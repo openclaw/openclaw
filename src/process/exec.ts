@@ -79,7 +79,7 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
-    cmdCommands: ["pnpm", "yarn"],
+    cmdCommands: ["corepack", "pnpm", "yarn"],
   });
 }
 

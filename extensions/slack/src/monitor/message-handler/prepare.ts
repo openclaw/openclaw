@@ -800,7 +800,11 @@ export async function prepareSlackMessage(params: {
     },
   });
 
-  const replyTarget = ctxPayload.To ?? undefined;
+  // Live DM replies should target the concrete Slack DM channel id we just
+  // received on. This avoids depending on a follow-up conversations.open
+  // round-trip for the normal reply path while keeping persisted routing
+  // metadata user-scoped for later session deliveries.
+  const replyTarget = isDirectMessage ? `channel:${message.channel}` : (ctxPayload.To ?? undefined);
   if (!replyTarget) {
     return null;
   }

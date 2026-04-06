@@ -10,8 +10,8 @@ import {
   supportsXHighThinking,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
 import {
@@ -65,6 +65,7 @@ import { updateSessionStoreAfterAgentRun } from "./command/session-store.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { canExecRequestNode } from "./exec-defaults.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadModelCatalog } from "./model-catalog.js";
@@ -102,8 +103,7 @@ type OverrideFieldClearedByDelete =
   | "authProfileOverrideCompactionCount"
   | "fallbackNoticeSelectedModel"
   | "fallbackNoticeActiveModel"
-  | "fallbackNoticeReason"
-  | "claudeCliSessionId";
+  | "fallbackNoticeReason";
 
 const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "providerOverride",
@@ -114,7 +114,6 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "fallbackNoticeSelectedModel",
   "fallbackNoticeActiveModel",
   "fallbackNoticeReason",
-  "claudeCliSessionId",
 ];
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
@@ -179,10 +178,11 @@ async function prepareAgentCommandExecution(
     }
     return loadedRaw;
   })();
-  const { resolvedConfig: cfg, diagnostics } = await resolveCommandSecretRefsViaGateway({
+  const { resolvedConfig: cfg } = await resolveCommandConfigWithSecrets({
     config: loadedRaw,
     commandName: "agent",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
+    runtime,
   });
   setRuntimeConfigSnapshot(cfg, sourceConfig);
   const normalizedSpawned = normalizeSpawnedRunMetadata({
@@ -192,9 +192,6 @@ async function prepareAgentCommandExecution(
     groupSpace: opts.groupSpace,
     workspaceDir: opts.workspaceDir,
   });
-  for (const entry of diagnostics) {
-    runtime.log(`[secrets] ${entry}`);
-  }
   const agentIdOverrideRaw = opts.agentId?.trim();
   const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {
@@ -510,7 +507,16 @@ async function agentCommandInternal(
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
           config: cfg,
-          eligibility: { remote: getRemoteSkillEligibility() },
+          eligibility: {
+            remote: getRemoteSkillEligibility({
+              advertiseExecNode: canExecRequestNode({
+                cfg,
+                sessionEntry,
+                sessionKey,
+                agentId: sessionAgentId,
+              }),
+            }),
+          },
           snapshotVersion: skillsSnapshotVersion,
           skillFilter,
           agentId: sessionAgentId,

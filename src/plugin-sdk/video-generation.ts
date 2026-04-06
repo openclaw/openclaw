@@ -3,6 +3,7 @@
 export type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
+  VideoGenerationProviderConfiguredContext,
   VideoGenerationRequest,
   VideoGenerationResolution,
   VideoGenerationResult,

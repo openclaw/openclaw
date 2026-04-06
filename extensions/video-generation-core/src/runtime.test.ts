@@ -108,6 +108,7 @@ describe("video-generation runtime", () => {
     expect(result.provider).toBe("video-plugin");
     expect(result.model).toBe("vid-v1");
     expect(result.attempts).toEqual([]);
+    expect(result.ignoredOverrides).toEqual([]);
     expect(seenAuthStore).toEqual(authStore);
     expect(result.videos).toEqual([
       {
@@ -160,5 +161,67 @@ describe("video-generation runtime", () => {
       'Set agents.defaults.videoGenerationModel.primary to a provider/model like "',
     );
     await expect(promise).rejects.toThrow("qwen: QWEN_API_KEY");
+  });
+
+  it("ignores unsupported optional overrides per provider", async () => {
+    let seenRequest:
+      | {
+          size?: string;
+          aspectRatio?: string;
+          resolution?: string;
+          audio?: boolean;
+          watermark?: boolean;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("openai/sora-2");
+    mocks.getVideoGenerationProvider.mockReturnValue({
+      id: "openai",
+      capabilities: {
+        supportsSize: true,
+      },
+      generateVideo: async (req) => {
+        seenRequest = {
+          size: req.size,
+          aspectRatio: req.aspectRatio,
+          resolution: req.resolution,
+          audio: req.audio,
+          watermark: req.watermark,
+        };
+        return {
+          videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+          model: "sora-2",
+        };
+      },
+    });
+
+    const result = await generateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "openai/sora-2" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a lobster",
+      size: "1280x720",
+      aspectRatio: "16:9",
+      resolution: "720P",
+      audio: false,
+      watermark: false,
+    });
+
+    expect(seenRequest).toEqual({
+      size: "1280x720",
+      aspectRatio: undefined,
+      resolution: undefined,
+      audio: undefined,
+      watermark: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "aspectRatio", value: "16:9" },
+      { key: "resolution", value: "720P" },
+      { key: "audio", value: false },
+      { key: "watermark", value: false },
+    ]);
   });
 });

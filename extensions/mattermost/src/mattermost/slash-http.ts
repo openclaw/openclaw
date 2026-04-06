@@ -6,7 +6,8 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
@@ -273,7 +274,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
-      allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
+      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
     });
 
     const auth = await authorizeSlashInvocation({

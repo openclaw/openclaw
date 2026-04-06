@@ -27,11 +27,11 @@ vi.mock("../../tts/tts.js", () => ({
 function createTalkConfig(apiKey: unknown): OpenClawConfig {
   return {
     talk: {
-      provider: "elevenlabs",
+      provider: "acme",
       providers: {
-        elevenlabs: {
+        acme: {
           apiKey,
-          voiceId: "voice-default",
+          voiceId: "stub-default-voice",
         },
       },
     },
@@ -44,11 +44,11 @@ describe("talk.speak handler", () => {
   });
 
   it("uses the active runtime config snapshot instead of the raw config snapshot", async () => {
-    const runtimeConfig = createTalkConfig("env-elevenlabs-key");
+    const runtimeConfig = createTalkConfig("env-acme-key");
     const diskConfig = createTalkConfig({
       source: "env",
       provider: "default",
-      id: "ELEVENLABS_API_KEY",
+      id: "ACME_SPEECH_API_KEY",
     });
 
     mocks.loadConfig.mockReturnValue(runtimeConfig);
@@ -59,8 +59,8 @@ describe("talk.speak handler", () => {
       config: diskConfig,
     });
     mocks.getSpeechProvider.mockReturnValue({
-      id: "elevenlabs",
-      label: "ElevenLabs",
+      id: "acme",
+      label: "Acme Speech",
       resolveTalkConfig: ({
         talkProviderConfig,
       }: {
@@ -69,11 +69,11 @@ describe("talk.speak handler", () => {
     });
     mocks.synthesizeSpeech.mockImplementation(
       async ({ cfg }: { cfg: OpenClawConfig; text: string; disableFallback: boolean }) => {
-        expect(cfg.messages?.tts?.provider).toBe("elevenlabs");
-        expect(cfg.messages?.tts?.providers?.elevenlabs?.apiKey).toBe("env-elevenlabs-key");
+        expect(cfg.messages?.tts?.provider).toBe("acme");
+        expect(cfg.messages?.tts?.providers?.acme?.apiKey).toBe("env-acme-key");
         return {
           success: true,
-          provider: "elevenlabs",
+          provider: "acme",
           audioBuffer: Buffer.from([1, 2, 3]),
           outputFormat: "mp3",
           voiceCompatible: false,
@@ -103,7 +103,7 @@ describe("talk.speak handler", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
-        provider: "elevenlabs",
+        provider: "acme",
         audioBase64: Buffer.from([1, 2, 3]).toString("base64"),
         outputFormat: "mp3",
         mimeType: "audio/mpeg",

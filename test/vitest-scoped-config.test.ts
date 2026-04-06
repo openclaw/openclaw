@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAcpVitestConfig } from "../vitest.acp.config.ts";
@@ -47,11 +46,12 @@ import { createUiVitestConfig } from "../vitest.ui.config.ts";
 import { createUtilsVitestConfig } from "../vitest.utils.config.ts";
 import { createWizardVitestConfig } from "../vitest.wizard.config.ts";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
+import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
 const EXTENSIONS_CHANNEL_GLOB = ["extensions", "channel", "**"].join("/");
 
 describe("resolveVitestIsolation", () => {
-  it("defaults shared scoped configs to non-isolated workers", () => {
+  it("defaults shared scoped configs to the non-isolated runner", () => {
     expect(resolveVitestIsolation({})).toBe(false);
   });
 
@@ -63,7 +63,7 @@ describe("resolveVitestIsolation", () => {
 });
 
 describe("createScopedVitestConfig", () => {
-  it("applies non-isolated mode by default", () => {
+  it("applies the non-isolated runner by default", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], { env: {} });
     expect(config.test?.isolate).toBe(false);
     expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
@@ -160,18 +160,15 @@ describe("scoped vitest configs", () => {
   const defaultUtilsConfig = createUtilsVitestConfig({});
   const defaultWizardConfig = createWizardVitestConfig({});
 
-  it("keeps every scoped lane on thread workers with the non-isolated runner", () => {
+  it("keeps scoped lanes on threads with the shared non-isolated runner", () => {
     for (const config of [
       defaultChannelsConfig,
       defaultAcpConfig,
       defaultExtensionsConfig,
       defaultExtensionChannelsConfig,
       defaultExtensionProvidersConfig,
-      defaultGatewayConfig,
       defaultInfraConfig,
-      defaultCommandsConfig,
       defaultAutoReplyConfig,
-      defaultAgentsConfig,
       defaultToolingConfig,
       defaultUiConfig,
     ]) {
@@ -179,11 +176,18 @@ describe("scoped vitest configs", () => {
       expect(config.test?.isolate).toBe(false);
       expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
     }
+
+    for (const config of [defaultGatewayConfig, defaultCommandsConfig, defaultAgentsConfig]) {
+      expect(config.test?.pool).toBe("threads");
+      expect(config.test?.isolate).toBe(false);
+      expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+    }
   });
 
-  it("defaults channel tests to non-isolated mode", () => {
+  it("defaults channel tests to threads with the non-isolated runner", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
     expect(defaultChannelsConfig.test?.pool).toBe("threads");
+    expect(defaultChannelsConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
@@ -191,7 +195,8 @@ describe("scoped vitest configs", () => {
   });
 
   it("loads channel include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-channels-"));
+    const tempDirs: string[] = [];
+    const tempDir = makeTempDir(tempDirs, "openclaw-vitest-channels-");
     try {
       const includeFile = path.join(tempDir, "include.json");
       fs.writeFileSync(
@@ -213,13 +218,14 @@ describe("scoped vitest configs", () => {
         bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
       ]);
     } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      cleanupTempDirs(tempDirs);
     }
   });
 
-  it("defaults extension tests to non-isolated mode", () => {
+  it("defaults extension tests to threads with the non-isolated runner", () => {
     expect(defaultExtensionsConfig.test?.isolate).toBe(false);
     expect(defaultExtensionsConfig.test?.pool).toBe("threads");
+    expect(defaultExtensionsConfig.test?.runner).toBe("./test/non-isolated-runner.ts");
   });
 
   it("normalizes extension channel include patterns relative to the scoped dir", () => {

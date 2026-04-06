@@ -15,10 +15,10 @@ import {
   resolveAuthStorePathForDisplay,
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
+import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
-  isCliProvider,
   normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
@@ -144,23 +144,9 @@ export async function modelsStatusCommand(
   }
 
   const providersFromEnv = new Set<string>();
-  // Keep in sync with resolveEnvApiKey() mappings (we want visibility even when
-  // a provider isn't currently selected in config/models).
-  const envProbeProviders = [
-    "anthropic",
-    "github-copilot",
-    "google-vertex",
-    "openai",
-    "google",
-    "groq",
-    "cerebras",
-    "xai",
-    "openrouter",
-    "zai",
-    "mistral",
-    "synthetic",
-  ];
-  for (const provider of envProbeProviders) {
+  // Use the shared provider-env registry so `models status` stays aligned with
+  // env-backed providers beyond the text-model defaults (for example image-gen).
+  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates()).toSorted()) {
     if (resolveEnvApiKey(provider)) {
       providersFromEnv.add(provider);
     }
@@ -191,7 +177,6 @@ export async function modelsStatusCommand(
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
   const missingProvidersInUse = Array.from(providersInUse)
     .filter((provider) => !providerAuthMap.has(provider))
-    .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
   const probeProfileIds = (() => {
@@ -274,7 +259,6 @@ export async function modelsStatusCommand(
     store,
     cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-    providers,
   });
   const oauthProfiles = authHealth.profiles.filter(
     (profile) => profile.type === "oauth" || profile.type === "token",

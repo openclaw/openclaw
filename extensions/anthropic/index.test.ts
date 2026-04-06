@@ -1,8 +1,15 @@
+import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import anthropicPlugin from "./index.js";
 
 describe("anthropic provider replay hooks", () => {
+  it("registers no cli commands", async () => {
+    const captured = capturePluginRegistration({ register: anthropicPlugin.register });
+
+    expect(captured.cliRegistrars).toEqual([]);
+  });
+
   it("owns native reasoning output mode for Claude transports", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -28,6 +35,7 @@ describe("anthropic provider replay hooks", () => {
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
@@ -81,5 +89,11 @@ describe("anthropic provider replay hooks", () => {
     expect(
       next?.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.cacheRetention,
     ).toBe("short");
+  });
+
+  it("does not register a Claude CLI auth method", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(provider.auth.map((entry) => entry.id)).not.toContain("cli");
   });
 });

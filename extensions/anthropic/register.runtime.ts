@@ -23,8 +23,6 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
-import { buildAnthropicCliBackend } from "./cli-backend.js";
-import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfig,
@@ -278,77 +276,14 @@ function buildAnthropicAuthDoctorHint(params: {
   ].join("\n");
 }
 
-async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  if (!hasClaudeCliAuth()) {
-    throw new Error(
-      [
-        "Claude CLI is not authenticated on this host.",
-        `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
-      ].join("\n"),
-    );
-  }
-  return buildAnthropicCliMigrationResult(ctx.config);
-}
-
-async function runAnthropicCliMigrationNonInteractive(ctx: {
-  config: ProviderAuthContext["config"];
-  runtime: ProviderAuthContext["runtime"];
-}): Promise<ProviderAuthContext["config"] | null> {
-  if (!hasClaudeCliAuth()) {
-    ctx.runtime.error(
-      [
-        'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-        `Run ${formatCliCommand("claude auth login")} first.`,
-      ].join("\n"),
-    );
-    ctx.runtime.exit(1);
-    return null;
-  }
-
-  const result = buildAnthropicCliMigrationResult(ctx.config);
-  const currentDefaults = ctx.config.agents?.defaults;
-  const currentModel = currentDefaults?.model;
-  const currentFallbacks =
-    currentModel && typeof currentModel === "object" && "fallbacks" in currentModel
-      ? currentModel.fallbacks
-      : undefined;
-
-  return {
-    ...ctx.config,
-    ...result.configPatch,
-    agents: {
-      ...ctx.config.agents,
-      ...result.configPatch?.agents,
-      defaults: {
-        ...currentDefaults,
-        ...result.configPatch?.agents?.defaults,
-        model: {
-          ...(Array.isArray(currentFallbacks) ? { fallbacks: currentFallbacks } : {}),
-          primary: result.defaultModel,
-        },
-      },
-    },
-  };
-}
-
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
-  const claudeCliProfileId = "anthropic:claude-cli";
   const providerId = "anthropic";
   const defaultAnthropicModel = "anthropic/claude-sonnet-4-6";
-  const anthropicOauthAllowlist = [
-    "anthropic/claude-sonnet-4-6",
-    "anthropic/claude-opus-4-6",
-    "anthropic/claude-opus-4-5",
-    "anthropic/claude-sonnet-4-5",
-    "anthropic/claude-haiku-4-5",
-  ] as const;
-  api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider({
     id: providerId,
     label: "Anthropic",
     docsPath: "/providers/models",
     envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-    deprecatedProfileIds: [claudeCliProfileId],
     oauthProfileIdRepairs: [
       {
         legacyProfileId: "anthropic:default",
@@ -356,34 +291,6 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
       },
     ],
     auth: [
-      {
-        id: "cli",
-        label: "Claude CLI",
-        hint: "Reuse a local Claude CLI login and switch model selection to claude-cli/*",
-        kind: "custom",
-        wizard: {
-          choiceId: "anthropic-cli",
-          choiceLabel: "Anthropic Claude CLI",
-          choiceHint: "Reuse a local Claude CLI login on this host",
-          assistantPriority: -20,
-          groupId: "anthropic",
-          groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key",
-          modelAllowlist: {
-            allowedKeys: [...anthropicOauthAllowlist].map((model) =>
-              model.replace(/^anthropic\//, "claude-cli/"),
-            ),
-            initialSelections: ["claude-cli/claude-sonnet-4-6"],
-            message: "Claude CLI models",
-          },
-        },
-        run: async (ctx: ProviderAuthContext) => await runAnthropicCliMigration(ctx),
-        runNonInteractive: async (ctx) =>
-          await runAnthropicCliMigrationNonInteractive({
-            config: ctx.config,
-            runtime: ctx.runtime,
-          }),
-      },
       {
         id: "setup-token",
         label: "Anthropic setup-token",
@@ -396,7 +303,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
           assistantPriority: 40,
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key + legacy token",
+          groupHint: "API key + legacy token",
         },
         run: async (ctx: ProviderAuthContext) => await runAnthropicSetupTokenAuth(ctx),
         runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
@@ -418,7 +325,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
           choiceLabel: "Anthropic API key",
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key",
+          groupHint: "API key + legacy token",
         },
       }),
     ],

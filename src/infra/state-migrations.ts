@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -79,9 +79,14 @@ type LegacySessionSurface = {
 };
 
 function getLegacySessionSurfaces(): LegacySessionSurface[] {
-  return getBundledChannelContractSurfaces().filter(
-    (surface): surface is LegacySessionSurface => Boolean(surface) && typeof surface === "object",
-  );
+  const surfaces: LegacySessionSurface[] = [];
+  for (const plugin of iterateBootstrapChannelPlugins()) {
+    const surface = plugin.messaging;
+    if (surface && typeof surface === "object") {
+      surfaces.push(surface);
+    }
+  }
+  return surfaces;
 }
 
 function isSurfaceGroupKey(key: string): boolean {

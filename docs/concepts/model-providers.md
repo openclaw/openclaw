@@ -162,12 +162,14 @@ Current bundled examples:
   OpenAI/Codex catalog rows, thinking/live-model policy, usage-token alias
   normalization (`input` / `output` and `prompt` / `completion` families), the
   shared `openai-responses-defaults` stream family for native OpenAI/Codex
-  wrappers, and provider-family metadata
-- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
-  native Gemini replay validation, bootstrap replay sanitation, tagged
-  reasoning-output mode, and modern-model matching; Gemini CLI OAuth also owns
-  auth-profile token formatting, usage-token parsing, and quota endpoint
-  fetching for usage surfaces
+  wrappers, provider-family metadata, bundled image-generation provider
+  registration for `gpt-image-1`, and bundled video-generation provider
+  registration for `sora-2`
+- `google`: Gemini 3.1 forward-compat fallback, native Gemini replay
+  validation, bootstrap replay sanitation, tagged reasoning-output mode,
+  modern-model matching, bundled image-generation provider registration for
+  Gemini image-preview models, and bundled video-generation provider
+  registration for Veo models
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
   normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
@@ -176,20 +178,34 @@ Current bundled examples:
   policy, binary-thinking/live-model policy, and usage auth + quota fetching;
   unknown `glm-5*` ids synthesize from the bundled `glm-4.7` template
 - `xai`: native Responses transport normalization, `/fast` alias rewrites for
-  Grok fast variants, default `tool_stream`, and xAI-specific tool-schema /
-  reasoning-payload cleanup
+  Grok fast variants, default `tool_stream`, xAI-specific tool-schema /
+  reasoning-payload cleanup, and bundled video-generation provider
+  registration for `grok-imagine-video`
 - `mistral`: plugin-owned capability metadata
 - `opencode` and `opencode-go`: plugin-owned capability metadata plus
   proxy-Gemini thought-signature sanitation
-- `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
-  `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
-  `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
+- `alibaba`: plugin-owned video-generation catalog for direct Wan model refs
+  such as `alibaba/wan2.6-t2v`
+- `byteplus`: plugin-owned catalogs plus bundled video-generation provider
+  registration for Seedance text-to-video/image-to-video models
+- `fal`: bundled video-generation provider registration for hosted third-party
+  image-generation provider registration for FLUX image models plus bundled
+  video-generation provider registration for hosted third-party video models
+- `cloudflare-ai-gateway`, `huggingface`, `kimi`, `nvidia`, `qianfan`,
+  `stepfun`, `synthetic`, `venice`, `vercel-ai-gateway`, and `volcengine`:
+  plugin-owned catalogs only
 - `qwen`: plugin-owned catalogs for text models plus shared
   media-understanding and video-generation provider registrations for its
   multimodal surfaces; Qwen video generation uses the Standard DashScope video
   endpoints with bundled Wan models such as `wan2.6-t2v` and `wan2.7-r2v`
-- `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
+- `runway`: plugin-owned video-generation provider registration for native
+  Runway task-based models such as `gen4.5`
+- `minimax`: plugin-owned catalogs, bundled video-generation provider
+  registration for Hailuo video models, bundled image-generation provider
+  registration for `image-01`, hybrid Anthropic/OpenAI replay-policy
   selection, and usage auth/snapshot logic
+- `together`: plugin-owned catalogs plus bundled video-generation provider
+  registration for Wan video models
 - `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and
@@ -253,9 +269,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: `ANTHROPIC_API_KEY`
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
 - Example model: `anthropic/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice apiKey` or `openclaw onboard --auth-choice anthropic-cli`
+- CLI: `openclaw onboard --auth-choice apiKey`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Billing note: Anthropic's public Claude Code docs still include direct Claude Code terminal usage in Claude plan limits. Separately, Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription.
+- Billing note: for Anthropic in OpenClaw, the practical split is **API key** or **Claude subscription with Extra Usage**. Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription. Our local repros also show the OpenClaw-identifying prompt string does not reproduce on the Anthropic SDK + API-key path.
 - Anthropic setup-token is available again as a legacy/manual OpenClaw path. Use it with the expectation that Anthropic told OpenClaw users this path requires **Extra Usage**.
 
 ```json5
@@ -331,21 +347,10 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   (or legacy `cached_content`) to forward a provider-native
   `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
 
-### Google Vertex and Gemini CLI
+### Google Vertex
 
-- Providers: `google-vertex`, `google-gemini-cli`
-- Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
-- Caution: Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
-- Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
-  - Install Gemini CLI first:
-    - `brew install gemini-cli`
-    - or `npm install -g @google/gemini-cli`
-  - Enable: `openclaw plugins enable google`
-  - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - Default model: `google-gemini-cli/gemini-3.1-pro-preview`
-  - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
-    tokens in auth profiles on the gateway host.
-  - If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
+- Provider: `google-vertex`
+- Auth: gcloud ADC
   - Gemini CLI JSON replies are parsed from `response`; usage falls back to
     `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
 

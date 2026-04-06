@@ -1,14 +1,10 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadRemoteProfileTestDeps,
   type RemoteProfileTestDeps,
 } from "./server-context.remote-profile-tab-ops.shared.js";
 
-let deps: RemoteProfileTestDeps;
-
-beforeAll(async () => {
-  deps = await loadRemoteProfileTestDeps();
-});
+const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
 
 beforeEach(() => {
   vi.clearAllMocks();

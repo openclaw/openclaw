@@ -3,21 +3,24 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
-import {
-  BUNDLED_PLUGIN_PATH_PREFIX,
-  BUNDLED_PLUGIN_ROOT_DIR,
-  bundledPluginFile,
-} from "../../../../test/helpers/bundled-plugin-paths.js";
+import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugins/public-artifacts.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
-const BUNDLED_EXTENSION_IDS = readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
-  .filter((entry) => entry.isDirectory() && entry.name !== "shared")
-  .map((entry) => entry.name)
-  .toSorted((left, right) => right.length - left.length);
+const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
+const bundledPluginRecords = loadPluginManifestRegistry({
+  cache: true,
+  config: {},
+}).plugins.filter((plugin) => plugin.origin === "bundled");
+const bundledPluginRoots = new Map(
+  bundledPluginRecords.map((plugin) => [plugin.id, plugin.rootDir] as const),
+);
+const BUNDLED_EXTENSION_IDS = [...bundledPluginRoots.keys()].toSorted(
+  (left, right) => right.length - left.length,
+);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
@@ -43,6 +46,14 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
 ]);
 // Shared config validation intentionally consumes this curated Telegram contract.
 const ALLOWED_CORE_CHANNEL_SDK_SUBPATHS = new Set(["telegram-command-config"]);
+
+function bundledPluginFile(pluginId: string, relativePath: string): string {
+  const rootDir = bundledPluginRoots.get(pluginId);
+  if (!rootDir) {
+    throw new Error(`missing bundled plugin root for ${pluginId}`);
+  }
+  return normalizePath(resolve(rootDir, relativePath));
+}
 
 type GuardedSource = {
   path: string;
@@ -320,18 +331,18 @@ function readSetupBarrelImportBlock(path: string): string {
 }
 
 function collectExtensionSourceFiles(): string[] {
-  const extensionsDir = normalizePath(resolve(ROOT_DIR, "..", "extensions"));
-  const sharedExtensionsDir = normalizePath(resolve(extensionsDir, "shared"));
-  extensionSourceFilesCache = collectSourceFiles(extensionSourceFilesCache, {
-    rootDir: resolve(ROOT_DIR, "..", "extensions"),
-    shouldSkipPath: (normalizedFullPath) =>
-      normalizedFullPath.includes(sharedExtensionsDir) ||
-      normalizedFullPath.includes(`${extensionsDir}/shared/`),
-    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
-      classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
-      entryName === "api.ts" ||
-      entryName === "runtime-api.ts",
-  });
+  if (extensionSourceFilesCache) {
+    return extensionSourceFilesCache;
+  }
+  extensionSourceFilesCache = bundledPluginRecords.flatMap((plugin) =>
+    collectSourceFiles(undefined, {
+      rootDir: plugin.rootDir,
+      shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
+        classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
+        entryName === "api.ts" ||
+        entryName === "runtime-api.ts",
+    }),
+  );
   return extensionSourceFilesCache;
 }
 
@@ -361,8 +372,12 @@ function collectCoreSourceFiles(): string[] {
 
 function collectExtensionFiles(extensionId: string): string[] {
   const cached = extensionFilesCache.get(extensionId);
+  const rootDir = bundledPluginRoots.get(extensionId);
+  if (!rootDir) {
+    return [];
+  }
   const files = collectSourceFiles(cached, {
-    rootDir: resolve(ROOT_DIR, "..", "extensions", extensionId),
+    rootDir,
     shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
       classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
       entryName === "runtime-api.ts",
@@ -406,7 +421,7 @@ function getSourceAnalysis(path: string): SourceAnalysis {
     text,
     importSpecifiers,
     extensionImports: importSpecifiers.filter((specifier) =>
-      specifier.includes(BUNDLED_PLUGIN_PATH_PREFIX),
+      specifier.includes(`/${BUNDLED_PLUGIN_ROOT_DIR}/`),
     ),
   } satisfies SourceAnalysis;
   sourceAnalysisCache.set(fullPath, analysis);

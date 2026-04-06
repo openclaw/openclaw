@@ -49,7 +49,7 @@ is a small, self-contained module with a clear purpose and documented contract.
 Legacy provider convenience seams for bundled channels are also gone. Imports
 such as `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
 `openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`,
-`openclaw/plugin-sdk/whatsapp-surface`, and
+channel-branded helper seams, and
 `openclaw/plugin-sdk/telegram-core` were private mono-repo shortcuts, not
 stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
 bundled plugin workspace, keep provider-owned helpers in that plugin's own
@@ -255,17 +255,19 @@ Current bundled provider examples:
   | `plugin-sdk/provider-stream` | Provider stream wrapper helpers | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
   | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers plus media payload builders |
-  | `plugin-sdk/media-understanding-runtime` | Media-understanding runtime facade | Media-understanding runner facade and typed result helpers |
+  | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |
+  | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
-  | `plugin-sdk/speech-runtime` | Speech runtime facade | TTS resolution and synthesis helpers |
+  | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, and validation helpers |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types and registry helpers |
   | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types and registry helpers |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
-  | `plugin-sdk/video-generation` | Video-generation provider types | Video-generation provider/request/result types for provider plugins |
+  | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
+  | `plugin-sdk/music-generation-core` | Shared music-generation core | Music-generation types, failover helpers, provider lookup, and model-ref parsing |
+  | `plugin-sdk/video-generation` | Video-generation helpers | Video-generation provider/request/result types |
   | `plugin-sdk/video-generation-core` | Shared video-generation core | Video-generation types, failover helpers, provider lookup, and model-ref parsing |
-  | `plugin-sdk/video-generation-runtime` | Video-generation runtime facade | Shared runtime `generateVideo` / `listRuntimeVideoGenerationProviders` facade |
   | `plugin-sdk/interactive-runtime` | Interactive reply helpers | Interactive reply payload normalization/reduction |
   | `plugin-sdk/channel-config-primitives` | Channel config primitives | Narrow channel config-schema primitives |
   | `plugin-sdk/channel-config-writes` | Channel config-write helpers | Channel config-write authorization helpers |
@@ -288,47 +290,43 @@ Current bundled provider examples:
   | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers | Memory host multimodal helpers |
   | `plugin-sdk/memory-core-host-query` | Memory host query helpers | Memory host query helpers |
   | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers | Memory host secret helpers |
+  | `plugin-sdk/memory-core-host-events` | Memory host event journal helpers | Memory host event journal helpers |
   | `plugin-sdk/memory-core-host-status` | Memory host status helpers | Memory host status helpers |
   | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime | Memory host CLI runtime helpers |
   | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime | Memory host core runtime helpers |
   | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers | Memory host file/runtime helpers |
+  | `plugin-sdk/memory-host-core` | Memory host core runtime alias | Vendor-neutral alias for memory host core runtime helpers |
+  | `plugin-sdk/memory-host-events` | Memory host event journal alias | Vendor-neutral alias for memory host event journal helpers |
+  | `plugin-sdk/memory-host-files` | Memory host file/runtime alias | Vendor-neutral alias for memory host file/runtime helpers |
+  | `plugin-sdk/memory-host-markdown` | Managed markdown helpers | Shared managed-markdown helpers for memory-adjacent plugins |
+  | `plugin-sdk/memory-host-search` | Active memory search facade | Lazy active-memory search-manager runtime facade |
+  | `plugin-sdk/memory-host-status` | Memory host status alias | Vendor-neutral alias for memory host status helpers |
   | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helpers | Memory-lancedb helper surface |
   | `plugin-sdk/testing` | Test utilities | Test helpers and mocks |
 </Accordion>
 
 This table is intentionally the common migration subset, not the full SDK
-surface. The generated full list of 200+ entrypoints lives in
+surface. The full list of 200+ entrypoints lives in
 `scripts/lib/plugin-sdk-entrypoints.json`.
 
-That generated list still includes some bundled-plugin helper seams such as
+That list still includes some bundled-plugin helper seams such as
 `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`,
 `plugin-sdk/zalo-setup`, and `plugin-sdk/matrix*`. Those remain exported for
 bundled-plugin maintenance and compatibility, but they are intentionally
 omitted from the common migration table and are not the recommended target for
 new plugin code.
 
-The same rule applies to other generated bundled-helper families such as:
+The same rule applies to other bundled-helper families such as:
 
-- browser: `plugin-sdk/browser*`
+- browser support helpers: `plugin-sdk/browser-cdp`, `plugin-sdk/browser-config-runtime`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-control-auth`, `plugin-sdk/browser-node-runtime`, `plugin-sdk/browser-profiles`, `plugin-sdk/browser-security-runtime`, `plugin-sdk/browser-setup-tools`, `plugin-sdk/browser-support`
 - Matrix: `plugin-sdk/matrix*`
 - LINE: `plugin-sdk/line*`
 - IRC: `plugin-sdk/irc*`
 - bundled helper/plugin surfaces like `plugin-sdk/googlechat`,
-  `plugin-sdk/whatsapp-surface`, `plugin-sdk/zalouser`,
-  `plugin-sdk/bluebubbles*`,
+  `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles*`,
   `plugin-sdk/mattermost*`, `plugin-sdk/msteams`,
   `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`,
-  `plugin-sdk/twitch`, `plugin-sdk/openai`, `plugin-sdk/moonshot`,
-  `plugin-sdk/qwen*`, `plugin-sdk/modelstudio*`,
-  `plugin-sdk/provider-moonshot`,
-  `plugin-sdk/cloudflare-ai-gateway`, `plugin-sdk/byteplus`,
-  `plugin-sdk/chutes`, `plugin-sdk/deepseek`, `plugin-sdk/google`,
-  `plugin-sdk/huggingface`, `plugin-sdk/kimi-coding`,
-  `plugin-sdk/kilocode`, `plugin-sdk/minimax`, `plugin-sdk/mistral`,
-  `plugin-sdk/nvidia`, `plugin-sdk/opencode`,
-  `plugin-sdk/opencode-go`, `plugin-sdk/qianfan`, `plugin-sdk/sglang`,
-  `plugin-sdk/synthetic`, `plugin-sdk/venice`, `plugin-sdk/vllm`,
-  `plugin-sdk/xai`, `plugin-sdk/volcengine`,
+  `plugin-sdk/twitch`,
   `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`,
   `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`,
   `plugin-sdk/thread-ownership`, and `plugin-sdk/voice-call`
@@ -336,15 +334,6 @@ The same rule applies to other generated bundled-helper families such as:
 `plugin-sdk/github-copilot-token` currently exposes the narrow token-helper
 surface `DEFAULT_COPILOT_API_BASE_URL`,
 `deriveCopilotApiBaseUrlFromToken`, and `resolveCopilotApiToken`.
-
-`plugin-sdk/whatsapp-surface` currently exposes `DEFAULT_WEB_MEDIA_BYTES`,
-WhatsApp auth/account helpers, directory-config helpers, group-policy helpers,
-outbound-target resolution, and the narrow `WebChannelStatus` /
-`WebInboundMessage` / `WebListenerCloseReason` / `WebMonitorTuning` types.
-
-For Qwen specifically, prefer the canonical `plugin-sdk/qwen` and
-`plugin-sdk/qwen-definitions` seams. `plugin-sdk/modelstudio*` remains
-exported as a compatibility alias for older plugin code.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask in Discord.

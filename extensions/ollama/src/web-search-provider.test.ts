@@ -31,6 +31,7 @@ describe("ollama web search provider", () => {
     const webSearchProviders: unknown[] = [];
 
     plugin.register({
+      registerMemoryEmbeddingProvider() {},
       registerProvider() {},
       registerWebSearchProvider(provider: unknown) {
         webSearchProviders.push(provider);
