@@ -248,16 +248,27 @@ export async function resolveChatGuidForTarget(params: {
     params.target.kind === "chat_identifier" ? params.target.chatIdentifier : null;
 
   const limit = 500;
-  // When matching by handle, prefer iMessage over SMS. A user may have both
-  // an `iMessage;-;<handle>` and `SMS;-;<handle>` chat; we should never silently
-  // downgrade to SMS when an iMessage chat exists for the same handle.
+  // When matching by handle, prefer the caller's requested service. A user may
+  // have both an `iMessage;-;<handle>` and `SMS;-;<handle>` chat:
+  //   - default / `service: "imessage"` / `service: "auto"` -> prefer iMessage
+  //     so we never silently downgrade to SMS when iMessage is available.
+  //   - explicit `service: "sms"` (e.g. caller passed `sms:+15551234567`) ->
+  //     prefer SMS so explicit SMS intent is respected.
   //
-  // Note: real `iMessage;-;<handle>` direct matches `return` immediately below,
-  // so we only need to remember SMS and unknown-service direct fallbacks here.
-  let directHandleSmsMatch: string | null = null;
+  // A direct `<preferred>;-;<handle>` match is the strongest signal and
+  // returns immediately. Everything else is recorded as a ranked fallback.
+  const preferredService: "iMessage" | "SMS" =
+    params.target.kind === "handle" && params.target.service === "sms" ? "SMS" : "iMessage";
+  const preferredPrefix = `${preferredService};-;`;
+  const otherPrefix = preferredService === "iMessage" ? "SMS;-;" : "iMessage;-;";
+
+  // Note: a direct `preferredPrefix` match `return`s immediately below, so we
+  // only need to remember the other-service and unknown-service direct fallbacks.
+  let directHandleOtherServiceMatch: string | null = null;
   let directHandleUnknownServiceMatch: string | null = null;
-  let participantIMessageMatch: string | null = null;
-  let participantSmsMatch: string | null = null;
+  let participantPreferredMatch: string | null = null;
+  let participantOtherServiceMatch: string | null = null;
+  let participantUnknownServiceMatch: string | null = null;
   for (let offset = 0; offset < 5000; offset += limit) {
     const chats = await queryChats({
       baseUrl: params.baseUrl,
@@ -309,22 +320,22 @@ export async function resolveChatGuidForTarget(params: {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
         if (directHandle && directHandle === normalizedHandle && guid) {
-          // Prefer iMessage over SMS. If this chat is iMessage we can return
-          // immediately; if it is SMS we remember it as a fallback and keep
-          // scanning in case an iMessage chat for the same handle exists.
-          if (guid.startsWith("iMessage;-;")) {
+          // A direct `<preferredPrefix><handle>` is the strongest signal and we
+          // can return immediately. Other services are remembered as fallbacks
+          // and we keep scanning in case a preferred-service chat exists later.
+          if (guid.startsWith(preferredPrefix)) {
             return guid;
           }
-          if (guid.startsWith("SMS;-;")) {
-            if (!directHandleSmsMatch) {
-              directHandleSmsMatch = guid;
+          if (guid.startsWith(otherPrefix)) {
+            if (!directHandleOtherServiceMatch) {
+              directHandleOtherServiceMatch = guid;
             }
           } else if (!directHandleUnknownServiceMatch) {
             // Unknown service; treat as a last-resort direct match.
             directHandleUnknownServiceMatch = guid;
           }
         }
-        if (guid && !participantIMessageMatch) {
+        if (guid) {
           // Only consider DM chats (`;-;` separator) as participant matches.
           // Group chats (`;+;` separator) should never match when searching by handle/phone.
           // This prevents routing "send to +1234567890" to a group chat that contains that number.
@@ -334,31 +345,32 @@ export async function resolveChatGuidForTarget(params: {
               normalizeBlueBubblesHandle(entry),
             );
             if (participants.includes(normalizedHandle)) {
-              if (guid.startsWith("iMessage;-;")) {
-                participantIMessageMatch = guid;
-              } else if (guid.startsWith("SMS;-;") && !participantSmsMatch) {
-                participantSmsMatch = guid;
-              } else if (!participantSmsMatch) {
-                participantSmsMatch = guid;
+              if (guid.startsWith(preferredPrefix)) {
+                if (!participantPreferredMatch) {
+                  participantPreferredMatch = guid;
+                }
+              } else if (guid.startsWith(otherPrefix)) {
+                if (!participantOtherServiceMatch) {
+                  participantOtherServiceMatch = guid;
+                }
+              } else if (!participantUnknownServiceMatch) {
+                participantUnknownServiceMatch = guid;
               }
             }
           }
         }
       }
     }
-    // If we already found an iMessage participant match we can stop scanning
-    // further pages; any later SMS chat would still lose out. We deliberately
-    // do NOT break on an unknown-service direct match — a real iMessage
-    // participant match on a later page should still win.
-    if (participantIMessageMatch) {
-      break;
-    }
+    // We deliberately do NOT break early on participant or non-preferred direct
+    // matches: a higher-priority direct `<preferredPrefix><handle>` chat may
+    // still exist on a later page, and only that branch can short-circuit.
   }
   return (
-    participantIMessageMatch ??
-    directHandleSmsMatch ??
+    participantPreferredMatch ??
+    directHandleOtherServiceMatch ??
+    participantOtherServiceMatch ??
     directHandleUnknownServiceMatch ??
-    participantSmsMatch
+    participantUnknownServiceMatch
   );
 }
 
