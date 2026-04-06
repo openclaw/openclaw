@@ -210,7 +210,8 @@ function isRemoteGatewayTarget(gatewayUrl: string | undefined): boolean {
   const details = buildGatewayConnectionDetails(
     gatewayUrl ? { url: gatewayUrl, urlSource: "cli" } : undefined,
   );
-  const hostname = new URL(details.url).hostname.toLowerCase();
+  // URL.hostname returns "[::1]" (with brackets) for IPv6 literals, so strip them before comparing.
+  const hostname = new URL(details.url).hostname.toLowerCase().replace(/^\[|\]$/g, "");
   return hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1";
 }
 
