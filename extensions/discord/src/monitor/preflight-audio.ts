@@ -6,13 +6,19 @@ type DiscordAudioAttachment = {
   url?: string;
 };
 
+type IndexedDiscordAudioAttachment = DiscordAudioAttachment & {
+  attachmentIndex: number;
+};
+
 function collectAudioAttachments(
   attachments: DiscordAudioAttachment[] | undefined,
-): DiscordAudioAttachment[] {
+): IndexedDiscordAudioAttachment[] {
   if (!Array.isArray(attachments)) {
     return [];
   }
-  return attachments.filter((att) => att.content_type?.startsWith("audio/"));
+  return attachments.flatMap((att, attachmentIndex) =>
+    att.content_type?.startsWith("audio/") ? [{ ...att, attachmentIndex }] : [],
+  );
 }
 
 export async function resolveDiscordPreflightAudioMentionContext(params: {
@@ -30,6 +36,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
   hasAudioAttachment: boolean;
   hasTypedText: boolean;
   transcript?: string;
+  transcribedAttachmentIndex?: number;
 }> {
   const audioAttachments = collectAudioAttachments(params.message.attachments);
   const hasAudioAttachment = audioAttachments.length > 0;
@@ -42,6 +49,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
       (params.shouldRequireMention && params.mentionRegexes.length > 0));
 
   let transcript: string | undefined;
+  let transcribedAttachmentIndex: number | undefined;
   if (needsPreflightTranscription) {
     if (params.abortSignal?.aborted) {
       return {
@@ -57,14 +65,15 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
           hasTypedText,
         };
       }
-      const audioUrls = audioAttachments
-        .map((att) => att.url)
-        .filter((url): url is string => typeof url === "string" && url.length > 0);
-      if (audioUrls.length > 0) {
+      const transcriptionCandidates = audioAttachments.filter(
+        (att): att is IndexedDiscordAudioAttachment & { url: string } =>
+          typeof att.url === "string" && att.url.length > 0,
+      );
+      if (transcriptionCandidates.length > 0) {
         transcript = await transcribeFirstAudio({
           ctx: {
-            MediaUrls: audioUrls,
-            MediaTypes: audioAttachments
+            MediaUrls: transcriptionCandidates.map((att) => att.url),
+            MediaTypes: transcriptionCandidates
               .map((att) => att.content_type)
               .filter((contentType): contentType is string => Boolean(contentType)),
             ChatType: params.chatType,
@@ -77,6 +86,8 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
         });
         if (params.abortSignal?.aborted) {
           transcript = undefined;
+        } else if (transcript) {
+          transcribedAttachmentIndex = transcriptionCandidates[0].attachmentIndex;
         }
       }
     } catch (err) {
@@ -88,5 +99,6 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
     hasAudioAttachment,
     hasTypedText,
     transcript,
+    transcribedAttachmentIndex,
   };
 }

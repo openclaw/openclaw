@@ -33,6 +33,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(result.transcript).toBe("hello from a voice note");
+    expect(result.transcribedAttachmentIndex).toBe(0);
     expect(result.hasAudioAttachment).toBe(true);
     expect(result.hasTypedText).toBe(false);
   });
@@ -162,6 +163,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     });
 
     expect(result.transcript).toBeUndefined();
+    expect(result.transcribedAttachmentIndex).toBeUndefined();
   });
 
   it("handles transcription errors gracefully", async () => {

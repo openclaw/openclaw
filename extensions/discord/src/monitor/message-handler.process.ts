@@ -88,6 +88,23 @@ function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
 
+function prunePreflightTranscribedAudio(params: {
+  mediaList: Array<{ path: string; contentType?: string }>;
+  attachmentIndex?: number;
+}): void {
+  if (typeof params.attachmentIndex !== "number" || params.attachmentIndex < 0) {
+    return;
+  }
+  const candidate = params.mediaList[params.attachmentIndex];
+  if (!candidate?.contentType?.startsWith("audio/")) {
+    return;
+  }
+  // Preflight already converted this first inbound audio attachment into text.
+  // Drop it from the later media-understanding payload to avoid a second
+  // transcription pass on the same Discord voice note.
+  params.mediaList.splice(params.attachmentIndex, 1);
+}
+
 type DiscordMessageProcessObserver = {
   onFinalReplyStart?: () => void;
   onFinalReplyDelivered?: () => void;
@@ -123,6 +140,8 @@ export async function processDiscordMessage(
     isGroupDm,
     baseText,
     messageText,
+    preflightTranscript,
+    preflightTranscribedAttachmentIndex,
     shouldRequireMention,
     canDetectMention,
     effectiveWasMentioned,
@@ -169,6 +188,10 @@ export async function processDiscordMessage(
     return;
   }
   mediaList.push(...forwardedMediaList);
+  prunePreflightTranscribedAudio({
+    mediaList,
+    attachmentIndex: preflightTranscript ? preflightTranscribedAttachmentIndex : undefined,
+  });
   const text = messageText;
   if (!text) {
     logVerbose("discord: drop message " + message.id + " (empty content)");

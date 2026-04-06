@@ -55,6 +55,8 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   commandAuthorized: boolean;
   baseText: string;
   messageText: string;
+  preflightTranscript?: string;
+  preflightTranscribedAttachmentIndex?: number;
   wasMentioned: boolean;
 
   route: ReturnType<typeof resolveAgentRoute>;

@@ -782,19 +782,26 @@ export async function preflightDiscordMessage(
 
   // Only authorized guild senders should reach the expensive transcription path.
   const { resolveDiscordPreflightAudioMentionContext } = await loadPreflightAudioRuntime();
-  const { hasTypedText, transcript: preflightTranscript } =
-    await resolveDiscordPreflightAudioMentionContext({
-      message,
-      chatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
-      sessionKey: baseSessionKey,
-      shouldRequireMention,
-      mentionRegexes,
-      cfg: params.cfg,
-      abortSignal: params.abortSignal,
-    });
+  const {
+    hasTypedText,
+    transcript: preflightTranscript,
+    transcribedAttachmentIndex: preflightTranscribedAttachmentIndex,
+  } = await resolveDiscordPreflightAudioMentionContext({
+    message,
+    chatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+    sessionKey: baseSessionKey,
+    shouldRequireMention,
+    mentionRegexes,
+    cfg: params.cfg,
+    abortSignal: params.abortSignal,
+  });
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
+
+  const resolvedBaseText = !hasTypedText && preflightTranscript ? preflightTranscript : baseText;
+  const resolvedMessageText =
+    !hasTypedText && preflightTranscript ? preflightTranscript : messageText;
 
   const mentionText = hasTypedText ? baseText : "";
   const { implicitMention, wasMentioned } = resolveDiscordMentionState({
@@ -812,7 +819,7 @@ export async function preflightDiscordMessage(
   });
   if (shouldLogVerbose()) {
     logVerbose(
-      `discord: inbound id=${message.id} guild=${params.data.guild_id ?? "dm"} channel=${messageChannelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${messageText ? "yes" : "no"}`,
+      `discord: inbound id=${message.id} guild=${params.data.guild_id ?? "dm"} channel=${messageChannelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${resolvedMessageText ? "yes" : "no"}`,
     );
   }
 
@@ -988,8 +995,10 @@ export async function preflightDiscordMessage(
     isDirectMessage,
     isGroupDm,
     commandAuthorized,
-    baseText,
-    messageText,
+    baseText: resolvedBaseText,
+    messageText: resolvedMessageText,
+    preflightTranscript,
+    preflightTranscribedAttachmentIndex,
     wasMentioned,
     route: effectiveRoute,
     threadBinding,

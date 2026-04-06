@@ -1,6 +1,14 @@
+import { ChannelType } from "@buape/carbon";
 import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./preflight-audio.runtime.js", () => ({
+  transcribeFirstAudio: transcribeFirstAudioMock,
+}));
 
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn<
@@ -77,6 +85,10 @@ let createDiscordDirectMessageContextOverrides: typeof import("./message-handler
 let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
+let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
+let createDiscordMessage: typeof import("./message-handler.preflight.test-helpers.js").createDiscordMessage;
+let createDiscordPreflightArgs: typeof import("./message-handler.preflight.test-helpers.js").createDiscordPreflightArgs;
+let DEFAULT_PREFLIGHT_CFG: typeof import("./message-handler.preflight.test-helpers.js").DEFAULT_PREFLIGHT_CFG;
 
 const sendModule = await import("../send.js");
 vi.spyOn(sendModule, "reactMessageDiscord").mockImplementation(
@@ -178,6 +190,20 @@ function createDirectMessageContextOverrides(
   return createDiscordDirectMessageContextOverrides(...args);
 }
 
+function createDmClient(channelId: string) {
+  return {
+    fetchChannel: async (id: string) => {
+      if (id === channelId) {
+        return {
+          id: channelId,
+          type: ChannelType.DM,
+        };
+      }
+      return null;
+    },
+  };
+}
+
 function mockDispatchSingleBlockReply(payload: { text: string; isReasoning?: boolean }) {
   dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
     await params?.dispatcher.sendBlockReply(payload);
@@ -202,6 +228,9 @@ beforeAll(async () => {
   ({ __testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ processDiscordMessage } = await import("./message-handler.process.js"));
+  ({ preflightDiscordMessage } = await import("./message-handler.preflight.js"));
+  ({ createDiscordMessage, createDiscordPreflightArgs, DEFAULT_PREFLIGHT_CFG } =
+    await import("./message-handler.preflight.test-helpers.js"));
 });
 
 beforeEach(() => {
@@ -211,6 +240,7 @@ beforeEach(() => {
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
+  transcribeFirstAudioMock.mockReset();
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
   readSessionUpdatedAt.mockClear();
@@ -665,6 +695,64 @@ describe("processDiscordMessage session routing", () => {
       to: "channel:thread-1",
       accountId: "default",
     });
+  });
+
+  it("threads DM preflight transcripts into the dispatched inbound context", async () => {
+    const channelId = "dm-voice-process-1";
+    transcribeFirstAudioMock.mockResolvedValueOnce("hello from discord voice");
+
+    const message = createDiscordMessage({
+      id: "voice-dm-process-1",
+      channelId,
+      content: "",
+      author: { id: "42", bot: false, username: "user" },
+      attachments: [
+        {
+          content_type: "audio/ogg",
+          url: "https://cdn.discordapp.com/attachments/voice.ogg",
+          filename: "voice-message.ogg",
+        },
+      ],
+    });
+    const data = {
+      channel_id: channelId,
+      author: message.author,
+      message,
+    } as import("./message-handler.preflight.test-helpers.js").DiscordMessageEvent;
+
+    const preflight = await preflightDiscordMessage(
+      createDiscordPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG as OpenClawConfig,
+        discordConfig: { dmPolicy: "open" },
+        data,
+        client: createDmClient(
+          channelId,
+        ) as import("./message-handler.preflight.test-helpers.js").DiscordClient,
+      }),
+    );
+
+    expect(preflight).not.toBeNull();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(preflight as any);
+
+    const dispatchArgs = dispatchInboundMessage.mock.calls.at(-1)?.[0] as
+      | { ctx?: Record<string, unknown> }
+      | undefined;
+    expect(dispatchArgs?.ctx).toEqual(
+      expect.objectContaining({
+        Body: expect.stringContaining("hello from discord voice"),
+        BodyForAgent: "hello from discord voice",
+        RawBody: "hello from discord voice",
+        CommandBody: "hello from discord voice",
+      }),
+    );
+    expect(dispatchArgs?.ctx?.MediaPath).toBeUndefined();
+    expect(dispatchArgs?.ctx?.MediaPaths).toBeUndefined();
+    expect(dispatchArgs?.ctx?.MediaType).toBeUndefined();
+    expect(dispatchArgs?.ctx?.MediaTypes).toBeUndefined();
+    expect(dispatchArgs?.ctx?.MediaUrl).toBeUndefined();
+    expect(dispatchArgs?.ctx?.MediaUrls).toBeUndefined();
   });
 });
 
