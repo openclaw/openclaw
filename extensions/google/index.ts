@@ -1,6 +1,7 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
@@ -14,8 +15,14 @@ import {
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import { buildGoogleMusicGenerationProvider } from "./music-generation-provider.js";
+import { formatGoogleOauthApiKey } from "./oauth-token-shared.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
+import {
+  buildGoogleVertexBaseUrl,
+  resolveGoogleVertexProjectId,
+  resolveGoogleVertexRegion,
+} from "./vertex-region.js";
 import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
 
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
@@ -34,6 +41,9 @@ const GOOGLE_GEMINI_PROVIDER_HOOKS = {
   }),
   ...buildProviderStreamFamilyHooks("google-thinking"),
 };
+
+const GOOGLE_VERTEX_PROVIDER_ID = "google-vertex";
+const GOOGLE_VERTEX_DEFAULT_MODEL = `${GOOGLE_VERTEX_PROVIDER_ID}/gemini-3.1-pro-preview`;
 
 async function loadGoogleImageGenerationProvider(): Promise<ImageGenerationProvider> {
   if (!googleImageGenerationProviderPromise) {
@@ -130,7 +140,7 @@ export default definePluginEntry({
       id: "google",
       label: "Google AI Studio",
       docsPath: "/providers/models",
-      hookAliases: ["google-antigravity", "google-vertex"],
+      hookAliases: ["google-antigravity"],
       envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
@@ -164,6 +174,145 @@ export default definePluginEntry({
           providerId: ctx.provider,
           ctx,
         }),
+      ...GOOGLE_GEMINI_PROVIDER_HOOKS,
+      isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
+    });
+    api.registerProvider({
+      id: GOOGLE_VERTEX_PROVIDER_ID,
+      label: "Google Vertex AI",
+      docsPath: "/providers/models",
+      envVars: [
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_PROJECT_ID",
+        "GOOGLE_CLOUD_LOCATION",
+        "CLOUD_ML_REGION",
+      ],
+      auth: [
+        {
+          id: "oauth",
+          label: "Google Vertex AI OAuth",
+          hint: "Google OAuth for Vertex AI with project + location",
+          kind: "oauth" as const,
+          wizard: {
+            choiceId: "google-vertex-oauth",
+            choiceLabel: "Google Vertex AI (OAuth)",
+            choiceHint: "Google OAuth targeting Vertex AI endpoints",
+            groupId: "google",
+            groupLabel: "Google",
+            groupHint: "Gemini API key + OAuth + Vertex AI",
+          },
+          run: async (ctx: ProviderAuthContext) => {
+            const env = ctx.env ?? process.env;
+            const location = await ctx.prompter.text({
+              message: "Vertex AI location (region)",
+              initialValue: resolveGoogleVertexRegion(env),
+              placeholder: "us-central1",
+            });
+            const locationStr = String(location).trim() || resolveGoogleVertexRegion(env);
+
+            const spin = ctx.prompter.progress("Starting Google OAuth for Vertex AI…");
+            try {
+              const { loginGeminiCliOAuth } = await import("./oauth.runtime.js");
+              const result = await loginGeminiCliOAuth({
+                isRemote: ctx.isRemote,
+                openUrl: ctx.openUrl,
+                log: (msg) => ctx.runtime.log(msg),
+                note: ctx.prompter.note,
+                prompt: async (message) => String(await ctx.prompter.text({ message })),
+                progress: spin,
+              });
+
+              spin.stop("Google Vertex AI OAuth complete");
+
+              const projectId = result.projectId || resolveGoogleVertexProjectId(env);
+              if (!projectId) {
+                throw new Error(
+                  "Could not determine Google Cloud project ID. Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID.",
+                );
+              }
+
+              const baseUrl = buildGoogleVertexBaseUrl({
+                region: locationStr,
+                projectId,
+              });
+
+              const { buildOauthProviderAuthResult } =
+                await import("openclaw/plugin-sdk/provider-auth-result");
+              return buildOauthProviderAuthResult({
+                providerId: GOOGLE_VERTEX_PROVIDER_ID,
+                defaultModel: GOOGLE_VERTEX_DEFAULT_MODEL,
+                access: result.access,
+                refresh: result.refresh,
+                expires: result.expires,
+                email: result.email,
+                ...(result.projectId ? { credentialExtra: { projectId: result.projectId } } : {}),
+                configPatch: {
+                  models: {
+                    providers: {
+                      [GOOGLE_VERTEX_PROVIDER_ID]: {
+                        baseUrl,
+                        api: "google-generative-ai",
+                      },
+                    },
+                  },
+                } as never,
+                notes: [
+                  `Vertex AI endpoint: ${locationStr}`,
+                  "If requests fail, verify GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION.",
+                ],
+              });
+            } catch (err) {
+              spin.stop("Google Vertex AI OAuth failed");
+              throw err;
+            }
+          },
+        },
+      ],
+      catalog: {
+        order: "simple" as const,
+        run: async (ctx) => {
+          const env = ctx.env;
+          const existing = ctx.config.models?.providers?.[GOOGLE_VERTEX_PROVIDER_ID];
+
+          // If user already has an explicit baseUrl configured, respect it
+          if (existing?.baseUrl) {
+            return null;
+          }
+
+          const projectId = resolveGoogleVertexProjectId(env);
+          if (!projectId) {
+            return null;
+          }
+
+          const apiKey = ctx.resolveProviderApiKey(GOOGLE_VERTEX_PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+
+          const region = resolveGoogleVertexRegion(env);
+          const baseUrl = buildGoogleVertexBaseUrl({ region, projectId });
+
+          return {
+            provider: {
+              baseUrl,
+              api: "google-generative-ai",
+              apiKey,
+              models: existing?.models ?? [],
+            },
+          };
+        },
+      },
+      normalizeConfig: ({ provider, providerConfig }) =>
+        normalizeGoogleProviderConfig(provider, providerConfig),
+      normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
+      resolveDynamicModel: (ctx) =>
+        resolveGoogleGeminiForwardCompatModel({
+          providerId: ctx.provider,
+          ctx,
+        }),
+      formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
       ...GOOGLE_GEMINI_PROVIDER_HOOKS,
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });

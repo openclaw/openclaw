@@ -9,7 +9,7 @@ export default definePluginEntry({
     api.registerProvider({
       id: "google",
       label: "Google AI Studio",
-      hookAliases: ["google-antigravity", "google-vertex"],
+      hookAliases: ["google-antigravity"],
       auth: [],
       normalizeConfig: ({ provider, providerConfig }) =>
         normalizeGoogleProviderConfig(provider, providerConfig),

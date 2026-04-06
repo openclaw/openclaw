@@ -63,6 +63,14 @@ describe("google generative ai helpers", () => {
     ).toBe(false);
   });
 
+  it("does not treat google-vertex as a google-generative-ai provider", () => {
+    expect(
+      shouldNormalizeGoogleGenerativeAiProviderConfig("google-vertex", {
+        models: [{ api: "openai-completions" }],
+      }),
+    ).toBe(false);
+  });
+
   it("normalizes transport baseUrls only for Google Generative AI", () => {
     expect(
       resolveGoogleGenerativeAiTransport({

@@ -79,8 +79,11 @@ export function shouldNormalizeGoogleGenerativeAiProviderConfig(
   providerKey: string,
   provider: GoogleProviderConfigLike,
 ): boolean {
-  if (providerKey === "google" || providerKey === "google-vertex") {
+  if (providerKey === "google") {
     return true;
+  }
+  if (providerKey === "google-vertex") {
+    return false;
   }
   if (isGoogleGenerativeAiApi(provider.api)) {
     return true;
@@ -94,6 +97,7 @@ export function shouldNormalizeGoogleProviderConfig(
 ): boolean {
   return (
     providerKey === "google-antigravity" ||
+    providerKey === "google-vertex" ||
     shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, provider)
   );
 }
@@ -133,6 +137,10 @@ export function normalizeGoogleProviderConfig(
       normalizedBaseUrl !== modelNormalized.baseUrl
         ? { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl }
         : modelNormalized;
+  }
+
+  if (providerKey === "google-vertex") {
+    nextProvider = normalizeProviderModels(nextProvider, normalizeGoogleModelId);
   }
 
   if (providerKey === "google-antigravity") {
