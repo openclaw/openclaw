@@ -13,6 +13,7 @@ export type BuiltInAuthChoice =
   | "setup-token"
   | "token"
   | "arceeai-api-key"
+  | "arceeai-openrouter"
   | "chutes"
   | "deepseek-api-key"
   | "openai-codex"
