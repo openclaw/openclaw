@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./auth-profiles.js";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForRuntime,
+} from "./auth-profiles.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
 
@@ -399,6 +403,54 @@ describe("ensureAuthProfileStore", () => {
         delete process.env.PI_CODING_AGENT_DIR;
       } else {
         process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not write inherited auth stores during secrets runtime reads", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secrets-runtime-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      const stateDir = path.join(root, ".openclaw");
+      const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+      const workerAgentDir = path.join(stateDir, "agents", "worker", "agent");
+      const workerStorePath = path.join(workerAgentDir, "auth-profiles.json");
+      fs.mkdirSync(mainAgentDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(mainAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(workerAgentDir, { readOnly: true });
+
+      expect(store.profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+      });
+      expect(fs.existsSync(workerStorePath)).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
