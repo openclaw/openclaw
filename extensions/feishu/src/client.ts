@@ -43,15 +43,14 @@ function applyFeishuSDKReconnectPatch(): void {
   const WSClient = defaultFeishuClientSdk.WSClient;
   if (!WSClient?.prototype) return;
 
-  const proto = WSClient.prototype;
+  const proto = WSClient.prototype as Record<string, unknown>;
 
   // --- Fix 1: Guard PingInterval in handleControlData (pong handler) ---
-  const origHandleControlData = proto.handleControlData as
+  const origHandleControlData = proto["handleControlData"] as
     | ((data: { headers: Array<{ key: string; value: string }>; payload?: Uint8Array }) => Promise<void>)
     | undefined;
   if (origHandleControlData) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (proto as unknown as { handleControlData: typeof origHandleControlData }).handleControlData = async function (
+    proto["handleControlData"] = async function (
       data: { headers: Array<{ key: string; value: string }>; payload?: Uint8Array },
     ) {
       const self = this as unknown as Record<string, unknown>;
@@ -73,10 +72,9 @@ function applyFeishuSDKReconnectPatch(): void {
   }
 
   // --- Fix 2: Exponential backoff on reConnect ---
-  const origReConnect = proto.reConnect as ((isStart?: boolean) => Promise<void>) | undefined;
+  const origReConnect = proto["reConnect"] as ((isStart?: boolean) => Promise<void>) | undefined;
   if (origReConnect) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (proto as unknown as { reConnect: typeof origReConnect }).reConnect = async function (isStart = false) {
+    proto["reConnect"] = async function (isStart = false) {
       const self = this as unknown as Record<string, unknown>;
       if (isStart) {
         // Reset backoff counter on a fresh start
