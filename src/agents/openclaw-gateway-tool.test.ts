@@ -679,6 +679,8 @@ describe("gateway tool", () => {
     ["plugins.allow", '{ plugins: { allow: ["acpx"] } }'],
     ["plugins.deny", '{ plugins: { deny: ["acpx"] } }'],
     ["plugins.slots", '{ plugins: { slots: { memory: "acpx" } } }'],
+    ["plugins.load", '{ plugins: { load: { paths: ["/extra/plugins"] } } }'],
+    ["channels", "{ channels: { telegram: { enabled: true } } }"],
   ])("rejects remote config.patch that changes plugin activation via %s", async (_label, raw) => {
     readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
     const tool = requireGatewayTool();

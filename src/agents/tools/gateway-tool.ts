@@ -380,6 +380,12 @@ function assertGatewayConfigMutationAllowed(params: {
       "plugins.allow",
       "plugins.deny",
       "plugins.slots",
+      // plugins.load.paths introduces new plugin manifests on the remote host; local contract
+      // discovery cannot evaluate their dangerous flags, so block load-path changes remotely.
+      "plugins.load",
+      // channels.<id>.enabled activates bundled channel plugins via isBundledChannelEnabledByChannelConfig;
+      // block channel config changes on remote gateways to close this activation path.
+      "channels",
     ] as const;
     const changedActivationPaths = REMOTE_PLUGIN_ACTIVATION_PATHS.filter(
       (path) =>
