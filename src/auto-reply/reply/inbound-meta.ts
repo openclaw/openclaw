@@ -1,4 +1,5 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
@@ -35,28 +36,18 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
 
 function resolveInboundFormattingHints(ctx: TemplateContext):
   | {
-      text_markup: "slack_mrkdwn";
+      text_markup: string;
       rules: string[];
     }
   | undefined {
   const channelValue = resolveInboundChannel(ctx);
-  const surface = safeTrim(ctx.Surface);
-  const provider = safeTrim(ctx.Provider);
-  const isSlack = channelValue === "slack" || surface === "slack" || provider === "slack";
-  if (!isSlack) {
+  if (!channelValue) {
     return undefined;
   }
-
-  return {
-    text_markup: "slack_mrkdwn",
-    rules: [
-      "Use Slack mrkdwn, not standard Markdown.",
-      "Bold uses *single asterisks*.",
-      "Links use <url|label>.",
-      "Code blocks use triple backticks without a language identifier.",
-      "Do not use markdown headings or pipe tables.",
-    ],
-  };
+  const normalizedChannel = normalizeChannelId(channelValue) ?? channelValue;
+  return getChannelPlugin(normalizedChannel)?.agentPrompt?.inboundFormattingHints?.({
+    accountId: safeTrim(ctx.AccountId) ?? undefined,
+  });
 }
 
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {

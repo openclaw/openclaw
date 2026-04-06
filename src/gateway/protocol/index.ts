@@ -120,6 +120,8 @@ import {
   type ExecApprovalsSetParams,
   ExecApprovalsSetParamsSchema,
   type ExecApprovalsSnapshot,
+  type ExecApprovalGetParams,
+  ExecApprovalGetParamsSchema,
   type ExecApprovalRequestParams,
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
@@ -225,8 +227,16 @@ import {
   type SkillsBinsParams,
   SkillsBinsParamsSchema,
   type SkillsBinsResult,
+  type SkillsDetailParams,
+  SkillsDetailParamsSchema,
+  type SkillsDetailResult,
+  SkillsDetailResultSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
+  type SkillsSearchParams,
+  SkillsSearchParamsSchema,
+  type SkillsSearchResult,
+  SkillsSearchResultSchema,
   type SkillsStatusParams,
   SkillsStatusParamsSchema,
   type SkillsUpdateParams,
@@ -404,6 +414,8 @@ export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBins
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
+export const validateSkillsSearchParams = ajv.compile<SkillsSearchParams>(SkillsSearchParamsSchema);
+export const validateSkillsDetailParams = ajv.compile<SkillsDetailParams>(SkillsDetailParamsSchema);
 export const validateCronListParams = ajv.compile<CronListParams>(CronListParamsSchema);
 export const validateCronStatusParams = ajv.compile<CronStatusParams>(CronStatusParamsSchema);
 export const validateCronAddParams = ajv.compile<CronAddParams>(CronAddParamsSchema);
@@ -434,6 +446,9 @@ export const validateExecApprovalsGetParams = ajv.compile<ExecApprovalsGetParams
 );
 export const validateExecApprovalsSetParams = ajv.compile<ExecApprovalsSetParams>(
   ExecApprovalsSetParamsSchema,
+);
+export const validateExecApprovalGetParams = ajv.compile<ExecApprovalGetParams>(
+  ExecApprovalGetParamsSchema,
 );
 export const validateExecApprovalRequestParams = ajv.compile<ExecApprovalRequestParams>(
   ExecApprovalRequestParamsSchema,
@@ -590,6 +605,10 @@ export {
   ToolsCatalogParamsSchema,
   ToolsEffectiveParamsSchema,
   SkillsInstallParamsSchema,
+  SkillsSearchParamsSchema,
+  SkillsSearchResultSchema,
+  SkillsDetailParamsSchema,
+  SkillsDetailResultSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
@@ -601,6 +620,11 @@ export {
   CronRunsParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
+  ExecApprovalsGetParamsSchema,
+  ExecApprovalsSetParamsSchema,
+  ExecApprovalGetParamsSchema,
+  ExecApprovalRequestParamsSchema,
+  ExecApprovalResolveParamsSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,
@@ -685,6 +709,10 @@ export type {
   ToolsEffectiveResult,
   SkillsBinsParams,
   SkillsBinsResult,
+  SkillsSearchParams,
+  SkillsSearchResult,
+  SkillsDetailParams,
+  SkillsDetailResult,
   SkillsInstallParams,
   SkillsUpdateParams,
   NodePairRejectParams,
@@ -718,6 +746,9 @@ export type {
   ExecApprovalsGetParams,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
+  ExecApprovalGetParams,
+  ExecApprovalRequestParams,
+  ExecApprovalResolveParams,
   LogsTailParams,
   LogsTailResult,
   PollParams,

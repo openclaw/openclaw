@@ -112,7 +112,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => ({
   checkQmdBinaryAvailability,
 }));
 
-vi.mock("./manager-runtime.js", () => ({
+vi.mock("../../manager-runtime.js", () => ({
   MemoryIndexManager: {
     get: mockMemoryIndexGet,
   },

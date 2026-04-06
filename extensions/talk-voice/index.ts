@@ -144,15 +144,14 @@ export default definePluginEntry({
         const apiKey = asTrimmedString(active.config.apiKey);
         const baseUrl = asProviderBaseUrl(active.config.baseUrl);
 
-        const currentVoiceId =
-          asTrimmedString(active.config.voiceId) || asTrimmedString(cfg.talk?.voiceId);
+        const currentVoiceId = asTrimmedString(active.config.voiceId);
 
         if (action === "status") {
           return {
             text:
               "Talk voice status:\n" +
               `- provider: ${providerId}\n` +
-              `- talk.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
+              `- talk.providers.${providerId}.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
               `- ${providerId}.apiKey: ${apiKey ? mask(apiKey) : "(unset)"}`,
           };
         }

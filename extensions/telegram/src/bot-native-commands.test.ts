@@ -1,13 +1,14 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { TELEGRAM_COMMAND_NAME_PATTERN } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
+let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
 import {
   createCommandBot,
   createNativeCommandTestParams,
@@ -22,8 +23,11 @@ import {
 
 describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
-    ({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
-      await import("./bot-native-commands.js"));
+    ({
+      registerTelegramNativeCommands,
+      parseTelegramNativeCommandCallbackData,
+      resolveTelegramNativeCommandDisableBlockStreaming,
+    } = await import("./bot-native-commands.js"));
   });
 
   beforeEach(() => {
@@ -98,6 +102,44 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredCommands).toEqual(customCommands.slice(0, 100));
     expect(runtimeLog).toHaveBeenCalledWith(
       "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
+    );
+  });
+
+  it("keeps sub-100 commands by shortening long descriptions to fit Telegram payload budget", async () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: false },
+    };
+    const customCommands = Array.from({ length: 92 }, (_, index) => ({
+      command: `cmd_${index}`,
+      description: `Command ${index} ` + "x".repeat(120),
+    }));
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const runtimeLog = vi.fn();
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(cfg),
+      bot: {
+        api: {
+          setMyCommands,
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn(),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      runtime: { log: runtimeLog } as unknown as RuntimeEnv,
+      telegramCfg: { customCommands } as TelegramAccountConfig,
+      nativeEnabled: false,
+      nativeSkillsEnabled: false,
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(registeredCommands).toHaveLength(92);
+    expect(
+      registeredCommands.some(
+        (entry) => entry.description.length < customCommands[0]!.description.length,
+      ),
+    ).toBe(true);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "Telegram menu text exceeded the conservative 5700-character payload budget; shortening descriptions to keep 92 commands visible.",
     );
   });
 
@@ -243,6 +285,27 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
+  it("uses nested streaming.block.enabled for native command block-streaming behavior", () => {
+    expect(
+      resolveTelegramNativeCommandDisableBlockStreaming({
+        streaming: {
+          block: {
+            enabled: false,
+          },
+        },
+      } as TelegramAccountConfig),
+    ).toBe(true);
+    expect(
+      resolveTelegramNativeCommandDisableBlockStreaming({
+        streaming: {
+          block: {
+            enabled: true,
+          },
+        },
+      } as TelegramAccountConfig),
+    ).toBe(false);
+  });
+
   it("uses plugin command metadata to send and edit a Telegram progress placeholder", async () => {
     const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
 
@@ -256,8 +319,10 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage:
-          "Running this command now...\n\nI'll edit this message with the final result when it's ready.",
+        nativeProgressMessages: {
+          telegram:
+            "Running this command now...\n\nI'll edit this message with the final result when it's ready.",
+        },
       },
       args: "now",
     } as never);
@@ -315,7 +380,7 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage: "Working on it...",
+        nativeProgressMessages: { telegram: "Working on it..." },
       },
       args: "now",
     } as never);
@@ -362,7 +427,7 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage: "Working on it...",
+        nativeProgressMessages: { telegram: "Working on it..." },
       },
       args: "now",
     } as never);
@@ -406,7 +471,7 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage: "Working on it...",
+        nativeProgressMessages: { telegram: "Working on it..." },
       },
       args: "now",
     } as never);
@@ -446,7 +511,7 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage: "Working on it...",
+        nativeProgressMessages: { telegram: "Working on it..." },
       },
       args: "now",
     } as never);

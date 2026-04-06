@@ -1,11 +1,12 @@
 import { isIP } from "node:net";
 import path from "node:path";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { type ExecApprovalsFile, loadExecApprovals } from "../infra/exec-approvals.js";
@@ -16,13 +17,7 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
-import { isBlockedHostnameOrIp, isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
-import {
-  redactCdpUrl,
-  resolveBrowserConfig,
-  resolveBrowserControlAuth,
-  resolveProfile,
-} from "../plugin-sdk/browser-config.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   formatPermissionDetail,
@@ -123,10 +118,17 @@ let auditDeepModulePromise: Promise<typeof import("./audit.deep.runtime.js")> | 
 let auditChannelModulePromise:
   | Promise<typeof import("./audit-channel.collect.runtime.js")>
   | undefined;
+let pluginRegistryLoaderModulePromise:
+  | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
+  | undefined;
+let pluginMetadataRegistryLoaderModulePromise:
+  | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
+  | undefined;
 let gatewayProbeDepsPromise:
   | Promise<{
       buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
       resolveGatewayProbeAuthSafe: typeof import("../gateway/probe-auth.js").resolveGatewayProbeAuthSafe;
+      resolveGatewayProbeTarget: typeof import("../gateway/probe-auth.js").resolveGatewayProbeTarget;
       probeGateway: typeof import("../gateway/probe.js").probeGateway;
     }>
   | undefined;
@@ -151,6 +153,17 @@ async function loadAuditChannelModule() {
   return await auditChannelModulePromise;
 }
 
+async function loadPluginRegistryLoaderModule() {
+  pluginRegistryLoaderModulePromise ??= import("../plugins/runtime/runtime-registry-loader.js");
+  return await pluginRegistryLoaderModulePromise;
+}
+
+async function loadPluginMetadataRegistryLoaderModule() {
+  pluginMetadataRegistryLoaderModulePromise ??=
+    import("../plugins/runtime/metadata-registry-loader.js");
+  return await pluginMetadataRegistryLoaderModulePromise;
+}
+
 async function loadGatewayProbeDeps() {
   gatewayProbeDepsPromise ??= Promise.all([
     import("../gateway/call.js"),
@@ -159,6 +172,7 @@ async function loadGatewayProbeDeps() {
   ]).then(([callModule, probeAuthModule, probeModule]) => ({
     buildGatewayConnectionDetails: callModule.buildGatewayConnectionDetails,
     resolveGatewayProbeAuthSafe: probeAuthModule.resolveGatewayProbeAuthSafe,
+    resolveGatewayProbeTarget: probeAuthModule.resolveGatewayProbeTarget,
     probeGateway: probeModule.probeGateway,
   }));
   return await gatewayProbeDepsPromise;
@@ -196,46 +210,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function hasNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
-  const channels = asRecord(cfg.channels);
-  const feishu = asRecord(channels?.feishu);
-  if (!feishu || feishu.enabled === false) {
-    return false;
-  }
-
-  const baseTools = asRecord(feishu.tools);
-  const baseDocEnabled = baseTools?.doc !== false;
-  const baseAppId = hasNonEmptyString(feishu.appId);
-  const baseAppSecret = hasConfiguredSecretInput(feishu.appSecret, cfg.secrets?.defaults);
-  const baseConfigured = baseAppId && baseAppSecret;
-
-  const accounts = asRecord(feishu.accounts);
-  if (!accounts || Object.keys(accounts).length === 0) {
-    return baseDocEnabled && baseConfigured;
-  }
-
-  for (const accountValue of Object.values(accounts)) {
-    const account = asRecord(accountValue) ?? {};
-    if (account.enabled === false) {
-      continue;
-    }
-    const accountTools = asRecord(account.tools);
-    const effectiveTools = accountTools ?? baseTools;
-    const docEnabled = effectiveTools?.doc !== false;
-    if (!docEnabled) {
-      continue;
-    }
-    const accountConfigured =
-      (hasNonEmptyString(account.appId) || baseAppId) &&
-      (hasConfiguredSecretInput(account.appSecret, cfg.secrets?.defaults) || baseAppSecret);
-    if (accountConfigured) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 async function collectFilesystemFindings(params: {
@@ -369,7 +343,7 @@ async function collectFilesystemFindings(params: {
   return findings;
 }
 
-function collectGatewayConfigFindings(
+export function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
   sourceConfig: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -607,18 +581,6 @@ function collectGatewayConfigFindings(
     });
   }
 
-  if (isFeishuDocToolEnabled(cfg)) {
-    findings.push({
-      checkId: "channels.feishu.doc_owner_open_id",
-      severity: "warn",
-      title: "Feishu doc create can grant requester permissions",
-      detail:
-        'channels.feishu tools include "doc"; feishu_doc action "create" can grant document access to the trusted requesting Feishu user.',
-      remediation:
-        "Disable channels.feishu.tools.doc when not needed, and restrict tool access for untrusted prompts.",
-    });
-  }
-
   const enabledDangerousFlags = collectEnabledInsecureOrDangerousFlags(cfg);
   if (enabledDangerousFlags.length > 0) {
     findings.push({
@@ -746,99 +708,76 @@ function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
   return false;
 }
 
-function collectBrowserControlFindings(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): SecurityAuditFinding[] {
-  const findings: SecurityAuditFinding[] = [];
-
-  let resolved: ReturnType<typeof resolveBrowserConfig>;
-  try {
-    resolved = resolveBrowserConfig(cfg.browser, cfg);
-  } catch (err) {
-    findings.push({
-      checkId: "browser.control_invalid_config",
-      severity: "warn",
-      title: "Browser control config looks invalid",
-      detail: String(err),
-      remediation: `Fix browser.cdpUrl in ${resolveConfigPath()} and re-run "${formatCliCommand("openclaw security audit --deep")}".`,
+async function collectPluginSecurityAuditFindings(
+  context: AuditExecutionContext,
+): Promise<SecurityAuditFinding[]> {
+  let collectors = getActivePluginRegistry()?.securityAuditCollectors ?? [];
+  if (collectors.length === 0) {
+    const autoEnabled = applyPluginAutoEnable({
+      config: context.sourceConfig,
+      env: context.env,
     });
-    return findings;
-  }
-
-  if (!resolved.enabled) {
-    return findings;
-  }
-
-  const browserAuth = resolveBrowserControlAuth(cfg, env);
-  const explicitAuthMode = cfg.gateway?.auth?.mode;
-  const tokenConfigured =
-    Boolean(browserAuth.token) ||
-    hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN) ||
-    hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
-  const passwordCanWin =
-    explicitAuthMode === "password" ||
-    (explicitAuthMode !== "token" &&
-      explicitAuthMode !== "none" &&
-      explicitAuthMode !== "trusted-proxy" &&
-      !tokenConfigured);
-  const passwordConfigured =
-    Boolean(browserAuth.password) ||
-    (passwordCanWin &&
-      (hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD) ||
-        hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults)));
-  if (!tokenConfigured && !passwordConfigured) {
-    findings.push({
-      checkId: "browser.control_no_auth",
-      severity: "critical",
-      title: "Browser control has no auth",
-      detail:
-        "Browser control HTTP routes are enabled but no gateway.auth token/password is configured. " +
-        "Any local process (or SSRF to loopback) can call browser control endpoints.",
-      remediation:
-        "Set gateway.auth.token (recommended) or gateway.auth.password so browser control HTTP routes require authentication. Restarting the gateway will auto-generate gateway.auth.token when browser control is enabled.",
+    const requestedPluginIds = new Set<string>();
+    for (const pluginId of Object.keys(autoEnabled.autoEnabledReasons)) {
+      const normalized = pluginId.trim();
+      if (normalized) {
+        requestedPluginIds.add(normalized);
+      }
+    }
+    for (const pluginId of autoEnabled.config.plugins?.allow ?? []) {
+      if (typeof pluginId !== "string") {
+        continue;
+      }
+      const normalized = pluginId.trim();
+      if (normalized) {
+        requestedPluginIds.add(normalized);
+      }
+    }
+    for (const [pluginId, entry] of Object.entries(autoEnabled.config.plugins?.entries ?? {})) {
+      if (entry?.enabled === false) {
+        continue;
+      }
+      const normalized = pluginId.trim();
+      if (normalized) {
+        requestedPluginIds.add(normalized);
+      }
+    }
+    if (requestedPluginIds.size === 0) {
+      return [];
+    }
+    const snapshot = (
+      await loadPluginMetadataRegistryLoaderModule()
+    ).loadPluginMetadataRegistrySnapshot({
+      config: autoEnabled.config,
+      activationSourceConfig: context.sourceConfig,
+      env: context.env,
+      onlyPluginIds: [...requestedPluginIds],
     });
+    collectors = snapshot.securityAuditCollectors ?? [];
   }
-
-  for (const name of Object.keys(resolved.profiles)) {
-    const profile = resolveProfile(resolved, name);
-    if (!profile || profile.cdpIsLoopback) {
-      continue;
-    }
-    let url: URL;
-    try {
-      url = new URL(profile.cdpUrl);
-    } catch {
-      continue;
-    }
-    const redactedCdpUrl = redactCdpUrl(profile.cdpUrl) ?? profile.cdpUrl;
-    if (url.protocol === "http:") {
-      findings.push({
-        checkId: "browser.remote_cdp_http",
-        severity: "warn",
-        title: "Remote CDP uses HTTP",
-        detail: `browser profile "${name}" uses http CDP (${redactedCdpUrl}); this is OK only if it's tailnet-only or behind an encrypted tunnel.`,
-        remediation: `Prefer HTTPS/TLS or a tailnet-only endpoint for remote CDP.`,
-      });
-    }
-    if (
-      isPrivateNetworkAllowedByPolicy(resolved.ssrfPolicy) &&
-      isBlockedHostnameOrIp(url.hostname)
-    ) {
-      findings.push({
-        checkId: "browser.remote_cdp_private_host",
-        severity: "warn",
-        title: "Remote CDP targets a private/internal host",
-        detail:
-          `browser profile "${name}" points at a private/internal CDP host (${redactedCdpUrl}). ` +
-          "This is expected for LAN/tailnet/WSL-style setups, but treat it as a trusted-network endpoint.",
-        remediation:
-          "Prefer a tailnet or tunnel for remote CDP. If you want strict blocking, set browser.ssrfPolicy.dangerouslyAllowPrivateNetwork=false and allow only explicit hosts.",
-      });
-    }
-  }
-
-  return findings;
+  const collectorResults = await Promise.all(
+    collectors.map(async (entry) => {
+      try {
+        return await entry.collector({
+          config: context.cfg,
+          sourceConfig: context.sourceConfig,
+          env: context.env,
+          stateDir: context.stateDir,
+          configPath: context.configPath,
+        });
+      } catch (err) {
+        return [
+          {
+            checkId: `plugins.${entry.pluginId}.security_audit_failed`,
+            severity: "warn" as const,
+            title: "Plugin security audit collector failed",
+            detail: `${entry.pluginId}: ${String(err)}`,
+          },
+        ];
+      }
+    }),
+  );
+  return collectorResults.flat();
 }
 
 function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
@@ -1277,29 +1216,18 @@ async function maybeProbeGateway(params: {
   deep: SecurityAuditReport["deep"];
   authWarning?: string;
 }> {
-  const { buildGatewayConnectionDetails, resolveGatewayProbeAuthSafe } =
+  const { buildGatewayConnectionDetails, resolveGatewayProbeAuthSafe, resolveGatewayProbeTarget } =
     await loadGatewayProbeDeps();
   const connection = buildGatewayConnectionDetails({ config: params.cfg });
   const url = connection.url;
-  const isRemoteMode = params.cfg.gateway?.mode === "remote";
-  const remoteUrlRaw =
-    typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url.trim() : "";
-  const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
+  const probeTarget = resolveGatewayProbeTarget(params.cfg);
 
-  const authResolution =
-    !isRemoteMode || remoteUrlMissing
-      ? resolveGatewayProbeAuthSafe({
-          cfg: params.cfg,
-          env: params.env,
-          mode: "local",
-          explicitAuth: params.explicitAuth,
-        })
-      : resolveGatewayProbeAuthSafe({
-          cfg: params.cfg,
-          env: params.env,
-          mode: "remote",
-          explicitAuth: params.explicitAuth,
-        });
+  const authResolution = resolveGatewayProbeAuthSafe({
+    cfg: params.cfg,
+    env: params.env,
+    mode: probeTarget.mode,
+    explicitAuth: params.explicitAuth,
+  });
   const res = await params
     .probe({ url, auth: authResolution.auth, timeoutMs: params.timeoutMs })
     .catch((err) => ({
@@ -1382,7 +1310,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(...collectGatewayConfigFindings(cfg, context.sourceConfig, env));
-  findings.push(...collectBrowserControlFindings(cfg, env));
+  findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
@@ -1458,6 +1386,14 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     context.includeChannelSecurity &&
     (context.plugins !== undefined || hasPotentialConfiguredChannels(cfg, env));
   if (shouldAuditChannelSecurity) {
+    if (context.plugins === undefined) {
+      (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
+        scope: "configured-channels",
+        config: cfg,
+        activationSourceConfig: context.sourceConfig,
+        env,
+      });
+    }
     const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(

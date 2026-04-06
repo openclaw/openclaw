@@ -2,8 +2,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createSandboxTestContext } from "openclaw/plugin-sdk/testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSandboxTestContext } from "../../../src/agents/sandbox/test-fixtures.js";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import {
   buildExecRemoteCommand,
@@ -74,8 +74,8 @@ describe("openshell cli helpers", () => {
 
 describe("openshell backend manager", () => {
   beforeAll(async () => {
-    vi.doMock("./cli.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./cli.js")>();
+    vi.doMock("./cli.js", async () => {
+      const actual = await vi.importActual<typeof import("./cli.js")>("./cli.js");
       return {
         ...actual,
         runOpenShellCli: cliMocks.runOpenShellCli,

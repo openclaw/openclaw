@@ -61,17 +61,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
-import {
-  setThreadBindingIdleTimeoutBySessionKey,
-  setThreadBindingMaxAgeBySessionKey,
-} from "../../plugin-sdk/discord-thread-bindings.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
-import { defineCachedValue } from "./runtime-cache.js";
-import { createRuntimeDiscord } from "./runtime-discord.js";
-import { createRuntimeLine } from "./runtime-line.js";
-import { createRuntimeMatrix } from "./runtime-matrix.js";
-import { createRuntimeSignal } from "./runtime-signal.js";
-import { createRuntimeSlack } from "./runtime-slack.js";
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
@@ -161,63 +151,22 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       loadAdapter: loadChannelOutboundAdapter,
     },
     threadBindings: {
-      setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) => {
-        switch (channelId) {
-          case "discord":
-            return setThreadBindingIdleTimeoutBySessionKey({
-              targetSessionKey,
-              accountId,
-              idleTimeoutMs,
-            });
-          case "matrix":
-            return setChannelConversationBindingIdleTimeoutBySessionKey({
-              channelId,
-              targetSessionKey,
-              accountId: accountId ?? "",
-              idleTimeoutMs,
-            });
-          case "telegram":
-            return setChannelConversationBindingIdleTimeoutBySessionKey({
-              channelId,
-              targetSessionKey,
-              accountId,
-              idleTimeoutMs,
-            });
-        }
-      },
-      setMaxAgeBySessionKey: ({ channelId, targetSessionKey, accountId, maxAgeMs }) => {
-        switch (channelId) {
-          case "discord":
-            return setThreadBindingMaxAgeBySessionKey({
-              targetSessionKey,
-              accountId,
-              maxAgeMs,
-            });
-          case "matrix":
-            return setChannelConversationBindingMaxAgeBySessionKey({
-              channelId,
-              targetSessionKey,
-              accountId: accountId ?? "",
-              maxAgeMs,
-            });
-          case "telegram":
-            return setChannelConversationBindingMaxAgeBySessionKey({
-              channelId,
-              targetSessionKey,
-              accountId,
-              maxAgeMs,
-            });
-        }
-      },
+      setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>
+        setChannelConversationBindingIdleTimeoutBySessionKey({
+          channelId,
+          targetSessionKey,
+          accountId,
+          idleTimeoutMs,
+        }),
+      setMaxAgeBySessionKey: ({ channelId, targetSessionKey, accountId, maxAgeMs }) =>
+        setChannelConversationBindingMaxAgeBySessionKey({
+          channelId,
+          targetSessionKey,
+          accountId,
+          maxAgeMs,
+        }),
     },
-  } satisfies Omit<PluginRuntime["channel"], "discord" | "slack" | "matrix" | "signal" | "line"> &
-    Partial<Pick<PluginRuntime["channel"], "discord" | "slack" | "matrix" | "signal" | "line">>;
-
-  defineCachedValue(channelRuntime, "discord", createRuntimeDiscord);
-  defineCachedValue(channelRuntime, "slack", createRuntimeSlack);
-  defineCachedValue(channelRuntime, "matrix", createRuntimeMatrix);
-  defineCachedValue(channelRuntime, "signal", createRuntimeSignal);
-  defineCachedValue(channelRuntime, "line", createRuntimeLine);
+  } satisfies PluginRuntime["channel"];
 
   return channelRuntime as PluginRuntime["channel"];
 }

@@ -8,12 +8,13 @@ import {
   type StatusReactionAdapter,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingNativeTransport,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -31,12 +32,14 @@ import type { SlackStreamSession } from "../../streaming.js";
 import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
+import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
 import {
   createSlackReplyDeliveryPlan,
   deliverReplies,
   readSlackReplyBlocks,
   resolveSlackThreadTs,
 } from "../replies.js";
+import { createReplyDispatcherWithTyping, dispatchInboundMessage } from "../reply.runtime.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -109,7 +112,7 @@ export function shouldInitializeSlackDraftStream(params: {
 }
 
 export function resolveSlackStreamingThreadHint(params: {
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   isThreadReply?: boolean;
@@ -320,8 +323,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const slackStreaming = resolveSlackStreamingConfig({
     streaming: account.config.streaming,
-    streamMode: account.config.streamMode,
-    nativeStreaming: account.config.nativeStreaming,
+    nativeStreaming: resolveChannelStreamingNativeTransport(account.config),
   });
   const streamThreadHint = resolveSlackStreamingThreadHint({
     replyToMode: prepared.replyToMode,
@@ -577,8 +579,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         hasRepliedRef,
         disableBlockStreaming: useStreaming
           ? true
-          : typeof account.config.blockStreaming === "boolean"
-            ? !account.config.blockStreaming
+          : typeof resolveChannelStreamingBlockEnabled(account.config) === "boolean"
+            ? !resolveChannelStreamingBlockEnabled(account.config)
             : undefined,
         onModelSelected,
         onPartialReply: useStreaming

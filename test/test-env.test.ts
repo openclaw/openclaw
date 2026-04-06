@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "./helpers/import-fresh.js";
+import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
 const ORIGINAL_ENV = { ...process.env };
@@ -31,9 +31,7 @@ function writeFile(targetPath: string, content: string): void {
 }
 
 function createTempHome(): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-env-real-home-"));
-  tempDirs.add(tempDir);
-  return tempDir;
+  return makeTempDir(tempDirs, "openclaw-test-env-real-home-");
 }
 
 afterEach(() => {
@@ -41,10 +39,7 @@ afterEach(() => {
     cleanupFns.pop()?.();
   }
   restoreProcessEnv();
-  for (const tempDir of tempDirs) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-  tempDirs.clear();
+  cleanupTempDirs(tempDirs);
 });
 
 describe("installTestEnv", () => {
@@ -139,6 +134,25 @@ describe("installTestEnv", () => {
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.HOME).toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+  });
+
+  it("does not load ~/.profile for normal isolated test runs", () => {
+    const realHome = createTempHome();
+    writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
+
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    delete process.env.LIVE;
+    delete process.env.OPENCLAW_LIVE_TEST;
+    delete process.env.OPENCLAW_LIVE_GATEWAY;
+    delete process.env.OPENCLAW_LIVE_USE_REAL_HOME;
+    delete process.env.OPENCLAW_LIVE_TEST_QUIET;
+
+    const testEnv = installTestEnv();
+    cleanupFns.push(testEnv.cleanup);
+
+    expect(testEnv.tempHome).not.toBe(realHome);
+    expect(process.env.TEST_PROFILE_ONLY).toBeUndefined();
   });
 
   it("falls back to parsing ~/.profile when bash is unavailable", async () => {

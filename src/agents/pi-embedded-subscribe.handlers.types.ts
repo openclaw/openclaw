@@ -29,6 +29,9 @@ export type EmbeddedPiSubscribeState = {
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
+  itemActiveIds: Set<string>;
+  itemStartedCount: number;
+  itemCompletedCount: number;
   lastToolError?: ToolErrorSummary;
 
   blockReplyBreak: "text_end" | "message_end";
@@ -137,6 +140,7 @@ export type ToolHandlerParams = Pick<
   | "sessionKey"
   | "sessionId"
   | "agentId"
+  | "toolResultFormat"
 >;
 
 export type ToolHandlerState = Pick<
@@ -144,6 +148,9 @@ export type ToolHandlerState = Pick<
   | "toolMetaById"
   | "toolMetas"
   | "toolSummaryById"
+  | "itemActiveIds"
+  | "itemStartedCount"
+  | "itemCompletedCount"
   | "lastToolError"
   | "pendingMessagingTargets"
   | "pendingMessagingTexts"

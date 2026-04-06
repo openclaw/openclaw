@@ -1,3 +1,5 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -7,6 +9,44 @@ const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 vi.mock("./openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
 }));
+
+function runWrappedPayloadCase(params: {
+  wrap: NonNullable<ReturnType<typeof buildOpenAIProvider>["wrapStreamFn"]>;
+  provider: string;
+  modelId: string;
+  model:
+    | Model<"openai-responses">
+    | Model<"openai-codex-responses">
+    | Model<"azure-openai-responses">;
+  extraParams?: Record<string, unknown>;
+  cfg?: Record<string, unknown>;
+  payload?: Record<string, unknown>;
+}) {
+  const payload = params.payload ?? { store: false };
+  let capturedOptions: (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined;
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    capturedOptions = options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined;
+    options?.onPayload?.(payload, model);
+    return {} as ReturnType<StreamFn>;
+  };
+
+  const streamFn = params.wrap({
+    provider: params.provider,
+    modelId: params.modelId,
+    extraParams: params.extraParams,
+    config: params.cfg as never,
+    agentDir: "/tmp/openai-provider-test",
+    streamFn: baseStreamFn,
+  } as never);
+
+  const context: Context = { messages: [] };
+  void streamFn?.(params.model, context, {});
+
+  return {
+    payload,
+    options: capturedOptions,
+  };
+}
 
 describe("buildOpenAIProvider", () => {
   it("resolves gpt-5.4 mini and nano from GPT-5 small-model templates", () => {
@@ -123,6 +163,58 @@ describe("buildOpenAIProvider", () => {
     );
   });
 
+  it("owns native reasoning output mode for OpenAI and Azure OpenAI responses", () => {
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "azure-openai-responses",
+        modelApi: "azure-openai-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe("native");
+  });
+
+  it("keeps GPT-5.4 family metadata aligned with native OpenAI docs", () => {
+    const provider = buildOpenAIProvider();
+    const codexProvider = buildOpenAICodexProviderPlugin();
+
+    const openaiModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelRegistry: { find: () => null },
+    } as never);
+    const codexModel = codexProvider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(openaiModel).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+    expect(codexModel).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
@@ -172,6 +264,170 @@ describe("buildOpenAIProvider", () => {
     ).toBe(true);
   });
 
+  it("owns replay policy for OpenAI and Codex transports", () => {
+    const provider = buildOpenAIProvider();
+    const codexProvider = buildOpenAICodexProviderPlugin();
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "openai",
+        modelApi: "openai",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "images-only",
+      applyAssistantFirstOrderingFix: false,
+      sanitizeToolCallIds: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+    });
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "openai",
+        modelApi: "openai-completions",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "images-only",
+      applyAssistantFirstOrderingFix: false,
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+    });
+
+    expect(
+      codexProvider.buildReplayPolicy?.({
+        provider: "openai-codex",
+        modelApi: "openai-codex-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "images-only",
+      applyAssistantFirstOrderingFix: false,
+      sanitizeToolCallIds: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+    });
+  });
+
+  it("owns direct OpenAI wrapper composition for responses payloads", () => {
+    const provider = buildOpenAIProvider();
+    const extraParams = provider.prepareExtraParams?.({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      extraParams: {
+        fastMode: true,
+        serviceTier: "priority",
+        textVerbosity: "low",
+      },
+    } as never);
+    const result = runWrappedPayloadCase({
+      wrap: provider.wrapStreamFn as NonNullable<typeof provider.wrapStreamFn>,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      extraParams: extraParams ?? undefined,
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        reasoning: { effort: "none" },
+      },
+    });
+
+    expect(extraParams).toMatchObject({
+      transport: "auto",
+      openaiWsWarmup: true,
+    });
+    expect(result.payload.service_tier).toBe("priority");
+    expect(result.payload.text).toEqual({ verbosity: "low" });
+    expect(result.payload.reasoning).toEqual({ effort: "none" });
+  });
+
+  it("owns Azure OpenAI reasoning compatibility without forcing OpenAI transport defaults", () => {
+    const provider = buildOpenAIProvider();
+    const result = runWrappedPayloadCase({
+      wrap: provider.wrapStreamFn as NonNullable<typeof provider.wrapStreamFn>,
+      provider: "azure-openai-responses",
+      modelId: "gpt-5.4",
+      model: {
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-5.4",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as Model<"azure-openai-responses">,
+      payload: {
+        reasoning: { effort: "none" },
+      },
+    });
+
+    expect(result.options?.transport).toBeUndefined();
+    expect(result.options?.openaiWsWarmup).toBeUndefined();
+    expect(result.payload.reasoning).toEqual({ effort: "none" });
+  });
+
+  it("owns Codex wrapper composition for responses payloads", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const result = runWrappedPayloadCase({
+      wrap: provider.wrapStreamFn as NonNullable<typeof provider.wrapStreamFn>,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      extraParams: {
+        fastMode: true,
+        serviceTier: "priority",
+        text_verbosity: "high",
+      },
+      cfg: {
+        auth: {
+          profiles: {
+            "openai-codex:default": {
+              provider: "openai-codex",
+              mode: "oauth",
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: {
+                enabled: true,
+                mode: "live",
+                allowedDomains: ["example.com"],
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as Model<"openai-codex-responses">,
+      payload: {
+        store: false,
+        text: { verbosity: "medium" },
+        tools: [{ type: "function", name: "read" }],
+      },
+    });
+
+    expect(result.payload.store).toBe(false);
+    expect(result.payload.service_tier).toBe("priority");
+    expect(result.payload.text).toEqual({ verbosity: "high" });
+    expect(result.payload.tools).toEqual([
+      { type: "function", name: "read" },
+      {
+        type: "web_search",
+        external_web_access: true,
+        filters: { allowed_domains: ["example.com"] },
+      },
+    ]);
+  });
   it("falls back to cached codex oauth credentials on accountId extraction failures", async () => {
     const provider = buildOpenAICodexProviderPlugin();
     const credential = {

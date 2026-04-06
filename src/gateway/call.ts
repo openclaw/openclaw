@@ -43,6 +43,14 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
+import {
+  ALL_GATEWAY_SECRET_INPUT_PATHS,
+  assignResolvedGatewaySecretInput,
+  isSupportedGatewaySecretInputPath,
+  isTokenGatewaySecretInputPath,
+  readGatewaySecretInputValue,
+  type SupportedGatewaySecretInputPath,
+} from "./secret-input-paths.js";
 export type { GatewayConnectionDetails };
 
 type CallGatewayBaseOptions = {
@@ -364,44 +372,6 @@ async function resolveGatewayCredentialsWithEnv(
   return resolveGatewayCredentialsFromConfigWithSecretInputs({ context, env });
 }
 
-type SupportedGatewaySecretInputPath =
-  | "gateway.auth.token"
-  | "gateway.auth.password"
-  | "gateway.remote.token"
-  | "gateway.remote.password";
-
-const ALL_GATEWAY_SECRET_INPUT_PATHS: SupportedGatewaySecretInputPath[] = [
-  "gateway.auth.token",
-  "gateway.auth.password",
-  "gateway.remote.token",
-  "gateway.remote.password",
-];
-
-function isSupportedGatewaySecretInputPath(path: string): path is SupportedGatewaySecretInputPath {
-  return (
-    path === "gateway.auth.token" ||
-    path === "gateway.auth.password" ||
-    path === "gateway.remote.token" ||
-    path === "gateway.remote.password"
-  );
-}
-
-function readGatewaySecretInputValue(
-  config: OpenClawConfig,
-  path: SupportedGatewaySecretInputPath,
-): unknown {
-  if (path === "gateway.auth.token") {
-    return config.gateway?.auth?.token;
-  }
-  if (path === "gateway.auth.password") {
-    return config.gateway?.auth?.password;
-  }
-  if (path === "gateway.remote.token") {
-    return config.gateway?.remote?.token;
-  }
-  return config.gateway?.remote?.password;
-}
-
 function hasConfiguredGatewaySecretRef(
   config: OpenClawConfig,
   path: SupportedGatewaySecretInputPath,
@@ -434,10 +404,6 @@ function resolveGatewayCredentialsFromConfigOptions(params: {
     remoteTokenFallback: context.remoteTokenFallback,
     remotePasswordFallback: context.remotePasswordFallback,
   } as const;
-}
-
-function isTokenGatewaySecretInputPath(path: SupportedGatewaySecretInputPath): boolean {
-  return path === "gateway.auth.token" || path === "gateway.remote.token";
 }
 
 function localAuthModeAllowsGatewaySecretInputPath(params: {
@@ -515,66 +481,12 @@ async function resolveConfiguredGatewaySecretInput(params: {
   path: SupportedGatewaySecretInputPath;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
-  const { config, path, env } = params;
-  if (path === "gateway.auth.token") {
-    return resolveGatewaySecretInputString({
-      config,
-      value: config.gateway?.auth?.token,
-      path,
-      env,
-    });
-  }
-  if (path === "gateway.auth.password") {
-    return resolveGatewaySecretInputString({
-      config,
-      value: config.gateway?.auth?.password,
-      path,
-      env,
-    });
-  }
-  if (path === "gateway.remote.token") {
-    return resolveGatewaySecretInputString({
-      config,
-      value: config.gateway?.remote?.token,
-      path,
-      env,
-    });
-  }
   return resolveGatewaySecretInputString({
-    config,
-    value: config.gateway?.remote?.password,
-    path,
-    env,
+    config: params.config,
+    value: readGatewaySecretInputValue(params.config, params.path),
+    path: params.path,
+    env: params.env,
   });
-}
-
-function assignResolvedGatewaySecretInput(params: {
-  config: OpenClawConfig;
-  path: SupportedGatewaySecretInputPath;
-  value: string | undefined;
-}): void {
-  const { config, path, value } = params;
-  if (path === "gateway.auth.token") {
-    if (config.gateway?.auth) {
-      config.gateway.auth.token = value;
-    }
-    return;
-  }
-  if (path === "gateway.auth.password") {
-    if (config.gateway?.auth) {
-      config.gateway.auth.password = value;
-    }
-    return;
-  }
-  if (path === "gateway.remote.token") {
-    if (config.gateway?.remote) {
-      config.gateway.remote.token = value;
-    }
-    return;
-  }
-  if (config.gateway?.remote) {
-    config.gateway.remote.password = value;
-  }
 }
 
 async function resolvePreferredGatewaySecretInputs(params: {

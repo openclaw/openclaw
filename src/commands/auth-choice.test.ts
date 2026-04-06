@@ -5,12 +5,9 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { GOOGLE_GEMINI_DEFAULT_MODEL } from "../plugin-sdk/google.js";
-import { MINIMAX_CN_API_BASE_URL } from "../plugin-sdk/minimax.js";
-import { ZAI_CODING_CN_BASE_URL, ZAI_CODING_GLOBAL_BASE_URL } from "../plugin-sdk/zai.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import { providerApiKeyAuthRuntime } from "../plugins/provider-api-key-auth.runtime.js";
-import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
+import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import type { AuthChoice } from "./onboard-types.js";
@@ -26,6 +23,11 @@ import {
 
 type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
 
+const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
+const MINIMAX_CN_API_BASE_URL = "https://api.minimax.chat/v1";
+const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
+
 const loginOpenAICodexOAuth = vi.hoisted(() =>
   vi.fn<() => Promise<OAuthCredentials | null>>(async () => null),
 );
@@ -34,9 +36,10 @@ vi.mock("./openai-codex-oauth.js", () => ({
 }));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/provider-auth-choice.runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/provider-auth-choice.runtime.js")>();
+vi.mock("../plugins/provider-auth-choice.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-auth-choice.runtime.js")>(
+    "../plugins/provider-auth-choice.runtime.js",
+  );
   return {
     ...actual,
     resolvePluginProviders,
@@ -50,6 +53,7 @@ vi.mock("./zai-endpoint-detect.js", () => ({
 
 type StoredAuthProfile = {
   key?: string;
+  token?: string;
   keyRef?: { source: string; provider: string; id: string };
   access?: string;
   refresh?: string;
@@ -649,6 +653,61 @@ describe("applyAuthChoice", () => {
   });
 
   resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
+
+  it("applies Anthropic setup-token auth when the provider exposes the setup flow", async () => {
+    await setupTempState();
+
+    resolvePluginProviders.mockReturnValue([
+      createFixedChoiceProvider({
+        providerId: "anthropic",
+        label: "Anthropic",
+        choiceId: "setup-token",
+        method: {
+          id: "setup-token",
+          label: "Anthropic setup-token",
+          kind: "token",
+          run: vi.fn(
+            async (): Promise<ProviderAuthResult> => ({
+              profiles: [
+                {
+                  profileId: "anthropic:default",
+                  credential: {
+                    type: "token",
+                    provider: "anthropic",
+                    token: `sk-ant-oat01-${"a".repeat(80)}`,
+                  },
+                },
+              ],
+              defaultModel: "anthropic/claude-sonnet-4-6",
+            }),
+          ),
+        },
+      }),
+    ]);
+
+    const result = await applyAuthChoice({
+      authChoice: "token",
+      config: {} as OpenClawConfig,
+      prompter: createPrompter({}),
+      runtime: createExitThrowingRuntime(),
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "anthropic",
+        token: `sk-ant-oat01-${"a".repeat(80)}`,
+      },
+    });
+
+    expect(result.config.auth?.profiles?.["anthropic:default"]).toMatchObject({
+      provider: "anthropic",
+      mode: "token",
+    });
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect((await readAuthProfile("anthropic:default"))?.token).toBe(
+      `sk-ant-oat01-${"a".repeat(80)}`,
+    );
+  });
 
   it("does not throw when openai-codex oauth fails", async () => {
     await setupTempState();

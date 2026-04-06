@@ -6,6 +6,7 @@ import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
   chunkMarkdown,
+  isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   remapChunkLines,
@@ -154,6 +155,12 @@ describe("listMemoryFiles", () => {
     expect(files.some((file) => file.endsWith("diagram.png"))).toBe(true);
     expect(files.some((file) => file.endsWith("note.wav"))).toBe(true);
     expect(files.some((file) => file.endsWith("ignore.bin"))).toBe(false);
+  });
+});
+
+describe("isMemoryPath", () => {
+  it("allows explicit access to top-level dreams.md", () => {
+    expect(isMemoryPath("dreams.md")).toBe(true);
   });
 });
 

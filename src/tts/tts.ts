@@ -30,4 +30,4 @@ export {
   type TtsResult,
   type TtsSynthesisResult,
   type TtsTelephonyResult,
-} from "../plugin-sdk/speech-runtime.js";
+} from "../plugin-sdk/tts-runtime.js";

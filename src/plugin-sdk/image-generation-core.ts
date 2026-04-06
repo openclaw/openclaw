@@ -6,6 +6,7 @@ export type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 export type {
   GeneratedImageAsset,
   ImageGenerationProvider,
+  ImageGenerationProviderConfiguredContext,
   ImageGenerationResolution,
   ImageGenerationRequest,
   ImageGenerationResult,
@@ -14,7 +15,6 @@ export type {
 export type { OpenClawConfig } from "../config/config.js";
 
 export { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
-export { resolveApiKeyForProvider } from "../agents/model-auth.js";
 export {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -26,6 +26,25 @@ export {
 } from "../image-generation/provider-registry.js";
 export { parseImageGenerationModelRef } from "../image-generation/model-ref.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
-export { normalizeGoogleModelId } from "./google.js";
-export { OPENAI_DEFAULT_IMAGE_MODEL } from "./openai.js";
+export { normalizeGooglePreviewModelId as normalizeGoogleModelId } from "./provider-model-shared.js";
 export { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+export { OPENAI_DEFAULT_IMAGE_MODEL } from "../plugins/provider-model-defaults.js";
+
+type ImageGenerationCoreAuthRuntimeModule =
+  typeof import("./image-generation-core.auth.runtime.js");
+
+let imageGenerationCoreAuthRuntimePromise:
+  | Promise<ImageGenerationCoreAuthRuntimeModule>
+  | undefined;
+
+async function loadImageGenerationCoreAuthRuntime(): Promise<ImageGenerationCoreAuthRuntimeModule> {
+  imageGenerationCoreAuthRuntimePromise ??= import("./image-generation-core.auth.runtime.js");
+  return imageGenerationCoreAuthRuntimePromise;
+}
+
+export async function resolveApiKeyForProvider(
+  ...args: Parameters<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>
+): Promise<Awaited<ReturnType<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>>> {
+  const runtime = await loadImageGenerationCoreAuthRuntime();
+  return runtime.resolveApiKeyForProvider(...args);
+}

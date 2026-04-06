@@ -1,3 +1,6 @@
+import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -6,10 +9,7 @@ import {
   doesApprovalRequestMatchChannelAccount,
   isChannelExecApprovalClientEnabledFromConfig,
   matchesApprovalRequestFilters,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
-import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
+} from "./approval-runtime.js";
 import {
   getDiscordExecApprovalApprovers,
   isDiscordExecApprovalApprover,
@@ -153,6 +153,13 @@ export function createDiscordApprovalCapability(configOverride?: DiscordExecAppr
   return createApproverRestrictedNativeApprovalCapability({
     channel: "discord",
     channelLabel: "Discord",
+    describeExecApprovalSetup: ({ accountId }) => {
+      const prefix =
+        accountId && accountId !== "default"
+          ? `channels.discord.accounts.${accountId}`
+          : "channels.discord";
+      return `Approve it from the Web UI or terminal UI for now. Discord supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+    },
     listAccountIds: listDiscordAccountIds,
     hasApprovers: ({ cfg, accountId }) =>
       getDiscordExecApprovalApprovers({ cfg, accountId, configOverride }).length > 0,
@@ -176,7 +183,17 @@ export function createDiscordNativeApprovalAdapter(
   return splitChannelApprovalCapability(createDiscordApprovalCapability(configOverride));
 }
 
-export const discordApprovalCapability = createDiscordApprovalCapability();
+let cachedDiscordApprovalCapability: ReturnType<typeof createDiscordApprovalCapability> | undefined;
+let cachedDiscordNativeApprovalAdapter:
+  | ReturnType<typeof createDiscordNativeApprovalAdapter>
+  | undefined;
 
-export const discordNativeApprovalAdapter =
-  splitChannelApprovalCapability(discordApprovalCapability);
+export function getDiscordApprovalCapability() {
+  cachedDiscordApprovalCapability ??= createDiscordApprovalCapability();
+  return cachedDiscordApprovalCapability;
+}
+
+export function getDiscordNativeApprovalAdapter() {
+  cachedDiscordNativeApprovalAdapter ??= createDiscordNativeApprovalAdapter();
+  return cachedDiscordNativeApprovalAdapter;
+}

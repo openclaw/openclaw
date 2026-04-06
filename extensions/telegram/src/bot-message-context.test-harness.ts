@@ -90,14 +90,5 @@ async function installMessageContextTestMocks() {
   if (messageContextMocksInstalled) {
     return;
   }
-  const { vi } = await loadVitestModule();
-  vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-    return {
-      ...actual,
-      readSessionUpdatedAt: () => undefined,
-      resolveStorePath: (storePath?: string) => storePath ?? "/tmp/sessions.json",
-    };
-  });
   messageContextMocksInstalled = true;
 }
