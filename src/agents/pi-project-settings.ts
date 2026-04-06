@@ -187,11 +187,21 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  model?: { contextWindow?: number };
 }): SettingsManager {
   const settingsManager = createEmbeddedPiSettingsManager(params);
-  applyPiCompactionSettingsFromConfig({
-    settingsManager,
-    cfg: params.cfg,
-  });
+
+  // 根据 model.contextWindow 动态计算 50% 压缩触发阈值
+  if (params.model?.contextWindow) {
+    const dynamicReserveTokens = Math.floor(params.model.contextWindow * 0.5);
+    settingsManager.applyOverrides({
+      compaction: { reserveTokens: dynamicReserveTokens },
+    });
+  } else {
+    applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: params.cfg,
+    });
+  }
   return settingsManager;
 }

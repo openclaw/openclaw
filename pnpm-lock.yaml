@@ -301,6 +301,8 @@ importers:
 
   extensions/cloudflare-ai-gateway: {}
 
+  extensions/comfy: {}
+
   extensions/copilot-proxy: {}
 
   extensions/deepgram: {}
@@ -724,6 +726,8 @@ importers:
         version: link:../..
 
   extensions/volcengine: {}
+
+  extensions/vydra: {}
 
   extensions/whatsapp:
     dependencies:
