@@ -63,6 +63,16 @@ function readOptionalNumber(value: unknown, fieldName: string): number | undefin
   return value;
 }
 
+function readOptionalBoolean(value: unknown, fieldName: string): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
+}
+
 function parseOptionalFlowStateJson(value: unknown): JsonLike | undefined {
   if (value === undefined) {
     return undefined;
@@ -119,6 +129,8 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   const expectedRevision = readOptionalNumber(params.flowExpectedRevision, "flowExpectedRevision");
   const currentStep = readOptionalTrimmedString(params.flowCurrentStep, "flowCurrentStep");
   const waitingStep = readOptionalTrimmedString(params.flowWaitingStep, "flowWaitingStep");
+  const token = readOptionalTrimmedString(params.token, "token");
+  const approve = readOptionalBoolean(params.approve, "approve");
   const runControllerId = readOptionalTrimmedString(params.flowControllerId, "flowControllerId");
   const runGoal = readOptionalTrimmedString(params.flowGoal, "flowGoal");
   const stateJson = params.flowStateJson;
@@ -140,6 +152,12 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   }
   if (expectedRevision === undefined) {
     throw new Error("flowExpectedRevision required when using managed TaskFlow resume mode");
+  }
+  if (!token) {
+    throw new Error("token required when using managed TaskFlow resume mode");
+  }
+  if (approve === undefined) {
+    throw new Error("approve required when using managed TaskFlow resume mode");
   }
   return {
     flowId,
