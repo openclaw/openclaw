@@ -18,10 +18,11 @@ const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
  *
  * Pi already truncates tool results aggressively when serializing old history
  * for compaction summaries. For the live request path we keep a larger slice so
- * the model can still act on recent tool output, but we still want a bounded
- * request-local ceiling that cannot dominate the next turn.
+ * the model can still act on recent tool output, especially large read results
+ * on modern 128K+ context models, while still keeping a bounded request-local
+ * ceiling that cannot dominate the next turn.
  */
-export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 40_000;
+export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 120_000;
 
 /**
  * Backwards-compatible alias for older call sites/tests.
