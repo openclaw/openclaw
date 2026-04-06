@@ -19,12 +19,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--wait-timeout', type=float)
     parser.add_argument('--poll-interval', type=float)
     parser.add_argument('--input')
+    parser.add_argument('--feedback-json')
     return parser
 
 
 def load_handoff(args: argparse.Namespace) -> dict | None:
     if args.handoff_json:
         return json.loads(args.handoff_json)
+    return None
+
+
+def load_feedback(args: argparse.Namespace) -> dict | None:
+    if args.feedback_json:
+        return json.loads(args.feedback_json)
     return None
 
 
@@ -103,6 +110,7 @@ def main() -> int:
     args = build_parser().parse_args()
     script_dir = Path(__file__).resolve().parent
     handoff = load_handoff(args)
+    feedback = load_feedback(args)
     runtime_args = build_runtime_args(args)
 
     if handoff is None:
@@ -122,6 +130,17 @@ def main() -> int:
     primary_remaining_issue = triage.get('primary_remaining_issue')
     suggested_next_step = triage.get('suggested_next_step')
     summary_confidence = triage.get('summary_confidence')
+    feedback_gate_applied = False
+    feedback_gate_reason = None
+
+    if (
+        decision == 'use_handoff'
+        and isinstance(feedback, dict)
+        and str(feedback.get('last_decision_quality') or '').lower() == 'poor'
+    ):
+        decision = 'rerun_full_evaluator'
+        feedback_gate_applied = True
+        feedback_gate_reason = 'last decision quality was poor, so full evaluator was preferred over shortcut reuse'
 
     if decision == 'use_handoff':
         seed_result = run_handoff_seed(script_dir, handoff)
@@ -145,6 +164,8 @@ def main() -> int:
             'suggested_next_step': suggested_next_step,
             'primary_remaining_issue': primary_remaining_issue,
             'summary_confidence': summary_confidence,
+            'feedback_gate_applied': feedback_gate_applied,
+            'feedback_gate_reason': feedback_gate_reason,
             'entry_result': entry_result,
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
@@ -166,6 +187,8 @@ def main() -> int:
             'suggested_next_step': suggested_next_step,
             'primary_remaining_issue': primary_remaining_issue,
             'summary_confidence': summary_confidence,
+            'feedback_gate_applied': feedback_gate_applied,
+            'feedback_gate_reason': feedback_gate_reason,
             'entry_result': entry_result,
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
@@ -177,6 +200,8 @@ def main() -> int:
         'suggested_next_step': suggested_next_step,
         'primary_remaining_issue': primary_remaining_issue,
         'summary_confidence': summary_confidence,
+        'feedback_gate_applied': feedback_gate_applied,
+        'feedback_gate_reason': feedback_gate_reason,
         'entry_result': evaluator_result,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))

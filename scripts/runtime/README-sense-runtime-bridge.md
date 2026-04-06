@@ -798,6 +798,21 @@ The manager runtime entrypoint now chains entry and dispatch into a single comma
 
 This keeps the architecture layered while letting the manager start from a single runtime entry command.
 
+The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
+
+- `feedback_summary`
+  - `decision_quality`
+  - `shortcut_accuracy`
+  - `fallback_triggered`
+  - `fallback_reason`
+  - `loop_efficiency`
+- `feedback_memory`
+  - `last_decision_quality`
+  - `last_primary_issue`
+  - `last_success_action`
+
+This feedback is observational only. It does not add retries or a new loop. The manager entry can read `feedback_memory` and prefer the full evaluator when the previous decision quality was `poor`.
+
 Current convergence states are:
 
 - `resolved`
