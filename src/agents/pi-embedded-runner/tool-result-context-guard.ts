@@ -145,7 +145,7 @@ function compactToPlaceholderInPlace(params: {
   }
 
   let reduced = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
+  for (const i of resolveToolResultCompactionOrder(messages)) {
     const msg = messages[i];
     if (!isToolResultMessage(msg)) {
       continue;
@@ -215,11 +215,10 @@ function compactExistingToolResultsInPlace(params: {
   }
 
   let reduced = 0;
-  // Compact newest-first so more of the cached prefix survives: rewriting
-  // messages[k] for small k invalidates the provider prompt cache from that point onward.
-  // Keep a truncated slice of newer tool output before falling back to a
-  // full placeholder so recent, user-visible results remain readable when possible.
-  for (let i = messages.length - 1; i >= 0; i--) {
+  // Keep the most recent tool result visible as long as older tool outputs can
+  // absorb the overflow. Among older tool results, compact newest-first so we
+  // still preserve as much of the cached prefix as possible.
+  for (const i of resolveToolResultCompactionOrder(messages)) {
     const msg = messages[i];
     if (!isToolResultMessage(msg)) {
       continue;
@@ -262,6 +261,21 @@ function compactExistingToolResultsInPlace(params: {
   }
 
   return reduced;
+}
+
+function resolveToolResultCompactionOrder(messages: AgentMessage[]): number[] {
+  const toolResultIndexes: number[] = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (isToolResultMessage(messages[i])) {
+      toolResultIndexes.push(i);
+    }
+  }
+  if (toolResultIndexes.length <= 1) {
+    return toolResultIndexes;
+  }
+  const newestIndex = toolResultIndexes[toolResultIndexes.length - 1];
+  const olderIndexes = toolResultIndexes.slice(0, -1).toReversed();
+  return [...olderIndexes, newestIndex];
 }
 
 function cloneMessagesForGuard(messages: AgentMessage[]): AgentMessage[] {
@@ -334,7 +348,7 @@ function enforceToolResultContextBudgetInPlace(params: {
     return;
   }
 
-  // Compact newest tool outputs first so more of the cached prefix survives;
+  // Prefer compacting older tool outputs before sacrificing the newest one;
   // stop once the context is back under budget.
   compactExistingToolResultsInPlace({
     messages,
