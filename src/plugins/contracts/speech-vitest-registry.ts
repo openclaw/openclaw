@@ -1,5 +1,8 @@
+import { createJiti } from "jiti";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
-import { resolveManifestContractPluginIds } from "../manifest-registry.js";
+import { resolveBundledPluginRepoEntryPath } from "../bundled-plugin-metadata.js";
+import { createCapturedPluginRegistration } from "../captured-registration.js";
+import type { OpenClawPluginDefinition } from "../types.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -9,6 +12,7 @@ import type {
   SpeechProviderPlugin,
   VideoGenerationProviderPlugin,
 } from "../types.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
 
 export type SpeechProviderContractEntry = {
   pluginId: string;
@@ -54,6 +58,67 @@ type ManifestContractKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
+const VITEST_CONTRACT_PLUGIN_IDS = {
+  imageGenerationProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.imageGenerationProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  speechProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.speechProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  mediaUnderstandingProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.mediaUnderstandingProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  realtimeVoiceProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.realtimeVoiceProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  realtimeTranscriptionProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.realtimeTranscriptionProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  videoGenerationProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.videoGenerationProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+} satisfies Record<ManifestContractKey, string[]>;
+
+function loadVitestVideoGenerationFallbackEntries(
+  pluginIds: readonly string[],
+): VideoGenerationProviderContractEntry[] {
+  const jiti = createJiti(import.meta.url, {
+    interopDefault: true,
+    moduleCache: false,
+    fsCache: false,
+  });
+  const repoRoot = process.cwd();
+  return pluginIds.flatMap((pluginId) => {
+    const modulePath = resolveBundledPluginRepoEntryPath({
+      rootDir: repoRoot,
+      pluginId,
+      preferBuilt: true,
+    });
+    if (!modulePath) {
+      return [];
+    }
+    try {
+      const mod = jiti(modulePath) as
+        | OpenClawPluginDefinition
+        | { default?: OpenClawPluginDefinition };
+      const plugin =
+        (mod as { default?: OpenClawPluginDefinition }).default ??
+        (mod as OpenClawPluginDefinition);
+      if (typeof plugin?.register !== "function") {
+        return [];
+      }
+      const captured = createCapturedPluginRegistration();
+      void plugin.register(captured.api);
+      return captured.videoGenerationProviders.map((provider) => ({
+        pluginId,
+        provider,
+      }));
+    } catch {
+      return [];
+    }
+  });
+}
+
 function loadVitestCapabilityContractEntries<T>(params: {
   contract: ManifestContractKey;
   pickEntries: (registry: ReturnType<typeof loadBundledCapabilityRuntimeRegistry>) => Array<{
@@ -61,18 +126,29 @@ function loadVitestCapabilityContractEntries<T>(params: {
     provider: T;
   }>;
 }): Array<{ pluginId: string; provider: T }> {
-  const pluginIds = resolveManifestContractPluginIds({
-    contract: params.contract,
-    origin: "bundled",
-  });
+  const pluginIds = VITEST_CONTRACT_PLUGIN_IDS[params.contract];
   if (pluginIds.length === 0) {
     return [];
   }
-  return params.pickEntries(
+  const bulkEntries = params.pickEntries(
     loadBundledCapabilityRuntimeRegistry({
       pluginIds,
       pluginSdkResolution: "dist",
     }),
+  );
+  const coveredPluginIds = new Set(bulkEntries.map((entry) => entry.pluginId));
+  if (coveredPluginIds.size === pluginIds.length) {
+    return bulkEntries;
+  }
+  return pluginIds.flatMap((pluginId) =>
+    params
+      .pickEntries(
+        loadBundledCapabilityRuntimeRegistry({
+          pluginIds: [pluginId],
+          pluginSdkResolution: "dist",
+        }),
+      )
+      .filter((entry) => entry.pluginId === pluginId),
   );
 }
 
@@ -132,7 +208,7 @@ export function loadVitestImageGenerationProviderContractRegistry(): ImageGenera
 }
 
 export function loadVitestVideoGenerationProviderContractRegistry(): VideoGenerationProviderContractEntry[] {
-  return loadVitestCapabilityContractEntries({
+  const entries = loadVitestCapabilityContractEntries({
     contract: "videoGenerationProviders",
     pickEntries: (registry) =>
       registry.videoGenerationProviders.map((entry) => ({
@@ -140,6 +216,14 @@ export function loadVitestVideoGenerationProviderContractRegistry(): VideoGenera
         provider: entry.provider,
       })),
   });
+  const coveredPluginIds = new Set(entries.map((entry) => entry.pluginId));
+  const missingPluginIds = VITEST_CONTRACT_PLUGIN_IDS.videoGenerationProviders.filter(
+    (pluginId) => !coveredPluginIds.has(pluginId),
+  );
+  if (missingPluginIds.length === 0) {
+    return entries;
+  }
+  return [...entries, ...loadVitestVideoGenerationFallbackEntries(missingPluginIds)];
 }
 
 export function loadVitestMusicGenerationProviderContractRegistry(): MusicGenerationProviderContractEntry[] {
