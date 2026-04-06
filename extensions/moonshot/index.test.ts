@@ -23,6 +23,52 @@ describe("moonshot provider plugin", () => {
     });
   });
 
+  it("normalizes boolean tool schemas for Moonshot API", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const [tool] =
+      provider.normalizeToolSchemas?.({
+        provider: "moonshot",
+        tools: [
+          {
+            name: "test_tool",
+            description: "A tool with boolean params",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+                enabled: { type: "boolean", description: "Toggle feature" },
+                optional: {
+                  anyOf: [{ type: "boolean" }, { type: "null" }],
+                },
+              },
+            },
+          },
+        ],
+      } as never) ?? [];
+
+    const props = (tool?.parameters as Record<string, unknown>)?.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(props.query).toEqual({ type: "string" });
+    expect(props.enabled).toEqual({
+      type: "string",
+      enum: ["true", "false"],
+      description: "Toggle feature",
+    });
+    expect(props.optional).toEqual({
+      anyOf: [{ type: "string", enum: ["true", "false"] }, { type: "null" }],
+    });
+
+    expect(
+      provider.inspectToolSchemas?.({
+        provider: "moonshot",
+        tools: [tool],
+      } as never),
+    ).toEqual([]);
+  });
+
   it("wires moonshot-thinking stream hooks", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     let capturedPayload: Record<string, unknown> | undefined;

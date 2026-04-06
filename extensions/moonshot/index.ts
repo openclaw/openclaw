@@ -10,6 +10,7 @@ import {
 } from "./onboard.js";
 import { buildMoonshotProvider } from "./provider-catalog.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
+import { inspectMoonshotToolSchemas, normalizeMoonshotToolSchemas } from "./tool-schema-compat.js";
 
 const PROVIDER_ID = "moonshot";
 const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
@@ -62,6 +63,8 @@ export default defineSingleProviderPluginEntry({
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
     ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
     ...MOONSHOT_THINKING_STREAM_HOOKS,
+    normalizeToolSchemas: normalizeMoonshotToolSchemas,
+    inspectToolSchemas: inspectMoonshotToolSchemas,
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
