@@ -79,13 +79,29 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (activeProviders.length > 0) {
-    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  const mappedActiveProviders = activeProviders.map(
+    (entry) => entry.provider,
+  ) as CapabilityProviderForKey<K>[];
+  if (activeProviders.length > 0 && params.cfg === undefined) {
+    return mappedActiveProviders;
   }
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
   const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
   const registry = resolveRuntimePluginRegistry(loadOptions);
-  return (registry?.[params.key] ?? []).map(
+  const compatProviders = (registry?.[params.key] ?? []).map(
     (entry) => entry.provider,
   ) as CapabilityProviderForKey<K>[];
+  if (mappedActiveProviders.length === 0) {
+    return compatProviders;
+  }
+  const mergedProviders = [...mappedActiveProviders];
+  const seen = new Set(mappedActiveProviders.map((provider) => provider.id));
+  for (const provider of compatProviders) {
+    if (seen.has(provider.id)) {
+      continue;
+    }
+    seen.add(provider.id);
+    mergedProviders.push(provider);
+  }
+  return mergedProviders;
 }

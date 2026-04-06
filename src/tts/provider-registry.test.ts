@@ -74,8 +74,18 @@ describe("speech provider registry", () => {
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith();
   });
 
-  it("uses active plugin speech providers even when config is provided", () => {
-    resolveRuntimePluginRegistryMock.mockReturnValue({
+  it("merges compat-loaded speech providers when config is provided and active registry is partial", () => {
+    const active = {
+      ...createEmptyPluginRegistry(),
+      speechProviders: [
+        {
+          pluginId: "test-openai",
+          source: "test",
+          provider: createSpeechProvider("openai"),
+        },
+      ],
+    };
+    const compatLoaded = {
       ...createEmptyPluginRegistry(),
       speechProviders: [
         {
@@ -84,13 +94,28 @@ describe("speech provider registry", () => {
           provider: createSpeechProvider("microsoft", ["edge"]),
         },
       ],
-    });
+    };
+    resolveRuntimePluginRegistryMock.mockImplementation((params?: unknown) =>
+      params === undefined ? active : compatLoaded,
+    );
 
-    const cfg = {} as OpenClawConfig;
+    const cfg = { messages: { tts: { provider: "edge" } } } as OpenClawConfig;
 
-    expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual(["microsoft"]);
+    expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual(["openai", "microsoft"]);
     expect(getSpeechProvider("edge", cfg)?.id).toBe("microsoft");
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith({
+      config: expect.objectContaining({
+        messages: { tts: { provider: "edge" } },
+        plugins: {
+          entries: expect.objectContaining({
+            elevenlabs: { enabled: true },
+            microsoft: { enabled: true },
+            openai: { enabled: true },
+          }),
+        },
+      }),
+    });
   });
 
   it("loads speech providers from plugins when config is provided and no active providers exist", () => {

@@ -170,9 +170,26 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
   });
 
-  it("keeps active capability providers even when cfg is passed", () => {
+  it("merges compat-loaded capability providers when cfg is passed and active registry is partial", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "openai",
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: Buffer.from("x"),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        }),
+      },
+    } as never);
+    const compatLoaded = createEmptyPluginRegistry();
+    compatLoaded.speechProviders.push({
       pluginId: "microsoft",
       pluginName: "microsoft",
       source: "test",
@@ -189,18 +206,21 @@ describe("resolvePluginCapabilityProviders", () => {
         }),
       },
     } as never);
-    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
-      params === undefined ? active : createEmptyPluginRegistry(),
-    );
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) => {
+      if (params === undefined) {
+        return active;
+      }
+      return compatLoaded;
+    });
 
     const providers = resolvePluginCapabilityProviders({
       key: "speechProviders",
       cfg: { messages: { tts: { provider: "edge" } } } as OpenClawConfig,
     });
 
-    expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
+    expectResolvedCapabilityProviderIds(providers, ["openai", "microsoft"]);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
-    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalledWith({
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: expect.anything(),
     });
   });
