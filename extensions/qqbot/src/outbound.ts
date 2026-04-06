@@ -50,7 +50,17 @@ interface MessageReplyRecord {
   firstReplyAt: number;
 }
 
+type QQMessageResult = {
+  ext_info?: {
+    ref_idx?: string;
+  };
+};
+
 const messageReplyTracker = new Map<string, MessageReplyRecord>();
+
+function getRefIdx(result: QQMessageResult): string | undefined {
+  return result.ext_info?.ref_idx;
+}
 
 /** Result of the passive-reply limit check. */
 export interface ReplyLimitResult {
@@ -1012,7 +1022,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as { ext_info?: { ref_idx?: string } }).ext_info?.ref_idx,
+                refIdx: getRefIdx(result),
               };
             }
           } else {
@@ -1029,7 +1039,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: getRefIdx(result),
               };
             } else if (target.type === "group") {
               const result = await sendProactiveGroupMessage(
@@ -1042,7 +1052,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: getRefIdx(result),
               };
             } else {
               const result = await sendChannelMessage(accessToken, target.id, item.content);
@@ -1050,7 +1060,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: getRefIdx(result),
               };
             }
           }
@@ -1123,7 +1133,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           channel: "qqbot",
           messageId: result.id,
           timestamp: result.timestamp,
-          refIdx: (result as any).ext_info?.ref_idx,
+          refIdx: getRefIdx(result),
         };
       } else if (target.type === "group") {
         const result = await sendProactiveGroupMessage(account.appId, accessToken, target.id, text);
@@ -1131,7 +1141,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           channel: "qqbot",
           messageId: result.id,
           timestamp: result.timestamp,
-          refIdx: (result as any).ext_info?.ref_idx,
+          refIdx: getRefIdx(result),
         };
       } else {
         const result = await sendChannelMessage(accessToken, target.id, text);
@@ -1139,7 +1149,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           channel: "qqbot",
           messageId: result.id,
           timestamp: result.timestamp,
-          refIdx: (result as any).ext_info?.ref_idx,
+          refIdx: getRefIdx(result),
         };
       }
       return outResult;
@@ -1170,7 +1180,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: getRefIdx(result),
       };
     }
   } catch (err) {
@@ -1222,7 +1232,7 @@ export async function sendProactiveMessage(
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: getRefIdx(result),
       };
     } else if (target.type === "group") {
       debugLog(
@@ -1236,7 +1246,7 @@ export async function sendProactiveMessage(
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: getRefIdx(result),
       };
     } else {
       debugLog(
@@ -1250,7 +1260,7 @@ export async function sendProactiveMessage(
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: getRefIdx(result),
       };
     }
     return outResult;

@@ -223,7 +223,7 @@ export function sanitizeFileName(name: string): string {
   result = result.normalize("NFC");
 
   // Drop ASCII control characters while keeping printable Unicode content.
-  result = result.replace(/[\x00-\x1F\x7F]/g, "");
+  result = result.replace(/\p{Cc}/gu, "");
 
   return result;
 }
