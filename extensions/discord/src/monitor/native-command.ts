@@ -25,7 +25,6 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
-  listChatCommands,
   parseCommandArgs,
   resolveCommandArgChoices,
   resolveCommandArgMenu,
@@ -53,7 +52,6 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
-  isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
   resolveDiscordChannelPolicyCommandAuthorizer,
