@@ -39,7 +39,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
-  subagentAnnounceTimeoutMs: number;
+  resolveSubagentAnnounceTimeoutMs(): number;
   persist(): void;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
@@ -486,7 +486,7 @@ export function createSubagentRegistryLifecycleController(params: {
         requesterOrigin,
         requesterDisplayKey: entry.requesterDisplayKey,
         task: entry.task,
-        timeoutMs: params.subagentAnnounceTimeoutMs,
+        timeoutMs: params.resolveSubagentAnnounceTimeoutMs(),
         cleanup: entry.cleanup,
         roundOneReply: entry.frozenResultText ?? undefined,
         fallbackReply: entry.fallbackFrozenResultText ?? undefined,

@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   onAgentEvent: vi.fn(() => noop),
   loadConfig: vi.fn(() => ({
-    agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+    agents: { defaults: { subagents: { archiveAfterMinutes: 0, announceTimeoutMs: 120_000 } } },
     session: { mainKey: "main", scope: "per-sender" },
   })),
   loadSessionStore: vi.fn(() => ({})),
@@ -106,7 +106,7 @@ describe("subagent registry seam flow", () => {
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
     mocks.onAgentEvent.mockReturnValue(noop);
     mocks.loadConfig.mockReturnValue({
-      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0, announceTimeoutMs: 120_000 } } },
       session: { mainKey: "main", scope: "per-sender" },
     });
     mocks.resolveAgentIdFromSessionKey.mockImplementation((sessionKey: string) => {
@@ -201,6 +201,40 @@ describe("subagent registry seam flow", () => {
     });
 
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+  });
+
+  it("uses configured announce timeout for subagent cleanup flow", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          subagents: {
+            archiveAfterMinutes: 0,
+            announceTimeoutMs: 1_800_000,
+          },
+        },
+      },
+      session: { mainKey: "main", scope: "per-sender" },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-timeout-configured",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "completion cleanup timeout",
+      cleanup: "keep",
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: "run-timeout-configured",
+        timeoutMs: 1_800_000,
+      }),
+    );
   });
 
   it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {
@@ -382,7 +416,9 @@ describe("subagent registry seam flow", () => {
     await vi.waitFor(() => {
       expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
         config: {
-          agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+          agents: {
+            defaults: { subagents: { archiveAfterMinutes: 0, announceTimeoutMs: 120_000 } },
+          },
           session: { mainKey: "main", scope: "per-sender" },
         },
         workspaceDir: "/tmp/killed-workspace",
@@ -540,7 +576,7 @@ describe("subagent registry seam flow", () => {
     });
     expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
       config: {
-        agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+        agents: { defaults: { subagents: { archiveAfterMinutes: 0, announceTimeoutMs: 120_000 } } },
         session: { mainKey: "main", scope: "per-sender" },
       },
       workspaceDir: "/tmp/workspace",

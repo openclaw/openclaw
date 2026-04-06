@@ -251,13 +251,10 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     }
     await waitFor(
       () =>
-        ctx.waitCalls.some((call) => call.runId === child.runId) &&
         patchCalls.some((call) => call.label === "my-task") &&
         ctx.calls.filter((call) => call.method === "agent").length >= 2,
     );
 
-    const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
-    expect(childWait?.timeoutMs).toBe(1000);
     // Cleanup should patch the label
     const labelPatch = patchCalls.find((call) => call.label === "my-task");
     expect(labelPatch?.key).toBe(child.sessionKey);

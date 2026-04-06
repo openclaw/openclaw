@@ -99,13 +99,25 @@ let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 // Use var to avoid TDZ when init runs across circular imports during bootstrap.
 var restoreAttempted = false;
-const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+const DEFAULT_SUBAGENT_LIFECYCLE_ANNOUNCE_TIMEOUT_MS = 120_000;
+const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 /**
  * Embedded runs can emit transient lifecycle `error` events while provider/model
  * retry is still in progress. Defer terminal error cleanup briefly so a
  * subsequent lifecycle `start` / `end` can cancel premature failure announces.
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+
+function resolveSubagentLifecycleAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
+  const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return DEFAULT_SUBAGENT_LIFECYCLE_ANNOUNCE_TIMEOUT_MS;
+  }
+  return Math.min(
+    Math.max(DEFAULT_SUBAGENT_LIFECYCLE_ANNOUNCE_TIMEOUT_MS, Math.floor(configured)),
+    MAX_TIMER_SAFE_TIMEOUT_MS,
+  );
+}
 
 function loadSubagentRegistryRuntime() {
   subagentRegistryRuntimePromise ??= import("./subagent-registry.runtime.js");
@@ -276,7 +288,8 @@ async function emitSubagentEndedHookForRun(params: {
 const subagentLifecycleController = createSubagentRegistryLifecycleController({
   runs: subagentRuns,
   resumedRuns,
-  subagentAnnounceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+  resolveSubagentAnnounceTimeoutMs: () =>
+    resolveSubagentLifecycleAnnounceTimeoutMs(subagentRegistryDeps.loadConfig()),
   persist: persistSubagentRuns,
   clearPendingLifecycleError,
   countPendingDescendantRuns,

@@ -2140,6 +2140,38 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.message).not.toContain("(no output)");
   });
 
+  it("does not cap lifecycle settle waits below configured longer announce timeouts", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValueOnce(true).mockReturnValue(false);
+    embeddedRunMock.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-1",
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+      },
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "context-stress-test",
+      timeoutMs: 1_800_000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(embeddedRunMock.waitForEmbeddedPiRunEnd).toHaveBeenCalledWith(
+      "child-session-1",
+      1_800_000,
+    );
+  });
+
   it("does not include batching guidance when sibling subagents are still active", async () => {
     subagentRegistryMock.countActiveDescendantRuns.mockImplementation((sessionKey: string) =>
       sessionKey === "agent:main:main" ? 2 : 0,

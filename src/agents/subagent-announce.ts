@@ -338,7 +338,9 @@ export async function runSubagentAnnounceFlow(params: {
         ? entry.sessionId.trim()
         : undefined;
     })();
-    const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
+    const settleTimeoutMs = Number.isFinite(params.timeoutMs)
+      ? Math.max(Math.floor(params.timeoutMs), 1)
+      : 1;
     let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {

@@ -112,7 +112,7 @@ describe("subagent registry lifecycle hardening", () => {
     const controller = createSubagentRegistryLifecycleController({
       runs,
       resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
+      resolveSubagentAnnounceTimeoutMs: () => 1_000,
       persist,
       clearPendingLifecycleError: vi.fn(),
       countPendingDescendantRuns: () => 0,
@@ -169,7 +169,7 @@ describe("subagent registry lifecycle hardening", () => {
     const controller = createSubagentRegistryLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
+      resolveSubagentAnnounceTimeoutMs: () => 1_000,
       persist,
       clearPendingLifecycleError: vi.fn(),
       countPendingDescendantRuns: () => 0,
@@ -214,7 +214,7 @@ describe("subagent registry lifecycle hardening", () => {
     const controller = createSubagentRegistryLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
+      resolveSubagentAnnounceTimeoutMs: () => 1_000,
       persist,
       clearPendingLifecycleError: vi.fn(),
       countPendingDescendantRuns: () => 0,
@@ -260,7 +260,7 @@ describe("subagent registry lifecycle hardening", () => {
     const controller = createSubagentRegistryLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
+      resolveSubagentAnnounceTimeoutMs: () => 1_000,
       persist: vi.fn(),
       clearPendingLifecycleError: vi.fn(),
       countPendingDescendantRuns: () => 0,
@@ -298,7 +298,7 @@ describe("subagent registry lifecycle hardening", () => {
     const controller = createSubagentRegistryLifecycleController({
       runs: new Map([[entry.runId, entry]]),
       resumedRuns: new Set(),
-      subagentAnnounceTimeoutMs: 1_000,
+      resolveSubagentAnnounceTimeoutMs: () => 1_000,
       persist: vi.fn(),
       clearPendingLifecycleError: vi.fn(),
       countPendingDescendantRuns: () => 0,
