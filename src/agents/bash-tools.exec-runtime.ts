@@ -243,7 +243,16 @@ export function resolveExecTarget(params: {
   const configuredTarget = params.configuredTarget ?? "auto";
   const requestedTarget = params.requestedTarget ?? null;
   if (params.elevatedRequested) {
-    const elevatedTarget = configuredTarget === "node" ? ("node" as const) : ("gateway" as const);
+    // Elevated commands cannot run inside a sandbox, so we resolve to a
+    // host that supports elevated semantics (gateway or node).  When the
+    // configured target already allows the node ("node" or "auto") *and*
+    // the caller explicitly requested the node, honour that request -- the
+    // remote node has its own approval / security layer for elevated
+    // commands, so this does not bypass any security gate.
+    const elevatedTarget: "gateway" | "node" =
+      configuredTarget === "node" || (configuredTarget === "auto" && requestedTarget === "node")
+        ? "node"
+        : "gateway";
     return {
       configuredTarget,
       requestedTarget,

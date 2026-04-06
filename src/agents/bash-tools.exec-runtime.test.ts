@@ -267,6 +267,54 @@ describe("resolveExecTarget", () => {
       effectiveHost: "node",
     });
   });
+
+  it("honours per-call host=node under elevated when configured target is auto", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "node",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
+  it("honours per-call host=node under elevated when configured target is auto with sandbox", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: true,
+        sandboxAvailable: true,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "node",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
+  it("does not allow per-call host=node to escape elevated+gateway", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "gateway",
+        requestedTarget: "node",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "gateway",
+      requestedTarget: "node",
+      selectedTarget: "gateway",
+      effectiveHost: "gateway",
+    });
+  });
 });
 
 describe("emitExecSystemEvent", () => {
