@@ -14,7 +14,13 @@ async function runQaSelfCheck(opts: { output?: string }) {
   await runtime.runQaLabSelfCheckCommand(opts);
 }
 
-async function runQaSuite(opts: { outputDir?: string }) {
+async function runQaSuite(opts: {
+  outputDir?: string;
+  providerMode?: "mock-openai" | "live-openai";
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+}) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
 }
@@ -71,9 +77,27 @@ export function registerQaLabCli(program: Command) {
   qa.command("suite")
     .description("Run all repo-backed QA scenarios against the real QA gateway lane")
     .option("--output-dir <path>", "Suite artifact directory")
-    .action(async (opts: { outputDir?: string }) => {
-      await runQaSuite(opts);
-    });
+    .option("--provider-mode <mode>", "Provider mode: mock-openai or live-openai", "mock-openai")
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option("--fast", "Enable provider fast mode where supported", false)
+    .action(
+      async (opts: {
+        outputDir?: string;
+        providerMode?: "mock-openai" | "live-openai";
+        model?: string;
+        altModel?: string;
+        fast?: boolean;
+      }) => {
+        await runQaSuite({
+          outputDir: opts.outputDir,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          fastMode: opts.fast,
+        });
+      },
+    );
 
   qa.command("ui")
     .description("Start the private QA debugger UI and local QA bus")

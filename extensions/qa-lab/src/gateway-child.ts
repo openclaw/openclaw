@@ -28,7 +28,7 @@ async function waitForGatewayReady(baseUrl: string, logs: () => string, timeoutM
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const response = await fetch(`${baseUrl}/readyz`);
+      const response = await fetch(`${baseUrl}/healthz`);
       if (response.ok) {
         return;
       }
@@ -70,8 +70,13 @@ async function runCliJson(params: { cwd: string; env: NodeJS.ProcessEnv; args: s
 
 export async function startQaGatewayChild(params: {
   repoRoot: string;
-  providerBaseUrl: string;
+  providerBaseUrl?: string;
   qaBusBaseUrl: string;
+  providerMode?: "mock-openai" | "live-openai";
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  controlUiEnabled?: boolean;
 }) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-suite-"));
   const workspaceDir = path.join(tempRoot, "workspace");
@@ -101,6 +106,11 @@ export async function startQaGatewayChild(params: {
     providerBaseUrl: params.providerBaseUrl,
     qaBusBaseUrl: params.qaBusBaseUrl,
     workspaceDir,
+    providerMode: params.providerMode,
+    primaryModel: params.primaryModel,
+    alternateModel: params.alternateModel,
+    fastMode: params.fastMode,
+    controlUiEnabled: params.controlUiEnabled,
   });
   await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 
@@ -149,6 +159,7 @@ export async function startQaGatewayChild(params: {
   const wsUrl = `ws://127.0.0.1:${gatewayPort}`;
   const logs = () =>
     `${Buffer.concat(stdout).toString("utf8")}\n${Buffer.concat(stderr).toString("utf8")}`.trim();
+  const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
 
   try {
     await waitForGatewayReady(baseUrl, logs);
@@ -190,9 +201,12 @@ export async function startQaGatewayChild(params: {
           "--params",
           JSON.stringify(rpcParams ?? {}),
         ],
+      }).catch((error) => {
+        const details = error instanceof Error ? error.message : String(error);
+        throw new Error(`${details}\nGateway logs:\n${logs()}`);
       });
     },
-    async stop() {
+    async stop(opts?: { keepTemp?: boolean }) {
       if (!child.killed) {
         child.kill("SIGTERM");
         await Promise.race([
@@ -204,7 +218,9 @@ export async function startQaGatewayChild(params: {
           }),
         ]);
       }
-      await fs.rm(tempRoot, { recursive: true, force: true });
+      if (!(opts?.keepTemp ?? keepTemp)) {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
     },
   };
 }
