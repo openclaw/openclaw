@@ -15,7 +15,8 @@ export type ExecApprovalReplyDecision = ExecApprovalDecision;
 export type ExecApprovalUnavailableReason =
   | "initiating-platform-disabled"
   | "initiating-platform-unsupported"
-  | "no-approval-route";
+  | "no-approval-route"
+  | "preflight-rejected";
 
 export type ExecApprovalReplyMetadata = {
   approvalId: string;
@@ -398,6 +399,28 @@ export function buildExecApprovalUnavailableReplyPayload(
       buildGenericNativeExecApprovalFallbackText({
         excludeChannel: params.channel,
       }),
+    );
+  } else if (params.reason === "preflight-rejected") {
+    lines.push(
+      "Exec preflight rejected this command — this is not an approval gate.",
+    );
+    if (warningText) {
+      lines.push(`Preflight reason: ${warningText}`);
+    }
+    lines.push(
+      "To allow this command, either disable the obfuscation check:",
+    );
+    lines.push(
+      "  tools.exec.obfuscationCheck: false",
+    );
+    lines.push(
+      "Or increase the command length threshold:",
+    );
+    lines.push(
+      "  tools.exec.maxCommandChars: <number>",
+    );
+    lines.push(
+      "See: https://docs.openclaw.ai/reference/config#toolsexec",
     );
   } else {
     lines.push(
