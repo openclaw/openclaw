@@ -67,14 +67,20 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 - Preferred entrypoint: `pnpm test:parallels:windows`
 - Use the snapshot closest to `pre-openclaw-native-e2e-2026-03-12`.
+- Default upgrade coverage on Windows should now include: fresh snapshot -> site installer pinned to the requested stable tag -> `openclaw update --channel dev` on the guest. Keep the older host-tgz upgrade path only when the caller explicitly passes `--target-package-spec`.
+- Optional exact npm-tag baseline on Windows: `bash scripts/e2e/parallels-windows-smoke.sh --mode upgrade --target-package-spec openclaw@<tag> --json`. That lane installs the published npm tarball as baseline, then runs `openclaw update --channel dev`.
+- Optional forward-fix Windows validation: `bash scripts/e2e/parallels-windows-smoke.sh --mode upgrade --upgrade-from-packed-main --json`. That lane installs the packed current-main npm tgz as baseline, then runs `openclaw update --channel dev`.
 - Always use `prlctl exec --current-user`; plain `prlctl exec` lands in `NT AUTHORITY\\SYSTEM`.
 - Prefer explicit `npm.cmd` and `openclaw.cmd`.
 - Use PowerShell only as the transport with `-ExecutionPolicy Bypass`, then call the `.cmd` shims from inside it.
+- Current Windows Node installs expose `corepack` as a `.cmd` shim. If a release-to-dev lane sees `corepack` on PATH but `openclaw update --channel dev` still behaves as if corepack is missing, treat that as an exec-shim regression first.
+- If an exact published-tag Windows lane fails during preflight with `npm run build` and `'pnpm' is not recognized`, remember that the guest is still executing the old published updater. Validate the fix with `--upgrade-from-packed-main`, then wait for the next tagged npm release before expecting the historical tag lane to pass.
 - Multi-word `openclaw agent --message ...` checks should call `& $openclaw ...` inside PowerShell, not `Start-Process ... -ArgumentList` against `openclaw.cmd`, or Commander can see split argv and throw `too many arguments for 'agent'`.
 - Windows installer/tgz phases now retry once after guest-ready recheck; keep new Windows smoke steps idempotent so a transport-flake retry is safe.
 - If a Windows retry sees the VM become `suspended` or `stopped`, resume/start it before the next `prlctl exec`; otherwise the second attempt just repeats the same `rc=255`.
 - Windows global `npm install -g` phases can stay quiet for a minute or more even when healthy; inspect the phase log before calling it hung, and only treat it as a regression once the retry wrapper or timeout trips.
 - Fresh Windows tgz install phases should also use the background PowerShell runner plus done-file/log-drain pattern; do not rely on one long-lived `prlctl exec ... powershell ... npm install -g` transport for package installs.
+- Windows release-to-dev helpers should log `where pnpm` before and after the update and require `where pnpm` to succeed post-update. That proves the updater installed or enabled `pnpm` itself instead of depending on a smoke-only bootstrap.
 - Fresh Windows ref-mode onboard should use the same background PowerShell runner plus done-file/log-drain pattern as the npm-update helper, including startup materialization checks, host-side timeouts on short poll `prlctl exec` calls, and retry-on-poll-failure behavior for transient transport flakes.
 - Fresh Windows daemon-health reachability should use a hello-only gateway probe and a longer per-probe timeout than the default local attach path; full health RPCs are too eager during initial startup on current main.
 - Fresh Windows ref-mode agent verification should set `OPENAI_API_KEY` in the PowerShell environment before invoking `openclaw.cmd agent`, for the same pairing-required fallback reason as macOS.
