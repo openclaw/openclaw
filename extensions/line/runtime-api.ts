@@ -69,7 +69,7 @@ export type {
 } from "./src/types.js";
 export * from "./src/webhook-node.js";
 export * from "./src/webhook.js";
-export * from "./src/webhook-utils.js";
+export { parseLineWebhookBody } from "./src/webhook-utils.js";
 export { datetimePickerAction, messageAction, postbackAction, uriAction } from "./src/actions.js";
 export type { Action } from "./src/actions.js";
 export {

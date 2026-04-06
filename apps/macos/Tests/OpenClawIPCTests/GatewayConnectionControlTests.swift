@@ -6,6 +6,7 @@ import Testing
 
 private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
     var state: URLSessionTask.State = .running
+    private(set) var sentMessages: [URLSessionWebSocketTask.Message] = []
 
     func resume() {}
 
@@ -13,7 +14,9 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
         self.state = .canceling
     }
 
-    func send(_: URLSessionWebSocketTask.Message) async throws {}
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        self.sentMessages.append(message)
+    }
 
     func receive() async throws -> URLSessionWebSocketTask.Message {
         throw URLError(.cannotConnectToHost)
@@ -25,29 +28,33 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
 }
 
 private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
+    let task = FakeWebSocketTask()
+
     func makeWebSocketTask(url _: URL) -> WebSocketTaskBox {
-        WebSocketTaskBox(task: FakeWebSocketTask())
+        WebSocketTaskBox(task: self.task)
     }
 }
 
-private func makeTestGatewayConnection() -> GatewayConnection {
-    GatewayConnection(
+private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSession) {
+    let session = FakeWebSocketSession()
+    let connection = GatewayConnection(
         configProvider: {
             (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil)
         },
-        sessionBox: WebSocketSessionBox(session: FakeWebSocketSession()))
+        sessionBox: WebSocketSessionBox(session: session))
+    return (connection, session)
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
     @Test func `status fails when process missing`() async {
-        let connection = makeTestGatewayConnection()
+        let (connection, _) = makeTestGatewayConnection()
         let result = await connection.status()
         #expect(result.ok == false)
         #expect(result.error != nil)
     }
 
     @Test func `reject empty message`() async {
-        let connection = makeTestGatewayConnection()
+        let (connection, _) = makeTestGatewayConnection()
         let result = await connection.sendAgent(
             message: "",
             thinking: nil,
@@ -55,5 +62,38 @@ private func makeTestGatewayConnection() -> GatewayConnection {
             deliver: false,
             to: nil)
         #expect(result.ok == false)
+    }
+
+    @Test func `send agent keeps empty voice wake trigger field`() async throws {
+        let (connection, session) = makeTestGatewayConnection()
+        _ = await connection.sendAgent(GatewayAgentInvocation(
+            message: "test",
+            sessionKey: "main",
+            thinking: nil,
+            deliver: false,
+            to: nil,
+            channel: .last,
+            timeoutSeconds: nil,
+            idempotencyKey: "idem-1",
+            voiceWakeTrigger: "   "))
+
+        guard let lastMessage = session.task.sentMessages.last else {
+            Issue.record("expected websocket send payload")
+            return
+        }
+        let payloadData: Data
+        switch lastMessage {
+        case .string(let text):
+            payloadData = Data(text.utf8)
+        case .data(let data):
+            payloadData = data
+        @unknown default:
+            Issue.record("unexpected websocket message type")
+            return
+        }
+
+        let json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
+        let params = json?["params"] as? [String: Any]
+        #expect(params?["voiceWakeTrigger"] as? String == "")
     }
 }
