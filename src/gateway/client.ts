@@ -258,6 +258,7 @@ export class GatewayClient {
         }
         return undefined;
       };
+      };
     }
     const ws = new WebSocket(url, wsOptions as ClientOptions);
     this.ws = ws;
