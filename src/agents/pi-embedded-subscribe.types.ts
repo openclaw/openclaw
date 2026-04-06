@@ -40,4 +40,10 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
   internalEvents?: AgentInternalEvent[];
+  /**
+   * Exact raw names of non-plugin OpenClaw tools registered for this run.
+   * When provided, filterToolResultMediaUrls requires an exact match before
+   * granting local-path access — preventing alias/case name-squatting bypasses.
+   */
+  builtinToolNames?: ReadonlySet<string>;
 };

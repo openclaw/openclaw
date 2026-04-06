@@ -1,9 +1,11 @@
+import { copyChannelAgentToolMeta } from "../agents/channel-tools.js";
 import {
   cleanSchemaForGemini,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../agents/schema/clean-for-gemini.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { applyModelCompatPatch } from "../plugins/provider-model-compat.js";
+import { copyPluginToolMeta } from "../plugins/tools.js";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -136,10 +138,16 @@ export function normalizeGeminiToolSchemas(
     if (!tool.parameters || typeof tool.parameters !== "object") {
       return tool;
     }
-    return {
+    const wrapped = {
       ...tool,
       parameters: cleanSchemaForGemini(tool.parameters as Record<string, unknown>),
     };
+    // Preserve WeakMap-attached plugin and channel metadata through the schema
+    // transformation so downstream trust checks (builtinToolNames, media
+    // filtering) see the original tool classification.
+    copyPluginToolMeta(tool, wrapped);
+    copyChannelAgentToolMeta(tool as never, wrapped as never);
+    return wrapped;
   });
 }
 

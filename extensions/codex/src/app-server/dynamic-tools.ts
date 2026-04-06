@@ -112,7 +112,7 @@ function collectToolTelemetry(params: {
   if (!params.isError && params.result) {
     const media = extractToolResultMediaArtifact(params.result);
     if (media) {
-      const mediaUrls = filterToolResultMediaUrls(params.toolName, media.mediaUrls, params.result);
+      const mediaUrls = filterToolResultMediaUrls(params.toolName, media.mediaUrls);
       const seen = new Set(params.telemetry.toolMediaUrls);
       for (const mediaUrl of mediaUrls) {
         if (!seen.has(mediaUrl)) {

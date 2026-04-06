@@ -2,7 +2,11 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
-import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import {
+  findClientToolNameConflicts,
+  toClientToolDefinitions,
+  toToolDefinitions,
+} from "./pi-tool-definition-adapter.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
@@ -97,6 +101,41 @@ describe("pi tool definition adapter", () => {
     });
     expect(result.content[0]).toMatchObject({ type: "text" });
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
+  });
+
+  it("rejects client tools that collide with built-in alias space", () => {
+    const conflicts = findClientToolNameConflicts({
+      tools: [
+        {
+          type: "function",
+          function: { name: "bash" },
+        },
+        {
+          type: "function",
+          function: { name: "Web_Search" },
+        },
+      ],
+      existingToolNames: ["exec", "web_search"],
+    });
+
+    expect(conflicts).toEqual(["bash", "Web_Search"]);
+  });
+
+  it("rejects duplicate client tools after normalization", () => {
+    const conflicts = findClientToolNameConflicts({
+      tools: [
+        {
+          type: "function",
+          function: { name: "exec" },
+        },
+        {
+          type: "function",
+          function: { name: "Exec" },
+        },
+      ],
+    });
+
+    expect(conflicts).toEqual(["exec", "Exec"]);
   });
 });
 

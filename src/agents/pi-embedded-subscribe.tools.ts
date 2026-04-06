@@ -189,16 +189,8 @@ function readToolResultStatus(result: unknown): string | undefined {
   return normalizeOptionalLowercaseString(status);
 }
 
-function isExternalToolResult(result: unknown): boolean {
-  const details = readToolResultDetails(result);
-  if (!details) {
-    return false;
-  }
-  return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
-}
-
-export function isToolResultMediaTrusted(toolName?: string, result?: unknown): boolean {
-  if (!toolName || isExternalToolResult(result)) {
+export function isToolResultMediaTrusted(toolName?: string): boolean {
+  if (!toolName) {
     return false;
   }
   const normalized = normalizeToolName(toolName);
@@ -210,12 +202,25 @@ export function isToolResultMediaTrusted(toolName?: string, result?: unknown): b
 export function filterToolResultMediaUrls(
   toolName: string | undefined,
   mediaUrls: string[],
-  result?: unknown,
+  builtinToolNames?: ReadonlySet<string>,
 ): string[] {
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  if (isToolResultMediaTrusted(toolName, result)) {
+  if (isToolResultMediaTrusted(toolName)) {
+    // When a runtime-registered set of built-in tool names is provided, require
+    // an exact raw-name match. This prevents MCP/client tools from bypassing
+    // the local-path filter via aliases (bash -> exec), case variants, or
+    // other normalized-name collisions with trusted built-ins.
+    // NOTE: when builtinToolNames is omitted (undefined), the guard is skipped
+    // and the weaker normalized-name check applies. All production call paths
+    // (attempt.ts) supply this set; omitting it preserves legacy behavior only.
+    if (builtinToolNames !== undefined) {
+      const registeredName = toolName?.trim();
+      if (!registeredName || !builtinToolNames.has(registeredName)) {
+        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+      }
+    }
     return mediaUrls;
   }
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));

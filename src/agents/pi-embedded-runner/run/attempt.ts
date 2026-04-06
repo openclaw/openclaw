@@ -29,6 +29,7 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
@@ -86,7 +87,11 @@ import {
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
-import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
+import {
+  createClientToolNameConflictError,
+  findClientToolNameConflicts,
+  toClientToolDefinitions,
+} from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
@@ -590,6 +595,33 @@ export async function runEmbeddedAttempt(
       ...(bundleMcpRuntime?.tools ?? []),
       ...(bundleLspRuntime?.tools ?? []),
     ];
+    // Collect exact raw names of non-plugin OpenClaw tools. Passed to the
+    // subscriber so filterToolResultMediaUrls only trusts MEDIA: paths from
+    // the concrete built-in tool registrations for this run.
+    // Built from `tools` (not `effectiveTools`) so bundle-injected MCP/LSP
+    // tools are deliberately excluded and never receive local-path trust.
+    const builtinToolNames = new Set(
+      tools.flatMap((tool) => {
+        const name = tool.name.trim();
+        if (!name || getPluginToolMeta(tool)) {
+          return [];
+        }
+        return [name];
+      }),
+    );
+    const clientToolNameConflicts = findClientToolNameConflicts({
+      tools: clientTools ?? [],
+      existingToolNames: builtinToolNames,
+    });
+    if (clientToolNameConflicts.length > 0) {
+      // Dispose runtimes and release session lock before throwing — the inner
+      // try/finally that normally handles cleanup hasn't been entered yet.
+      await bundleMcpRuntime?.dispose();
+      await bundleLspRuntime?.dispose();
+      await sessionLock.release();
+      throw createClientToolNameConflictError(clientToolNameConflicts);
+    }
+    await params.onPreflightPassed?.();
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
@@ -1492,6 +1524,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           internalEvents: params.internalEvents,
+          builtinToolNames,
         }),
       );
 

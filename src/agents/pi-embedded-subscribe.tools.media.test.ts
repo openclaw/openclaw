@@ -12,6 +12,29 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(undefined)).toEqual([]);
   });
 
+  it("blocks trusted-media aliases that are not exact registered built-ins", () => {
+    expect(filterToolResultMediaUrls("bash", ["/etc/passwd"], new Set(["exec"]))).toEqual([]);
+    expect(
+      filterToolResultMediaUrls("Web_Search", ["/etc/passwd"], new Set(["web_search"])),
+    ).toEqual([]);
+  });
+
+  it("keeps local media for exact registered built-in tool names", () => {
+    expect(
+      filterToolResultMediaUrls("web_search", ["/tmp/screenshot.png"], new Set(["web_search"])),
+    ).toEqual(["/tmp/screenshot.png"]);
+  });
+
+  it("still allows remote media for colliding aliases", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "bash",
+        ["/etc/passwd", "https://example.com/file.png"],
+        new Set(["exec"]),
+      ),
+    ).toEqual(["https://example.com/file.png"]);
+  });
+
   it("returns empty array for non-object", () => {
     expect(extractToolResultMediaPaths("hello")).toEqual([]);
     expect(extractToolResultMediaPaths(42)).toEqual([]);
@@ -277,25 +300,21 @@ describe("extractToolResultMediaPaths", () => {
     expect(isToolResultMediaTrusted("music_generate")).toBe(true);
   });
 
-  it("does not trust local MEDIA paths for MCP-provenance results", () => {
+  it("does not trust local MEDIA paths for tools absent from builtinToolNames", () => {
+    // An MCP/plugin tool named "browser" should not inherit local-path trust
+    // even though "browser" normalizes to a trusted tool name.
     expect(
-      filterToolResultMediaUrls("browser", ["/tmp/screenshot.png"], {
-        details: {
-          mcpServer: "probe",
-          mcpTool: "browser",
-        },
-      }),
+      filterToolResultMediaUrls("browser", ["/tmp/screenshot.png"], new Set(["exec"])),
     ).toEqual([]);
   });
 
-  it("still allows remote MEDIA urls for MCP-provenance results", () => {
+  it("still allows remote MEDIA urls for tools absent from builtinToolNames", () => {
     expect(
-      filterToolResultMediaUrls("browser", ["https://example.com/screenshot.png"], {
-        details: {
-          mcpServer: "probe",
-          mcpTool: "browser",
-        },
-      }),
+      filterToolResultMediaUrls(
+        "browser",
+        ["https://example.com/screenshot.png"],
+        new Set(["exec"]),
+      ),
     ).toEqual(["https://example.com/screenshot.png"]);
   });
 });

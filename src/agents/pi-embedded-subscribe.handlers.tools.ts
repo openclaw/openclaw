@@ -13,6 +13,7 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -42,12 +43,10 @@ import { normalizeToolName } from "./tool-policy.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
-type MediaParseModule = typeof import("../media/parse.js");
 type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
 
 let execApprovalReplyModulePromise: Promise<ExecApprovalReplyModule> | undefined;
 let hookRunnerGlobalModulePromise: Promise<HookRunnerGlobalModule> | undefined;
-let mediaParseModulePromise: Promise<MediaParseModule> | undefined;
 let beforeToolCallModulePromise: Promise<BeforeToolCallModule> | undefined;
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
@@ -58,11 +57,6 @@ function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
 function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   hookRunnerGlobalModulePromise ??= import("../plugins/hook-runner-global.js");
   return hookRunnerGlobalModulePromise;
-}
-
-function loadMediaParse(): Promise<MediaParseModule> {
-  mediaParseModulePromise ??= import("../media/parse.js");
-  return mediaParseModulePromise;
 }
 
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
@@ -308,17 +302,16 @@ function queuePendingToolMedia(
   }
 }
 
-async function collectEmittedToolOutputMediaUrls(
+function collectEmittedToolOutputMediaUrls(
   toolName: string,
   outputText: string,
-  result: unknown,
-): Promise<string[]> {
-  const { splitMediaFromOutput } = await loadMediaParse();
+  builtinToolNames?: ReadonlySet<string>,
+): string[] {
   const mediaUrls = splitMediaFromOutput(outputText).mediaUrls ?? [];
   if (mediaUrls.length === 0) {
     return [];
   }
-  return filterToolResultMediaUrls(toolName, mediaUrls, result);
+  return filterToolResultMediaUrls(toolName, mediaUrls, builtinToolNames);
 }
 
 const COMPACT_PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
@@ -433,12 +426,13 @@ function readExecApprovalUnavailableDetails(result: unknown): {
 async function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
+  rawToolName: string;
   meta?: string;
   isToolError: boolean;
   result: unknown;
   sanitizedResult: unknown;
 }) {
-  const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
+  const { ctx, toolName, rawToolName, meta, isToolError, result, sanitizedResult } = params;
   const hasStructuredMedia =
     result &&
     typeof result === "object" &&
@@ -448,6 +442,7 @@ async function emitToolResultOutput(params: {
     typeof ((result as { details?: { media?: unknown } }).details?.media ?? undefined) ===
       "object" &&
     !Array.isArray((result as { details?: { media?: unknown } }).details?.media);
+
   const approvalPending = readExecApprovalPendingDetails(result);
   let emittedToolOutputMediaUrls: string[] = [];
   if (!isToolError && approvalPending) {
@@ -511,14 +506,14 @@ async function emitToolResultOutput(params: {
     ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText });
   if (shouldEmitOutput) {
     if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText, result);
       if (ctx.params.toolResultFormat === "plain") {
-        emittedToolOutputMediaUrls = await collectEmittedToolOutputMediaUrls(
+        emittedToolOutputMediaUrls = collectEmittedToolOutputMediaUrls(
           toolName,
           outputText,
-          result,
+          ctx.builtinToolNames,
         );
       }
+      ctx.emitToolOutput(toolName, meta, outputText, rawToolName);
     }
     if (!hasStructuredMedia) {
       return;
@@ -529,13 +524,19 @@ async function emitToolResultOutput(params: {
     return;
   }
 
-  const mediaReply = extractToolResultMediaArtifact(result);
-  if (!mediaReply) {
+  // emitToolOutput() already handles MEDIA: directives when enabled; this path
+  // only sends raw media URLs for non-verbose delivery mode.
+  const mediaArtifact = extractToolResultMediaArtifact(result);
+  if (!mediaArtifact) {
     return;
   }
-  const mediaUrls = filterToolResultMediaUrls(toolName, mediaReply.mediaUrls, result);
+  const mediaUrls = filterToolResultMediaUrls(
+    rawToolName,
+    mediaArtifact.mediaUrls,
+    ctx.builtinToolNames,
+  );
   const pendingMediaUrls =
-    mediaReply.audioAsVoice || emittedToolOutputMediaUrls.length === 0
+    mediaArtifact.audioAsVoice || emittedToolOutputMediaUrls.length === 0
       ? mediaUrls
       : mediaUrls.filter((url) => !emittedToolOutputMediaUrls.includes(url));
   if (pendingMediaUrls.length === 0) {
@@ -543,7 +544,7 @@ async function emitToolResultOutput(params: {
   }
   queuePendingToolMedia(ctx, {
     mediaUrls: pendingMediaUrls,
-    ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
+    ...(mediaArtifact.audioAsVoice ? { audioAsVoice: true } : {}),
   });
 }
 
@@ -779,7 +780,8 @@ export async function handleToolExecutionEnd(
     result?: unknown;
   },
 ) {
-  const toolName = normalizeToolName(evt.toolName);
+  const rawToolName = evt.toolName;
+  const toolName = normalizeToolName(rawToolName);
   const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
   const isError = evt.isError;
@@ -1099,7 +1101,15 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  await emitToolResultOutput({
+    ctx,
+    toolName,
+    rawToolName,
+    meta,
+    isToolError,
+    result,
+    sanitizedResult,
+  });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();

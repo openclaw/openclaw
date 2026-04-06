@@ -90,6 +90,8 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Invoked after deterministic tool preflight checks succeed for an attempt. */
+  onPreflightPassed?: () => void | Promise<void>;
 };
 
 export type AgentCommandIngressOpts = Omit<

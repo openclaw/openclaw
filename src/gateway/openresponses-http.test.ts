@@ -108,6 +108,12 @@ async function postResponses(port: number, body: unknown, headers?: Record<strin
   return res;
 }
 
+async function resolveOpenResponsesStreamPreflight(opts: unknown): Promise<void> {
+  await (
+    opts as { onPreflightPassed?: (() => void | Promise<void>) | undefined } | undefined
+  )?.onPreflightPassed?.();
+}
+
 function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
   const events: Array<{ event?: string; data: string }> = [];
   const lines = text.split("\n");
@@ -654,13 +660,15 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const port = enabledPort;
     try {
       agentCommand.mockClear();
-      agentCommand.mockImplementationOnce((async (opts: unknown) =>
-        buildAssistantDeltaResult({
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        await resolveOpenResponsesStreamPreflight(opts);
+        return buildAssistantDeltaResult({
           opts,
           emit: emitAgentEvent,
           deltas: ["he", "llo"],
           text: "hello",
-        })) as never);
+        });
+      }) as never);
 
       const resDelta = await postResponses(port, {
         stream: true,
@@ -702,9 +710,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(completedDeltaOutput?.[0]?.phase).toBe("final_answer");
 
       agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({
-        payloads: [{ text: "hello" }],
-      } as never);
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        await resolveOpenResponsesStreamPreflight(opts);
+        return {
+          payloads: [{ text: "hello" }],
+        };
+      }) as never);
 
       const resFallback = await postResponses(port, {
         stream: true,
@@ -717,9 +728,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(fallbackText).toContain("hello");
 
       agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({
-        payloads: [{ text: "hello" }],
-      } as never);
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        await resolveOpenResponsesStreamPreflight(opts);
+        return {
+          payloads: [{ text: "hello" }],
+        };
+      }) as never);
 
       const resTypeMatch = await postResponses(port, {
         stream: true,
@@ -1073,6 +1087,36 @@ describe("OpenResponses HTTP API (e2e)", () => {
         agentId: "main",
       }),
     ).toBeUndefined();
+  });
+
+  it("rejects conflicting OpenResponses client tools before streaming starts", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockRejectedValueOnce(new Error("client tool name conflict: bash"));
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+      tools: [{ type: "function", name: "bash", description: "shell" }],
+    });
+
+    await expectInvalidRequest(res, /invalid tool configuration/i);
+    expect(res.headers.get("content-type") ?? "").not.toContain("text/event-stream");
+  });
+
+  it("returns invalid-request JSON for conflicting OpenResponses client tools", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockRejectedValueOnce(new Error("client tool name conflict: bash"));
+
+    const res = await postResponses(port, {
+      model: "openclaw",
+      input: "hi",
+      tools: [{ type: "function", name: "bash", description: "shell" }],
+    });
+
+    await expectInvalidRequest(res, /invalid tool configuration/i);
   });
 
   it("blocks unsafe URL-based file/image inputs", async () => {

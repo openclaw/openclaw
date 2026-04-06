@@ -407,13 +407,17 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const emitToolResultMessage = (
     toolName: string | undefined,
     message: string,
-    result?: unknown,
+    mediaToolName?: string,
   ) => {
     if (!params.onToolResult) {
       return;
     }
     const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
-    const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? [], result);
+    const filteredMediaUrls = filterToolResultMediaUrls(
+      mediaToolName ?? toolName,
+      mediaUrls ?? [],
+      params.builtinToolNames,
+    );
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
@@ -432,7 +436,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     });
     emitToolResultMessage(toolName, agg);
   };
-  const emitToolOutput = (toolName?: string, meta?: string, output?: string, result?: unknown) => {
+  const emitToolOutput = (
+    toolName?: string,
+    meta?: string,
+    output?: string,
+    mediaToolName?: string,
+  ) => {
     if (!output) {
       return;
     }
@@ -440,7 +449,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       markdown: useMarkdown,
     });
     const message = `${agg}\n${formatToolOutputBlock(output)}`;
-    emitToolResultMessage(toolName, message, result);
+    emitToolResultMessage(toolName, message, mediaToolName);
   };
 
   const stripBlockTags = (
@@ -722,6 +731,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunking,
     blockChunker,
     hookRunner: params.hookRunner,
+    builtinToolNames: params.builtinToolNames,
     noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,

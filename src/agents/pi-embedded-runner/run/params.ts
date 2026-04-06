@@ -74,6 +74,8 @@ export type RunEmbeddedPiAgentParams = {
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
+  /** Invoked after deterministic tool preflight checks succeed for an attempt. */
+  onPreflightPassed?: () => void | Promise<void>;
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
   provider?: string;

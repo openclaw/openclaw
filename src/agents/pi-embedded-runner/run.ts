@@ -664,6 +664,7 @@ export async function runEmbeddedPiAgent(
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
             disableTools: params.disableTools,
+            onPreflightPassed: params.onPreflightPassed,
             provider,
             modelId,
             model: applyAuthHeaderOverride(
