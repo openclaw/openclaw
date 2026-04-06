@@ -1,5 +1,13 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
+import type {
+  ClawArtifactEntry,
+  ClawAuditEntry,
+  ClawControlState,
+  ClawInboxItem,
+  ClawMissionDetail,
+  ClawMissionSummary,
+} from "../../../src/shared/claw-types.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -63,14 +71,6 @@ import type { DevicePairingList } from "./controllers/devices.ts";
 import type { DreamingStatus } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type {
-  ClawArtifactEntry,
-  ClawAuditEntry,
-  ClawControlState,
-  ClawInboxItem,
-  ClawMissionDetail,
-  ClawMissionSummary,
-} from "../../../src/shared/claw-types.js";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
@@ -222,6 +222,12 @@ export class OpenClawApp extends LitElement {
   @state() clawInbox: ClawInboxItem[] = [];
   @state() clawAuditLoading = false;
   @state() clawAuditEntries: ClawAuditEntry[] = [];
+  @state() clawAuditFilters = {
+    role: "",
+    toolName: "",
+    sideEffectClass: "",
+    outcome: "",
+  };
   @state() clawArtifactsLoading = false;
   @state() clawArtifacts: ClawArtifactEntry[] = [];
   @state() pendingGatewayUrl: string | null = null;

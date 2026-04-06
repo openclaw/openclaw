@@ -25,6 +25,7 @@ import {
   saveAgentsConfig,
 } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
+import { loadChatHistory } from "./controllers/chat.ts";
 import {
   approveClawMission,
   cancelClawMission,
@@ -36,10 +37,10 @@ import {
   rerunClawPreflight,
   resumeClawMission,
   selectClawMission,
+  setClawAuditFilter,
   setClawAutonomy,
   stopAllClawNow,
 } from "./controllers/claw.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
 import {
   applyConfig,
   ensureAgentConfigEntry,
@@ -255,7 +256,9 @@ function uniquePreserveOrder(values: string[]): string[] {
 function isClawEnabledInUi(state: Pick<AppViewState, "configForm" | "configSnapshot">): boolean {
   const config = state.configForm ?? state.configSnapshot?.config ?? null;
   const claw = config?.claw;
-  return Boolean(claw && typeof claw === "object" && (claw as { enabled?: unknown }).enabled === true);
+  return Boolean(
+    claw && typeof claw === "object" && (claw as { enabled?: unknown }).enabled === true,
+  );
 }
 
 type DismissedUpdateBanner = {
@@ -631,9 +634,7 @@ export function renderApp(state: AppViewState) {
                           `
                         : nothing}
                       <div class="nav-section__items">
-                        ${tabs.map((tab) =>
-                          renderTab(state, tab, { collapsed: navCollapsed }),
-                        )}
+                        ${tabs.map((tab) => renderTab(state, tab, { collapsed: navCollapsed }))}
                       </div>
                     </section>
                   `;
@@ -804,8 +805,8 @@ export function renderApp(state: AppViewState) {
                 <section class="card">
                   <div class="card-title">Claw Missions</div>
                   <div class="card-sub">
-                    Claw is disabled in config. Enable <code>claw.enabled</code> to use the
-                    mission console.
+                    Claw is disabled in config. Enable <code>claw.enabled</code> to use the mission
+                    console.
                   </div>
                 </section>
               `
@@ -823,6 +824,7 @@ export function renderApp(state: AppViewState) {
                   inbox: state.clawInbox,
                   auditLoading: state.clawAuditLoading,
                   auditEntries: state.clawAuditEntries,
+                  auditFilters: state.clawAuditFilters,
                   artifactsLoading: state.clawArtifactsLoading,
                   artifacts: state.clawArtifacts,
                   onGoalDraftChange: (value) => {
@@ -854,6 +856,9 @@ export function renderApp(state: AppViewState) {
                   },
                   onPauseAll: () => {
                     void pauseAllClaw(state);
+                  },
+                  onSetAuditFilter: (key, value) => {
+                    setClawAuditFilter(state, key, value);
                   },
                   onStopAllNow: () => {
                     void stopAllClawNow(state);

@@ -111,6 +111,33 @@ describe("createClawMissionService", () => {
     await expect(fs.stat(path.join(missionDir!, "AUDIT_LOG.jsonl"))).resolves.toBeTruthy();
   });
 
+  it("exposes the mission packet and structured audit metadata in mission snapshots", async () => {
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+    });
+
+    const created = await service.createMission({
+      goal: "Plan and verify the Claw mission packet before unattended continuation starts.",
+    });
+
+    expect(created.mission?.packet.summary).toBeTruthy();
+    expect(created.mission?.packet.scopeIn.length).toBeGreaterThan(0);
+    expect(created.mission?.packet.tasks.length).toBeGreaterThan(0);
+    expect(created.mission?.packet.doneCriteria.length).toBeGreaterThan(0);
+    expect(created.mission?.continuationPhase).toBeNull();
+
+    const audit = await service.getAudit(created.mission!.id);
+    expect(audit[0]).toEqual(
+      expect.objectContaining({
+        role: expect.any(String),
+        actionType: expect.any(String),
+        targetSummary: expect.any(String),
+        outcome: expect.any(String),
+      }),
+    );
+  });
+
   it("transitions a mission through approve, pause, resume, and cancel", async () => {
     const service = createClawMissionService({
       resolveWorkspaceDir: () => workspaceDir,
@@ -396,6 +423,58 @@ describe("createClawMissionService", () => {
     );
   });
 
+  it("preserves verifier intent across global pause and resume", async () => {
+    const runEmbeddedPiAgent = vi
+      .fn()
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "verify",
+            summary: "The runner completed the implementation work.",
+            currentStep: "Ready for verification.",
+            nextStep: "Run the fresh verification pass.",
+            progress: true,
+            evidence: ["Implementation work is ready for verification."],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "done",
+            summary: "Verifier completed after global pause was cleared.",
+            evidence: ["Verifier accepted the mission output."],
+          }),
+        ),
+      );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Pause verifier work globally and resume without losing phase intent.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+    await service.runNextMissionCycle();
+
+    await service.pauseAll();
+    const pausedDashboard = await service.buildDashboard();
+    expect(pausedDashboard.missions[0]?.status).toBe("paused");
+    expect(pausedDashboard.missions[0]?.continuationPhase).toBe("verifying");
+
+    await service.pauseAll(false);
+    const resumedDashboard = await service.buildDashboard();
+    expect(resumedDashboard.missions[0]?.status).toBe("queued");
+    expect(resumedDashboard.missions[0]?.continuationPhase).toBe("verifying");
+
+    const completed = await service.runNextMissionCycle();
+    expect(completed?.mission?.status).toBe("done");
+  });
+
   it("applies emergency stop to active missions", async () => {
     const service = createClawMissionService({
       resolveWorkspaceDir: () => workspaceDir,
@@ -486,6 +565,119 @@ describe("createClawMissionService", () => {
         "mission.done",
       ]),
     );
+  });
+
+  it("resumes verification after pausing a mission during the verifier phase", async () => {
+    const runEmbeddedPiAgent = vi
+      .fn()
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "verify",
+            summary: "The runner completed the implementation work.",
+            currentStep: "Ready for verification.",
+            nextStep: "Run the fresh verification pass.",
+            progress: true,
+            evidence: ["Implementation work is ready for verification."],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "done",
+            summary: "The verifier confirmed the done criteria.",
+            evidence: ["Verifier accepted the mission output."],
+          }),
+        ),
+      );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Pause and resume a mission without losing verifier intent.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+
+    const firstCycle = await service.runNextMissionCycle();
+    expect(firstCycle?.mission?.status).toBe("verifying");
+
+    const paused = await service.pauseMission(missionId, "Pause during verification");
+    expect(paused.mission?.status).toBe("paused");
+    expect(paused.mission?.continuationPhase).toBe("verifying");
+
+    const resumed = await service.resumeMission(missionId);
+    expect(resumed.mission?.status).toBe("queued");
+    expect(resumed.mission?.continuationPhase).toBe("verifying");
+
+    const completed = await service.runNextMissionCycle();
+    expect(completed?.mission?.status).toBe("done");
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes verifier blockers through the verifier instead of restarting runner execution", async () => {
+    const runEmbeddedPiAgent = vi
+      .fn()
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "verify",
+            summary: "Runner completed the work and handed off to verification.",
+            currentStep: "Ready for verification.",
+            nextStep: "Run the fresh verification pass.",
+            progress: true,
+            evidence: ["Implementation is waiting for verification."],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "blocked",
+            summary: "Verification needs a follow-up decision before it can continue.",
+            blockerSummary: "Verification needs a one-time unblock step.",
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "done",
+            summary: "Verification completed successfully after resume.",
+            evidence: ["Verifier accepted the resumed mission."],
+          }),
+        ),
+      );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Resume a verifier blocker without restarting the runner.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+    await service.runNextMissionCycle();
+
+    const blocked = await service.runNextMissionCycle();
+    expect(blocked?.mission?.status).toBe("blocked");
+    expect(blocked?.mission?.continuationPhase).toBe("verifying");
+
+    const resumed = await service.resumeMission(missionId);
+    expect(resumed.mission?.status).toBe("queued");
+    expect(resumed.mission?.continuationPhase).toBe("verifying");
+
+    const completed = await service.runNextMissionCycle();
+    expect(completed?.mission?.status).toBe("done");
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(3);
   });
 
   it("claims queued missions up to claw.maxActiveMissions and keeps the cap stable", async () => {

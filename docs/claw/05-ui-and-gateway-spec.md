@@ -129,25 +129,26 @@ Claw must use one canonical pending-decision model for all operator-required act
 Decision kinds:
 
 - `start_approval`
-- `setup_request`
-- `runtime_blocker`
-- `owner_choice`
+- `preflight_blocker`
+- `operator_choice`
 - `recovery_uncertain`
 
 Required fields:
 
-- `decisionId`
-- `missionId`
+- `id`
 - `kind`
 - `title`
 - `summary`
-- `details`
 - `requestedAt`
-- `requestedByRole`
-- `expiresAt` if applicable
-- `allowedResponses`
-- `defaultResponse` if applicable
-- `resolution` when completed
+- `status`
+- `response` when completed
+
+Optional fields that later versions may add:
+
+- richer details
+- requested-by role
+- explicit allowed responses
+- expiry or default response metadata
 
 The `Inbox` view is the canonical UI for unresolved decisions.
 

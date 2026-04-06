@@ -120,7 +120,7 @@ Claw uses an approved-mission queue with capped parallel execution.
 
 ### Defaults
 
-- `maxActiveMissions = 2`
+- `maxActiveMissions = 1`
 - per-mission live child agent cap = `4`
 - spawn depth cap = `2`
 

@@ -11,6 +11,13 @@ import type {
   ClawPreflightCheck,
 } from "../../../../src/shared/claw-types.js";
 
+export type ClawAuditFilters = {
+  role: string;
+  toolName: string;
+  sideEffectClass: string;
+  outcome: string;
+};
+
 export type ClawViewProps = {
   loading: boolean;
   error: string | null;
@@ -24,6 +31,7 @@ export type ClawViewProps = {
   inbox: ClawInboxItem[];
   auditLoading: boolean;
   auditEntries: ClawAuditEntry[];
+  auditFilters: ClawAuditFilters;
   artifactsLoading: boolean;
   artifacts: ClawArtifactEntry[];
   onGoalDraftChange: (value: string) => void;
@@ -36,6 +44,7 @@ export type ClawViewProps = {
   onRerunPreflight: (missionId: string) => void;
   onReplyDecision: (missionId: string, decisionId: string, action: ClawDecisionAction) => void;
   onPauseAll: () => void;
+  onSetAuditFilter: (key: keyof ClawAuditFilters, value: string) => void;
   onStopAllNow: () => void;
   onSetAutonomy: (enabled: boolean) => void;
   onRefresh: () => void;
@@ -114,15 +123,25 @@ function renderPreflight(check: ClawPreflightCheck) {
     <li>
       <strong>${check.title}</strong> (${check.status})
       <div class="card-sub">${check.summary}</div>
+      ${check.detail ? html`<div class="card-sub">${check.detail}</div>` : nothing}
     </li>
   `;
 }
 
 function renderAuditEntry(entry: ClawAuditEntry) {
+  const metadata = [
+    entry.role ?? null,
+    entry.phase ?? null,
+    entry.sideEffectClass ?? null,
+    entry.outcome ?? null,
+    entry.toolName ? `tool:${entry.toolName}` : null,
+  ].filter((value): value is string => Boolean(value));
+
   return html`
     <li>
       <strong>${entry.summary}</strong>
-      <div class="card-sub">${entry.type} • ${formatDate(entry.at)}</div>
+      <div class="card-sub">${entry.type} | ${formatDate(entry.at)}</div>
+      ${metadata.length > 0 ? html`<div class="card-sub">${metadata.join(" | ")}</div>` : nothing}
       ${entry.detail ? html`<div class="card-sub">${entry.detail}</div>` : nothing}
     </li>
   `;
@@ -133,11 +152,30 @@ function renderArtifact(entry: ClawArtifactEntry) {
     <li>
       <strong>${entry.name}</strong>
       <div class="card-sub">
-        ${entry.kind}${entry.updatedAt ? html` • ${formatDate(entry.updatedAt)}` : nothing}
-        ${typeof entry.sizeBytes === "number" ? html` • ${entry.sizeBytes} bytes` : nothing}
+        ${entry.kind}${entry.updatedAt ? html` | ${formatDate(entry.updatedAt)}` : nothing}
+        ${typeof entry.sizeBytes === "number" ? html` | ${entry.sizeBytes} bytes` : nothing}
       </div>
       <div class="card-sub">${entry.path}</div>
     </li>
+  `;
+}
+
+function resolveAuditFilterOptions(
+  entries: readonly ClawAuditEntry[],
+  key: keyof Pick<ClawAuditEntry, "role" | "toolName" | "sideEffectClass" | "outcome">,
+): string[] {
+  return [
+    ...new Set(
+      entries.map((entry) => entry[key]).filter((value): value is string => Boolean(value)),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function renderTextList(items: readonly string[]) {
+  return html`
+    <ul style="padding-left: 18px;">
+      ${items.map((item) => html`<li>${item}</li>`)}
+    </ul>
   `;
 }
 
@@ -159,6 +197,31 @@ export function renderClaw(props: ClawViewProps) {
   const canRerunPreflight =
     mission != null &&
     ["awaiting_setup", "awaiting_approval", "paused", "blocked"].includes(mission.status);
+
+  const filteredAuditEntries = props.auditEntries.filter((entry) => {
+    if (props.auditFilters.role && entry.role !== props.auditFilters.role) {
+      return false;
+    }
+    if (props.auditFilters.toolName && entry.toolName !== props.auditFilters.toolName) {
+      return false;
+    }
+    if (
+      props.auditFilters.sideEffectClass &&
+      entry.sideEffectClass !== props.auditFilters.sideEffectClass
+    ) {
+      return false;
+    }
+    if (props.auditFilters.outcome && entry.outcome !== props.auditFilters.outcome) {
+      return false;
+    }
+    return true;
+  });
+
+  const auditRoleOptions = resolveAuditFilterOptions(props.auditEntries, "role");
+  const auditToolOptions = resolveAuditFilterOptions(props.auditEntries, "toolName");
+  const auditSideEffectOptions = resolveAuditFilterOptions(props.auditEntries, "sideEffectClass");
+  const auditOutcomeOptions = resolveAuditFilterOptions(props.auditEntries, "outcome");
+
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
@@ -269,7 +332,11 @@ export function renderClaw(props: ClawViewProps) {
                         >
                           <span>
                             <strong>${entry.title}</strong>
-                            <div class="card-sub">${entry.status}</div>
+                            <div class="card-sub">
+                              ${entry.status}${entry.continuationPhase
+                                ? html` | phase: ${entry.continuationPhase}`
+                                : nothing}
+                            </div>
                           </span>
                           ${entry.requiresAttention ? html`<span>Needs Attention</span>` : nothing}
                         </button>
@@ -304,11 +371,16 @@ export function renderClaw(props: ClawViewProps) {
                       : nothing}
                     <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 10px;">
                       <div><strong>Status:</strong> ${mission.status}</div>
+                      <div>
+                        <strong>Continuation Phase:</strong>
+                        ${mission.continuationPhase ?? "n/a"}
+                      </div>
                       <div><strong>Current Step:</strong> ${mission.currentStep ?? "n/a"}</div>
                       <div><strong>Created:</strong> ${formatDate(mission.createdAt)}</div>
                       <div><strong>Updated:</strong> ${formatDate(mission.updatedAt)}</div>
                       <div><strong>Workspace:</strong> ${mission.workspaceDir}</div>
                       <div><strong>Mission Dir:</strong> ${mission.missionDir}</div>
+                      <div><strong>Packet Source:</strong> ${mission.packet.source}</div>
                     </div>
 
                     <div class="row" style="gap: 8px; flex-wrap: wrap;">
@@ -351,6 +423,56 @@ export function renderClaw(props: ClawViewProps) {
 
                     <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 16px;">
                       <section class="panel">
+                        <div class="card-title">Scope & Plan</div>
+                        <div class="card-sub">${mission.packet.summary}</div>
+                        <div class="card-sub" style="margin-top: 8px;">
+                          ${mission.packet.lifecycleNote}
+                        </div>
+                        <div style="margin-top: 12px;">
+                          <strong>In Scope</strong>
+                          ${renderTextList(mission.packet.scopeIn)}
+                        </div>
+                        <div style="margin-top: 12px;">
+                          <strong>Out of Scope</strong>
+                          ${renderTextList(mission.packet.scopeOut)}
+                        </div>
+                        <div style="margin-top: 12px;">
+                          <strong>Planned Phases</strong>
+                          <ol style="padding-left: 18px;">
+                            ${mission.packet.phases.map((item) => html`<li>${item}</li>`)}
+                          </ol>
+                        </div>
+                      </section>
+                      <section class="panel">
+                        <div class="card-title">Tasks & Verification</div>
+                        <div><strong>Current Step:</strong> ${mission.currentStep ?? "n/a"}</div>
+                        <div style="margin-top: 12px;">
+                          <strong>Mission Tasks</strong>
+                          ${renderTextList(mission.packet.tasks)}
+                        </div>
+                        <div style="margin-top: 12px;">
+                          <strong>Done Criteria</strong>
+                          ${renderTextList(mission.packet.doneCriteria)}
+                        </div>
+                      </section>
+                    </div>
+
+                    <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 16px;">
+                      <section class="panel">
+                        <div class="card-title">Logs & Files</div>
+                        <div class="card-sub">Logs directory: ${mission.logsDir}</div>
+                        <div class="card-sub">Audit log: ${mission.auditLogPath}</div>
+                        <div class="card-sub">Artifacts directory: ${mission.artifactsDir}</div>
+                        <div style="margin-top: 12px;">
+                          <strong>Mission Files</strong>
+                          <ul style="padding-left: 18px;">
+                            ${mission.files.map(
+                              (entry) => html`<li>${entry.name} (${entry.kind})</li>`,
+                            )}
+                          </ul>
+                        </div>
+                      </section>
+                      <section class="panel">
                         <div class="card-title">Decisions</div>
                         ${mission.decisions.length === 0
                           ? html`<div class="card-sub">No decisions recorded.</div>`
@@ -367,31 +489,19 @@ export function renderClaw(props: ClawViewProps) {
                               </ul>
                             `}
                       </section>
+                    </div>
+
+                    <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 16px;">
                       <section class="panel">
                         <div class="card-title">Preflight</div>
                         <ul style="padding-left: 18px;">
                           ${mission.preflight.map(renderPreflight)}
                         </ul>
                       </section>
-                    </div>
-
-                    <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 16px;">
-                      <section class="panel">
-                        <div class="card-title">Audit</div>
-                        ${props.auditLoading
-                          ? html`<div class="card-sub">Loading audit…</div>`
-                          : props.auditEntries.length === 0
-                            ? html`<div class="card-sub">No audit entries yet.</div>`
-                            : html`
-                                <ul style="padding-left: 18px;">
-                                  ${props.auditEntries.map(renderAuditEntry)}
-                                </ul>
-                              `}
-                      </section>
                       <section class="panel">
                         <div class="card-title">Artifacts</div>
                         ${props.artifactsLoading
-                          ? html`<div class="card-sub">Loading artifacts…</div>`
+                          ? html`<div class="card-sub">Loading artifacts...</div>`
                           : props.artifacts.length === 0
                             ? html`<div class="card-sub">No artifacts recorded yet.</div>`
                             : html`
@@ -401,6 +511,92 @@ export function renderClaw(props: ClawViewProps) {
                               `}
                       </section>
                     </div>
+
+                    <section class="panel">
+                      <div class="card-title">Audit</div>
+                      <div
+                        class="grid"
+                        style="grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;"
+                      >
+                        <label class="card-sub">
+                          Role
+                          <select
+                            class="input"
+                            .value=${props.auditFilters.role}
+                            @change=${(event: Event) =>
+                              props.onSetAuditFilter(
+                                "role",
+                                (event.target as HTMLSelectElement).value,
+                              )}
+                          >
+                            <option value="">All</option>
+                            ${auditRoleOptions.map(
+                              (value) => html`<option value=${value}>${value}</option>`,
+                            )}
+                          </select>
+                        </label>
+                        <label class="card-sub">
+                          Outcome
+                          <select
+                            class="input"
+                            .value=${props.auditFilters.outcome}
+                            @change=${(event: Event) =>
+                              props.onSetAuditFilter(
+                                "outcome",
+                                (event.target as HTMLSelectElement).value,
+                              )}
+                          >
+                            <option value="">All</option>
+                            ${auditOutcomeOptions.map(
+                              (value) => html`<option value=${value}>${value}</option>`,
+                            )}
+                          </select>
+                        </label>
+                        <label class="card-sub">
+                          Side Effect
+                          <select
+                            class="input"
+                            .value=${props.auditFilters.sideEffectClass}
+                            @change=${(event: Event) =>
+                              props.onSetAuditFilter(
+                                "sideEffectClass",
+                                (event.target as HTMLSelectElement).value,
+                              )}
+                          >
+                            <option value="">All</option>
+                            ${auditSideEffectOptions.map(
+                              (value) => html`<option value=${value}>${value}</option>`,
+                            )}
+                          </select>
+                        </label>
+                        <label class="card-sub">
+                          Tool
+                          <select
+                            class="input"
+                            .value=${props.auditFilters.toolName}
+                            @change=${(event: Event) =>
+                              props.onSetAuditFilter(
+                                "toolName",
+                                (event.target as HTMLSelectElement).value,
+                              )}
+                          >
+                            <option value="">All</option>
+                            ${auditToolOptions.map(
+                              (value) => html`<option value=${value}>${value}</option>`,
+                            )}
+                          </select>
+                        </label>
+                      </div>
+                      ${props.auditLoading
+                        ? html`<div class="card-sub">Loading audit...</div>`
+                        : filteredAuditEntries.length === 0
+                          ? html`<div class="card-sub">No audit entries yet.</div>`
+                          : html`
+                              <ul style="padding-left: 18px;">
+                                ${filteredAuditEntries.map(renderAuditEntry)}
+                              </ul>
+                            `}
+                    </section>
                   </div>
                 `}
           </section>

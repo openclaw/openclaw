@@ -199,7 +199,7 @@ Completion cannot be inferred from "nothing else to try" or "the model says it i
 
 Claw v1 defaults are:
 
-- `maxActiveMissions = 2`
+- `maxActiveMissions = 1`
 - per-mission live child agent cap = `4`
 - subagent spawn depth cap = `2`
 - one active browser profile per mission unless a later spec widens it
