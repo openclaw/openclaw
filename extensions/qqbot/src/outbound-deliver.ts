@@ -29,6 +29,7 @@ import {
 import { getQQBotRuntime } from "./runtime.js";
 import { chunkText, TEXT_CHUNK_LIMIT } from "./text-utils.js";
 import type { ResolvedQQBotAccount } from "./types.js";
+import { resolveApprovedQqbotRemoteMediaUrl } from "./utils/file-utils.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "./utils/image-size.js";
 import { normalizeMediaTags } from "./utils/media-tags.js";
 import { normalizePath, isLocalPath as isLocalFilePath } from "./utils/platform.js";
@@ -61,6 +62,25 @@ export type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Prom
 
 /** Consume a quote ref exactly once. */
 export type ConsumeQuoteRefFn = () => string | undefined;
+
+function formatLoggedUrl(url: string, maxLength = 80): string {
+  return url.length > maxLength ? `${url.slice(0, maxLength)}...` : url;
+}
+
+async function resolveApprovedReplyTextRemoteMediaUrl(params: {
+  url: string;
+  prefix: string;
+  log?: DeliverAccountContext["log"];
+}): Promise<string | null> {
+  const approvedUrl = await resolveApprovedQqbotRemoteMediaUrl(params.url);
+  if (approvedUrl) {
+    return approvedUrl;
+  }
+  params.log?.info(
+    `${params.prefix} Ignored remote reply-text media URL outside approved QQ/Tencent HTTPS hosts: ${formatLoggedUrl(params.url)}`,
+  );
+  return null;
+}
 
 function resolveQQBotMediaTargetContext(
   event: DeliverEventContext,
@@ -192,6 +212,20 @@ export async function parseAndSendMediaTags(
     let mediaPath = decodeMediaPath(normalizeOptionalString(match[2]) ?? "", log, prefix);
 
     if (mediaPath) {
+      const isRemoteUrl = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
+      if (isRemoteUrl) {
+        const approvedUrl = await resolveApprovedReplyTextRemoteMediaUrl({
+          url: mediaPath,
+          prefix,
+          log,
+        });
+        if (!approvedUrl) {
+          lastIndex = match.index + match[0].length;
+          continue;
+        }
+        mediaPath = approvedUrl;
+      }
+
       const typeMap: Record<string, QueueItem["type"]> = {
         qqmedia: "media",
         qqvoice: "voice",
@@ -271,6 +305,23 @@ export interface PlainReplyPayload {
   mediaUrl?: string;
 }
 
+interface ApprovedMarkdownImageMatch {
+  originalMatch: RegExpMatchArray;
+  normalizedMatch: RegExpMatchArray;
+}
+
+function normalizeMarkdownMatchUrl(
+  match: RegExpMatchArray,
+  normalizedUrl: string,
+): RegExpMatchArray {
+  const normalizedMatch = [...match] as RegExpMatchArray;
+  normalizedMatch.index = match.index;
+  normalizedMatch.input = match.input;
+  normalizedMatch.groups = match.groups;
+  normalizedMatch[2] = normalizedUrl;
+  return normalizedMatch;
+}
+
 /**
  * Send a reply that does not contain structured media tags.
  * Handles markdown image embeds, Base64 media, plain-text chunking, and local media routing.
@@ -300,7 +351,7 @@ export async function sendPlainReply(
       if (!collectedImageUrls.includes(url)) {
         collectedImageUrls.push(url);
         log?.info(
-          `${prefix} Collected ${isDataUrl ? "Base64" : "media URL"}: ${isDataUrl ? `(length: ${url.length})` : url.slice(0, 80) + "..."}`,
+          `${prefix} Collected ${isDataUrl ? "Base64" : "media URL"}: ${isDataUrl ? `(length: ${url.length})` : formatLoggedUrl(url)}`,
         );
       }
       return true;
@@ -327,17 +378,32 @@ export async function sendPlainReply(
   // Extract markdown images.
   const mdImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/gi;
   const mdMatches = [...replyText.matchAll(mdImageRegex)];
+  const approvedMdMatches: ApprovedMarkdownImageMatch[] = [];
   for (const m of mdMatches) {
     const url = m[2]?.trim();
-    if (url && !collectedImageUrls.includes(url)) {
-      if (url.startsWith("http://") || url.startsWith("https://")) {
-        collectedImageUrls.push(url);
-        log?.info(`${prefix} Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
-      } else if (isLocalFilePath(url)) {
-        if (!localMediaToSend.includes(url)) {
-          localMediaToSend.push(url);
-          log?.info(`${prefix} Collected local media from markdown for auto-routing: ${url}`);
-        }
+    if (!url) {
+      continue;
+    }
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      const approvedUrl = await resolveApprovedReplyTextRemoteMediaUrl({ url, prefix, log });
+      if (!approvedUrl) {
+        continue;
+      }
+      approvedMdMatches.push({
+        originalMatch: m,
+        normalizedMatch: normalizeMarkdownMatchUrl(m, approvedUrl),
+      });
+      if (!collectedImageUrls.includes(approvedUrl)) {
+        collectedImageUrls.push(approvedUrl);
+        log?.info(
+          `${prefix} Extracted approved HTTP image from markdown: ${formatLoggedUrl(approvedUrl)}`,
+        );
+      }
+    } else if (isLocalFilePath(url)) {
+      approvedMdMatches.push({ originalMatch: m, normalizedMatch: m });
+      if (!localMediaToSend.includes(url)) {
+        localMediaToSend.push(url);
+        log?.info(`${prefix} Collected local media from markdown for auto-routing: ${url}`);
       }
     }
   }
@@ -346,11 +412,20 @@ export async function sendPlainReply(
   const bareUrlRegex =
     /(?<![(["'])(https?:\/\/[^\s)"'<>]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s"'<>]*)?)/gi;
   const bareUrlMatches = [...replyText.matchAll(bareUrlRegex)];
+  const approvedBareUrlMatches: RegExpMatchArray[] = [];
   for (const m of bareUrlMatches) {
     const url = m[1];
-    if (url && !collectedImageUrls.includes(url)) {
-      collectedImageUrls.push(url);
-      log?.info(`${prefix} Extracted bare image URL: ${url.slice(0, 80)}...`);
+    if (!url) {
+      continue;
+    }
+    const approvedUrl = await resolveApprovedReplyTextRemoteMediaUrl({ url, prefix, log });
+    if (!approvedUrl) {
+      continue;
+    }
+    approvedBareUrlMatches.push(m);
+    if (!collectedImageUrls.includes(approvedUrl)) {
+      collectedImageUrls.push(approvedUrl);
+      log?.info(`${prefix} Extracted approved bare image URL: ${formatLoggedUrl(approvedUrl)}`);
     }
   }
 
@@ -361,9 +436,16 @@ export async function sendPlainReply(
 
   // Strip markdown image tags that are neither HTTP URLs nor collected local paths
   // to prevent leaking unresolvable paths (e.g. relative paths) to the user.
+  const approvedMarkdownImageUrls = new Set(
+    approvedMdMatches
+      .map((match) => match.originalMatch[2]?.trim())
+      .filter((url): url is string => Boolean(url)),
+  );
   for (const m of mdMatches) {
     const url = m[2]?.trim();
-    if (url && !url.startsWith("http://") && !url.startsWith("https://") && !isLocalFilePath(url)) {
+    const keepMarkdownImage =
+      Boolean(url) && (approvedMarkdownImageUrls.has(url) || (url ? isLocalFilePath(url) : false));
+    if (!keepMarkdownImage) {
       textWithoutImages = textWithoutImages.replace(m[0], "").trim();
     }
   }
@@ -372,8 +454,8 @@ export async function sendPlainReply(
     await sendMarkdownReply(
       textWithoutImages,
       collectedImageUrls,
-      mdMatches,
-      bareUrlMatches,
+      approvedMdMatches,
+      approvedBareUrlMatches,
       event,
       actx,
       sendWithRetry,
@@ -383,8 +465,8 @@ export async function sendPlainReply(
     await sendPlainTextReply(
       textWithoutImages,
       collectedImageUrls,
-      mdMatches,
-      bareUrlMatches,
+      approvedMdMatches,
+      approvedBareUrlMatches,
       event,
       actx,
       sendWithRetry,
@@ -639,7 +721,7 @@ async function sendVoiceWithTimeout(
 async function sendMarkdownReply(
   textWithoutImages: string,
   imageUrls: string[],
-  mdMatches: RegExpMatchArray[],
+  mdMatches: ApprovedMarkdownImageMatch[],
   bareUrlMatches: RegExpMatchArray[],
   event: DeliverEventContext,
   actx: DeliverAccountContext,
@@ -701,7 +783,7 @@ async function sendMarkdownReply(
   }
 
   // Handle public image URLs.
-  const existingMdUrls = new Set(mdMatches.map((m) => m[2]));
+  const existingMdUrls = new Set(mdMatches.map((match) => match.normalizedMatch[2]));
   const imagesToAppend: string[] = [];
 
   for (const url of httpImageUrls) {
@@ -721,9 +803,12 @@ async function sendMarkdownReply(
 
   // Backfill dimensions for existing markdown images.
   let result = textWithoutImages;
-  for (const m of mdMatches) {
-    const fullMatch = m[0];
-    const imgUrl = m[2];
+  for (const { originalMatch, normalizedMatch } of mdMatches) {
+    const fullMatch = originalMatch[0];
+    const imgUrl = normalizedMatch[2];
+    if (!imgUrl) {
+      continue;
+    }
     const isHttpUrl = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
     if (isHttpUrl && !hasQQBotImageSize(fullMatch)) {
       try {
@@ -774,7 +859,7 @@ async function sendMarkdownReply(
 async function sendPlainTextReply(
   textWithoutImages: string,
   imageUrls: string[],
-  mdMatches: RegExpMatchArray[],
+  mdMatches: ApprovedMarkdownImageMatch[],
   bareUrlMatches: RegExpMatchArray[],
   event: DeliverEventContext,
   actx: DeliverAccountContext,
@@ -787,8 +872,8 @@ async function sendPlainTextReply(
   const imgMediaTarget = resolveQQBotMediaTargetContext(event, account, prefix);
 
   let result = textWithoutImages;
-  for (const m of mdMatches) {
-    result = result.replace(m[0], "").trim();
+  for (const { originalMatch } of mdMatches) {
+    result = result.replace(originalMatch[0], "").trim();
   }
   for (const m of bareUrlMatches) {
     result = result.replace(m[0], "").trim();

@@ -35,6 +35,7 @@ import {
   fileExistsAsync,
   formatFileSize,
   readFileAsync,
+  resolveApprovedQqbotRemoteMediaUrl,
 } from "./utils/file-utils.js";
 import { normalizeMediaTags } from "./utils/media-tags.js";
 import { decodeCronPayload } from "./utils/payload.js";
@@ -273,6 +274,21 @@ function shouldDirectUploadUrl(account: ResolvedQQBotAccount): boolean {
   return account.config?.urlDirectUpload !== false;
 }
 
+async function resolveAllowedRemoteMediaUrl(params: {
+  mediaPath: string;
+  prefix: string;
+  caller: string;
+}): Promise<string | null> {
+  const approvedUrl = await resolveApprovedQqbotRemoteMediaUrl(params.mediaPath);
+  if (approvedUrl) {
+    return approvedUrl;
+  }
+  debugWarn(
+    `${params.prefix} ${params.caller}: rejected remote URL outside approved QQ/Tencent HTTPS media hosts: ${params.mediaPath.slice(0, 80)}`,
+  );
+  return null;
+}
+
 /**
  * Send a photo from a local file, public URL, or Base64 data URL.
  */
@@ -281,10 +297,22 @@ export async function sendPhoto(
   imagePath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(imagePath));
+  let mediaPath = resolveQQBotLocalMediaPath(normalizePath(imagePath));
   const isLocal = isLocalFilePath(mediaPath);
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
   const isData = mediaPath.startsWith("data:");
+
+  if (isHttp) {
+    const approvedUrl = await resolveAllowedRemoteMediaUrl({
+      mediaPath,
+      prefix,
+      caller: "sendPhoto",
+    });
+    if (!approvedUrl) {
+      return { channel: "qqbot", error: "Remote media URL is not allowed for QQ Bot delivery" };
+    }
+    mediaPath = approvedUrl;
+  }
 
   // Force a local download before upload when direct URL upload is disabled.
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
@@ -412,8 +440,20 @@ export async function sendVoice(
   transcodeEnabled: boolean = true,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(voicePath));
+  let mediaPath = resolveQQBotLocalMediaPath(normalizePath(voicePath));
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
+
+  if (isHttp) {
+    const approvedUrl = await resolveAllowedRemoteMediaUrl({
+      mediaPath,
+      prefix,
+      caller: "sendVoice",
+    });
+    if (!approvedUrl) {
+      return { channel: "qqbot", error: "Remote media URL is not allowed for QQ Bot delivery" };
+    }
+    mediaPath = approvedUrl;
+  }
 
   if (isHttp) {
     if (shouldDirectUploadUrl(ctx.account)) {
@@ -551,8 +591,20 @@ export async function sendVideoMsg(
   videoPath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(videoPath));
+  let mediaPath = resolveQQBotLocalMediaPath(normalizePath(videoPath));
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
+
+  if (isHttp) {
+    const approvedUrl = await resolveAllowedRemoteMediaUrl({
+      mediaPath,
+      prefix,
+      caller: "sendVideoMsg",
+    });
+    if (!approvedUrl) {
+      return { channel: "qqbot", error: "Remote media URL is not allowed for QQ Bot delivery" };
+    }
+    mediaPath = approvedUrl;
+  }
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
     debugLog(`${prefix} sendVideoMsg: urlDirectUpload=false, downloading URL first...`);
@@ -672,8 +724,21 @@ export async function sendDocument(
   filePath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(filePath));
+  let mediaPath = resolveQQBotLocalMediaPath(normalizePath(filePath));
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
+
+  if (isHttp) {
+    const approvedUrl = await resolveAllowedRemoteMediaUrl({
+      mediaPath,
+      prefix,
+      caller: "sendDocument",
+    });
+    if (!approvedUrl) {
+      return { channel: "qqbot", error: "Remote media URL is not allowed for QQ Bot delivery" };
+    }
+    mediaPath = approvedUrl;
+  }
+
   const fileName = sanitizeFileName(path.basename(mediaPath));
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {

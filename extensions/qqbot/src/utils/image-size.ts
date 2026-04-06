@@ -5,7 +5,9 @@
  */
 
 import { Buffer } from "buffer";
+import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { debugLog } from "./debug-log.js";
+import { QQBOT_MEDIA_SSRF_POLICY, resolveApprovedQqbotRemoteMediaUrl } from "./file-utils.js";
 
 export interface ImageSize {
   width: number;
@@ -150,40 +152,42 @@ export async function getImageSizeFromUrl(
   url: string,
   timeoutMs = 5000,
 ): Promise<ImageSize | null> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const approvedUrl = await resolveApprovedQqbotRemoteMediaUrl(url);
+  if (!approvedUrl) {
+    debugLog(`[image-size] Rejected remote image URL: ${url.slice(0, 60)}...`);
+    return null;
+  }
 
-    // Request only the first 64 KB, which is enough for common headers.
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Range: "bytes=0-65535",
-        "User-Agent": "QQBot-Image-Size-Detector/1.0",
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const fetched = await fetchRemoteMedia({
+      url: approvedUrl,
+      maxBytes: 64 * 1024,
+      maxRedirects: 0,
+      ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
+      requestInit: {
+        signal: controller.signal,
+        headers: {
+          Range: "bytes=0-65535",
+          "User-Agent": "QQBot-Image-Size-Detector/1.0",
+        },
       },
     });
 
-    clearTimeout(timeoutId);
-
-    if (!response.ok && response.status !== 206) {
-      debugLog(`[image-size] Failed to fetch ${url}: ${response.status}`);
-      return null;
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    const size = parseImageSize(buffer);
+    const size = parseImageSize(fetched.buffer);
     if (size) {
       debugLog(
-        `[image-size] Got size from URL: ${size.width}x${size.height} - ${url.slice(0, 60)}...`,
+        `[image-size] Got size from URL: ${size.width}x${size.height} - ${approvedUrl.slice(0, 60)}...`,
       );
     }
 
     return size;
   } catch (err) {
-    debugLog(`[image-size] Error fetching ${url.slice(0, 60)}...: ${String(err)}`);
+    debugLog(`[image-size] Error fetching ${approvedUrl.slice(0, 60)}...: ${String(err)}`);
     return null;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

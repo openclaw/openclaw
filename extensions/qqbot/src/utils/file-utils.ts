@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -26,6 +26,28 @@ export const QQBOT_MEDIA_SSRF_POLICY: SsrFPolicy = {
   hostnameAllowlist: QQBOT_MEDIA_HOSTNAME_ALLOWLIST,
   allowRfc2544BenchmarkRange: true,
 };
+
+/** Normalize and validate a remote QQ Bot media URL against the shared HTTPS + SSRF policy. */
+export async function resolveApprovedQqbotRemoteMediaUrl(url: string): Promise<string | null> {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsedUrl.protocol !== "https:") {
+    return null;
+  }
+
+  try {
+    await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+      policy: QQBOT_MEDIA_SSRF_POLICY,
+    });
+    return parsedUrl.toString();
+  } catch {
+    return null;
+  }
+}
 
 /** Result of local file-size validation. */
 export interface FileSizeCheckResult {
@@ -129,22 +151,18 @@ export async function downloadFile(
   originalFilename?: string,
 ): Promise<string | null> {
   try {
-    let parsedUrl: URL;
-    try {
-      parsedUrl = new URL(url);
-    } catch {
+    const approvedUrl = await resolveApprovedQqbotRemoteMediaUrl(url);
+    if (!approvedUrl) {
       return null;
     }
-    if (parsedUrl.protocol !== "https:") {
-      return null;
-    }
+    const parsedUrl = new URL(approvedUrl);
 
     if (!fs.existsSync(destDir)) {
       fs.mkdirSync(destDir, { recursive: true });
     }
 
     const fetched = await fetchRemoteMedia({
-      url: parsedUrl.toString(),
+      url: approvedUrl,
       filePathHint: originalFilename,
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
     });
