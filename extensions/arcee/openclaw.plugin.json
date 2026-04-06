@@ -3,7 +3,7 @@
   "enabledByDefault": true,
   "providers": ["arcee"],
   "providerAuthEnvVars": {
-    "arcee": ["ARCEEAI_API_KEY", "OPENROUTER_API_KEY"]
+    "arcee": ["ARCEEAI_API_KEY"]
   },
   "providerAuthChoices": [
     {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
+import { resolveProviderAuthEnvVarCandidates } from "../../src/secrets/provider-env-vars.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import arceePlugin from "./index.js";
 
@@ -65,6 +66,13 @@ describe("arcee provider plugin", () => {
       "arcee/trinity-large-preview",
       "arcee/trinity-large-thinking",
     ]);
+  });
+
+  it("keeps direct Arcee auth env candidates separate from OpenRouter", () => {
+    const candidates = resolveProviderAuthEnvVarCandidates();
+
+    expect(candidates.arcee).toEqual(["ARCEEAI_API_KEY"]);
+    expect(candidates.openrouter).toEqual(["OPENROUTER_API_KEY"]);
   });
 
   it("builds the direct Arcee AI model catalog", async () => {
