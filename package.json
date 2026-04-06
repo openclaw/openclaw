@@ -1068,6 +1068,7 @@
     "lint:auth:pairing-account-scope": "node scripts/check-pairing-account-scope.mjs",
     "lint:docs": "pnpm dlx markdownlint-cli2",
     "lint:docs:fix": "pnpm dlx markdownlint-cli2 --fix",
+    "lint:extensions:channels": "node scripts/run-extension-channel-oxlint.mjs",
     "lint:extensions:no-plugin-sdk-internal": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=plugin-sdk-internal",
     "lint:extensions:no-relative-outside-package": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=relative-outside-package",
     "lint:extensions:no-src-outside-plugin-sdk": "node scripts/check-extension-plugin-sdk-boundary.mjs --mode=src-outside-plugin-sdk",
