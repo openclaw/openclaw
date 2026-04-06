@@ -211,32 +211,40 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 	}
 
 	go func() {
+		defer close(jobs)
 		for index, file := range ordered {
-			jobs <- docJob{index: index + 1, path: file, rel: resolveRelPath(docsRoot, file)}
+			job := docJob{index: index + 1, path: file, rel: resolveRelPath(docsRoot, file)}
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- job:
+			}
 		}
-		close(jobs)
+	}()
+
+	go func() {
+		wg.Wait()
+		close(results)
 	}()
 
 	processed := 0
 	skipped := 0
 	outputs := []string{}
-	for i := 0; i < len(ordered); i++ {
-		result := <-results
-		if result.err != nil {
-			wg.Wait()
-			return processed, skipped, outputs, result.err
+	var firstErr error
+	for result := range results {
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
 		}
 		if result.skipped {
 			skipped++
 			log.Printf("docs-i18n: [w* %d/%d] skipped %s (%s)", result.index, len(ordered), result.rel, result.duration.Round(time.Millisecond))
-		} else {
+		} else if result.err == nil {
 			processed++
 			outputs = append(outputs, result.output)
 			log.Printf("docs-i18n: [w* %d/%d] done %s (%s)", result.index, len(ordered), result.rel, result.duration.Round(time.Millisecond))
 		}
 	}
-	wg.Wait()
-	return processed, skipped, outputs, nil
+	return processed, skipped, outputs, firstErr
 }
 
 func runSegmentSequential(ctx context.Context, ordered []string, translator *PiTranslator, tm *TranslationMemory, docsRoot, srcLang, tgtLang string) (int, []string, error) {
