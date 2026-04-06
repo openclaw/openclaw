@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../../runtime-api.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
+  claimCurrentTokenStorageState,
   maybeMigrateLegacyStorage,
   repairCurrentTokenStorageMetaDeviceId,
   resolveMatrixStateFilePath,
@@ -495,7 +496,7 @@ describe("matrix client storage paths", () => {
     expectCanonicalRootForNewDevice(stateDir);
   });
 
-  it("keeps the current-token storage root stable after deviceId backfill when startup wrote new state", () => {
+  it("keeps the current-token storage root stable after deviceId backfill when startup claimed state there", () => {
     const stateDir = setupStateDir();
     const canonicalPaths = resolveMatrixAccountStorageRoot({
       stateDir,
@@ -524,6 +525,11 @@ describe("matrix client storage paths", () => {
         },
       ],
     });
+    expect(
+      claimCurrentTokenStorageState({
+        rootDir: canonicalPaths.rootDir,
+      }),
+    ).toBe(true);
     const oldStoragePaths = seedExistingStorageRoot({
       accessToken: "secret-token-old",
       deviceId: "DEVICE123",
@@ -563,5 +569,66 @@ describe("matrix client storage paths", () => {
       deviceId: "DEVICE123",
     });
     expect(restartedPaths.rootDir).toBe(canonicalPaths.rootDir);
+  });
+
+  it("does not keep the current-token storage root sticky when only marker files exist after backfill", () => {
+    const stateDir = setupStateDir();
+    const canonicalPaths = resolveMatrixAccountStorageRoot({
+      stateDir,
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accessToken: "secret-token-new",
+    });
+    fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
+    writeJson(canonicalPaths.rootDir, "storage-meta.json", {
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accountId: "default",
+      accessTokenHash: canonicalPaths.tokenHash,
+      deviceId: null,
+    });
+    writeJson(canonicalPaths.rootDir, "startup-verification.json", {
+      deviceId: "DEVICE123",
+    });
+    const oldStoragePaths = seedExistingStorageRoot({
+      accessToken: "secret-token-old",
+      deviceId: "DEVICE123",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
+        deviceId: "DEVICE123",
+      },
+    });
+    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
+    writeJson(oldStoragePaths.rootDir, "thread-bindings.json", {
+      version: 1,
+      bindings: [
+        {
+          accountId: "default",
+          conversationId: "$thread-old",
+          targetKind: "subagent",
+          targetSessionKey: "agent:ops:subagent:old",
+          boundAt: 1,
+          lastActivityAt: 1,
+        },
+      ],
+    });
+
+    repairCurrentTokenStorageMetaDeviceId({
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accessToken: "secret-token-new",
+      accountId: "default",
+      deviceId: "DEVICE123",
+      env: createMigrationEnv(stateDir),
+    });
+
+    const restartedPaths = resolveDefaultStoragePaths({
+      accessToken: "secret-token-new",
+      deviceId: "DEVICE123",
+    });
+    expect(restartedPaths.rootDir).toBe(oldStoragePaths.rootDir);
   });
 });

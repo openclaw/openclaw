@@ -34,6 +34,8 @@ type StoredRootMetadata = {
   accountId?: string;
   accessTokenHash?: string;
   deviceId?: string | null;
+  currentTokenStateClaimed?: boolean;
+  createdAt?: string;
 };
 
 function resolveLegacyStoragePaths(env: NodeJS.ProcessEnv = process.env): {
@@ -91,18 +93,6 @@ function scoreStorageRoot(rootDir: string): number {
   return score;
 }
 
-function hasCurrentTokenStorageState(rootDir: string): boolean {
-  return [
-    "bot-storage.json",
-    "crypto",
-    THREAD_BINDINGS_FILENAME,
-    LEGACY_CRYPTO_MIGRATION_FILENAME,
-    RECOVERY_KEY_FILENAME,
-    IDB_SNAPSHOT_FILENAME,
-    STARTUP_VERIFICATION_FILENAME,
-  ].some((entry) => fs.existsSync(path.join(rootDir, entry)));
-}
-
 function resolveStorageRootMtimeMs(rootDir: string): number {
   try {
     return fs.statSync(rootDir).mtimeMs;
@@ -132,6 +122,12 @@ function readStoredRootMetadata(rootDir: string): StoredRootMetadata {
     }
     if (typeof parsed.deviceId === "string" && parsed.deviceId.trim()) {
       metadata.deviceId = parsed.deviceId.trim();
+    }
+    if (parsed.currentTokenStateClaimed === true) {
+      metadata.currentTokenStateClaimed = true;
+    }
+    if (typeof parsed.createdAt === "string" && parsed.createdAt.trim()) {
+      metadata.createdAt = parsed.createdAt.trim();
     }
   } catch {
     // ignore missing or malformed storage metadata
@@ -223,7 +219,7 @@ function resolvePreferredMatrixStorageRoot(params: {
   if (
     canonicalMetadata.accessTokenHash === params.canonicalTokenHash &&
     canonicalMetadata.deviceId?.trim() === params.deviceId.trim() &&
-    hasCurrentTokenStorageState(params.canonicalRootDir)
+    canonicalMetadata.currentTokenStateClaimed === true
   ) {
     return {
       rootDir: best.rootDir,
@@ -462,28 +458,62 @@ function rollbackLegacyMoves(moved: LegacyMoveRecord[]): string | null {
   return null;
 }
 
+function writeStoredRootMetadata(
+  metaPath: string,
+  payload: {
+    homeserver?: string;
+    userId?: string;
+    accountId: string;
+    accessTokenHash?: string;
+    deviceId: string | null;
+    currentTokenStateClaimed: boolean;
+    createdAt: string;
+  },
+): boolean {
+  try {
+    fs.mkdirSync(path.dirname(metaPath), { recursive: true });
+    fs.writeFileSync(metaPath, JSON.stringify(payload, null, 2), "utf-8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function writeStorageMeta(params: {
   storagePaths: MatrixStoragePaths;
   homeserver: string;
   userId: string;
   accountId?: string | null;
   deviceId?: string | null;
+  currentTokenStateClaimed?: boolean;
 }): boolean {
-  try {
-    const payload = {
-      homeserver: params.homeserver,
-      userId: params.userId,
-      accountId: params.accountId ?? DEFAULT_ACCOUNT_KEY,
-      accessTokenHash: params.storagePaths.tokenHash,
-      deviceId: params.deviceId ?? null,
-      createdAt: new Date().toISOString(),
-    };
-    fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
-    fs.writeFileSync(params.storagePaths.metaPath, JSON.stringify(payload, null, 2), "utf-8");
-    return true;
-  } catch {
+  const existing = readStoredRootMetadata(params.storagePaths.rootDir);
+  return writeStoredRootMetadata(params.storagePaths.metaPath, {
+    homeserver: params.homeserver,
+    userId: params.userId,
+    accountId: params.accountId ?? DEFAULT_ACCOUNT_KEY,
+    accessTokenHash: params.storagePaths.tokenHash,
+    deviceId: params.deviceId ?? null,
+    currentTokenStateClaimed:
+      params.currentTokenStateClaimed ?? existing.currentTokenStateClaimed === true,
+    createdAt: existing.createdAt ?? new Date().toISOString(),
+  });
+}
+
+export function claimCurrentTokenStorageState(params: { rootDir: string }): boolean {
+  const metadata = readStoredRootMetadata(params.rootDir);
+  if (!metadata.accessTokenHash?.trim()) {
     return false;
   }
+  return writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
+    homeserver: metadata.homeserver,
+    userId: metadata.userId,
+    accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
+    accessTokenHash: metadata.accessTokenHash,
+    deviceId: metadata.deviceId ?? null,
+    currentTokenStateClaimed: true,
+    createdAt: metadata.createdAt ?? new Date().toISOString(),
+  });
 }
 
 export function repairCurrentTokenStorageMetaDeviceId(params: {
