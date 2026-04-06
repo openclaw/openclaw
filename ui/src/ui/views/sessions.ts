@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
@@ -222,7 +223,7 @@ export function renderSessions(props: SessionsProps) {
           </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
 
@@ -306,7 +307,9 @@ export function renderSessions(props: SessionsProps) {
           ? html`
               <div class="data-table-bulk-bar">
                 <span>${props.selectedKeys.size} selected</span>
-                <button class="btn btn--sm" @click=${props.onDeselectAll}>Unselect</button>
+                <button class="btn btn--sm" @click=${props.onDeselectAll}>
+                  ${t("common.unselect")}
+                </button>
                 <button
                   class="btn btn--sm danger"
                   ?disabled=${props.loading}
