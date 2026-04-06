@@ -78,6 +78,23 @@ function buildToolItemId(toolCallId: string): string {
   return `tool:${toolCallId}`;
 }
 
+function resolveReadToolPathArg(args: unknown): string {
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : null;
+  if (!record) {
+    return "";
+  }
+  for (const candidate of [record.path, record.file_path, record.filePath, record.file]) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const trimmed = candidate.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return "";
+}
+
 function buildToolItemTitle(toolName: string, meta?: string): string {
   return meta ? `${toolName} ${meta}` : toolName;
 }
@@ -539,14 +556,7 @@ export function handleToolExecutionStart(
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
 
     if (toolName === "read") {
-      const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-      const filePathValue =
-        typeof record.path === "string"
-          ? record.path
-          : typeof record.file_path === "string"
-            ? record.file_path
-            : "";
-      const filePath = filePathValue.trim();
+      const filePath = resolveReadToolPathArg(args);
       if (!filePath) {
         const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
         ctx.log.warn(
