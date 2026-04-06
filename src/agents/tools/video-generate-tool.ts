@@ -72,6 +72,9 @@ const SUPPORTED_ASPECT_RATIOS = new Set([
   "9:16",
   "16:9",
   "21:9",
+  // Provider-specific sentinel: bypasses normalization and is forwarded as-is
+  // (e.g. Seedance uses "adaptive" to auto-detect the ratio from input image dimensions).
+  "adaptive",
 ]);
 
 const VideoGenerateToolSchema = Type.Object({
@@ -111,6 +114,15 @@ const VideoGenerateToolSchema = Type.Object({
       description: `Optional reference videos (up to ${MAX_INPUT_VIDEOS}).`,
     }),
   ),
+  videoRoles: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Optional semantic roles for each entry in `videos`, parallel by index. " +
+        'Provider-interpreted; common values: "reference_video". ' +
+        "Entries beyond the length of `videos` are ignored. " +
+        "Use an empty string to leave a position unset.",
+    }),
+  ),
   audioRef: Type.Optional(
     Type.String({
       description: "Optional single reference audio path or URL (e.g. background music).",
@@ -119,6 +131,15 @@ const VideoGenerateToolSchema = Type.Object({
   audioRefs: Type.Optional(
     Type.Array(Type.String(), {
       description: `Optional reference audios (up to ${MAX_INPUT_AUDIOS}).`,
+    }),
+  ),
+  audioRoles: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Optional semantic roles for each entry in `audioRefs`, parallel by index. " +
+        'Provider-interpreted; common values: "reference_audio". ' +
+        "Entries beyond the length of `audioRefs` are ignored. " +
+        "Use an empty string to leave a position unset.",
     }),
   ),
   model: Type.Optional(
@@ -216,7 +237,7 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
     return normalized;
   }
   throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+    "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or adaptive",
   );
 }
 
@@ -316,10 +337,13 @@ function validateVideoGenerationCapabilities(params: {
     }
   }
   if (params.inputAudioCount > 0) {
-    const maxInputAudios = caps.maxInputAudios ?? MAX_INPUT_AUDIOS;
+    // Default to 0: providers must explicitly declare maxInputAudios to accept audio inputs.
+    const maxInputAudios = caps.maxInputAudios ?? 0;
     if (params.inputAudioCount > maxInputAudios) {
       throw new ToolInputError(
-        `${provider.id} supports at most ${maxInputAudios} reference audio${maxInputAudios === 1 ? "" : "s"}.`,
+        maxInputAudios === 0
+          ? `${provider.id} does not support reference audio inputs.`
+          : `${provider.id} supports at most ${maxInputAudios} reference audio${maxInputAudios === 1 ? "" : "s"}.`,
       );
     }
   }
@@ -749,23 +773,24 @@ export function createVideoGenerateTool(options?: {
         pluralKey: "images",
         maxCount: MAX_INPUT_IMAGES,
       });
-      // imageRoles: parallel string array giving each image a semantic role hint.
-      const imageRolesRaw = Array.isArray(args.imageRoles) ? args.imageRoles : [];
-      const imageRoles: string[] = imageRolesRaw.map((r) =>
-        typeof r === "string" ? r.trim() : "",
-      );
+      // *Roles: parallel string arrays giving each asset a semantic role hint.
+      const parseRolesArg = (raw: unknown): string[] =>
+        (Array.isArray(raw) ? raw : []).map((r) => (typeof r === "string" ? r.trim() : ""));
+      const imageRoles = parseRolesArg(args.imageRoles);
       const videoInputs = normalizeReferenceInputs({
         args,
         singularKey: "video",
         pluralKey: "videos",
         maxCount: MAX_INPUT_VIDEOS,
       });
+      const videoRoles = parseRolesArg(args.videoRoles);
       const audioInputs = normalizeReferenceInputs({
         args,
         singularKey: "audioRef",
         pluralKey: "audioRefs",
         maxCount: MAX_INPUT_AUDIOS,
       });
+      const audioRoles = parseRolesArg(args.audioRoles);
 
       const selectedProvider = resolveSelectedVideoGenerationProvider({
         config: effectiveCfg,
@@ -778,12 +803,11 @@ export function createVideoGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
-      // Attach roles to the loaded image assets (positional, by index).
+      // Attach roles to the loaded image assets (positional, by index into images[]).
       for (let i = 0; i < loadedReferenceImages.length; i++) {
         const role = imageRoles[i];
         if (role) {
-          // loadedReferenceImages entries are plain objects; role is safe to add.
-          (loadedReferenceImages[i] as { sourceAsset: { role?: string } }).sourceAsset.role = role;
+          loadedReferenceImages[i].sourceAsset.role = role;
         }
       }
       const loadedReferenceVideos = await loadReferenceAssets({
@@ -792,12 +816,24 @@ export function createVideoGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
+      for (let i = 0; i < loadedReferenceVideos.length; i++) {
+        const role = videoRoles[i];
+        if (role) {
+          loadedReferenceVideos[i].sourceAsset.role = role;
+        }
+      }
       const loadedReferenceAudios = await loadReferenceAssets({
         inputs: audioInputs,
         expectedKind: "audio",
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
+      for (let i = 0; i < loadedReferenceAudios.length; i++) {
+        const role = audioRoles[i];
+        if (role) {
+          loadedReferenceAudios[i].sourceAsset.role = role;
+        }
+      }
       validateVideoGenerationCapabilities({
         provider: selectedProvider,
         model:
