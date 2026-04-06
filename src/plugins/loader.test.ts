@@ -43,6 +43,7 @@ import {
   listImportedRuntimePluginIds,
   setActivePluginRegistry,
 } from "./runtime.js";
+import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
@@ -1779,41 +1780,47 @@ module.exports = { id: "throws-after-import", register() {} };`,
           loadVariant: () =>
             loadOpenClawPlugins({
               ...options,
-              pluginSdkResolution: "workspace" as const,
+              pluginSdkResolution: "workspace" as PluginSdkResolutionPreference,
+            }),
+        };
+      },
+    },
+    {
+      name: "does not reuse cached registries across gateway subagent binding modes",
+      setup: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "cache-gateway-shared",
+          filename: "cache-gateway-shared.cjs",
+          body: `module.exports = { id: "cache-gateway-shared", register() {} };`,
+        });
+
+        const options = {
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              allow: ["cache-gateway-shared"],
+              load: {
+                paths: [plugin.file],
+              },
+            },
+          },
+        };
+
+        return {
+          loadFirst: () => loadOpenClawPlugins(options),
+          loadVariant: () =>
+            loadOpenClawPlugins({
+              ...options,
+              runtimeOptions: {
+                allowGatewaySubagentBinding: true,
+              },
             }),
         };
       },
     },
   ])("$name", ({ setup }) => {
     expectCacheMissThenHit(setup());
-  });
-
-  it("reuses cached registry across gateway subagent binding modes", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "cache-gateway-shared",
-      filename: "cache-gateway-shared.cjs",
-      body: `module.exports = { id: "cache-gateway-shared", register() {} };`,
-    });
-
-    const options = {
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          allow: ["cache-gateway-shared"],
-          load: {
-            paths: [plugin.file],
-          },
-        },
-      },
-    };
-
-    const first = loadOpenClawPlugins(options);
-    const second = loadOpenClawPlugins({
-      ...options,
-      runtimeOptions: { allowGatewaySubagentBinding: true },
-    });
-    expect(second).toBe(first);
   });
 
   it("evicts least recently used registries when the loader cache exceeds its cap", () => {
