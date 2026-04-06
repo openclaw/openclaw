@@ -103,21 +103,29 @@ function hasUsableSessionEntry(entry: unknown): boolean {
   return typeof sessionId !== "string" || sessionId.trim() !== "";
 }
 
-type ResolvedAnnounceTarget = {
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  requesterDepth: number;
-  requesterIsInternal: boolean;
-  fallbackUsed: boolean;
-};
+type ResolvedAnnounceTarget =
+  | {
+      kind: "resolved";
+      requesterSessionKey: string;
+      requesterOrigin?: DeliveryContext;
+      requesterDepth: number;
+      requesterIsInternal: boolean;
+      fallbackUsed: boolean;
+    }
+  | {
+      kind: "ignore";
+    }
+  | {
+      kind: "no-fallback";
+      requesterIsInternal: boolean;
+    };
 
 async function resolveSubagentAnnounceTarget(params: {
   requesterSessionKey: string;
-  requesterDisplayKey?: string;
   requesterOrigin?: DeliveryContext;
   subagentRegistryRuntime?: Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>;
-}): Promise<ResolvedAnnounceTarget | null> {
-  let requesterSessionKey = params.requesterDisplayKey?.trim() || params.requesterSessionKey;
+}): Promise<ResolvedAnnounceTarget> {
+  let requesterSessionKey = params.requesterSessionKey;
   let requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   let requesterDepth = getSubagentDepthFromSessionStore(requesterSessionKey);
   let requesterIsInternal = requesterDepth >= 1 || isCronSessionKey(requesterSessionKey);
@@ -125,6 +133,7 @@ async function resolveSubagentAnnounceTarget(params: {
 
   if (!requesterIsInternal) {
     return {
+      kind: "resolved",
       requesterSessionKey,
       requesterOrigin,
       requesterDepth,
@@ -135,6 +144,7 @@ async function resolveSubagentAnnounceTarget(params: {
 
   if (isCronSessionKey(requesterSessionKey)) {
     return {
+      kind: "resolved",
       requesterSessionKey,
       requesterOrigin,
       requesterDepth,
@@ -145,7 +155,7 @@ async function resolveSubagentAnnounceTarget(params: {
 
   const runtime = params.subagentRegistryRuntime ?? (await loadSubagentRegistryRuntime());
   if (runtime.shouldIgnorePostCompletionAnnounceForSession(requesterSessionKey)) {
-    return null;
+    return { kind: "ignore" };
   }
 
   const parentSessionEntry = loadSessionEntryByKey(requesterSessionKey);
@@ -156,7 +166,7 @@ async function resolveSubagentAnnounceTarget(params: {
   if (!parentSessionAlive) {
     const fallback = runtime.resolveRequesterForChildSession(requesterSessionKey);
     if (!fallback?.requesterSessionKey) {
-      return null;
+      return { kind: "no-fallback", requesterIsInternal: true };
     }
     requesterSessionKey = fallback.requesterSessionKey;
     requesterOrigin = normalizeDeliveryContext(fallback.requesterOrigin) ?? requesterOrigin;
@@ -166,6 +176,7 @@ async function resolveSubagentAnnounceTarget(params: {
   }
 
   return {
+    kind: "resolved",
     requesterSessionKey,
     requesterOrigin,
     requesterDepth,
@@ -533,12 +544,14 @@ export async function runSubagentAnnounceFlow(params: {
 
     const resolvedTarget = await resolveSubagentAnnounceTarget({
       requesterSessionKey: targetRequesterSessionKey,
-      requesterDisplayKey: params.requesterDisplayKey,
       requesterOrigin: targetRequesterOrigin,
       subagentRegistryRuntime,
     });
-    if (!resolvedTarget) {
-      if (requesterIsInternalSession()) {
+    if (resolvedTarget.kind === "ignore") {
+      return true;
+    }
+    if (resolvedTarget.kind === "no-fallback") {
+      if (resolvedTarget.requesterIsInternal) {
         shouldDeleteChildSession = false;
         return false;
       }
