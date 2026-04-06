@@ -1,23 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { audit, successfulProbeResult } from "./audit.test-helpers.js";
+import { resolveGatewayProbeAuthSafe, resolveGatewayProbeTarget } from "../gateway/probe-auth.js";
+import { collectDeepProbeFindings } from "./audit.js";
 
 describe("security audit gateway auth selection", () => {
   it("applies gateway auth precedence across local and remote modes", async () => {
-    const makeProbeCapture = () => {
-      let capturedAuth: { token?: string; password?: string } | undefined;
-      return {
-        probeGatewayFn: async (opts: {
-          url: string;
-          auth?: { token?: string; password?: string };
-        }) => {
-          capturedAuth = opts.auth;
-          return successfulProbeResult(opts.url);
-        },
-        getAuth: () => capturedAuth,
-      };
-    };
-
     const makeProbeEnv = (env?: { token?: string; password?: string }) => {
       const probeEnv: NodeJS.ProcessEnv = {};
       if (env?.token !== undefined) {
@@ -110,19 +97,18 @@ describe("security audit gateway auth selection", () => {
 
     await Promise.all(
       cases.map(async (testCase) => {
-        const probe = makeProbeCapture();
-        await audit(testCase.cfg, {
-          deep: true,
-          deepTimeoutMs: 50,
-          probeGatewayFn: probe.probeGatewayFn,
+        const target = resolveGatewayProbeTarget(testCase.cfg);
+        const result = resolveGatewayProbeAuthSafe({
+          cfg: testCase.cfg,
           env: makeProbeEnv(testCase.env),
+          mode: target.mode,
         });
-        expect(probe.getAuth(), testCase.name).toEqual(testCase.expectedAuth);
+        expect(result.auth, testCase.name).toEqual(testCase.expectedAuth);
       }),
     );
   });
 
-  it("adds warning finding when probe auth SecretRef is unavailable", async () => {
+  it("adds warning finding when probe auth SecretRef is unavailable", () => {
     const cfg: OpenClawConfig = {
       gateway: {
         mode: "local",
@@ -138,16 +124,23 @@ describe("security audit gateway auth selection", () => {
       },
     };
 
-    const res = await audit(cfg, {
-      deep: true,
-      deepTimeoutMs: 50,
-      probeGatewayFn: async (opts) => successfulProbeResult(opts.url),
+    const result = resolveGatewayProbeAuthSafe({
+      cfg,
+      mode: "local",
       env: {},
     });
-
-    const warning = res.findings.find(
-      (finding) => finding.checkId === "gateway.probe_auth_secretref_unavailable",
-    );
+    const warning = collectDeepProbeFindings({
+      deep: {
+        gateway: {
+          attempted: true,
+          url: "ws://127.0.0.1:18789",
+          ok: true,
+          error: null,
+          close: null,
+        },
+      },
+      authWarning: result.warning,
+    }).find((finding) => finding.checkId === "gateway.probe_auth_secretref_unavailable");
     expect(warning?.severity).toBe("warn");
     expect(warning?.detail).toContain("gateway.auth.token");
   });
