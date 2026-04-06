@@ -176,6 +176,12 @@ describe("scripts/test-projects full-suite sharding", () => {
         watchMode: false,
       },
       {
+        config: "vitest.full-core-unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
         config: "vitest.full-core-unit-support.config.ts",
         forwardedArgs: [],
         includePatterns: null,
@@ -183,6 +189,12 @@ describe("scripts/test-projects full-suite sharding", () => {
       },
       {
         config: "vitest.full-core-contracts.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-bundled.config.ts",
         forwardedArgs: [],
         includePatterns: null,
         watchMode: false,

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { asRecord, readString } from "../config-record-shared.js";
 import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
 
@@ -206,17 +207,6 @@ type QQBotTtsBlock = QQBotTtsProviderConfig & {
   voice?: string;
   speed?: number;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
-}
 
 function readNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
   const value = record?.[key];
