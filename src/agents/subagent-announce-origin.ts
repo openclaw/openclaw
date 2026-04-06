@@ -42,7 +42,7 @@ function normalizeThreadId(raw?: string | number): string | number | undefined {
   return undefined;
 }
 
-function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
+export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context) {
     return undefined;
   }
@@ -66,7 +66,7 @@ function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | 
   return normalized;
 }
 
-function mergeDeliveryContext(
+export function mergeDeliveryContext(
   primary?: DeliveryContext,
   fallback?: DeliveryContext,
 ): DeliveryContext | undefined {
