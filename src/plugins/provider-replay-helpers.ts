@@ -63,15 +63,53 @@ export function buildStrictAnthropicReplayPolicy(
   };
 }
 
+/**
+ * Returns true for Claude models that preserve thinking blocks in context
+ * natively (Opus 4.5+, Sonnet 4.5+, Haiku 4.5+). For these models, dropping
+ * thinking blocks from prior turns breaks prompt cache prefix matching.
+ *
+ * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
+ */
+function shouldPreserveThinkingBlocks(modelId?: string): boolean {
+  const id = (modelId ?? "").toLowerCase();
+  if (!id.includes("claude")) return false;
+
+  // Models that preserve thinking blocks natively:
+  // - claude-opus-4-5, claude-opus-4-6 (and any future opus-4.x+)
+  // - claude-sonnet-4-5, claude-sonnet-4-6 (and any future sonnet-4.x+)
+  // - claude-haiku-4-5 (and any future haiku-4.x+)
+  // Models that require dropping thinking blocks:
+  // - claude-3-7-sonnet, claude-3-5-sonnet, and earlier
+  if (
+    id.includes("opus-4") ||
+    id.includes("sonnet-4-5") ||
+    id.includes("sonnet-4-6") ||
+    id.includes("sonnet-4.5") ||
+    id.includes("sonnet-4.6") ||
+    id.includes("haiku-4")
+  ) {
+    return true;
+  }
+
+  // Future-proofing: claude-5-x, claude-6-x etc. should also preserve
+  if (/claude-[5-9]/.test(id) || /claude-\d{2,}/.test(id)) {
+    return true;
+  }
+
+  return false;
+}
+
 export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
+  const isClaude = (modelId?.toLowerCase() ?? "").includes("claude");
   return buildStrictAnthropicReplayPolicy({
-    dropThinkingBlocks: (modelId?.toLowerCase() ?? "").includes("claude"),
+    dropThinkingBlocks: isClaude && !shouldPreserveThinkingBlocks(modelId),
   });
 }
 
 export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
+  const isClaude = (modelId?.toLowerCase() ?? "").includes("claude");
   return buildStrictAnthropicReplayPolicy({
-    dropThinkingBlocks: (modelId?.toLowerCase() ?? "").includes("claude"),
+    dropThinkingBlocks: isClaude && !shouldPreserveThinkingBlocks(modelId),
     sanitizeToolCallIds: true,
     preserveNativeAnthropicToolUseIds: true,
   });
@@ -82,10 +120,12 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
   options: { anthropicModelDropThinkingBlocks?: boolean } = {},
 ): ProviderReplayPolicy | undefined {
   if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
+    const isClaude = (ctx.modelId?.toLowerCase() ?? "").includes("claude");
     return buildStrictAnthropicReplayPolicy({
       dropThinkingBlocks:
         options.anthropicModelDropThinkingBlocks &&
-        (ctx.modelId?.toLowerCase() ?? "").includes("claude"),
+        isClaude &&
+        !shouldPreserveThinkingBlocks(ctx.modelId),
     });
   }
 
