@@ -55,7 +55,7 @@ describe("startGmailWatcherWithLogs", () => {
     expect(log.warn).toHaveBeenCalledWith(
       `gmail watcher not started: auth failed. ` +
         `Note: If using external webhook (e.g. gog + Pub/Sub), this is expected. ` +
-        `Ensure your configured Gmail hook endpoint is reachable.`
+        `Ensure your configured Gmail hook endpoint is reachable.`,
     );
   });
 
