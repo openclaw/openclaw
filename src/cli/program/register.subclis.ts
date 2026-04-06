@@ -1,12 +1,15 @@
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getPrimaryCommand } from "../argv.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import {
   shouldEagerRegisterSubcommands,
   shouldRegisterPrimarySubcommandOnly,
 } from "../command-registration-policy.js";
-import { removeCommandByName } from "./command-tree.js";
-import { registerLazyCommand as registerLazyCommandPlaceholder } from "./register-lazy-command.js";
+import {
+  registerCommandGroupByName,
+  registerCommandGroups,
+  type CommandGroupEntry,
+} from "./register-command-groups.js";
 import {
   getSubCliCommandsWithSubcommands,
   getSubCliEntries as getSubCliEntryDescriptors,
@@ -311,47 +314,26 @@ const entries: SubCliEntry[] = [
   },
 ];
 
+function resolveSubCliCommandGroups(): CommandGroupEntry[] {
+  return entries.map((entry) => ({
+    placeholders: [entry],
+    register: entry.register,
+  }));
+}
+
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
   return getSubCliEntryDescriptors();
 }
 
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
-  const entry = entries.find((candidate) => candidate.name === name);
-  if (!entry) {
-    return false;
-  }
-  removeCommandByName(program, entry.name);
-  await entry.register(program);
-  return true;
-}
-
-function registerLazyCommand(program: Command, entry: SubCliEntry) {
-  registerLazyCommandPlaceholder({
-    program,
-    name: entry.name,
-    description: entry.description,
-    register: async () => {
-      await entry.register(program);
-    },
-  });
+  return registerCommandGroupByName(program, resolveSubCliCommandGroups(), name);
 }
 
 export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
-  if (shouldEagerRegisterSubcommands()) {
-    for (const entry of entries) {
-      void entry.register(program);
-    }
-    return;
-  }
-  const primary = getPrimaryCommand(argv);
-  if (primary && shouldRegisterPrimarySubcommandOnly(argv)) {
-    const entry = entries.find((candidate) => candidate.name === primary);
-    if (entry) {
-      registerLazyCommand(program, entry);
-      return;
-    }
-  }
-  for (const candidate of entries) {
-    registerLazyCommand(program, candidate);
-  }
+  const { primary } = resolveCliArgvInvocation(argv);
+  registerCommandGroups(program, resolveSubCliCommandGroups(), {
+    eager: shouldEagerRegisterSubcommands(),
+    primary,
+    registerPrimaryOnly: Boolean(primary && shouldRegisterPrimarySubcommandOnly(argv)),
+  });
 }
