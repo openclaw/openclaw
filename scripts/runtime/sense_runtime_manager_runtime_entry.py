@@ -418,6 +418,27 @@ def derive_recovery_owner(
     return 'none'
 
 
+def derive_recovery_actionable(
+    error_code: str | None,
+    recovery_hint: str | None,
+    recovery_priority: str | None,
+    recovery_bucket: str | None,
+) -> bool:
+    code = str(error_code or '')
+    hint = str(recovery_hint or '')
+    priority = str(recovery_priority or '')
+    bucket = str(recovery_bucket or '')
+    if bucket == 'none':
+        return False
+    if priority == 'none':
+        return False
+    if code == 'NONE':
+        return False
+    if hint == 'no_action_needed':
+        return False
+    return True
+
+
 def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
     entry_status = 'completed' if isinstance(entry_result, dict) else None
     bridge_status = None
@@ -544,6 +565,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_recovery_priority': manager_handoff.get('recovery_priority'),
         'last_recovery_bucket': manager_handoff.get('recovery_bucket'),
         'last_recovery_owner': manager_handoff.get('recovery_owner'),
+        'last_recovery_actionable': manager_handoff.get('recovery_actionable'),
     }
 
 
@@ -612,6 +634,10 @@ def main() -> int:
         error_detail_code = normalize_error_detail_code(runtime_entry_state, None, dispatch_result)
         error_source_layer = normalize_error_source_layer(runtime_entry_state, None, dispatch_result)
         error_stage = normalize_error_stage(runtime_entry_state, None, dispatch_result)
+        recovery_hint = derive_recovery_hint(error_code, error_detail_code, error_stage)
+        recovery_priority = derive_recovery_priority(error_code, error_detail_code, error_stage)
+        recovery_bucket = derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage)
+        recovery_owner = derive_recovery_owner(recovery_bucket, error_source_layer, error_stage)
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -629,13 +655,15 @@ def main() -> int:
             'error_detail_code': error_detail_code,
             'error_source_layer': error_source_layer,
             'error_stage': error_stage,
-            'recovery_hint': derive_recovery_hint(error_code, error_detail_code, error_stage),
-            'recovery_priority': derive_recovery_priority(error_code, error_detail_code, error_stage),
-            'recovery_bucket': derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage),
-            'recovery_owner': derive_recovery_owner(
-                derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage),
-                error_source_layer,
-                error_stage,
+            'recovery_hint': recovery_hint,
+            'recovery_priority': recovery_priority,
+            'recovery_bucket': recovery_bucket,
+            'recovery_owner': recovery_owner,
+            'recovery_actionable': derive_recovery_actionable(
+                error_code,
+                recovery_hint,
+                recovery_priority,
+                recovery_bucket,
             ),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
@@ -679,6 +707,10 @@ def main() -> int:
         error_detail_code = normalize_error_detail_code(runtime_entry_state, error_text, dispatch_result)
         error_source_layer = normalize_error_source_layer(runtime_entry_state, error_text, dispatch_result)
         error_stage = normalize_error_stage(runtime_entry_state, error_text, dispatch_result)
+        recovery_hint = derive_recovery_hint(error_code, error_detail_code, error_stage)
+        recovery_priority = derive_recovery_priority(error_code, error_detail_code, error_stage)
+        recovery_bucket = derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage)
+        recovery_owner = derive_recovery_owner(recovery_bucket, error_source_layer, error_stage)
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -696,13 +728,15 @@ def main() -> int:
             'error_detail_code': error_detail_code,
             'error_source_layer': error_source_layer,
             'error_stage': error_stage,
-            'recovery_hint': derive_recovery_hint(error_code, error_detail_code, error_stage),
-            'recovery_priority': derive_recovery_priority(error_code, error_detail_code, error_stage),
-            'recovery_bucket': derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage),
-            'recovery_owner': derive_recovery_owner(
-                derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage),
-                error_source_layer,
-                error_stage,
+            'recovery_hint': recovery_hint,
+            'recovery_priority': recovery_priority,
+            'recovery_bucket': recovery_bucket,
+            'recovery_owner': recovery_owner,
+            'recovery_actionable': derive_recovery_actionable(
+                error_code,
+                recovery_hint,
+                recovery_priority,
+                recovery_bucket,
             ),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),

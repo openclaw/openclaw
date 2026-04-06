@@ -866,6 +866,8 @@ Additional top-level observability fields are also included:
   - coarse aggregation bucket such as `auth`, `runtime_submit`, `runtime_poll`, `control_plane`, `executor_gate`, `config_mapping`, or `none`
 - `recovery_owner`
   - coarse responsibility owner such as `auth`, `runtime`, `manager_control_plane`, `config`, or `none`
+- `recovery_actionable`
+  - boolean flag indicating whether a human should look at the issue now
 - `summary_counters`
   - compact counters such as `warning_count`, `remaining_issue_count`, `secondary_action_count`, `followup_executed_count`, and `path_depth`
 - `entry_status`
@@ -879,7 +881,7 @@ Additional top-level observability fields are also included:
 
 These fields are for observability and aggregation only. They do not change runtime behavior.
 
-The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, `error_detail_code`, `error_source_layer`, `error_stage`, `recovery_hint`, `recovery_priority`, `recovery_bucket`, and `recovery_owner` for lightweight aggregation and faster operational triage.
+The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, `error_detail_code`, `error_source_layer`, `error_stage`, `recovery_hint`, `recovery_priority`, `recovery_bucket`, `recovery_owner`, and `recovery_actionable` for lightweight aggregation and faster operational triage.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
