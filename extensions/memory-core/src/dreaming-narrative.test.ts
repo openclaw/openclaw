@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as configRuntimeModule from "openclaw/plugin-sdk/config-runtime";
@@ -583,7 +584,8 @@ describe("generateAndAppendDreamNarrative", () => {
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
-    const expectedSessionKey = `dreaming-narrative-light-${nowMs}`;
+    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
+    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}-${nowMs}`;
 
     await generateAndAppendDreamNarrative({
       subagent,
@@ -847,5 +849,38 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(sessionFiles.some((name) => name.startsWith("orphan.jsonl.deleted."))).toBe(true);
     expect(sessionFiles).toContain("still-live.jsonl");
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("dreaming cleanup scrubbed"));
+  });
+
+  it("isolates narrative sessions across workspaces even at the same timestamp", async () => {
+    const firstWorkspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const secondWorkspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("A quiet memory took shape.");
+    const logger = createMockLogger();
+    const nowMs = Date.parse("2026-04-05T03:00:00Z");
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir: firstWorkspaceDir,
+      data: { phase: "light", snippets: ["first workspace fragment"] },
+      nowMs,
+      logger,
+    });
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir: secondWorkspaceDir,
+      data: { phase: "light", snippets: ["second workspace fragment"] },
+      nowMs,
+      logger,
+    });
+
+    const firstSessionKey = subagent.run.mock.calls[0]?.[0]?.sessionKey;
+    const secondSessionKey = subagent.run.mock.calls[1]?.[0]?.sessionKey;
+    expect(firstSessionKey).toBeTypeOf("string");
+    expect(secondSessionKey).toBeTypeOf("string");
+    expect(firstSessionKey).not.toBe(secondSessionKey);
+    expect(firstSessionKey).toContain("dreaming-narrative-light-");
+    expect(secondSessionKey).toContain("dreaming-narrative-light-");
+    expect(subagent.deleteSession.mock.calls[0]?.[0]?.sessionKey).toBe(firstSessionKey);
+    expect(subagent.deleteSession.mock.calls[1]?.[0]?.sessionKey).toBe(secondSessionKey);
   });
 });

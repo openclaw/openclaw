@@ -1,4 +1,5 @@
 import type { Dirent } from "node:fs";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -174,6 +175,15 @@ async function startNarrativeRunOrFallback(params: {
     }
     return null;
   }
+}
+
+function buildNarrativeSessionKey(params: {
+  workspaceDir: string;
+  phase: NarrativePhaseData["phase"];
+  nowMs: number;
+}): string {
+  const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
+  return `dreaming-narrative-${params.phase}-${workspaceHash}-${params.nowMs}`;
 }
 
 // ── Prompt building ────────────────────────────────────────────────────
@@ -835,7 +845,11 @@ export async function generateAndAppendDreamNarrative(params: {
     return;
   }
 
-  const sessionKey = `dreaming-narrative-${params.data.phase}-${nowMs}`;
+  const sessionKey = buildNarrativeSessionKey({
+    workspaceDir: params.workspaceDir,
+    phase: params.data.phase,
+    nowMs,
+  });
   const message = buildNarrativePrompt(params.data);
   let runId: string | null = null;
   let waitStatus: string | null = null;
