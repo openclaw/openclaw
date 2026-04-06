@@ -112,7 +112,7 @@ function renderDevices(props: NodesProps) {
 
 function renderPendingDevice(req: PendingDevice, props: NodesProps) {
   const name = req.displayName?.trim() || req.deviceId;
-  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : "n/a";
+  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : t("common.na");
   const roleValue = req.role?.trim() || formatList(req.roles);
   const scopesValue = formatList(req.scopes);
   const repair = req.isRepair ? " · repair" : "";
@@ -252,30 +252,28 @@ function renderBindings(state: BindingState) {
     <section class="card">
       <div class="row" style="justify-content: space-between; align-items: center;">
         <div>
-          <div class="card-title">Exec node binding</div>
-          <div class="card-sub">
-            Pin agents to a specific node when using <span class="mono">exec host=node</span>.
-          </div>
+          <div class="card-title">${t("nodes.binding.execNodeBinding")}</div>
+          <div class="card-sub">${t("nodes.binding.execNodeBindingSubtitle")}</div>
         </div>
         <button
           class="btn"
           ?disabled=${state.disabled || !state.configDirty}
           @click=${state.onSave}
         >
-          ${state.configSaving ? "Saving…" : "Save"}
+          ${state.configSaving ? t("common.saving") : t("common.save")}
         </button>
       </div>
 
       ${state.formMode === "raw"
         ? html`
             <div class="callout warn" style="margin-top: 12px">
-              Switch the Config tab to <strong>Form</strong> mode to edit bindings here.
+              ${t("nodes.binding.formModeHint")}
             </div>
           `
         : nothing}
       ${!state.ready
         ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
-            <div class="muted">Load config to edit bindings.</div>
+            <div class="muted">${t("nodes.binding.loadConfigHint")}</div>
             <button class="btn" ?disabled=${state.configLoading} @click=${state.onLoadConfig}>
               ${state.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>
@@ -284,12 +282,12 @@ function renderBindings(state: BindingState) {
             <div class="list" style="margin-top: 16px;">
               <div class="list-item">
                 <div class="list-main">
-                  <div class="list-title">Default binding</div>
-                  <div class="list-sub">Used when agents do not override a node binding.</div>
+                  <div class="list-title">${t("nodes.binding.defaultBinding")}</div>
+                  <div class="list-sub">${t("nodes.binding.defaultBindingHint")}</div>
                 </div>
                 <div class="list-meta">
                   <label class="field">
-                    <span>Node</span>
+                    <span>${t("nodes.binding.node")}</span>
                     <select
                       ?disabled=${state.disabled || !supportsBinding}
                       @change=${(event: Event) => {
