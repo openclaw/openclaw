@@ -608,12 +608,21 @@ Before running the secondary action, the executor now applies a small safety gat
 
 - if `main_action.result.exit_code == 0`
   - secondary execution may continue
+- if `main_action.result.exit_code == 0` but readiness or missing-requirement signals still look degraded
+  - secondary execution continues with warning
 - if `main_action.result.exit_code != 0`
   - secondary execution is skipped
 - if `main_action.result.error` is present
   - secondary execution is skipped
 
-This keeps follow-up remediation from running after a failed primary remediation step.
+Current warning signals are intentionally minimal and may include:
+
+- `readiness == degraded`
+- top-level `missing_requirements`
+- nested `provider_status` / `gpu_status` / `nim_status_info` / `model_status` readiness flags staying false
+- nested or top-level warning lists in the remediation result
+
+This keeps follow-up remediation from running after a failed primary remediation step while still allowing warning-marked continuation when the main action succeeds but leaves degraded state behind.
 
 Current execution mapping is:
 
@@ -632,6 +641,9 @@ Execution report shape includes:
 - `secondary_action`
 - `secondary_gate_decision`
 - `secondary_gate_reason`
+- `secondary_gate_warning`
+- `warnings`
+- `warning_count`
 - `duration_sec`
 - `exit_summary`
 - `fallback_action`

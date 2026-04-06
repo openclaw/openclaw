@@ -133,6 +133,72 @@ def build_exit_summary(
     }
 
 
+def collect_main_warnings(step_result: dict) -> list[str]:
+    if not isinstance(step_result, dict):
+        return []
+    result = step_result.get('result')
+    if not isinstance(result, dict):
+        return []
+
+    warnings: list[str] = []
+    if result.get('readiness') == 'degraded':
+        warnings.append('runtime readiness remains degraded after main action')
+
+    missing_requirements = result.get('missing_requirements')
+    if isinstance(missing_requirements, list):
+        for requirement in missing_requirements:
+            if isinstance(requirement, str) and requirement.strip():
+                warnings.append(f'missing requirement remains: {requirement.strip()}')
+
+    details = result.get('details')
+    if isinstance(details, dict):
+        details_warnings = details.get('warnings')
+        if isinstance(details_warnings, list):
+            for item in details_warnings:
+                if isinstance(item, str) and item.strip():
+                    warnings.append(item.strip())
+        warning_text = details.get('warning')
+        if isinstance(warning_text, str) and warning_text.strip():
+            warnings.append(warning_text.strip())
+
+    for status_key, label in (
+        ('provider_status', 'provider'),
+        ('gpu_status', 'gpu'),
+        ('nim_status_info', 'nim'),
+        ('model_status', 'model'),
+    ):
+        status = result.get(status_key)
+        if not isinstance(status, dict):
+            continue
+        nested_missing = status.get('missing_requirements')
+        if isinstance(nested_missing, list):
+            for requirement in nested_missing:
+                if isinstance(requirement, str) and requirement.strip():
+                    warnings.append(f'{label} requirement remains: {requirement.strip()}')
+        for ready_key, ready_label in (
+            ('provider_ready', 'provider readiness'),
+            ('gpu_ready', 'gpu readiness'),
+            ('nim_ready', 'nim readiness'),
+            ('model_ready', 'model readiness'),
+        ):
+            if status.get(ready_key) is False:
+                warnings.append(f'{ready_label} is still false after main action')
+
+    top_level_warnings = result.get('warnings')
+    if isinstance(top_level_warnings, list):
+        for item in top_level_warnings:
+            if isinstance(item, str) and item.strip():
+                warnings.append(item.strip())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for warning in warnings:
+        if warning not in seen:
+            deduped.append(warning)
+            seen.add(warning)
+    return deduped
+
+
 def main() -> int:
     started_at = time.monotonic()
     args = build_parser().parse_args()
@@ -150,6 +216,7 @@ def main() -> int:
     secondary_placeholder = build_secondary_placeholder(
         secondary_action, secondary_next_step
     )
+    empty_warnings: list[str] = []
 
     if confidence_gate_applied or manager_action in NON_EXECUTING_ACTIONS:
         main_placeholder = {
@@ -163,6 +230,9 @@ def main() -> int:
             'stop_reason': 'confidence gate requested fallback handling' if confidence_gate_applied else f'manager action {manager_action} is non-executing',
             'secondary_gate_decision': 'stop_secondary',
             'secondary_gate_reason': 'executor stopped before main execution',
+            'secondary_gate_warning': False,
+            'warnings': empty_warnings,
+            'warning_count': 0,
             'main_action': main_placeholder,
             'secondary_action': secondary_placeholder,
             'fallback_action': fallback_action,
@@ -180,11 +250,15 @@ def main() -> int:
         and isinstance(main_result.get('result'), dict)
         and main_result['result'].get('error')
     )
+    main_warnings = collect_main_warnings(main_result)
     if main_error:
         output = {
             'executor_state': 'failed',
             'secondary_gate_decision': 'skip_secondary',
             'secondary_gate_reason': 'main action returned an error payload',
+            'secondary_gate_warning': False,
+            'warnings': main_warnings,
+            'warning_count': len(main_warnings),
             'main_action': main_result,
             'secondary_action': secondary_placeholder,
             'fallback_action': fallback_action,
@@ -200,6 +274,9 @@ def main() -> int:
             'executor_state': 'partial_failure',
             'secondary_gate_decision': 'skip_secondary',
             'secondary_gate_reason': 'main action failed with non-zero exit_code',
+            'secondary_gate_warning': bool(main_warnings),
+            'warnings': main_warnings,
+            'warning_count': len(main_warnings),
             'main_action': main_result,
             'secondary_action': secondary_placeholder,
             'fallback_action': fallback_action,
@@ -213,15 +290,23 @@ def main() -> int:
     secondary_result = secondary_placeholder
     secondary_gate_decision = 'skip_secondary'
     secondary_gate_reason = 'no secondary action planned'
+    secondary_gate_warning = bool(main_warnings)
     if secondary_action:
-        secondary_gate_decision = 'continue_secondary'
-        secondary_gate_reason = 'main action completed without an error payload or non-zero exit code'
+        if main_warnings:
+            secondary_gate_decision = 'continue_with_warning'
+            secondary_gate_reason = 'main action completed but runtime readiness signals still show warnings'
+        else:
+            secondary_gate_decision = 'continue_secondary'
+            secondary_gate_reason = 'main action completed without an error payload or non-zero exit code'
         secondary_result = execute_step(script_dir, secondary_action, secondary_next_step, runtime_args)
         if secondary_result.get('executed') and isinstance(secondary_result.get('result'), dict) and secondary_result['result'].get('error'):
             output = {
                 'executor_state': 'failed',
                 'secondary_gate_decision': secondary_gate_decision,
                 'secondary_gate_reason': secondary_gate_reason,
+                'secondary_gate_warning': secondary_gate_warning,
+                'warnings': main_warnings,
+                'warning_count': len(main_warnings),
                 'main_action': main_result,
                 'secondary_action': secondary_result,
                 'fallback_action': fallback_action,
@@ -238,6 +323,9 @@ def main() -> int:
                 'executor_state': 'partial_failure',
                 'secondary_gate_decision': secondary_gate_decision,
                 'secondary_gate_reason': secondary_gate_reason,
+                'secondary_gate_warning': secondary_gate_warning,
+                'warnings': main_warnings,
+                'warning_count': len(main_warnings),
                 'main_action': main_result,
                 'secondary_action': secondary_result,
                 'fallback_action': fallback_action,
@@ -249,9 +337,12 @@ def main() -> int:
             return 1
 
     output = {
-        'executor_state': 'completed',
+        'executor_state': 'completed_with_warning' if main_warnings else 'completed',
         'secondary_gate_decision': secondary_gate_decision,
         'secondary_gate_reason': secondary_gate_reason,
+        'secondary_gate_warning': secondary_gate_warning,
+        'warnings': main_warnings,
+        'warning_count': len(main_warnings),
         'main_action': main_result,
         'secondary_action': secondary_result,
         'fallback_action': fallback_action,
