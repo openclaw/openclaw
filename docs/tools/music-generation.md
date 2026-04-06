@@ -56,6 +56,16 @@ For direct synchronous contexts without a session-backed agent run, the built-in
 tool still falls back to inline generation and returns the final media path in
 the tool result.
 
+Example prompts:
+
+```text
+Generate a cinematic piano track with soft strings and no vocals.
+```
+
+```text
+Generate an energetic chiptune loop about launching a rocket at sunrise.
+```
+
 ### Workflow-driven plugin generation
 
 The bundled `comfy` plugin can also provide `music_generate` using a
@@ -92,13 +102,25 @@ runtime:
 /tool music_generate action=list
 ```
 
+Use `action: "status"` to inspect the active session-backed music task:
+
+```text
+/tool music_generate action=status
+```
+
+Direct generation example:
+
+```text
+/tool music_generate prompt="Dreamy lo-fi hip hop with vinyl texture and gentle rain" instrumental=true
+```
+
 ## Built-in tool parameters
 
 | Parameter         | Type     | Description                                                                                       |
 | ----------------- | -------- | ------------------------------------------------------------------------------------------------- |
 | `prompt`          | string   | Music generation prompt (required for `action: "generate"`)                                       |
 | `action`          | string   | `"generate"` (default), `"status"` for the current session task, or `"list"` to inspect providers |
-| `model`           | string   | Provider/model override, e.g. `google/lyria-3-pro-preview` or `comfy/workflow`                   |
+| `model`           | string   | Provider/model override, e.g. `google/lyria-3-pro-preview` or `comfy/workflow`                    |
 | `lyrics`          | string   | Optional lyrics when the provider supports explicit lyric input                                   |
 | `instrumental`    | boolean  | Request instrumental-only output when the provider supports it                                    |
 | `image`           | string   | Single reference image path or URL                                                                |
@@ -160,6 +182,12 @@ error includes details from each attempt.
   mp3 output.
 - ComfyUI support is workflow-driven and depends on the configured graph plus
   node mapping for prompt/output fields.
+
+## Choosing the right path
+
+- Use the shared provider-backed path when you want model selection, provider failover, and the built-in async task/status flow.
+- Use a plugin path such as ComfyUI when you need a custom workflow graph or a provider that is not part of the shared bundled music capability.
+- If you are debugging ComfyUI-specific behavior, see [ComfyUI](/providers/comfy). If you are debugging shared provider behavior, start with [Google (Gemini)](/providers/google) or [MiniMax](/providers/minimax).
 
 ## Live tests
 
