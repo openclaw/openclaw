@@ -96,7 +96,7 @@ function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
   try {
     const loaded = requireProviderRuntime(
       "../../plugins/provider-runtime.js",
-    ) as ProviderRuntimeHooks;
+    ) as unknown as ProviderRuntimeHooks;
     cachedProviderRuntimeHooks = {
       classifyProviderFailoverReasonWithPlugin: loaded.classifyProviderFailoverReasonWithPlugin,
       matchesProviderContextOverflowWithPlugin: loaded.matchesProviderContextOverflowWithPlugin,

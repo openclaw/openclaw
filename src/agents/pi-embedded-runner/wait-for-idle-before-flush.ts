@@ -7,6 +7,13 @@ type ToolResultFlushManager = {
   clearPendingToolResults?: (() => void) | undefined;
 };
 
+type FlushPendingToolResultsAfterIdleParams = {
+  agent: unknown;
+  sessionManager: unknown;
+  timeoutMs?: number;
+  clearPendingOnTimeout?: boolean;
+};
+
 export const DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 
 async function waitForAgentIdleBestEffort(
@@ -40,19 +47,18 @@ async function waitForAgentIdleBestEffort(
   }
 }
 
-export async function flushPendingToolResultsAfterIdle(opts: {
-  agent: IdleAwareAgent | null | undefined;
-  sessionManager: ToolResultFlushManager | null | undefined;
-  timeoutMs?: number;
-  clearPendingOnTimeout?: boolean;
-}): Promise<void> {
+export async function flushPendingToolResultsAfterIdle(
+  opts: FlushPendingToolResultsAfterIdleParams,
+): Promise<void> {
+  const agent = opts.agent as IdleAwareAgent | null | undefined;
+  const sessionManager = opts.sessionManager as ToolResultFlushManager | null | undefined;
   const timedOut = await waitForAgentIdleBestEffort(
-    opts.agent,
+    agent,
     opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
   );
-  if (timedOut && opts.clearPendingOnTimeout && opts.sessionManager?.clearPendingToolResults) {
-    opts.sessionManager.clearPendingToolResults();
+  if (timedOut && opts.clearPendingOnTimeout && sessionManager?.clearPendingToolResults) {
+    sessionManager.clearPendingToolResults();
     return;
   }
-  opts.sessionManager?.flushPendingToolResults?.();
+  sessionManager?.flushPendingToolResults?.();
 }
