@@ -2407,6 +2407,45 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for internal message:received notices before resolving the dispatch", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+    });
+    let markHookStarted: (() => void) | undefined;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
+    });
+    let releaseHook: (() => void) | undefined;
+    const hookReleased = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (eventUnknown: unknown) => {
+      const event = eventUnknown as { messages: string[] };
+      event.messages.push("  hook notice  ");
+      markHookStarted?.();
+      await hookReleased;
+    });
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
+
+    const pendingDispatch = dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    await hookStarted;
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+
+    releaseHook?.();
+    await pendingDispatch;
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "  hook notice  " });
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
   it("skips internal message:received hook when session key is unavailable", async () => {
     setNoAbort();
     const cfg = emptyConfig;

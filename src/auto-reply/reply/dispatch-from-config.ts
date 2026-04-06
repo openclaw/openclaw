@@ -490,18 +490,21 @@ export async function dispatchReplyFromConfig(params: {
       ...toInternalMessageReceivedContext(hookContext),
       timestamp,
     });
-    fireAndForgetHook(
-      (async () => {
-        await triggerInternalHook(internalHookEvent);
-        for (const message of internalHookEvent.messages) {
-          if (typeof message !== "string" || !message.trim()) {
-            continue;
-          }
-          await sendBindingNotice({ text: message }, "additive");
+    try {
+      await triggerInternalHook(internalHookEvent);
+      for (const message of internalHookEvent.messages) {
+        const trimmedMessage = typeof message === "string" ? message.trim() : "";
+        if (!trimmedMessage) {
+          continue;
         }
-      })(),
-      "dispatch-from-config: message_received internal hook failed",
-    );
+        // Preserve intentional hook formatting; trim only guards blank notices.
+        await sendBindingNotice({ text: message }, "additive");
+      }
+    } catch (err) {
+      logVerbose(
+        `dispatch-from-config: message_received internal hook failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   markProcessing();
