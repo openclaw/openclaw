@@ -7,6 +7,22 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 
+PRIORITY_ORDER = ['immediate', 'high', 'medium', 'low', 'none']
+PRIORITY_LEVEL = {
+    'immediate': 4,
+    'high': 3,
+    'medium': 2,
+    'low': 1,
+    'none': 0,
+}
+PRIORITY_WEIGHTS = {
+    'immediate': 100,
+    'high': 75,
+    'medium': 50,
+    'low': 25,
+    'none': 0,
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -119,6 +135,8 @@ def main() -> int:
                 'actionable_count': 0,
                 'max_recovery_rank': 0,
                 'sample_error_code': None,
+                '_strongest_priority_level': 0,
+                'strongest_priority_band': 'none',
             },
         )
         aggregate['count'] += 1
@@ -140,14 +158,12 @@ def main() -> int:
         else:
             cell['non_actionable'] += 1
         priority = record.get('recovery_priority')
-        priority_key = priority if isinstance(priority, str) and priority in {
-            'immediate',
-            'high',
-            'medium',
-            'low',
-            'none',
-        } else 'none'
+        priority_key = priority if isinstance(priority, str) and priority in PRIORITY_LEVEL else 'none'
         owner_bucket_priority_summary[owner_key][bucket_key][priority_key] += 1
+        priority_level = PRIORITY_LEVEL[priority_key]
+        if priority_level > aggregate['_strongest_priority_level']:
+            aggregate['_strongest_priority_level'] = priority_level
+            aggregate['strongest_priority_band'] = priority_key
         rank = record.get('recovery_rank')
         if isinstance(rank, int) and rank > aggregate['max_recovery_rank']:
             aggregate['max_recovery_rank'] = rank
@@ -179,6 +195,7 @@ def main() -> int:
                 'recovery_owner_counts': dict(sorted(aggregate['recovery_owner_counts'].items())),
                 'actionable_count': aggregate['actionable_count'],
                 'max_recovery_rank': aggregate['max_recovery_rank'],
+                'strongest_priority_band': aggregate['strongest_priority_band'],
                 'sample_error_code': aggregate['sample_error_code'],
             }
         )
@@ -261,20 +278,12 @@ def main() -> int:
         priority_summary_output[owner_key] = ordered_priority_row
 
     priority_heatmap: list[dict[str, object]] = []
-    priority_weights = {
-        'immediate': 100,
-        'high': 75,
-        'medium': 50,
-        'low': 25,
-        'none': 0,
-    }
-    priority_order = ['immediate', 'high', 'medium', 'low', 'none']
     for owner_key in sorted(priority_summary_output.keys()):
         row = priority_summary_output[owner_key]
         for bucket_name, counts in row.items():
-            score = sum(int(counts.get(name, 0)) * priority_weights[name] for name in priority_order)
+            score = sum(int(counts.get(name, 0)) * PRIORITY_WEIGHTS[name] for name in PRIORITY_ORDER)
             band = 'none'
-            for name in priority_order:
+            for name in PRIORITY_ORDER:
                 if int(counts.get(name, 0)) > 0:
                     band = name
                     break
@@ -284,7 +293,7 @@ def main() -> int:
                     'bucket': bucket_name,
                     'score': score,
                     'band': band,
-                    'counts': {name: int(counts.get(name, 0)) for name in priority_order},
+                    'counts': {name: int(counts.get(name, 0)) for name in PRIORITY_ORDER},
                 }
             )
     priority_heatmap.sort(
@@ -297,6 +306,27 @@ def main() -> int:
     priority_heatmap_compact = [
         item for item in priority_heatmap if int(item.get('score', 0)) > 0
     ]
+    route_severity_compact = [
+        {
+            'route_signature': item['route_signature'],
+            'count': item['count'],
+            'score': item['max_recovery_rank'],
+            'band': item.get('strongest_priority_band', 'none'),
+            'actionable_count': item['actionable_count'],
+            'max_recovery_rank': item['max_recovery_rank'],
+            'sample_error_code': item['sample_error_code'],
+            'latest_timestamp': item['latest_timestamp'],
+        }
+        for item in aggregated_routes
+        if int(item.get('max_recovery_rank', 0)) > 0
+    ]
+    route_severity_compact.sort(
+        key=lambda item: (
+            -int(item.get('score', 0)),
+            -int(item.get('count', 0)),
+            str(item.get('route_signature') or ''),
+        )
+    )
 
     output = {
         'total_records': len(filtered_records),
@@ -306,6 +336,7 @@ def main() -> int:
         'owner_bucket_priority_summary': priority_summary_output,
         'priority_heatmap': priority_heatmap,
         'priority_heatmap_compact': priority_heatmap_compact,
+        'route_severity_compact': route_severity_compact,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
