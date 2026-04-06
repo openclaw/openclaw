@@ -416,7 +416,11 @@ describe("runPreparedReply media-only handling", () => {
     });
 
     vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(
-      async () => await authPromise.then(() => undefined),
+      async () =>
+        await authPromise.then(() => ({
+          authProfileId: undefined,
+          authProfileIdSource: undefined,
+        })),
     );
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
 
@@ -460,7 +464,10 @@ describe("runPreparedReply media-only handling", () => {
       },
     };
     vi.mocked(resolveSessionAuthProfileOverride).mockImplementation(async ({ sessionEntry }) => {
-      return sessionEntry?.authProfileOverride;
+      return {
+        authProfileId: sessionEntry?.authProfileOverride,
+        authProfileIdSource: sessionEntry?.authProfileOverrideSource,
+      };
     });
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const previousRun = createReplyOperation({
@@ -511,7 +518,11 @@ describe("runPreparedReply media-only handling", () => {
     };
 
     vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(
-      async () => await authPromise.then(() => undefined),
+      async () =>
+        await authPromise.then(() => ({
+          authProfileId: undefined,
+          authProfileIdSource: undefined,
+        })),
     );
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
 
