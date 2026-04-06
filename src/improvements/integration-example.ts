@@ -29,6 +29,8 @@ import {
   DEFAULT_AUTOCOMPACT_CONFIG
 } from './autocompact.js';
 
+import type { Message } from './microcompact.js';
+
 // ============================================================================
 // 类型定义
 // ============================================================================
@@ -147,7 +149,14 @@ export async function improvedMessageCompactor(
   const originalTokens = estimateSimpleTokens(messages);
   console.log(`[Improved Compactor] Original tokens: ${originalTokens}`);
   
-  let compactedMessages = [...messages];
+  // Convert to our Message type for processing
+  let processingMessages: Message[] = messages.map(msg => ({
+    type: msg.role,
+    message: {
+      content: msg.content
+    },
+    timestamp: msg.timestamp
+  }));
   let microcompactApplied = false;
   let autocompactApplied = false;
   
@@ -159,8 +168,8 @@ export async function improvedMessageCompactor(
     };
     
     console.log('[Improved Compactor] Applying Microcompact...');
-    compactedMessages = await applyMicrocompact(
-      compactedMessages,
+    processingMessages = await applyMicrocompact(
+      processingMessages,
       microcompactConfig
     );
     microcompactApplied = true;
@@ -174,13 +183,21 @@ export async function improvedMessageCompactor(
     };
     
     console.log('[Improved Compactor] Applying Autocompact...');
-    compactedMessages = await applyAutocompact(
-      compactedMessages,
+    processingMessages = await applyAutocompact(
+      processingMessages,
       model,
       autocompactConfig
     );
     autocompactApplied = true;
   }
+  
+  // Convert back to OpenClawMessage type
+  const compactedMessages: OpenClawMessage[] = processingMessages.map(msg => ({
+    type: msg.type,
+    role: msg.type,
+    content: msg.message?.content || '',
+    timestamp: msg.timestamp
+  }));
   
   const compactedTokens = estimateSimpleTokens(compactedMessages);
   const savedTokens = originalTokens - compactedTokens;
@@ -315,8 +332,8 @@ export async function OpenClawRuntimeWithImprovements() {
     {
       microcompact: {
         enabled: true,
-        cacheBased: { enabled: true },
-        timeBased: { enabled: true }
+        cacheBased: { enabled: true, maxCachedResults: 3, minToolCalls: 5 },
+        timeBased: { enabled: true, gapThresholdMinutes: 30, maxCachedResults: 3 }
       },
       autocompact: {
         enabled: true,

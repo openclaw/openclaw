@@ -30,10 +30,12 @@ export interface ToolCall {
   [key: string]: unknown;
 }
 
+declare var Buffer: any;
+
 /**
  * 工具结果数据类型
  */
-export type ToolResultData = Record<string, unknown> | string | Buffer;
+export type ToolResultData = Record<string, unknown> | string | any;
 
 /**
  * 工具结果接口

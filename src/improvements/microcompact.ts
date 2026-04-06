@@ -16,10 +16,12 @@
 // 类型定义
 // ============================================================================
 
+declare var Buffer: any;
+
 /**
  * 工具结果的通用内容类型
  */
-export type ToolResultContent = string | Buffer | Record<string, unknown> | unknown[];
+export type ToolResultContent = string | any | Record<string, unknown> | unknown[];
 
 /**
  * 消息块类型
@@ -325,7 +327,7 @@ export async function applyCacheBasedCompact(
         // 找到对应的 tool_use
         const toolUse = findToolUseForToolResult(blocks, block.tool_use_id);
 
-        if (toolUse && isCompactableTool(toolUse.name)) {
+        if (toolUse && toolUse.type === 'tool_use' && isCompactableTool(toolUse.name)) {
           const toolName = toolUse.name;
           const currentCount = toolResultTracker.get(toolName) || 0;
           toolResultTracker.set(toolName, currentCount + 1);
@@ -446,7 +448,7 @@ export async function evaluateTimeBasedTrigger(
     const timestamp = parseTimestamp(message.timestamp);
 
     for (const block of blocks) {
-      if (block.type === 'tool_use') {
+      if (block.type === 'tool_use' && 'name' in block) {
         toolCalls.push({
           name: block.name,
           timestamp
