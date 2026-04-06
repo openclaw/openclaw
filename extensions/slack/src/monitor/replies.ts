@@ -138,9 +138,13 @@ function createSlackReplyReferencePlanner(params: {
   hasReplied?: boolean;
   isThreadReply?: boolean;
 }) {
-  // Only force threading for genuine user thread replies. Slack auto-populates
-  // thread_ts on top-level messages; respect the configured replyToMode there.
-  const effectiveMode = params.isThreadReply ? "all" : params.replyToMode;
+  // Older/internal callers may not pass explicit thread classification. Keep
+  // genuine thread replies sticky, but do not let Slack's auto-populated
+  // top-level thread_ts override the configured replyToMode.
+  const effectiveIsThreadReply =
+    params.isThreadReply ??
+    Boolean(params.incomingThreadTs && params.incomingThreadTs !== params.messageTs);
+  const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
     existingId: params.incomingThreadTs,
