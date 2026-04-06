@@ -108,9 +108,15 @@ For setup specifically:
 - `openclaw/plugin-sdk/channel-setup` covers the optional-install setup
   builders plus a few setup-safe primitives:
   `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`,
-  `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
-  `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
-  `splitSetupEntries`
+
+If your channel supports env-driven setup or auth and generic startup/config
+flows should know those env names before runtime loads, declare them in the
+plugin manifest with `channelEnvVars`. Keep channel runtime `envVars` or local
+constants for operator-facing copy only.
+`createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
+`createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
+`splitSetupEntries`
+
 - use the broader `openclaw/plugin-sdk/setup` seam only when you also need the
   heavier shared setup/config helpers such as
   `moveSingleAccountChannelSectionToDefaultAccount(...)`

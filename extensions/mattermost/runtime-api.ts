@@ -57,12 +57,11 @@ export {
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "openclaw/plugin-sdk/channel-policy";
-export { mattermostPlugin } from "./src/channel.js";
 export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-export { rawDataToString } from "openclaw/plugin-sdk/browser-support";
+export { rawDataToString } from "openclaw/plugin-sdk/browser-node-runtime";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,

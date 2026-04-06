@@ -11,7 +11,7 @@ const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function findExplicitProviderConfig(
@@ -28,7 +28,7 @@ function findExplicitProviderConfig(
   return isRecord(match?.[1]) ? match[1] : undefined;
 }
 
-function buildKimiReplayPolicy() {
+function _buildKimiReplayPolicy() {
   return {
     preserveSignatures: false,
   };

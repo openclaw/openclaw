@@ -19,6 +19,10 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
+import {
+  resolveSessionKeyForRequest,
+  resolveStoredSessionKeyForSessionId,
+} from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
   coerceToFailoverError,
@@ -101,9 +105,60 @@ import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
+/**
+ * Best-effort backfill of sessionKey from sessionId when not explicitly provided.
+ * The return value is normalized: whitespace-only inputs collapse to undefined, and
+ * successful resolution returns a trimmed session key. This is a read-only lookup
+ * with no side effects.
+ * See: https://github.com/openclaw/openclaw/issues/60552
+ */
+function backfillSessionKey(params: {
+  config: RunEmbeddedPiAgentParams["config"];
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+}): string | undefined {
+  const trimmed = params.sessionKey?.trim() || undefined;
+  if (trimmed) {
+    return trimmed;
+  }
+  if (!params.config || !params.sessionId) {
+    return undefined;
+  }
+  try {
+    const resolved = params.agentId?.trim()
+      ? resolveStoredSessionKeyForSessionId({
+          cfg: params.config,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+        })
+      : resolveSessionKeyForRequest({
+          cfg: params.config,
+          sessionId: params.sessionId,
+        });
+    return resolved.sessionKey?.trim() || undefined;
+  } catch (err) {
+    log.warn(
+      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${describeUnknownError(err)}`,
+    );
+    return undefined;
+  }
+}
+
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
+  // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
+  // receive a non-null key even when callers omit it. See #60552.
+  const effectiveSessionKey = backfillSessionKey({
+    config: params.config,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (effectiveSessionKey !== params.sessionKey) {
+    params = { ...params, sessionKey: effectiveSessionKey };
+  }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
@@ -167,17 +222,19 @@ export async function runEmbeddedPiAgent(
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+      const normalizedSessionKey = params.sessionKey?.trim();
       const fallbackConfigured = hasConfiguredModelFallbacks({
         cfg: params.config,
         agentId: params.agentId,
-        sessionKey: params.sessionKey,
+        sessionKey: normalizedSessionKey,
       });
       await ensureOpenClawModelsJson(params.config, agentDir);
+      const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
         agentId: workspaceResolution.agentId,
-        sessionKey: params.sessionKey,
+        sessionKey: resolvedSessionKey,
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
         modelProviderId: provider,
@@ -526,7 +583,7 @@ export async function runEmbeddedPiAgent(
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
+            sessionKey: resolvedSessionKey,
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
@@ -616,6 +673,7 @@ export async function runEmbeddedPiAgent(
           const {
             aborted,
             promptError,
+            preflightRecovery,
             timedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
@@ -648,7 +706,7 @@ export async function runEmbeddedPiAgent(
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
-                sessionKey: params.sessionKey ?? params.sessionId,
+                sessionKey: resolvedSessionKey ?? params.sessionId,
                 provider: activeErrorContext.provider,
                 model: activeErrorContext.model,
               })
@@ -663,9 +721,16 @@ export async function runEmbeddedPiAgent(
             !attempt.lastToolError &&
             attempt.toolMetas.length === 0 &&
             attempt.assistantTexts.length === 0;
+          if (preflightRecovery?.handled) {
+            log.info(
+              `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
+                `completed for ${provider}/${modelId}; retrying prompt`,
+            );
+            continue;
+          }
           const requestedSelection = shouldSwitchToLiveModel({
             cfg: params.config,
-            sessionKey: params.sessionKey,
+            sessionKey: resolvedSessionKey,
             agentId: params.agentId,
             defaultProvider: DEFAULT_PROVIDER,
             defaultModel: DEFAULT_MODEL,
@@ -677,7 +742,7 @@ export async function runEmbeddedPiAgent(
           if (requestedSelection && canRestartForLiveSwitch) {
             await clearLiveModelSwitchPending({
               cfg: params.config,
-              sessionKey: params.sessionKey,
+              sessionKey: resolvedSessionKey,
               agentId: params.agentId,
             });
             log.info(
@@ -919,6 +984,25 @@ export async function runEmbeddedPiAgent(
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (compactResult.compacted) {
+                if (preflightRecovery?.route === "compact_then_truncate") {
+                  const truncResult = await truncateOversizedToolResultsInSession({
+                    sessionFile: params.sessionFile,
+                    contextWindowTokens: ctxInfo.tokens,
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey,
+                  });
+                  if (truncResult.truncated) {
+                    log.info(
+                      `[context-overflow-precheck] post-compaction tool-result truncation succeeded for ` +
+                        `${provider}/${modelId}; truncated ${truncResult.truncatedCount} tool result(s)`,
+                    );
+                  } else {
+                    log.warn(
+                      `[context-overflow-precheck] post-compaction tool-result truncation did not help for ` +
+                        `${provider}/${modelId}: ${truncResult.reason ?? "unknown"}`,
+                    );
+                  }
+                }
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
@@ -927,9 +1011,6 @@ export async function runEmbeddedPiAgent(
                 `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
               );
             }
-            // Fallback: try truncating oversized tool results in the session.
-            // This handles the case where a single tool result exceeds the
-            // context window and compaction cannot reduce it further.
             if (!toolResultTruncationAttempted) {
               const contextWindowTokens = ctxInfo.tokens;
               const hasOversized = attempt.messagesSnapshot
@@ -940,13 +1021,6 @@ export async function runEmbeddedPiAgent(
                 : false;
 
               if (hasOversized) {
-                if (log.isEnabled("debug")) {
-                  log.debug(
-                    `[compaction-diag] decision diagId=${overflowDiagId} branch=truncate_tool_results ` +
-                      `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
-                      `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
-                  );
-                }
                 toolResultTruncationAttempted = true;
                 log.warn(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
@@ -962,25 +1036,16 @@ export async function runEmbeddedPiAgent(
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
-                  // Do NOT reset overflowCompactionAttempts here — the global cap must remain
-                  // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
                   continue;
                 }
                 log.warn(
                   `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
                 );
-              } else if (log.isEnabled("debug")) {
-                log.debug(
-                  `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
-                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
-                    `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
-                );
               }
             }
             if (
               (isCompactionFailure ||
-                overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS ||
-                toolResultTruncationAttempted) &&
+                overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS) &&
               log.isEnabled("debug")
             ) {
               log.debug(

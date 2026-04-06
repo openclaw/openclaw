@@ -1,27 +1,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
-import { resolveMemoryWikiConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
-import { initializeMemoryWikiVault } from "./vault.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const { createVault } = createMemoryWikiTestHarness();
 
 describe("compileMemoryWikiVault", () => {
+  let suiteRoot = "";
+  let caseId = 0;
+
+  beforeAll(async () => {
+    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-suite-"));
+  });
+
+  afterAll(async () => {
+    if (suiteRoot) {
+      await fs.rm(suiteRoot, { recursive: true, force: true });
+    }
+  });
+
+  function nextCaseRoot() {
+    return path.join(suiteRoot, `case-${caseId++}`);
+  }
+
   it("writes root and directory indexes for native markdown", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: rootDir } },
-      { homedir: "/Users/tester" },
-    );
-    await initializeMemoryWikiVault(config);
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
 
     await fs.writeFile(
       path.join(rootDir, "sources", "alpha.md"),
@@ -44,13 +53,13 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("renders obsidian-friendly links when configured", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: rootDir, renderMode: "obsidian" } },
-      { homedir: "/Users/tester" },
-    );
-    await initializeMemoryWikiVault(config);
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
 
     await fs.writeFile(
       path.join(rootDir, "sources", "alpha.md"),
@@ -69,13 +78,10 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("writes related blocks from source ids and shared sources", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: rootDir } },
-      { homedir: "/Users/tester" },
-    );
-    await initializeMemoryWikiVault(config);
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
 
     await fs.writeFile(
       path.join(rootDir, "sources", "alpha.md"),
@@ -132,13 +138,10 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("writes dashboard report pages when createDashboards is enabled", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: rootDir } },
-      { homedir: "/Users/tester" },
-    );
-    await initializeMemoryWikiVault(config);
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
 
     await fs.writeFile(
       path.join(rootDir, "entities", "alpha.md"),
@@ -188,16 +191,13 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("skips dashboard report pages when createDashboards is disabled", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      {
-        vault: { path: rootDir },
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: {
         render: { createDashboards: false },
       },
-      { homedir: "/Users/tester" },
-    );
-    await initializeMemoryWikiVault(config);
+    });
 
     await fs.writeFile(
       path.join(rootDir, "entities", "alpha.md"),
@@ -220,13 +220,10 @@ describe("compileMemoryWikiVault", () => {
   });
 
   it("ignores generated related links when computing backlinks on repeated compile", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: rootDir } },
-      { homedir: "/Users/tester" },
-    );
-    await initializeMemoryWikiVault(config);
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
 
     await fs.writeFile(
       path.join(rootDir, "entities", "beta.md"),

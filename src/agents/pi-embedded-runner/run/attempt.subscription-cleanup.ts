@@ -1,5 +1,13 @@
 import type { SubscribeEmbeddedPiSessionParams } from "../../pi-embedded-subscribe.types.js";
 
+type IdleAwareAgent = {
+  waitForIdle?: (() => Promise<void>) | undefined;
+};
+
+type ToolResultFlushManager = {
+  flushPendingToolResults?: (() => void) | undefined;
+  clearPendingToolResults?: (() => void) | undefined;
+};
 export function buildEmbeddedSubscriptionParams(
   params: SubscribeEmbeddedPiSessionParams,
 ): SubscribeEmbeddedPiSessionParams {
@@ -9,9 +17,10 @@ export function buildEmbeddedSubscriptionParams(
 export async function cleanupEmbeddedAttemptResources(params: {
   removeToolResultContextGuard?: () => void;
   flushPendingToolResultsAfterIdle: (params: {
-    agent: unknown;
-    sessionManager: unknown;
-    clearPendingOnTimeout: boolean;
+    agent: IdleAwareAgent | null | undefined;
+    sessionManager: ToolResultFlushManager | null | undefined;
+    timeoutMs?: number;
+    clearPendingOnTimeout?: boolean;
   }) => Promise<void>;
   session?: { agent?: unknown; dispose(): void };
   sessionManager: unknown;
@@ -28,8 +37,8 @@ export async function cleanupEmbeddedAttemptResources(params: {
     }
     try {
       await params.flushPendingToolResultsAfterIdle({
-        agent: params.session?.agent,
-        sessionManager: params.sessionManager,
+        agent: params.session?.agent as IdleAwareAgent | null | undefined,
+        sessionManager: params.sessionManager as ToolResultFlushManager | null | undefined,
         clearPendingOnTimeout: true,
       });
     } catch {

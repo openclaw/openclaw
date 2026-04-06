@@ -209,6 +209,44 @@ describe("applyPluginAutoEnable providers", () => {
     expect(result.changes).toContain("acme web search configured, enabled automatically.");
   });
 
+  it("auto-enables third-party plugins when manifest-owned tool config exists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          entries: {
+            acme: {
+              config: {
+                acmeTool: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      env: makeIsolatedEnv(),
+      manifestRegistry: makeRegistry([
+        {
+          id: "acme",
+          channels: [],
+          contracts: {
+            tools: ["acme_tool"],
+          },
+          configSchema: {
+            type: "object",
+            properties: {
+              webSearch: { type: "object" },
+              acmeTool: { type: "object" },
+            },
+          },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
+    expect(result.changes).toContain("acme tool configured, enabled automatically.");
+  });
+
   it("auto-enables acpx plugin when ACP is configured", () => {
     const result = applyPluginAutoEnable({
       config: {

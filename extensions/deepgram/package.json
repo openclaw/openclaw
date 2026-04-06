@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/deepgram-provider",
-  "version": "2026.4.5",
+  "version": "2026.4.6",
   "private": true,
   "description": "OpenClaw Deepgram media-understanding provider",
   "type": "module",

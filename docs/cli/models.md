@@ -31,6 +31,8 @@ Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI
 Codex, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks
 when available; otherwise OpenClaw falls back to matching OAuth/API-key
 credentials from auth profiles, env, or config.
+In `--json` output, `auth.providers` is the env/config/store-aware provider
+overview, while `auth.oauth` is auth-store profile health only.
 Add `--probe` to run live auth probes against each configured provider profile.
 Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent’s model/auth state. When omitted,
@@ -128,5 +130,5 @@ Notes:
   `--profile-id`.
 - `paste-token --expires-in <duration>` stores an absolute token expiry from a
   relative duration such as `365d` or `12h`.
-- Anthropic billing note: for Anthropic in OpenClaw, the practical split is **API key** or **Claude subscription with Extra Usage**. Anthropic notified OpenClaw users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw** Claude-login path counts as third-party harness usage and requires **Extra Usage** billed separately from the subscription. Our local repros also show the OpenClaw-identifying prompt string does not reproduce on the Anthropic SDK + API-key path.
-- Anthropic `setup-token` / `paste-token` are available again as a legacy/manual OpenClaw path. Use them with the expectation that Anthropic told OpenClaw users this path requires **Extra Usage**.
+- Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy.
+- Anthropic `setup-token` / `paste-token` remain available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.

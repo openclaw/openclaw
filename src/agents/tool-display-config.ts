@@ -640,6 +640,20 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    music_generate: {
+      emoji: "🎵",
+      title: "Music Generation",
+      actions: {
+        generate: {
+          label: "generate",
+          detailKeys: ["prompt", "model", "durationSeconds", "format", "instrumental"],
+        },
+        list: {
+          label: "list",
+          detailKeys: ["provider", "model"],
+        },
+      },
+    },
     video_generate: {
       emoji: "🎬",
       title: "Video Generation",

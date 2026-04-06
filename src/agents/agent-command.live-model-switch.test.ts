@@ -200,6 +200,7 @@ vi.mock("../utils/message-channel.js", () => ({
 const resolveEffectiveModelFallbacksMock = vi.fn().mockReturnValue(undefined);
 vi.mock("./agent-scope.js", () => ({
   listAgentIds: () => ["default"],
+  resolveAgentConfig: () => undefined,
   resolveAgentDir: () => "/tmp/agent",
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveSessionAgentId: () => "default",

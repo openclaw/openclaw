@@ -17,11 +17,7 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  createRuntimeOutboundDelegates,
-  resolveOutboundSendDep,
-} from "openclaw/plugin-sdk/outbound-runtime";
-import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   createComputedAccountStatusAdapter,
@@ -37,12 +33,11 @@ import { getDiscordApprovalCapability } from "./approval-native.js";
 import { discordMessageActions as discordMessageActionsImpl } from "./channel-actions.js";
 import {
   buildTokenChannelStatusSummary,
-  type ChannelPlugin,
   DEFAULT_ACCOUNT_ID,
-  getChatChannelMeta,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
+  type ChannelPlugin,
   type OpenClawConfig,
 } from "./channel-api.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
@@ -50,6 +45,7 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
+import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
@@ -129,11 +125,27 @@ function loadDiscordCarbonModule() {
   return discordCarbonModuleCache;
 }
 
-const meta = {
-  ...getChatChannelMeta("discord"),
-};
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
+function resolveDiscordAttachedOutboundTarget(params: {
+  to: string;
+  threadId?: string | number | null;
+}): string {
+  if (params.threadId == null) {
+    return params.to;
+  }
+  const threadId = String(params.threadId).trim();
+  return threadId ? `channel:${threadId}` : params.to;
+}
+
+function shouldTreatDiscordDeliveredTextAsVisible(params: {
+  kind: "tool" | "block" | "final";
+  text?: string;
+}): boolean {
+  return (
+    params.kind === "block" && typeof params.text === "string" && params.text.trim().length > 0
+  );
+}
 
 function resolveRuntimeDiscordMessageActions() {
   try {
@@ -568,7 +580,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             maxAgeMs,
           }).map(toConversationLifecycleBinding),
       },
-      status: createComputedAccountStatusAdapter<ResolvedDiscordAccount, DiscordProbe, unknown>({
+      status: createComputedAccountStatusAdapter<ResolvedDiscordAccount, DiscordProbe>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
           connected: false,
           reconnectAttempts: 0,
@@ -597,7 +609,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           }
           return lines;
         },
-        buildCapabilitiesDiagnostics: async ({ account, timeoutMs, target }) => {
+        buildCapabilitiesDiagnostics: async ({ account, target }) => {
           if (!target?.trim()) {
             return undefined;
           }
@@ -813,6 +825,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         chunker: null,
         textChunkLimit: 2000,
         pollMaxOptions: 10,
+        shouldTreatDeliveredTextAsVisible: shouldTreatDiscordDeliveredTextAsVisible,
         shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
           shouldSuppressLocalDiscordExecApprovalPrompt({
             cfg,
@@ -823,9 +836,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       attachedResults: {
         channel: "discord",
-        sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
+        sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
           const send = await resolveDiscordSend(deps);
-          return await send(to, text, {
+          return await send(resolveDiscordAttachedOutboundTarget({ to, threadId }), text, {
             verbose: false,
             cfg,
             replyTo: replyToId ?? undefined,
@@ -839,26 +852,48 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           text,
           mediaUrl,
           mediaLocalRoots,
+          mediaReadFile,
           accountId,
           deps,
           replyToId,
+          threadId,
           silent,
         }) => {
           const send = await resolveDiscordSend(deps);
-          return await send(to, text, {
+          const target = resolveDiscordAttachedOutboundTarget({ to, threadId });
+          if (text.trim() && mediaUrl && isLikelyDiscordVideoMedia(mediaUrl)) {
+            await send(target, text, {
+              verbose: false,
+              cfg,
+              replyTo: replyToId ?? undefined,
+              accountId: accountId ?? undefined,
+              silent: silent ?? undefined,
+            });
+            return await send(target, "", {
+              verbose: false,
+              cfg,
+              mediaUrl,
+              mediaLocalRoots,
+              mediaReadFile,
+              accountId: accountId ?? undefined,
+              silent: silent ?? undefined,
+            });
+          }
+          return await send(target, text, {
             verbose: false,
             cfg,
             mediaUrl,
             mediaLocalRoots,
+            mediaReadFile,
             replyTo: replyToId ?? undefined,
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,
           });
         },
-        sendPoll: async ({ cfg, to, poll, accountId, silent }) =>
+        sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) =>
           await (
             await loadDiscordSendModule()
-          ).sendPollDiscord(to, poll, {
+          ).sendPollDiscord(resolveDiscordAttachedOutboundTarget({ to, threadId }), poll, {
             cfg,
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,

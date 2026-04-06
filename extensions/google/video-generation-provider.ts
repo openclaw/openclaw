@@ -15,12 +15,31 @@ const DEFAULT_GOOGLE_VIDEO_MODEL = "veo-3.1-fast-generate-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
 const MAX_POLL_ATTEMPTS = 90;
-const GOOGLE_VIDEO_MIN_DURATION_SECONDS = 4;
-const GOOGLE_VIDEO_MAX_DURATION_SECONDS = 8;
+const GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS = [4, 6, 8] as const;
+const GOOGLE_VIDEO_MIN_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[0];
+const GOOGLE_VIDEO_MAX_DURATION_SECONDS =
+  GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS.length - 1];
 
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
   const configured = req.cfg?.models?.providers?.google?.baseUrl?.trim();
   return configured ? normalizeGoogleApiBaseUrl(configured) : undefined;
+}
+
+function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
+  const trimmed = size?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const match = /^(\d+)x(\d+)$/u.exec(trimmed);
+  if (!match) {
+    return undefined;
+  }
+  const width = Number.parseInt(match[1] ?? "", 10);
+  const height = Number.parseInt(match[2] ?? "", 10);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    return undefined;
+  }
+  return { width, height };
 }
 
 function resolveAspectRatio(params: {
@@ -31,20 +50,11 @@ function resolveAspectRatio(params: {
   if (direct === "16:9" || direct === "9:16") {
     return direct;
   }
-  const size = params.size?.trim();
-  if (!size) {
+  const parsedSize = parseVideoSize(params.size);
+  if (!parsedSize) {
     return undefined;
   }
-  const match = /^(\d+)x(\d+)$/u.exec(size);
-  if (!match) {
-    return undefined;
-  }
-  const width = Number.parseInt(match[1] ?? "", 10);
-  const height = Number.parseInt(match[2] ?? "", 10);
-  if (!Number.isFinite(width) || !Number.isFinite(height)) {
-    return undefined;
-  }
-  return width >= height ? "16:9" : "9:16";
+  return parsedSize.width >= parsedSize.height ? "16:9" : "9:16";
 }
 
 function resolveResolution(params: {
@@ -57,17 +67,11 @@ function resolveResolution(params: {
   if (params.resolution === "1080P") {
     return "1080p";
   }
-  const size = params.size?.trim();
-  if (!size) {
+  const parsedSize = parseVideoSize(params.size);
+  if (!parsedSize) {
     return undefined;
   }
-  const match = /^(\d+)x(\d+)$/u.exec(size);
-  if (!match) {
-    return undefined;
-  }
-  const width = Number.parseInt(match[1] ?? "", 10);
-  const height = Number.parseInt(match[2] ?? "", 10);
-  const maxEdge = Math.max(width, height);
+  const maxEdge = Math.max(parsedSize.width, parsedSize.height);
   return maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined;
 }
 
@@ -75,10 +79,21 @@ function resolveDurationSeconds(durationSeconds: number | undefined): number | u
   if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
     return undefined;
   }
-  return Math.min(
+  const rounded = Math.min(
     GOOGLE_VIDEO_MAX_DURATION_SECONDS,
     Math.max(GOOGLE_VIDEO_MIN_DURATION_SECONDS, Math.round(durationSeconds)),
   );
+  return GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS.reduce((best, current) => {
+    const currentDistance = Math.abs(current - rounded);
+    const bestDistance = Math.abs(best - rounded);
+    if (currentDistance < bestDistance) {
+      return current;
+    }
+    if (currentDistance === bestDistance && current > best) {
+      return current;
+    }
+    return best;
+  });
 }
 
 function resolveInputImage(req: VideoGenerationRequest) {
@@ -145,14 +160,37 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 1,
-      maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
-      supportsAspectRatio: true,
-      supportsResolution: true,
-      supportsSize: true,
-      supportsAudio: true,
+      generate: {
+        maxVideos: 1,
+        maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
+        supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsSize: true,
+        supportsAudio: true,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
+        supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsSize: true,
+        supportsAudio: true,
+      },
+      videoToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputVideos: 1,
+        maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
+        supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsSize: true,
+        supportsAudio: true,
+      },
     },
     async generateVideo(req) {
       if ((req.inputImages?.length ?? 0) > 1) {

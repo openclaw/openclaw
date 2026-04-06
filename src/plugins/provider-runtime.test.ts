@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/types.js";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -8,6 +9,7 @@ import {
 } from "./provider-runtime.test-support.js";
 import type {
   AnyAgentTool,
+  ProviderExternalAuthProfile,
   ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
   ProviderRuntimeModel,
@@ -16,10 +18,13 @@ import type {
 } from "./types.js";
 
 type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProviders;
+type IsPluginProvidersLoadInFlight =
+  typeof import("./providers.runtime.js").isPluginProvidersLoadInFlight;
 type ResolveCatalogHookProviderPluginIds =
   typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
+const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
 const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProviderPluginIds>(
   (_) => [] as string[],
 );
@@ -49,6 +54,7 @@ let resolveProviderDefaultThinkingLevel: typeof import("./provider-runtime.js").
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderReplayPolicyWithPlugin: typeof import("./provider-runtime.js").resolveProviderReplayPolicyWithPlugin;
+let resolveExternalAuthProfilesWithPlugins: typeof import("./provider-runtime.js").resolveExternalAuthProfilesWithPlugins;
 let resolveProviderSyntheticAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderSyntheticAuthWithPlugin;
 let shouldDeferProviderSyntheticProfileAuthWithPlugin: typeof import("./provider-runtime.js").shouldDeferProviderSyntheticProfileAuthWithPlugin;
 let sanitizeProviderReplayHistoryWithPlugin: typeof import("./provider-runtime.js").sanitizeProviderReplayHistoryWithPlugin;
@@ -229,6 +235,8 @@ describe("provider-runtime", () => {
     }));
     vi.doMock("./providers.runtime.js", () => ({
       resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+      isPluginProvidersLoadInFlight: (params: unknown) =>
+        isPluginProvidersLoadInFlightMock(params as never),
     }));
     ({
       augmentModelCatalogWithProviderPlugins,
@@ -256,6 +264,7 @@ describe("provider-runtime", () => {
       resolveProviderModernModelRef,
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderReplayPolicyWithPlugin,
+      resolveExternalAuthProfilesWithPlugins,
       resolveProviderSyntheticAuthWithPlugin,
       shouldDeferProviderSyntheticProfileAuthWithPlugin,
       sanitizeProviderReplayHistoryWithPlugin,
@@ -280,6 +289,8 @@ describe("provider-runtime", () => {
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
+    isPluginProvidersLoadInFlightMock.mockReset();
+    isPluginProvidersLoadInFlightMock.mockReturnValue(false);
     resolveCatalogHookProviderPluginIdsMock.mockReset();
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue([]);
   });
@@ -303,16 +314,16 @@ describe("provider-runtime", () => {
   it("matches providers by hook alias for runtime hook lookup", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {
-        id: "openai-codex",
-        label: "OpenAI Codex",
-        hookAliases: ["codex-cli"],
+        id: "anthropic",
+        label: "Anthropic",
+        hookAliases: ["claude-cli"],
         auth: [],
       },
     ]);
 
     expectProviderRuntimePluginLoad({
-      provider: "codex-cli",
-      expectedPluginId: "openai-codex",
+      provider: "claude-cli",
+      expectedPluginId: "anthropic",
     });
   });
 
@@ -644,6 +655,22 @@ describe("provider-runtime", () => {
           },
           createEmbeddingProvider,
           resolveSyntheticAuth,
+          resolveExternalAuthProfiles: ({ store }): ProviderExternalAuthProfile[] =>
+            store.profiles["demo:managed"]
+              ? []
+              : [
+                  {
+                    persistence: "runtime-only",
+                    profileId: "demo:managed",
+                    credential: {
+                      type: "oauth",
+                      provider: DEMO_PROVIDER_ID,
+                      access: "external-access",
+                      refresh: "external-refresh",
+                      expires: Date.now() + 60_000,
+                    },
+                  },
+                ],
           shouldDeferSyntheticProfileAuth,
           normalizeResolvedModel: ({ model }) => ({
             ...model,
@@ -1037,6 +1064,29 @@ describe("provider-runtime", () => {
       },
       {
         actual: () =>
+          resolveExternalAuthProfilesWithPlugins({
+            env: process.env,
+            context: {
+              env: process.env,
+              store: { version: 1, profiles: {} },
+            },
+          }),
+        expected: [
+          {
+            persistence: "runtime-only",
+            profileId: "demo:managed",
+            credential: {
+              type: "oauth",
+              provider: DEMO_PROVIDER_ID,
+              access: "external-access",
+              refresh: "external-refresh",
+              expires: expect.any(Number),
+            },
+          },
+        ],
+      },
+      {
+        actual: () =>
           resolveProviderSyntheticAuthWithPlugin({
             provider: DEMO_PROVIDER_ID,
             context: createDemoProviderContext({
@@ -1237,5 +1287,108 @@ describe("provider-runtime", () => {
         cache: false,
       }),
     );
+  });
+
+  it("does not stack-overflow when provider hook resolution reenters the same plugin load", () => {
+    let providerLoadInFlight = false;
+    isPluginProvidersLoadInFlightMock.mockImplementation(() => providerLoadInFlight);
+    resolvePluginProvidersMock.mockImplementation(() => {
+      providerLoadInFlight = true;
+      try {
+        const reentrantResult = normalizeProviderConfigWithPlugin({
+          provider: "reentrant-provider",
+          context: {
+            provider: "reentrant-provider",
+            providerConfig: {
+              baseUrl: "https://example.com",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        });
+        expect(reentrantResult).toBeUndefined();
+        return [];
+      } finally {
+        providerLoadInFlight = false;
+      }
+    });
+
+    const result = normalizeProviderConfigWithPlugin({
+      provider: "demo",
+      context: {
+        provider: "demo",
+        providerConfig: { baseUrl: "https://example.com", api: "openai-completions", models: [] },
+      },
+    });
+
+    expect(result).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps cached provider hook results available during a nested provider load", () => {
+    const cachedNormalizedConfig: ModelProviderConfig = {
+      baseUrl: "https://cached.example.com",
+      api: "openai-completions",
+      models: [],
+    };
+    let providerLoadInFlight = false;
+    isPluginProvidersLoadInFlightMock.mockImplementation(() => providerLoadInFlight);
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      const providerRef = params?.providerRefs?.[0];
+      if (providerRef === "cached-provider") {
+        return [
+          {
+            id: "cached-provider",
+            label: "Cached Provider",
+            auth: [],
+            normalizeConfig: () => cachedNormalizedConfig,
+          },
+        ];
+      }
+      providerLoadInFlight = true;
+      try {
+        const reentrantResult = normalizeProviderConfigWithPlugin({
+          provider: "cached-provider",
+          context: {
+            provider: "cached-provider",
+            providerConfig: {
+              baseUrl: "https://example.com",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        });
+        expect(reentrantResult).toBe(cachedNormalizedConfig);
+        return [];
+      } finally {
+        providerLoadInFlight = false;
+      }
+    });
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "cached-provider",
+        context: {
+          provider: "cached-provider",
+          providerConfig: { baseUrl: "https://example.com", api: "openai-completions", models: [] },
+        },
+      }),
+    ).toBe(cachedNormalizedConfig);
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "outer-provider",
+        context: {
+          provider: "outer-provider",
+          providerConfig: {
+            baseUrl: "https://outer.example.com",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      }),
+    ).toBeUndefined();
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(3);
   });
 });

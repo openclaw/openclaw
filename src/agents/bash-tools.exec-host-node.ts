@@ -280,11 +280,18 @@ export async function executeNodeHostCommand(
         preResolvedDecision,
       })
     ) {
-      const { approvedByAsk, deniedReason } = execHostShared.createExecApprovalDecisionState({
-        decision: preResolvedDecision,
-        askFallback,
+      const { baseDecision, approvedByAsk, deniedReason } =
+        execHostShared.createExecApprovalDecisionState({
+          decision: preResolvedDecision,
+          askFallback,
+        });
+      const strictInlineEvalDecision = execHostShared.enforceStrictInlineEvalApprovalBoundary({
+        baseDecision,
+        approvedByAsk,
+        deniedReason,
+        requiresInlineEvalApproval: inlineEvalHit !== null,
       });
-      if (deniedReason || !approvedByAsk) {
+      if (strictInlineEvalDecision.deniedReason || !strictInlineEvalDecision.approvedByAsk) {
         throw new Error(
           execHostShared.buildHeadlessExecApprovalDeniedMessage({
             trigger: params.trigger,
@@ -295,8 +302,8 @@ export async function executeNodeHostCommand(
           }),
         );
       }
-      inlineApprovedByAsk = approvedByAsk;
-      inlineApprovalDecision = approvedByAsk ? "allow-once" : null;
+      inlineApprovedByAsk = strictInlineEvalDecision.approvedByAsk;
+      inlineApprovalDecision = strictInlineEvalDecision.approvedByAsk ? "allow-once" : null;
       inlineApprovalId = approvalId;
     } else {
       const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
@@ -342,6 +349,16 @@ export async function executeNodeHostCommand(
         } else if (decision === "allow-always") {
           approvedByAsk = true;
           approvalDecision = "allow-always";
+        }
+
+        ({ approvedByAsk, deniedReason } = execHostShared.enforceStrictInlineEvalApprovalBoundary({
+          baseDecision,
+          approvedByAsk,
+          deniedReason,
+          requiresInlineEvalApproval: inlineEvalHit !== null,
+        }));
+        if (deniedReason) {
+          approvalDecision = null;
         }
 
         if (deniedReason) {

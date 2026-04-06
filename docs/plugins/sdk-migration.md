@@ -249,12 +249,14 @@ Current bundled provider examples:
   | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
   | `plugin-sdk/provider-http` | Provider HTTP helpers | Generic provider HTTP/endpoint capability helpers |
   | `plugin-sdk/provider-web-fetch` | Provider web-fetch helpers | Web-fetch provider registration/cache helpers |
-  | `plugin-sdk/provider-web-search` | Provider web-search helpers | Web-search provider registration/cache/config helpers |
+  | `plugin-sdk/provider-web-search-contract` | Provider web-search contract helpers | Narrow web-search config/credential contract helpers such as `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
+  | `plugin-sdk/provider-web-search` | Provider web-search helpers | Web-search provider registration/cache/runtime helpers |
   | `plugin-sdk/provider-tools` | Provider tool/schema compat helpers | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
   | `plugin-sdk/provider-usage` | Provider usage helpers | `fetchClaudeUsage`, `fetchGeminiUsage`, `fetchGithubCopilotUsage`, and other provider usage helpers |
   | `plugin-sdk/provider-stream` | Provider stream wrapper helpers | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
   | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers plus media payload builders |
+  | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
@@ -263,6 +265,8 @@ Current bundled provider examples:
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types and registry helpers |
   | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types and registry helpers |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
+  | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
+  | `plugin-sdk/music-generation-core` | Shared music-generation core | Music-generation types, failover helpers, provider lookup, and model-ref parsing |
   | `plugin-sdk/video-generation` | Video-generation helpers | Video-generation provider/request/result types |
   | `plugin-sdk/video-generation-core` | Shared video-generation core | Video-generation types, failover helpers, provider lookup, and model-ref parsing |
   | `plugin-sdk/interactive-runtime` | Interactive reply helpers | Interactive reply payload normalization/reduction |
@@ -273,7 +277,7 @@ Current bundled provider examples:
   | `plugin-sdk/allowlist-config-edit` | Allowlist config helpers | Allowlist config edit/read helpers |
   | `plugin-sdk/group-access` | Group access helpers | Shared group-access decision helpers |
   | `plugin-sdk/direct-dm` | Direct-DM helpers | Shared direct-DM auth/guard helpers |
-  | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status helper primitives |
+  | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status and ambient proxy helper primitives |
   | `plugin-sdk/webhook-targets` | Webhook target helpers | Webhook target registry and route-install helpers |
   | `plugin-sdk/webhook-path` | Webhook path helpers | Webhook path normalization helpers |
   | `plugin-sdk/web-media` | Shared web media helpers | Remote/local media loading helpers |
@@ -315,7 +319,7 @@ new plugin code.
 
 The same rule applies to other bundled-helper families such as:
 
-- browser support helpers: `plugin-sdk/browser-cdp`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-control-auth`, `plugin-sdk/browser-profiles`, `plugin-sdk/browser-support`
+- browser support helpers: `plugin-sdk/browser-cdp`, `plugin-sdk/browser-config-runtime`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-control-auth`, `plugin-sdk/browser-node-runtime`, `plugin-sdk/browser-profiles`, `plugin-sdk/browser-security-runtime`, `plugin-sdk/browser-setup-tools`, `plugin-sdk/browser-support`
 - Matrix: `plugin-sdk/matrix*`
 - LINE: `plugin-sdk/line*`
 - IRC: `plugin-sdk/irc*`

@@ -19,6 +19,7 @@ function createStubPluginRegistry(): PluginRegistry {
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
+    musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
     memoryEmbeddingProviders: [],

@@ -1,26 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { applyMemoryWikiMutation } from "./apply.js";
-import { resolveMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
-import { initializeMemoryWikiVault } from "./vault.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const { createVault } = createMemoryWikiTestHarness();
 
 describe("applyMemoryWikiMutation", () => {
   it("creates synthesis pages with managed summary blocks and refreshed indexes", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-apply-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: rootDir } },
-      { homedir: "/Users/tester" },
-    );
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-" });
 
     const result = await applyMemoryWikiMutation({
       config,
@@ -64,13 +53,10 @@ describe("applyMemoryWikiMutation", () => {
   });
 
   it("updates page metadata without overwriting existing human notes", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-apply-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: rootDir } },
-      { homedir: "/Users/tester" },
-    );
-    await initializeMemoryWikiVault(config);
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-apply-",
+      initialize: true,
+    });
 
     const targetPath = path.join(rootDir, "entities", "alpha.md");
     await fs.writeFile(

@@ -1,4 +1,4 @@
-import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
@@ -176,7 +176,7 @@ export async function resolveDeliveryTarget(
     };
   }
 
-  const channelPlugin = getChannelPlugin(channel);
+  const channelPlugin = getLoadedChannelPlugin(channel);
   const resolvedAccountId = normalizeAccountId(accountId);
   const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
     cfg,

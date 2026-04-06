@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveMemoryWikiConfig } from "./config.js";
@@ -10,6 +9,9 @@ import {
   renderMemoryWikiStatus,
   resolveMemoryWikiStatus,
 } from "./status.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+const { createVault } = createMemoryWikiTestHarness();
 
 describe("resolveMemoryWikiStatus", () => {
   it("reports missing vault and missing requested obsidian cli", async () => {
@@ -58,12 +60,10 @@ describe("resolveMemoryWikiStatus", () => {
   });
 
   it("counts source provenance from the vault", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-status-"));
-    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
-    await fs.mkdir(path.join(rootDir, "entities"), { recursive: true });
-    await fs.mkdir(path.join(rootDir, "concepts"), { recursive: true });
-    await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
-    await fs.mkdir(path.join(rootDir, "reports"), { recursive: true });
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-status-",
+      initialize: true,
+    });
     await fs.writeFile(
       path.join(rootDir, "sources", "native.md"),
       renderWikiMarkdown({
@@ -113,10 +113,6 @@ describe("resolveMemoryWikiStatus", () => {
       "utf8",
     );
 
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: rootDir } },
-      { homedir: "/Users/tester" },
-    );
     const status = await resolveMemoryWikiStatus(config, {
       pathExists: async () => true,
       resolveCommand: async () => null,
@@ -130,8 +126,6 @@ describe("resolveMemoryWikiStatus", () => {
       unsafeLocal: 1,
       other: 0,
     });
-
-    await fs.rm(rootDir, { recursive: true, force: true });
   });
 });
 

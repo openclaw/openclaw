@@ -1,31 +1,28 @@
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
-  createAllowlistSetupWizardProxy,
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
+  createAllowlistSetupWizardProxy,
+  createEnvPatchedAccountSetupAdapter,
   createLegacyCompatChannelDmPolicy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
-  createEnvPatchedAccountSetupAdapter,
-  type OpenClawConfig,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
-} from "openclaw/plugin-sdk/setup-runtime";
-import {
   type ChannelSetupAdapter,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-  type ChannelSetupWizardAllowFromEntry,
+  type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectSlackAccount } from "./account-inspect.js";
-import { listSlackAccountIds, resolveSlackAccount, type ResolvedSlackAccount } from "./accounts.js";
+import { resolveSlackAccount } from "./accounts.js";
 import {
   buildSlackSetupLines,
+  SLACK_CHANNEL as channel,
   isSlackSetupAccountConfigured,
   setSlackChannelAllowlist,
-  SLACK_CHANNEL as channel,
 } from "./shared.js";
 
 function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {

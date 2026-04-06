@@ -1,4 +1,4 @@
-import { listBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
+import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
@@ -44,7 +44,7 @@ export function deriveSessionChatType(sessionKey: string | undefined | null): Se
   if (builtInLegacy) {
     return builtInLegacy;
   }
-  for (const plugin of listBootstrapChannelPlugins()) {
+  for (const plugin of iterateBootstrapChannelPlugins()) {
     const derived = plugin.messaging?.deriveLegacySessionChatType?.(scoped);
     if (derived) {
       return derived;

@@ -1,23 +1,29 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
-import { resolveMemoryWikiConfig } from "./config.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
 describe("syncMemoryWikiBridgeSources", () => {
   it("imports public memory-core artifacts and stays idempotent across reruns", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-bridge-ws-"));
-    const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-bridge-vault-"));
-    tempDirs.push(workspaceDir, vaultDir);
+    const workspaceDir = await createTempDir("memory-wiki-bridge-ws-");
+    const { rootDir: vaultDir, config } = await createVault({
+      prefix: "memory-wiki-bridge-vault-",
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryCore: true,
+          indexMemoryRoot: true,
+          indexDailyNotes: true,
+          indexDreamReports: true,
+        },
+      },
+    });
 
     await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
@@ -32,20 +38,6 @@ describe("syncMemoryWikiBridgeSources", () => {
       "utf8",
     );
 
-    const config = resolveMemoryWikiConfig(
-      {
-        vaultMode: "bridge",
-        vault: { path: vaultDir },
-        bridge: {
-          enabled: true,
-          readMemoryCore: true,
-          indexMemoryRoot: true,
-          indexDailyNotes: true,
-          indexDreamReports: true,
-        },
-      },
-      { homedir: "/Users/tester" },
-    );
     const appConfig: OpenClawConfig = {
       plugins: {
         entries: {
@@ -91,12 +83,7 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   it("returns a no-op result outside bridge mode", async () => {
-    const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-isolated-"));
-    tempDirs.push(vaultDir);
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: vaultDir } },
-      { homedir: "/Users/tester" },
-    );
+    const { config } = await createVault({ prefix: "memory-wiki-isolated-" });
 
     const result = await syncMemoryWikiBridgeSources({ config });
 
@@ -112,9 +99,17 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   it("imports the public memory event journal when followMemoryEvents is enabled", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-bridge-events-ws-"));
-    const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-bridge-events-vault-"));
-    tempDirs.push(workspaceDir, vaultDir);
+    const workspaceDir = await createTempDir("memory-wiki-bridge-events-ws-");
+    const { rootDir: vaultDir, config } = await createVault({
+      prefix: "memory-wiki-bridge-events-vault-",
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          followMemoryEvents: true,
+        },
+      },
+    });
 
     await appendMemoryHostEvent(workspaceDir, {
       type: "memory.recall.recorded",
@@ -131,17 +126,6 @@ describe("syncMemoryWikiBridgeSources", () => {
       ],
     });
 
-    const config = resolveMemoryWikiConfig(
-      {
-        vaultMode: "bridge",
-        vault: { path: vaultDir },
-        bridge: {
-          enabled: true,
-          followMemoryEvents: true,
-        },
-      },
-      { homedir: "/Users/tester" },
-    );
     const appConfig: OpenClawConfig = {
       plugins: {
         entries: {
@@ -167,16 +151,11 @@ describe("syncMemoryWikiBridgeSources", () => {
   });
 
   it("prunes stale bridge pages when the source artifact disappears", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-bridge-prune-ws-"));
-    const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-bridge-prune-vault-"));
-    tempDirs.push(workspaceDir, vaultDir);
-
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
-
-    const config = resolveMemoryWikiConfig(
-      {
+    const workspaceDir = await createTempDir("memory-wiki-bridge-prune-ws-");
+    const { rootDir: vaultDir, config } = await createVault({
+      prefix: "memory-wiki-bridge-prune-vault-",
+      config: {
         vaultMode: "bridge",
-        vault: { path: vaultDir },
         bridge: {
           enabled: true,
           indexMemoryRoot: true,
@@ -185,8 +164,9 @@ describe("syncMemoryWikiBridgeSources", () => {
           followMemoryEvents: false,
         },
       },
-      { homedir: "/Users/tester" },
-    );
+    });
+
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
     const appConfig: OpenClawConfig = {
       plugins: {
         entries: {

@@ -1,33 +1,21 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { resolveMemoryWikiConfig } from "./config.js";
+import { describe, expect, it } from "vitest";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { initializeMemoryWikiVault, WIKI_VAULT_DIRECTORIES } from "./vault.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0).map(async (dir) => {
-      await fs.rm(dir, { recursive: true, force: true });
-    }),
-  );
-});
+const { createVault } = createMemoryWikiTestHarness();
 
 describe("initializeMemoryWikiVault", () => {
   it("creates the wiki layout and seed files", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-",
+      config: {
         vault: {
-          path: rootDir,
           renderMode: "obsidian",
         },
       },
-      { homedir: "/Users/tester" },
-    );
+    });
 
     const result = await initializeMemoryWikiVault(config, {
       nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
@@ -51,16 +39,9 @@ describe("initializeMemoryWikiVault", () => {
   });
 
   it("is idempotent when the vault already exists", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      {
-        vault: {
-          path: rootDir,
-        },
-      },
-      { homedir: "/Users/tester" },
-    );
+    const { config } = await createVault({
+      prefix: "memory-wiki-",
+    });
 
     await initializeMemoryWikiVault(config);
     const second = await initializeMemoryWikiVault(config);

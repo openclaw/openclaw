@@ -1,21 +1,14 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { resolveMemoryWikiConfig } from "./config.js";
+import { describe, expect, it } from "vitest";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
 describe("syncMemoryWikiUnsafeLocalSources", () => {
   it("imports explicit private paths and preserves unsafe-local provenance", async () => {
-    const privateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-private-"));
-    const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-unsafe-vault-"));
-    tempDirs.push(privateDir, vaultDir);
+    const privateDir = await createTempDir("memory-wiki-private-");
 
     await fs.mkdir(path.join(privateDir, "nested"), { recursive: true });
     await fs.writeFile(path.join(privateDir, "nested", "state.md"), "# internal state\n", "utf8");
@@ -24,17 +17,16 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const directPath = path.join(privateDir, "events.log");
     await fs.writeFile(directPath, "private log\n", "utf8");
 
-    const config = resolveMemoryWikiConfig(
-      {
+    const { rootDir: vaultDir, config } = await createVault({
+      prefix: "memory-wiki-unsafe-vault-",
+      config: {
         vaultMode: "unsafe-local",
-        vault: { path: vaultDir },
         unsafeLocal: {
           allowPrivateMemoryCoreAccess: true,
           paths: [path.join(privateDir, "nested"), directPath],
         },
       },
-      { homedir: "/Users/tester" },
-    );
+    });
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
 
@@ -57,24 +49,21 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
   });
 
   it("prunes stale unsafe-local pages when configured files disappear", async () => {
-    const privateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-private-prune-"));
-    const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-unsafe-prune-vault-"));
-    tempDirs.push(privateDir, vaultDir);
+    const privateDir = await createTempDir("memory-wiki-private-prune-");
 
     const secretPath = path.join(privateDir, "secret.md");
     await fs.writeFile(secretPath, "# private\n", "utf8");
 
-    const config = resolveMemoryWikiConfig(
-      {
+    const { rootDir: vaultDir, config } = await createVault({
+      prefix: "memory-wiki-unsafe-prune-vault-",
+      config: {
         vaultMode: "unsafe-local",
-        vault: { path: vaultDir },
         unsafeLocal: {
           allowPrivateMemoryCoreAccess: true,
           paths: [secretPath],
         },
       },
-      { homedir: "/Users/tester" },
-    );
+    });
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
     const firstPagePath = first.pagePaths[0] ?? "";

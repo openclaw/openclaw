@@ -6,6 +6,7 @@ import {
   resolvePluginDiscoveryProviders,
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
+import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   isNonSecretApiKeyMarker,
@@ -64,7 +65,12 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
-function resolveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
+function resolveProviderDiscoveryFilter(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] | undefined {
+  const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
   if (testRaw) {
     const ids = testRaw
@@ -78,15 +84,48 @@ function resolveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | unde
   if (!live) {
     return undefined;
   }
-  const raw = env.OPENCLAW_LIVE_PROVIDERS?.trim();
-  if (!raw || raw === "all") {
+  const rawValues = [
+    env.OPENCLAW_LIVE_PROVIDERS?.trim(),
+    env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
+  ].filter((value): value is string => Boolean(value && value !== "all"));
+  if (rawValues.length === 0) {
     return undefined;
   }
-  const ids = raw
-    .split(",")
+  const ids = rawValues
+    .flatMap((value) => value.split(","))
     .map((value) => value.trim())
     .filter(Boolean);
-  return ids.length > 0 ? [...new Set(ids)] : undefined;
+  if (ids.length === 0) {
+    return undefined;
+  }
+  const pluginIds = new Set<string>();
+  for (const id of ids) {
+    const owners =
+      resolveOwningPluginIdsForProvider({
+        provider: id,
+        config,
+        workspaceDir,
+        env,
+      }) ?? [];
+    if (owners.length > 0) {
+      for (const owner of owners) {
+        pluginIds.add(owner);
+      }
+      continue;
+    }
+    pluginIds.add(id);
+  }
+  return pluginIds.size > 0
+    ? [...pluginIds].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
+export function resolveProviderDiscoveryFilterForTest(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] | undefined {
+  return resolveProviderDiscoveryFilter(params);
 }
 
 function mergeImplicitProviderSet(
@@ -315,7 +354,11 @@ export async function resolveImplicitProviders(
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
-    onlyPluginIds: resolveProviderDiscoveryFilter(env),
+    onlyPluginIds: resolveProviderDiscoveryFilter({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env,
+    }),
   });
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {

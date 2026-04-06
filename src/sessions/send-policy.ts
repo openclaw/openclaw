@@ -1,7 +1,6 @@
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
-import { deriveSessionChatType } from "./session-chat-type.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
@@ -46,8 +45,33 @@ function deriveChannelFromKey(key?: string) {
 }
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
-  const chatType = deriveSessionChatType(key);
-  return chatType === "unknown" ? undefined : chatType;
+  const normalizedKey = stripAgentSessionKeyPrefix(key)?.trim().toLowerCase();
+  if (!normalizedKey) {
+    return undefined;
+  }
+  const tokens = new Set(normalizedKey.split(":").filter(Boolean));
+  if (tokens.has("group")) {
+    return "group";
+  }
+  if (tokens.has("channel")) {
+    return "channel";
+  }
+  if (tokens.has("direct") || tokens.has("dm")) {
+    return "direct";
+  }
+  if (/^group:[^:]+$/u.test(normalizedKey)) {
+    return "group";
+  }
+  if (/^[0-9]+(?:-[0-9]+)*@g\.us$/u.test(normalizedKey)) {
+    return "group";
+  }
+  if (/^whatsapp:(?!.*:group:).+@g\.us$/u.test(normalizedKey)) {
+    return "group";
+  }
+  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/u.test(normalizedKey)) {
+    return "channel";
+  }
+  return undefined;
 }
 
 export function resolveSendPolicy(params: {

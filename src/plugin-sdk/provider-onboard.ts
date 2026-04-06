@@ -25,6 +25,13 @@ export type AgentModelAliasEntry =
       alias?: string;
     };
 
+const LEGACY_OPENCODE_ZEN_DEFAULT_MODELS = new Set([
+  "opencode/claude-opus-4-5",
+  "opencode-zen/claude-opus-4-5",
+]);
+
+export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-4-6";
+
 export type ProviderOnboardPresetAppliers<TArgs extends unknown[]> = {
   applyProviderConfig: (cfg: OpenClawConfig, ...args: TArgs) => OpenClawConfig;
   applyConfig: (cfg: OpenClawConfig, ...args: TArgs) => OpenClawConfig;
@@ -49,6 +56,20 @@ function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
     return { modelRef: entry };
   }
   return entry;
+}
+
+function resolveCurrentPrimaryModel(model: unknown): string | undefined {
+  if (typeof model === "string") {
+    return model.trim() || undefined;
+  }
+  if (
+    model &&
+    typeof model === "object" &&
+    typeof (model as { primary?: unknown }).primary === "string"
+  ) {
+    return ((model as { primary: string }).primary || "").trim() || undefined;
+  }
+  return undefined;
 }
 
 type ProviderModelMergeState = {
@@ -208,6 +229,24 @@ export function applyAgentDefaultModelPrimary(
         },
       },
     },
+  };
+}
+
+export function applyOpencodeZenModelDefault(cfg: OpenClawConfig): {
+  next: OpenClawConfig;
+  changed: boolean;
+} {
+  const current = resolveCurrentPrimaryModel(cfg.agents?.defaults?.model);
+  const normalizedCurrent =
+    current && LEGACY_OPENCODE_ZEN_DEFAULT_MODELS.has(current)
+      ? OPENCODE_ZEN_DEFAULT_MODEL
+      : current;
+  if (normalizedCurrent === OPENCODE_ZEN_DEFAULT_MODEL) {
+    return { next: cfg, changed: false };
+  }
+  return {
+    next: applyAgentDefaultModelPrimary(cfg, OPENCODE_ZEN_DEFAULT_MODEL),
+    changed: true,
   };
 }
 

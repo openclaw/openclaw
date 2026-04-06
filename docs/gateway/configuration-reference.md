@@ -220,7 +220,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
     discord: {
       enabled: true,
       token: "your-bot-token",
-      mediaMaxMb: 8,
+      mediaMaxMb: 100,
       allowBots: false,
       actions: {
         reactions: true,
@@ -646,8 +646,9 @@ Matrix is extension-backed and configured under `channels.matrix`.
 
 - Token auth uses `accessToken`; password auth uses `userId` + `password`.
 - `channels.matrix.proxy` routes Matrix HTTP traffic through an explicit HTTP(S) proxy. Named accounts can override it with `channels.matrix.accounts.<id>.proxy`.
-- `channels.matrix.allowPrivateNetwork` allows private/internal homeservers. `proxy` and `allowPrivateNetwork` are independent controls.
+- `channels.matrix.network.dangerouslyAllowPrivateNetwork` allows private/internal homeservers. `proxy` and this network opt-in are independent controls.
 - `channels.matrix.defaultAccount` selects the preferred account in multi-account setups.
+- `channels.matrix.autoJoin` defaults to `off`, so invited rooms and fresh DM-style invites are ignored until you set `autoJoin: "allowlist"` with `autoJoinAllowlist` or `autoJoin: "always"`.
 - `channels.matrix.execApprovals`: Matrix-native exec approval delivery and approver authorization.
   - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
   - `approvers`: Matrix user IDs (e.g. `@owner:example.org`) allowed to approve exec requests.
@@ -901,6 +902,18 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 }
 ```
 
+### `agents.defaults.contextInjection`
+
+Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
+
+- `"continuation-skip"`: safe continuation turns (after a completed assistant response) skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs and post-compaction retries still rebuild context.
+
+```json5
+{
+  agents: { defaults: { contextInjection: "continuation-skip" } },
+}
+```
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.
@@ -1026,6 +1039,11 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
   - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
   - If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order.
+- `musicGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - Used by the shared music-generation capability and the built-in `music_generate` tool.
+  - Typical values: `google/lyria-3-clip-preview`, `google/lyria-3-pro-preview`, or `minimax/music-2.5+`.
+  - If omitted, `music_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered music-generation providers in provider-id order.
+  - If you select a provider/model directly, configure the matching provider auth/API key too.
 - `videoGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the shared video-generation capability and the built-in `video_generate` tool.
   - Typical values: `qwen/wan2.6-t2v`, `qwen/wan2.6-i2v`, `qwen/wan2.6-r2v`, `qwen/wan2.6-r2v-flash`, or `qwen/wan2.7-r2v`.
@@ -1065,6 +1083,37 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinkin
 Z.AI models enable `tool_stream` by default for tool call streaming. Set `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 Anthropic Claude 4.6 models default to `adaptive` thinking when no explicit thinking level is set.
 
+### `agents.defaults.cliBackends`
+
+Optional CLI backends for text-only fallback runs (no tool calls). Useful as a backup when API providers fail.
+
+```json5
+{
+  agents: {
+    defaults: {
+      cliBackends: {
+        "codex-cli": {
+          command: "/opt/homebrew/bin/codex",
+        },
+        "my-cli": {
+          command: "my-cli",
+          args: ["--json"],
+          output: "json",
+          modelArg: "--model",
+          sessionArg: "--session",
+          sessionMode: "existing",
+          systemPromptArg: "--system",
+          systemPromptWhen: "first",
+          imageArg: "--image",
+          imageMode: "repeat",
+        },
+      },
+    },
+  },
+}
+```
+
+- CLI backends are text-first; tools are always disabled.
 - Sessions supported when `sessionArg` is set.
 - Image pass-through supported when `imageArg` accepts file paths.
 
@@ -2070,6 +2119,9 @@ Configures inbound media understanding (image/audio/video):
   tools: {
     media: {
       concurrency: 2,
+      asyncCompletion: {
+        directSend: false, // opt-in: send finished async music/video directly to the channel
+      },
       audio: {
         enabled: true,
         maxBytes: 20971520,
@@ -2112,6 +2164,12 @@ Configures inbound media understanding (image/audio/video):
 - Failures fall back to the next entry.
 
 Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
+
+**Async completion fields:**
+
+- `asyncCompletion.directSend`: when `true`, completed async `music_generate`
+  and `video_generate` tasks try direct channel delivery first. Default: `false`
+  (legacy requester-session wake/model-delivery path).
 
 </Accordion>
 
@@ -2611,17 +2669,10 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
 - `plugins.entries.xai.config.xSearch`: xAI X Search (Grok web search) settings.
   - `enabled`: enable the X Search provider.
   - `model`: Grok model to use for search (e.g. `"grok-4-1-fast"`).
-- `plugins.entries.memory-core.config.dreaming`: memory dreaming (experimental) settings. See [Dreaming](/concepts/dreaming) for modes and thresholds.
-  - `mode`: dreaming cadence preset (`"off"`, `"core"`, `"rem"`, `"deep"`). Default: `"off"`.
-  - `cron`: optional cron expression override for the dreaming schedule.
-  - `timezone`: timezone for schedule evaluation (falls back to `agents.defaults.userTimezone`).
-  - `limit`: maximum candidates to promote per cycle.
-  - `minScore`: minimum weighted score threshold for promotion.
-  - `minRecallCount`: minimum recall count threshold.
-  - `minUniqueQueries`: minimum distinct query count threshold.
-  - `recencyHalfLifeDays`: days for the recency score to decay by half. Default: `14`.
-  - `maxAgeDays`: optional maximum daily-note age in days allowed for promotion.
-  - `verboseLogging`: emit detailed per-run dreaming logs into the normal gateway log stream.
+- `plugins.entries.memory-core.config.dreaming`: memory dreaming (experimental) settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
+  - `enabled`: master dreaming switch (default `false`).
+  - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
+  - phase policy and thresholds are implementation details (not user-facing config keys).
 - Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.

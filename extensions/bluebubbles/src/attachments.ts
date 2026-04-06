@@ -10,12 +10,11 @@ import { resolveRequestUrl } from "./request-url.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
-import { resolveChatGuidForTarget, createChatForHandle } from "./send.js";
+import { createChatForHandle, resolveChatGuidForTarget } from "./send.js";
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesAttachment,
-  type BlueBubblesSendTarget,
   type SsrFPolicy,
 } from "./types.js";
 
@@ -127,10 +126,12 @@ export async function downloadBlueBubblesAttachment(
     };
   } catch (error) {
     if (readMediaFetchErrorCode(error) === "max_bytes") {
-      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`);
+      throw new Error(`BlueBubbles attachment too large (limit ${maxBytes} bytes)`, {
+        cause: error,
+      });
     }
     const text = error instanceof Error ? error.message : String(error);
-    throw new Error(`BlueBubbles attachment download failed: ${text}`);
+    throw new Error(`BlueBubbles attachment download failed: ${text}`, { cause: error });
   }
 }
 

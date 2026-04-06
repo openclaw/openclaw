@@ -3,7 +3,7 @@ import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
-import { ToolInputError } from "../agents/tools/common.js";
+import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
@@ -254,10 +254,10 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   try {
+    const gatewayTool: AnyAgentTool = tool;
     const toolCallId = `http-${Date.now()}`;
     const toolArgs = mergeActionIntoArgsIfSupported({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      toolSchema: (tool as any).parameters,
+      toolSchema: gatewayTool.parameters,
       action,
       args,
     });
@@ -278,8 +278,7 @@ export async function handleToolsInvokeHttpRequest(
       });
       return true;
     }
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(toolCallId, hookResult.params);
+    const result = await gatewayTool.execute?.(toolCallId, hookResult.params);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);

@@ -25,6 +25,7 @@ import {
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
 
 function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
@@ -38,13 +39,6 @@ type RuntimeMemoryAuditContext = {
   dbPath?: string;
   qmdCollections?: number;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 async function resolveRuntimeMemoryAuditContext(
   cfg: OpenClawConfig,
@@ -61,7 +55,8 @@ async function resolveRuntimeMemoryAuditContext(
   }
   try {
     const status = manager.status();
-    const customQmd = asRecord(asRecord(status.custom)?.qmd);
+    const customQmd =
+      isRecord(status.custom) && isRecord(status.custom.qmd) ? status.custom.qmd : null;
     return {
       workspaceDir: status.workspaceDir?.trim(),
       backend: status.backend,
@@ -218,7 +213,7 @@ export async function noteMemorySearchHealth(
           qmdCheck.error ? `Probe error: ${qmdCheck.error}` : null,
           "",
           "Fix (pick one):",
-          "- Install the supported QMD package: npm install -g @tobilu/qmd",
+          "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
           `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
           `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
           "",

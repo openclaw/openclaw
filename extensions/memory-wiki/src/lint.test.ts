@@ -1,27 +1,21 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { resolveMemoryWikiConfig } from "./config.js";
+import { describe, expect, it } from "vitest";
 import { lintMemoryWikiVault } from "./lint.js";
 import { renderWikiMarkdown } from "./markdown.js";
-import { initializeMemoryWikiVault } from "./vault.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const { createVault } = createMemoryWikiTestHarness();
 
 describe("lintMemoryWikiVault", () => {
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-lint-"));
-    tempDirs.push(rootDir);
-    const config = resolveMemoryWikiConfig(
-      { vault: { path: rootDir, renderMode: "obsidian" } },
-      { homedir: "/Users/tester" },
-    );
-    await initializeMemoryWikiVault(config);
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-",
+      initialize: true,
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
 
     const duplicate = renderWikiMarkdown({
       frontmatter: {

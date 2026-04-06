@@ -4,6 +4,7 @@ export function createSharedCoreVitestConfig(env?: Record<string, string | undef
   return createScopedVitestConfig(["src/shared/**/*.test.ts"], {
     dir: "src",
     env,
+    includeOpenClawRuntimeSetup: false,
     name: "shared-core",
     passWithNoTests: true,
   });

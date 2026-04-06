@@ -1,36 +1,48 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { resolveMemoryWikiConfig } from "./config.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const { createVault } = createMemoryWikiTestHarness();
 
 describe("syncMemoryWikiImportedSources", () => {
+  let suiteRoot = "";
+  let caseId = 0;
+
+  beforeAll(async () => {
+    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-sync-suite-"));
+  });
+
+  afterAll(async () => {
+    if (suiteRoot) {
+      await fs.rm(suiteRoot, { recursive: true, force: true });
+    }
+  });
+
+  function nextCaseRoot() {
+    return path.join(suiteRoot, `case-${caseId++}`);
+  }
+
   it("refreshes indexes when imported sources change and skips when they do not", async () => {
-    const privateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-sync-private-"));
-    const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-sync-vault-"));
-    tempDirs.push(privateDir, vaultDir);
+    const caseRoot = nextCaseRoot();
+    const privateDir = path.join(caseRoot, "private");
 
     const sourcePath = path.join(privateDir, "alpha.md");
+    await fs.mkdir(privateDir, { recursive: true });
     await fs.writeFile(sourcePath, "# Alpha\n", "utf8");
 
-    const config = resolveMemoryWikiConfig(
-      {
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: path.join(caseRoot, "vault"),
+      config: {
         vaultMode: "unsafe-local",
-        vault: { path: vaultDir },
         unsafeLocal: {
           allowPrivateMemoryCoreAccess: true,
           paths: [sourcePath],
         },
       },
-      { homedir: "/Users/tester" },
-    );
+    });
 
     const first = await syncMemoryWikiImportedSources({ config });
 
@@ -56,17 +68,17 @@ describe("syncMemoryWikiImportedSources", () => {
   });
 
   it("respects ingest.autoCompile=false", async () => {
-    const privateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-sync-private-"));
-    const vaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-sync-vault-"));
-    tempDirs.push(privateDir, vaultDir);
+    const caseRoot = nextCaseRoot();
+    const privateDir = path.join(caseRoot, "private");
 
     const sourcePath = path.join(privateDir, "alpha.md");
+    await fs.mkdir(privateDir, { recursive: true });
     await fs.writeFile(sourcePath, "# Alpha\n", "utf8");
 
-    const config = resolveMemoryWikiConfig(
-      {
+    const { config } = await createVault({
+      rootDir: path.join(caseRoot, "vault"),
+      config: {
         vaultMode: "unsafe-local",
-        vault: { path: vaultDir },
         unsafeLocal: {
           allowPrivateMemoryCoreAccess: true,
           paths: [sourcePath],
@@ -75,8 +87,7 @@ describe("syncMemoryWikiImportedSources", () => {
           autoCompile: false,
         },
       },
-      { homedir: "/Users/tester" },
-    );
+    });
 
     const result = await syncMemoryWikiImportedSources({ config });
 

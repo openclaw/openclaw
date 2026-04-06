@@ -71,7 +71,10 @@ function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConf
     if (!normalizedProvider) {
       continue;
     }
-    providers[providerId] = normalizedProvider;
+    providers[providerId] = {
+      ...providers[providerId],
+      ...normalizedProvider,
+    };
   }
   return Object.keys(providers).length > 0 ? providers : undefined;
 }

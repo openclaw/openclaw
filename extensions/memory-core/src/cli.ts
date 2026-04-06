@@ -7,6 +7,8 @@ import {
 import type {
   MemoryCommandOptions,
   MemoryPromoteCommandOptions,
+  MemoryPromoteExplainOptions,
+  MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
 import {
@@ -44,6 +46,19 @@ async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
   await runtime.runMemoryPromote(opts);
 }
 
+async function runMemoryPromoteExplain(
+  selectorArg: string | undefined,
+  opts: MemoryPromoteExplainOptions,
+) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryPromoteExplain(selectorArg, opts);
+}
+
+async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryRemHarness(opts);
+}
+
 export function registerMemoryCli(program: Command) {
   const memory = program
     .command("memory")
@@ -71,6 +86,14 @@ export function registerMemoryCli(program: Command) {
           [
             "openclaw memory promote --apply",
             "Append top-ranked short-term candidates into MEMORY.md.",
+          ],
+          [
+            'openclaw memory promote-explain "router vlan"',
+            "Explain why a specific candidate would or would not promote.",
+          ],
+          [
+            "openclaw memory rem-harness --json",
+            "Preview REM reflections, candidate truths, and deep promotion output.",
           ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
@@ -137,5 +160,26 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (opts: MemoryPromoteCommandOptions) => {
       await runMemoryPromote(opts);
+    });
+
+  memory
+    .command("promote-explain")
+    .description("Explain a specific promotion candidate and its score breakdown")
+    .argument("<selector>", "Candidate key, path fragment, or snippet fragment")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--include-promoted", "Include already promoted candidates", false)
+    .option("--json", "Print JSON")
+    .action(async (selectorArg: string | undefined, opts: MemoryPromoteExplainOptions) => {
+      await runMemoryPromoteExplain(selectorArg, opts);
+    });
+
+  memory
+    .command("rem-harness")
+    .description("Preview REM reflections, candidate truths, and deep promotions without writing")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--include-promoted", "Include already promoted deep candidates", false)
+    .option("--json", "Print JSON")
+    .action(async (opts: MemoryRemHarnessOptions) => {
+      await runMemoryRemHarness(opts);
     });
 }

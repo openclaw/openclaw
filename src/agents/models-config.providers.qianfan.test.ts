@@ -1,21 +1,29 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
-import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const qianfanApiKeyEnv = ["QIANFAN_API", "KEY"].join("_");
+async function loadSecretsModule() {
+  vi.doUnmock("../plugins/manifest-registry.js");
+  vi.resetModules();
+  return import("./models-config.providers.secrets.js");
+}
+
+beforeEach(() => {
+  vi.doUnmock("../plugins/manifest-registry.js");
+});
 
 describe("Qianfan provider", () => {
-  it("should include qianfan when QIANFAN_API_KEY is configured", async () => {
-    // pragma: allowlist secret
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const qianfanApiKey = "test-key"; // pragma: allowlist secret
-    await withEnvAsync({ [qianfanApiKeyEnv]: qianfanApiKey }, async () => {
-      const providers = await resolveImplicitProvidersForTest({ agentDir });
-      expect(providers?.qianfan).toBeDefined();
-      expect(providers?.qianfan?.apiKey).toBe("QIANFAN_API_KEY");
+  it("resolves QIANFAN_API_KEY markers through provider auth lookup", async () => {
+    const { createProviderAuthResolver } = await loadSecretsModule();
+    const resolveAuth = createProviderAuthResolver(
+      {
+        QIANFAN_API_KEY: "test-key", // pragma: allowlist secret
+      } as NodeJS.ProcessEnv,
+      { version: 1, profiles: {} },
+    );
+
+    expect(resolveAuth("qianfan")).toMatchObject({
+      apiKey: "QIANFAN_API_KEY",
+      mode: "api_key",
+      source: "env",
     });
   });
 });

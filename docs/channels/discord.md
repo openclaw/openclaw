@@ -1237,7 +1237,7 @@ High-signal Discord fields:
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
-  - `mediaMaxMb` caps outbound Discord uploads (default: `8MB`)
+  - `mediaMaxMb` caps outbound Discord uploads (default: `100MB`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
 - UI: `ui.components.accentColor`

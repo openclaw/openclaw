@@ -71,11 +71,15 @@ describe("minimax video generation provider", () => {
       model: "MiniMax-Hailuo-2.3",
       prompt: "A fox sprints across snowy hills",
       cfg: {},
+      durationSeconds: 5,
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://api.minimax.io/v1/video_generation",
+        body: expect.objectContaining({
+          duration: 6,
+        }),
       }),
     );
     expect(result.videos).toHaveLength(1);

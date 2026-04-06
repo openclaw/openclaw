@@ -21,6 +21,13 @@ const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   }),
 }));
 
+function createPinnedDispatcherCompatibilityError(): Error {
+  const cause = Object.assign(new Error("invalid onRequestStart method"), {
+    code: "UND_ERR_INVALID_ARG",
+  });
+  return Object.assign(new TypeError("fetch failed"), { cause });
+}
+
 function redirectResponse(location: string): Response {
   return new Response(null, {
     status: 302,
@@ -98,11 +105,17 @@ describe("fetchWithSsrFGuard hardening", () => {
     expectEnvProxy: boolean;
   }): Promise<void> {
     vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
     const lookupFn = createPublicLookup();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       if (params.expectEnvProxy) {
-        expect(getDispatcherClassName(requestInit.dispatcher)).toBe("EnvHttpProxyAgent");
+        expect(requestInit.dispatcher).toBeDefined();
       } else {
         expect(requestInit.dispatcher).toBeDefined();
         expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
@@ -118,6 +131,12 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    if (params.expectEnvProxy) {
+      expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+      expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
+        allowH2: false,
+      });
+    }
     await result.release();
   }
 
@@ -310,6 +329,25 @@ describe("fetchWithSsrFGuard hardening", () => {
     }
   });
 
+  it("fails closed when the runtime rejects the pinned dispatcher shape", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      if (requestInit.dispatcher) {
+        throw createPinnedDispatcherCompatibilityError();
+      }
+      return okResponse();
+    });
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+      }),
+    ).rejects.toThrow("fetch failed");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores dispatcher support markers on ambient global fetch", async () => {
     const runtimeFetch = vi.fn(async () => okResponse());
     const originalGlobalFetch = globalThis.fetch;
@@ -422,6 +460,7 @@ describe("fetchWithSsrFGuard hardening", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://proxy.example:7890",
+      allowH2: false,
       requestTls: {
         servername: "public.example",
       },

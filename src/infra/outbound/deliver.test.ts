@@ -1,6 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIMessageTestPlugin } from "../../../test/helpers/channels/imessage-test-plugin.js";
+import {
+  imessageOutboundForTest,
+  signalOutbound,
+  whatsappOutbound,
+} from "../../../test/helpers/infra/deliver-test-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
@@ -13,11 +18,6 @@ import type { PluginHookRegistration } from "../../plugins/types.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
-import {
-  imessageOutboundForTest,
-  signalOutbound,
-  whatsappOutbound,
-} from "./deliver.test-outbounds.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
@@ -567,7 +567,7 @@ describe("deliverOutboundPayloads", () => {
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
-  it("uses iMessage media maxBytes from agent fallback", async () => {
+  it("does not pass iMessage media maxBytes on plain text sends", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
     setActivePluginRegistry(
       createTestRegistry([
@@ -590,11 +590,7 @@ describe("deliverOutboundPayloads", () => {
       deps: { imessage: sendIMessage },
     });
 
-    expect(sendIMessage).toHaveBeenCalledWith(
-      "chat_id:42",
-      "hello",
-      expect.objectContaining({ maxBytes: 3 * 1024 * 1024 }),
-    );
+    expect(sendIMessage).toHaveBeenCalledWith("chat_id:42", "hello", { accountId: undefined });
   });
 
   it("normalizes payloads and drops empty entries", () => {

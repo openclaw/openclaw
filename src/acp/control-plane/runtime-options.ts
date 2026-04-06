@@ -1,6 +1,9 @@
 import { isAbsolute } from "node:path";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import { normalizeText } from "../normalize-text.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
+
+export { normalizeText } from "../normalize-text.js";
 
 const MAX_RUNTIME_MODE_LENGTH = 64;
 const MAX_MODEL_LENGTH = 200;
@@ -209,14 +212,6 @@ export function validateRuntimeOptionPatch(
   }
 
   return next;
-}
-
-export function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
 }
 
 export function normalizeRuntimeOptions(
