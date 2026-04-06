@@ -160,12 +160,13 @@ export async function handleSessionHistoryHttpRequest(
     typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
       ? cfg.gateway.webchat.chatHistoryMaxChars
       : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  const sanitizedMessages = sanitizeChatHistoryMessages(
-    entry?.sessionId
-      ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
-      : [],
-    effectiveMaxChars,
-  );
+  // Read the transcript once and derive both sanitized and raw views from the
+  // same snapshot, eliminating the theoretical race window where a concurrent
+  // write between two separate reads could cause seq/content divergence.
+  const rawSnapshot = entry?.sessionId
+    ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
+    : [];
+  const sanitizedMessages = sanitizeChatHistoryMessages(rawSnapshot, effectiveMaxChars);
   const history = paginateSessionMessages(sanitizedMessages, limit, cursor);
 
   if (!shouldStreamSse(req)) {
