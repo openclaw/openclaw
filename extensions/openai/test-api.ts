@@ -1,4 +1,5 @@
 export { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
+export { buildOpenAICodexCliBackend } from "./cli-backend.js";
 export {
   openaiCodexMediaUnderstandingProvider,
   openaiMediaUnderstandingProvider,

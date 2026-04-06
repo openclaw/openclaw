@@ -48,6 +48,7 @@ import {
   couldBeSilentTokenStart,
   HEARTBEAT_TOKEN,
   isSilentReplyPrefixText,
+  isSilentReplyTailFragmentText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../tokens.js";
@@ -627,6 +628,9 @@ export async function runAgentTurnWithFallback(params: {
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           return { skip: true };
         }
+        if (isSilentReplyTailFragmentText(text, SILENT_REPLY_TOKEN)) {
+          return { skip: true };
+        }
         if (
           isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
           isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
@@ -639,6 +643,14 @@ export async function runAgentTurnWithFallback(params: {
             return { text: undefined, skip: false };
           }
           return { skip: true };
+        }
+        // Pure-whitespace deltas (single space, newline) are valid streaming
+        // tokens — they preserve markdown spacing between words and bullet
+        // markers. sanitizeUserFacingText would .trim() them to "" and drop
+        // them entirely. They contain no patterns worth sanitizing, so pass
+        // them through as-is.
+        if (!text.trim()) {
+          return { text, skip: false };
         }
         const sanitized = sanitizeUserFacingText(text, {
           errorContext: Boolean(payload.isError),
@@ -785,6 +797,7 @@ export async function runAgentTurnWithFallback(params: {
                   timeoutMs: params.followupRun.run.timeoutMs,
                   runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  skillsSnapshot: params.followupRun.run.skillsSnapshot,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   cliSessionId,

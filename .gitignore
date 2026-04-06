@@ -23,6 +23,9 @@ ui/test-results/
 packages/dashboard-next/.next/
 packages/dashboard-next/out/
 
+# Private skills
+skills/skillstore-plugin-publisher/
+
 # Mise configuration files
 mise.toml
 

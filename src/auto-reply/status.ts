@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
+  isCliProvider,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
@@ -441,15 +442,28 @@ const formatCliPromptLoadLine = (status?: CliPromptLoadStatus): string | null =>
   if (!status) {
     return null;
   }
+  const usesChunks = (status.chunkCount ?? 0) > 1;
+  const progressValue =
+    status.verifiedChunkCount ??
+    (status.verifiedRead ? status.chunkCount : undefined) ??
+    (status.verifiedRead ? 1 : 0);
   const modeLabel =
     status.loaderMode === "disabled"
       ? "direct"
-      : status.loaderMode === "strict"
-        ? "file/strict"
-        : "file";
+      : usesChunks
+        ? status.loaderMode === "strict"
+          ? "chunks/strict"
+          : "chunks"
+        : status.loaderMode === "strict"
+          ? "file/strict"
+          : "file";
+  const progressLabel =
+    usesChunks && typeof status.chunkCount === "number"
+      ? ` (${Math.min(progressValue, status.chunkCount)}/${status.chunkCount})`
+      : "";
   const stateLabel = status.verifiedRead ? "verified" : "unverified";
   const fallbackLabel = status.fallbackReason ? ` · fallback=${status.fallbackReason}` : "";
-  return `📄 CLI prompt: ${modeLabel} · ${stateLabel}${fallbackLabel}`;
+  return `📄 CLI prompt: ${modeLabel}${progressLabel} · ${stateLabel}${fallbackLabel}`;
 };
 
 export function buildStatusMessage(args: StatusArgs): string {
@@ -828,6 +842,23 @@ export function buildStatusMessage(args: StatusArgs): string {
   })();
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+  const runtimeModelPresent = Boolean(
+    runtimeModelRaw || runtimeProviderRaw || fallbackState.active,
+  );
+  const lastRuntimeAuthLabel =
+    activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue
+      ? ` · 🔑 ${activeAuthLabelValue}`
+      : "";
+  const lastRuntimeReason =
+    fallbackState.active && fallbackState.reason
+      ? ` (fallback: ${fallbackState.reason})`
+      : fallbackState.active
+        ? " (fallback)"
+        : "";
+  const lastRuntimeLine =
+    runtimeModelPresent && (activeProvider !== selectedProvider || activeModel !== selectedModel)
+      ? `↪️ Last runtime: ${activeModelLabel}${lastRuntimeAuthLabel}${lastRuntimeReason}`
+      : null;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
     ? `↪️ Fallback: ${activeModelLabel}${
@@ -843,13 +874,18 @@ export function buildStatusMessage(args: StatusArgs): string {
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
-  const cliPromptLoadLine = formatCliPromptLoadLine(args.sessionEntry?.cliPromptLoad);
+  const cliPromptLoadLine =
+    args.sessionEntry?.cliPromptLoad &&
+    (isCliProvider(selectedProvider, args.config) || isCliProvider(activeProvider, args.config))
+      ? formatCliPromptLoadLine(args.sessionEntry?.cliPromptLoad)
+      : null;
 
   return [
     versionLine,
     args.timeLine,
     modelLine,
-    fallbackLine,
+    lastRuntimeLine,
+    lastRuntimeLine ? null : fallbackLine,
     usageCostLine,
     cacheLine,
     `📚 ${contextLine}`,

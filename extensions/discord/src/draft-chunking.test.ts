@@ -16,10 +16,14 @@ describe("resolveDiscordDraftStreamingChunking", () => {
       channels: {
         discord: {
           textChunkLimit: 500,
-          draftChunk: {
-            minChars: 900,
-            maxChars: 1200,
-            breakPreference: "sentence",
+          streaming: {
+            preview: {
+              chunk: {
+                minChars: 900,
+                maxChars: 1200,
+                breakPreference: "sentence",
+              },
+            },
           },
         },
       },
@@ -36,17 +40,25 @@ describe("resolveDiscordDraftStreamingChunking", () => {
     const cfg = {
       channels: {
         discord: {
-          draftChunk: {
-            minChars: 200,
-            maxChars: 800,
-            breakPreference: "paragraph",
+          streaming: {
+            preview: {
+              chunk: {
+                minChars: 200,
+                maxChars: 800,
+                breakPreference: "paragraph",
+              },
+            },
           },
           accounts: {
             ops: {
-              draftChunk: {
-                minChars: 25,
-                maxChars: 75,
-                breakPreference: "newline",
+              streaming: {
+                preview: {
+                  chunk: {
+                    minChars: 25,
+                    maxChars: 75,
+                    breakPreference: "newline",
+                  },
+                },
               },
             },
           },

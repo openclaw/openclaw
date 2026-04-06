@@ -96,10 +96,30 @@ describe("plugin-sdk exports", () => {
   it("keeps the root runtime surface intentionally small", async () => {
     const runtimeExports = await readIndexRuntimeExports();
     expect([...runtimeExports].toSorted()).toEqual([
+      "SessionBindingError",
+      "clamp",
       "delegateCompactionToRuntime",
+      "detectMime",
+      "emitDiagnosticEvent",
       "emptyPluginConfigSchema",
+      "escapeRegExp",
+      "extensionForMime",
+      "extractOriginalFilename",
+      "getFileExtension",
+      "getSessionBindingService",
+      "isDiagnosticsEnabled",
+      "isSessionBindingError",
+      "listSkillCommandsForAgents",
+      "missingTargetError",
+      "normalizeE164",
       "onDiagnosticEvent",
       "registerContextEngine",
+      "registerLogTransport",
+      "registerSessionBindingAdapter",
+      "safeParseJson",
+      "sleep",
+      "stripAnsi",
+      "unregisterSessionBindingAdapter",
     ]);
   });
 

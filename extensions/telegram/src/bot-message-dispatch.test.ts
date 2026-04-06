@@ -405,7 +405,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({
       context: createContext(),
-      telegramCfg: { blockStreaming: true },
+      telegramCfg: { streaming: { block: { enabled: true } } },
     });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
@@ -655,7 +655,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it.each([
     { label: "default account config", telegramCfg: {} },
-    { label: "account blockStreaming override", telegramCfg: { blockStreaming: true } },
+    {
+      label: "account blockStreaming override",
+      telegramCfg: { streaming: { block: { enabled: true } } },
+    },
   ])("disables block streaming when streamMode is off ($label)", async ({ telegramCfg }) => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });

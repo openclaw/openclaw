@@ -384,7 +384,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           dmPolicy: "allowlist",
           allowFrom: ["123"],
           groupPolicy: "allowlist",
-          streaming: "partial",
+          streaming: { mode: "partial" },
           accounts: {
             alerts: {
               enabled: true,

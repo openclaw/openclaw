@@ -1,5 +1,8 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import {
+  convertMarkdownTables,
+  stripInlineDirectiveTagsForDelivery,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -32,6 +35,10 @@ const FEISHU_CARD_TEMPLATES = new Set([
   "violet",
   "lime",
 ]);
+
+function sanitizeFeishuTextForDelivery(text: string): string {
+  return stripInlineDirectiveTagsForDelivery(text).text;
+}
 
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
@@ -577,7 +584,7 @@ export async function sendMessageFeishu(
   });
 
   // Build message content (with @mention support)
-  let rawText = text ?? "";
+  let rawText = sanitizeFeishuTextForDelivery(text ?? "");
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
@@ -664,7 +671,7 @@ export async function editMessageFeishu(params: {
 
   const renderMode = account.config?.renderMode ?? "auto";
   if (renderMode === "card" || (renderMode === "auto" && shouldUseFeishuMarkdownCard(text!))) {
-    const normalizedCardText = normalizeMentionTagsForCard(text!);
+    const normalizedCardText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text!));
     const response = await client.im.message.patch({
       path: { message_id: messageId },
       data: { content: JSON.stringify(buildMarkdownCard(normalizedCardText)) },
@@ -681,7 +688,7 @@ export async function editMessageFeishu(params: {
     cfg,
     channel: "feishu",
   });
-  const messageText = convertMarkdownTables(text!, tableMode);
+  const messageText = convertMarkdownTables(sanitizeFeishuTextForDelivery(text!), tableMode);
   const payload = buildFeishuPostMessagePayload({ messageText });
   const response = await client.im.message.patch({
     path: { message_id: messageId },
@@ -730,7 +737,7 @@ export function shouldUseFeishuMarkdownCard(text: string): boolean {
  * Uses schema 2.0 format for proper markdown rendering.
  */
 export function buildMarkdownCard(text: string): Record<string, unknown> {
-  const normalizedText = normalizeMentionTagsForCard(text);
+  const normalizedText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text));
   return {
     schema: "2.0",
     config: {
@@ -777,7 +784,7 @@ export function buildStructuredCard(
     thinkingExpanded?: boolean;
   },
 ): Record<string, unknown> {
-  const normalizedText = normalizeMentionTagsForCard(text);
+  const normalizedText = normalizeMentionTagsForCard(sanitizeFeishuTextForDelivery(text));
   const elements: Record<string, unknown>[] = [];
   const thinkingText = options?.thinkingText?.trim();
   if (thinkingText) {

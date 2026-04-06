@@ -1,5 +1,6 @@
 import { mkdtempSync } from "node:fs";
-import { mkdtemp, rm, type RmOptions } from "node:fs/promises";
+import type { RmOptions } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";

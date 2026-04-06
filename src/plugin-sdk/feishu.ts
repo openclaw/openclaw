@@ -68,6 +68,17 @@ export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+export { getLiveSessionTranscriptEntries } from "../agents/pi-embedded-runner/live-session-registry.js";
+export {
+  appendAssistantMessageToSessionTranscript,
+  loadSessionStore,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../config/sessions.js";
+export type { SessionEntry, SessionTranscriptMessageMeta } from "../config/sessions.js";
+export { stripEnvelopeFromMessage } from "../gateway/chat-sanitize.js";
+export { resolveUserPath } from "../utils.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { AnyAgentTool, OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";

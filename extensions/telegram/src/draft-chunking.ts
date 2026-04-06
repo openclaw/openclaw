@@ -7,6 +7,11 @@ import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 
 const DEFAULT_TELEGRAM_DRAFT_STREAM_MIN = 200;
 const DEFAULT_TELEGRAM_DRAFT_STREAM_MAX = 800;
+type DraftChunkConfig = {
+  minChars?: number;
+  maxChars?: number;
+  breakPreference?: "paragraph" | "newline" | "sentence";
+};
 
 export function resolveTelegramDraftStreamingChunking(
   cfg: OpenClawConfig | undefined,
@@ -21,11 +26,13 @@ export function resolveTelegramDraftStreamingChunking(
   });
   const normalizedAccountId = normalizeAccountId(accountId);
   const accountCfg = resolveAccountEntry(cfg?.channels?.telegram?.accounts, normalizedAccountId);
-  const draftCfg =
-    resolveChannelStreamingPreviewChunk(accountCfg) ??
+  const accountLegacyDraftChunk = (accountCfg as { draftChunk?: unknown } | undefined)?.draftChunk;
+  const channelLegacyDraftChunk = (cfg?.channels?.telegram as { draftChunk?: unknown } | undefined)
+    ?.draftChunk;
+  const draftCfg = (resolveChannelStreamingPreviewChunk(accountCfg) ??
     resolveChannelStreamingPreviewChunk(cfg?.channels?.telegram) ??
-    accountCfg?.draftChunk ??
-    cfg?.channels?.telegram?.draftChunk;
+    accountLegacyDraftChunk ??
+    channelLegacyDraftChunk) as DraftChunkConfig | undefined;
 
   const maxRequested = Math.max(
     1,

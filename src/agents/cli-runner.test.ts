@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -93,7 +94,7 @@ type MockRunExit = {
   exitCode: number | null;
   exitSignal: NodeJS.Signals | number | null;
   durationMs: number;
-  stdout: string;
+  stdout: string | (() => string);
   stderr: string;
   timedOut: boolean;
   noOutputTimedOut: boolean;
@@ -117,51 +118,94 @@ function resolveClaudePromptFilePath(sessionFile: string): string {
   return path.join(path.dirname(sessionFile), `${base}.claude-system-prompt.txt`);
 }
 
-function createClaudeStreamSuccess(sessionFile: string, text = "ok", sessionId = "sid-1"): string {
-  const promptFilePath = resolveClaudePromptFilePath(sessionFile);
-  const toolUseId = "toolu_test_read";
-  return [
-    JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
-    JSON.stringify({
-      type: "assistant",
-      session_id: sessionId,
-      message: {
-        role: "assistant",
-        content: [
-          { type: "tool_use", id: toolUseId, name: "Read", input: { file_path: promptFilePath } },
-        ],
-      },
-    }),
-    JSON.stringify({
-      type: "user",
-      session_id: sessionId,
-      message: {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: toolUseId,
-            startLine: 1,
-            numLines: 2,
-            totalLines: 2,
-            content: "prompt file",
+function listClaudePromptChunkPaths(sessionFile: string): string[] {
+  const resolvedPromptFile = resolveClaudePromptFilePath(sessionFile);
+  const dir = path.dirname(resolvedPromptFile);
+  const base = path.basename(sessionFile, path.extname(sessionFile));
+  const entries = fsSync.existsSync(dir) ? fsSync.readdirSync(dir) : [];
+  const promptFiles = entries
+    .filter(
+      (entry) =>
+        entry === `${base}.claude-system-prompt.txt` ||
+        /^.+\.part\d+\.claude-system-prompt\.txt$/.test(entry),
+    )
+    .filter((entry) => entry.startsWith(base))
+    .map((entry) => path.join(dir, entry))
+    .toSorted((a, b) => {
+      const aMatch = a.match(/\.part(\d+)\.claude-system-prompt\.txt$/);
+      const bMatch = b.match(/\.part(\d+)\.claude-system-prompt\.txt$/);
+      const aIndex = aMatch ? Number.parseInt(aMatch[1] ?? "0", 10) - 1 : 0;
+      const bIndex = bMatch ? Number.parseInt(bMatch[1] ?? "0", 10) - 1 : 0;
+      return aIndex - bIndex;
+    });
+  return promptFiles.length > 0 ? promptFiles : [resolvedPromptFile];
+}
+
+function createClaudeStreamSuccess(
+  sessionFile: string,
+  text = "ok",
+  sessionId = "sid-1",
+): () => string {
+  return () => {
+    const records = [JSON.stringify({ type: "system", subtype: "init", session_id: sessionId })];
+    const promptPaths = listClaudePromptChunkPaths(sessionFile);
+    for (const [index, promptPath] of promptPaths.entries()) {
+      const toolUseId = `toolu_test_read_${index + 1}`;
+      records.push(
+        JSON.stringify({
+          type: "assistant",
+          session_id: sessionId,
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: toolUseId,
+                name: "Read",
+                input: { file_path: promptPath },
+              },
+            ],
           },
-        ],
-      },
-    }),
-    JSON.stringify({
-      type: "assistant",
-      session_id: sessionId,
-      message: { role: "assistant", content: [{ type: "text", text }] },
-    }),
-    JSON.stringify({
-      type: "result",
-      subtype: "success",
-      is_error: false,
-      result: text,
-      session_id: sessionId,
-    }),
-  ].join("\n");
+        }),
+      );
+      records.push(
+        JSON.stringify({
+          type: "user",
+          session_id: sessionId,
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: toolUseId,
+                startLine: 1,
+                numLines: 2,
+                totalLines: 2,
+                content: `prompt file ${index + 1}`,
+              },
+            ],
+          },
+        }),
+      );
+    }
+    records.push(
+      JSON.stringify({
+        type: "assistant",
+        session_id: sessionId,
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      }),
+    );
+    records.push(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: text,
+        session_id: sessionId,
+      }),
+    );
+    return records.join("\n");
+  };
 }
 
 describe("runCliAgent with process supervisor", () => {
@@ -181,10 +225,17 @@ describe("runCliAgent with process supervisor", () => {
         spawn: async (...args: unknown[]) => {
           const input = args[0] as { onStdout?: (chunk: string) => void } | undefined;
           const managedRun = (await supervisorSpawnMock(...args)) as
-            | { __stdoutForStreaming?: string; wait?: () => Promise<{ stdout?: string }> }
+            | {
+                __stdoutForStreaming?: string | (() => string);
+                wait?: () => Promise<{ stdout?: string }>;
+              }
             | undefined;
-          if (input?.onStdout && typeof managedRun?.__stdoutForStreaming === "string") {
-            input.onStdout(managedRun.__stdoutForStreaming);
+          const streamingOutput =
+            typeof managedRun?.__stdoutForStreaming === "function"
+              ? managedRun.__stdoutForStreaming()
+              : managedRun?.__stdoutForStreaming;
+          if (input?.onStdout && typeof streamingOutput === "string") {
+            input.onStdout(streamingOutput);
           }
           if (input?.onStdout && managedRun?.wait) {
             const originalWait = managedRun.wait.bind(managedRun);
@@ -1315,6 +1366,7 @@ describe("runCliAgent with process supervisor", () => {
     const promptFile = resolveClaudePromptFilePath("/tmp/session.jsonl");
     expect(systemPrompt).toContain(promptFile);
     const fileContents = await fs.readFile(promptFile, "utf-8");
+    expect(fileContents).toContain("keep a short plan updated with `update_plan`.");
     expect(fileContents).toContain("<available_skills>");
     expect(fileContents).toContain("demo-skill");
   });
@@ -1362,6 +1414,7 @@ describe("runCliAgent with process supervisor", () => {
     const promptFile = resolveClaudePromptFilePath("/tmp/session.jsonl");
     expect(input.argv?.[systemPromptIndex + 1]).toContain(promptFile);
     const fileContents = await fs.readFile(promptFile, "utf-8");
+    expect(fileContents).toContain("keep a short plan updated with `update_plan`.");
     expect(fileContents).toContain("snapshot-skill");
   });
 

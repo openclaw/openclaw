@@ -67,16 +67,9 @@ function readEnumParam<T extends string>(
   throw new Error(`${key} must be one of: ${allowed.join(", ")}.`);
 }
 
-function respondError(
-  respond: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1] extends (
-    ctx: infer T,
-  ) => unknown
-    ? T["respond"]
-    : never,
-  error: unknown,
-) {
+function respondError(respond: GatewayRespond, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  respond(false, undefined, { message });
+  respond(false, undefined, { code: "memory_wiki_error", message });
 }
 
 async function syncImportedSourcesIfNeeded(
@@ -155,7 +148,7 @@ export function registerMemoryWikiGatewayMethods(params: {
           true,
           await ingestMemoryWikiSource({
             config,
-            inputPath,
+            inputPath: inputPath!,
             ...(title ? { title } : {}),
           }),
         );
@@ -229,7 +222,7 @@ export function registerMemoryWikiGatewayMethods(params: {
           await searchMemoryWiki({
             config,
             appConfig,
-            query,
+            query: query!,
             maxResults,
             searchBackend,
             searchCorpus,
@@ -276,7 +269,7 @@ export function registerMemoryWikiGatewayMethods(params: {
           await getMemoryWikiPage({
             config,
             appConfig,
-            lookup,
+            lookup: lookup!,
             fromLine,
             lineCount,
             searchBackend,
@@ -307,7 +300,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const query = readStringParam(requestParams, "query", { required: true });
-        respond(true, await runObsidianSearch({ config, query }));
+        respond(true, await runObsidianSearch({ config, query: query! }));
       } catch (error) {
         respondError(respond, error);
       }
@@ -320,7 +313,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const vaultPath = readStringParam(requestParams, "path", { required: true });
-        respond(true, await runObsidianOpen({ config, vaultPath }));
+        respond(true, await runObsidianOpen({ config, vaultPath: vaultPath! }));
       } catch (error) {
         respondError(respond, error);
       }
@@ -333,7 +326,7 @@ export function registerMemoryWikiGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const id = readStringParam(requestParams, "id", { required: true });
-        respond(true, await runObsidianCommand({ config, id }));
+        respond(true, await runObsidianCommand({ config, id: id! }));
       } catch (error) {
         respondError(respond, error);
       }
@@ -353,3 +346,15 @@ export function registerMemoryWikiGatewayMethods(params: {
     { scope: WRITE_SCOPE },
   );
 }
+type GatewayRespond = (
+  ok: boolean,
+  payload?: unknown,
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+    retryable?: boolean;
+    retryAfterMs?: number;
+  },
+  meta?: Record<string, unknown>,
+) => void;

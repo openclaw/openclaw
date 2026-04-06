@@ -7,6 +7,11 @@ import { DISCORD_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 
 const DEFAULT_DISCORD_DRAFT_STREAM_MIN = 200;
 const DEFAULT_DISCORD_DRAFT_STREAM_MAX = 800;
+type DraftChunkConfig = {
+  minChars?: number;
+  maxChars?: number;
+  breakPreference?: "paragraph" | "newline" | "sentence";
+};
 
 export function resolveDiscordDraftStreamingChunking(
   cfg: OpenClawConfig | undefined,
@@ -21,11 +26,13 @@ export function resolveDiscordDraftStreamingChunking(
   });
   const normalizedAccountId = normalizeAccountId(accountId);
   const accountCfg = resolveAccountEntry(cfg?.channels?.discord?.accounts, normalizedAccountId);
-  const draftCfg =
-    resolveChannelStreamingPreviewChunk(accountCfg) ??
+  const accountLegacyDraftChunk = (accountCfg as { draftChunk?: unknown } | undefined)?.draftChunk;
+  const channelLegacyDraftChunk = (cfg?.channels?.discord as { draftChunk?: unknown } | undefined)
+    ?.draftChunk;
+  const draftCfg = (resolveChannelStreamingPreviewChunk(accountCfg) ??
     resolveChannelStreamingPreviewChunk(cfg?.channels?.discord) ??
-    accountCfg?.draftChunk ??
-    cfg?.channels?.discord?.draftChunk;
+    accountLegacyDraftChunk ??
+    channelLegacyDraftChunk) as DraftChunkConfig | undefined;
 
   const maxRequested = Math.max(
     1,

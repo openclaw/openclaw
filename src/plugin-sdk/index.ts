@@ -85,7 +85,57 @@ export type { HookEntry } from "../hooks/types.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
-export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
+export { clamp, escapeRegExp, normalizeE164, safeParseJson, sleep } from "../utils.js";
+export { stripAnsi } from "../terminal/ansi.js";
+export { missingTargetError } from "../infra/outbound/target-errors.js";
+export {
+  getSessionBindingService,
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  SessionBindingError,
+  isSessionBindingError,
+} from "../infra/outbound/session-binding-service.js";
+export type {
+  BindingTargetKind,
+  BindingStatus,
+  ConversationRef,
+  SessionBindingAdapter,
+  SessionBindingAdapterCapabilities,
+  SessionBindingBindInput,
+  SessionBindingCapabilities,
+  SessionBindingErrorCode,
+  SessionBindingPlacement,
+  SessionBindingRecord,
+  SessionBindingService,
+  SessionBindingUnbindInput,
+} from "../infra/outbound/session-binding-service.js";
+export { registerLogTransport } from "../logging/logger.js";
+export type { LogTransport, LogTransportRecord } from "../logging/logger.js";
+export {
+  emitDiagnosticEvent,
+  isDiagnosticsEnabled,
+  onDiagnosticEvent,
+} from "../infra/diagnostic-events.js";
+export type {
+  DiagnosticEventPayload,
+  DiagnosticHeartbeatEvent,
+  DiagnosticLaneDequeueEvent,
+  DiagnosticLaneEnqueueEvent,
+  DiagnosticMessageProcessedEvent,
+  DiagnosticMessageQueuedEvent,
+  DiagnosticRunAttemptEvent,
+  DiagnosticSessionState,
+  DiagnosticSessionStateEvent,
+  DiagnosticSessionStuckEvent,
+  DiagnosticUsageEvent,
+  DiagnosticWebhookErrorEvent,
+  DiagnosticWebhookProcessedEvent,
+  DiagnosticWebhookReceivedEvent,
+} from "../infra/diagnostic-events.js";
+export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
+export { extractOriginalFilename } from "../media/store.js";
+export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
+export type { SkillCommandSpec } from "../agents/skills.js";
 export type {
   AssembleResult,
   BootstrapResult,
@@ -106,4 +156,3 @@ export type {
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
-export { onDiagnosticEvent } from "../infra/diagnostic-events.js";

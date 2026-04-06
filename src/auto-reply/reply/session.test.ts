@@ -2277,8 +2277,15 @@ describe("persistSessionUsageUpdate", () => {
       },
       cliPromptLoad: {
         sessionPromptFile: "/tmp/session.claude-system-prompt.txt",
+        currentSessionPromptFile: "/tmp/session.part002.claude-system-prompt.txt",
+        sessionPromptFiles: [
+          "/tmp/session.claude-system-prompt.txt",
+          "/tmp/session.part002.claude-system-prompt.txt",
+        ],
         loaderMode: "normal",
         verifiedRead: true,
+        chunkCount: 2,
+        verifiedChunkCount: 2,
       },
     });
 
@@ -2297,8 +2304,15 @@ describe("persistSessionUsageUpdate", () => {
     });
     expect(stored[sessionKey].cliPromptLoad).toEqual({
       sessionPromptFile: "/tmp/session.claude-system-prompt.txt",
+      currentSessionPromptFile: "/tmp/session.part002.claude-system-prompt.txt",
+      sessionPromptFiles: [
+        "/tmp/session.claude-system-prompt.txt",
+        "/tmp/session.part002.claude-system-prompt.txt",
+      ],
       loaderMode: "normal",
       verifiedRead: true,
+      chunkCount: 2,
+      verifiedChunkCount: 2,
     });
   });
 });

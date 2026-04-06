@@ -79,6 +79,7 @@ describe("buildStatusMessage", () => {
 
     expect(normalized).toContain("OpenClaw");
     expect(normalized).toContain("Model: anthropic/pi:opus");
+    expect(normalized).not.toContain("Last runtime:");
     expect(normalized).toContain("api-key");
     expect(normalized).toContain("Tokens: 1.2k in / 800 out");
     expect(normalized).toContain("Cost: $0.0020");
@@ -103,6 +104,12 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         cliPromptLoad: {
           sessionPromptFile: "/tmp/abc.claude-system-prompt.txt",
+          currentSessionPromptFile: "/tmp/abc.part002.claude-system-prompt.txt",
+          sessionPromptFiles: [
+            "/tmp/abc.claude-system-prompt.txt",
+            "/tmp/abc.part002.claude-system-prompt.txt",
+            "/tmp/abc.part003.claude-system-prompt.txt",
+          ],
           loaderMode: "strict",
           verifiedRead: false,
           fallbackReason: "verification_retry",
@@ -115,6 +122,74 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("CLI prompt: file/strict");
     expect(normalized).toContain("fallback=verification_retry");
+  });
+
+  it("shows chunk-aware cli prompt loader status when chunk metadata is present", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "claude-cli/sonnet",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        cliPromptLoad: {
+          sessionPromptFile: "/tmp/abc.claude-system-prompt.txt",
+          currentSessionPromptFile: "/tmp/abc.part002.claude-system-prompt.txt",
+          sessionPromptFiles: [
+            "/tmp/abc.claude-system-prompt.txt",
+            "/tmp/abc.part002.claude-system-prompt.txt",
+            "/tmp/abc.part003.claude-system-prompt.txt",
+          ],
+          loaderMode: "strict",
+          verifiedRead: false,
+          chunkCount: 3,
+          verifiedChunkCount: 1,
+          fallbackReason: "verification_retry",
+        },
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      now: 10 * 60_000,
+    });
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("CLI prompt: chunks/strict (1/3)");
+    expect(normalized).toContain("fallback=verification_retry");
+  });
+
+  it("distinguishes configured model from last runtime model", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "minimax/minimax",
+      },
+      sessionEntry: {
+        sessionId: "runtime-diff",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "sonnet",
+        cliPromptLoad: {
+          sessionPromptFile: "/tmp/runtime-diff.claude-system-prompt.txt",
+          currentSessionPromptFile: "/tmp/runtime-diff.part003.claude-system-prompt.txt",
+          sessionPromptFiles: [
+            "/tmp/runtime-diff.claude-system-prompt.txt",
+            "/tmp/runtime-diff.part002.claude-system-prompt.txt",
+            "/tmp/runtime-diff.part003.claude-system-prompt.txt",
+          ],
+          loaderMode: "normal",
+          verifiedRead: true,
+          chunkCount: 3,
+          verifiedChunkCount: 3,
+        },
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      now: 10 * 60_000,
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: minimax/minimax");
+    expect(normalized).toContain("Last runtime: claude-cli/sonnet");
+    expect(normalized).toContain("CLI prompt: chunks (3/3)");
   });
 
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {

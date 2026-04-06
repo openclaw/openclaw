@@ -14,7 +14,9 @@ describe("filterSupportedLanguageHints", () => {
   });
 
   it("drops invalid languages and falls back to text", async () => {
-    await expect(filterSupportedLanguageHints(["not-a-real-language"])).resolves.toEqual(["text"]);
+    await expect(
+      filterSupportedLanguageHints(["not-a-real-language"] as Iterable<string>),
+    ).resolves.toEqual(["text"]);
   });
 
   it("keeps valid languages when invalid hints are mixed in", async () => {
@@ -43,7 +45,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
           overflow: "wrap",
           unsafeCSS: "",
         },
-        langs: ["not-a-real-language"],
+        langs: ["not-a-real-language" as unknown as NonNullable<FileDiffMetadata["lang"]>],
         fileDiff: {
           name: "foo.txt",
           lang: "not-a-real-language" as never,
@@ -75,7 +77,10 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
           overflow: "scroll",
           unsafeCSS: "",
         },
-        langs: ["typescript", "not-a-real-language"],
+        langs: [
+          "typescript",
+          "not-a-real-language" as unknown as NonNullable<FileDiffMetadata["lang"]>,
+        ],
         oldFile: {
           name: "before.unknown",
           contents: "before",
@@ -116,7 +121,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
           overflow: "wrap",
           unsafeCSS: "",
         },
-        langs: ["   "],
+        langs: ["   " as unknown as NonNullable<FileDiffMetadata["lang"]>],
         oldFile: {
           name: "before.unknown",
           contents: "before",

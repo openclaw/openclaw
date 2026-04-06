@@ -3,21 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
-import { closeAllMemorySearchManagers } from "./index.js";
+import { closeAllMemorySearchManagers as closeAllMemorySearchManagersImport } from "./index.js";
+import "./test-runtime-mocks.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
-import { createMemoryManagerOrThrow } from "./test-manager.js";
+
+type MemoryIndexManager = import("./index.js").MemoryIndexManager;
+type MemoryIndexModule = typeof import("./index.js");
 
 const embedBatch = vi.fn(async (_input: string[]): Promise<number[][]> => []);
 const embedQuery = vi.fn(async (_input: string): Promise<number[]> => [0.2, 0.2, 0.2]);
-
-vi.mock("./embeddings.js", () => ({
-  createEmbeddingProvider: async (_options: unknown) =>
-    createOpenAIEmbeddingProviderMock({
-      embedQuery: embedQuery as unknown as (input: string) => Promise<number[]>,
-      embedBatch: embedBatch as unknown as (input: string[]) => Promise<number[][]>,
-    }),
-}));
+let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
 describe("memory search async sync", () => {
   let workspaceDir: string;
@@ -43,7 +39,16 @@ describe("memory search async sync", () => {
     }) as OpenClawConfig;
 
   beforeEach(async () => {
-    await closeAllMemorySearchManagers();
+    vi.resetModules();
+    vi.doMock("./embeddings.js", () => ({
+      createEmbeddingProvider: async (_options: unknown) =>
+        createOpenAIEmbeddingProviderMock({
+          embedQuery: embedQuery as unknown as (input: string) => Promise<number[]>,
+          embedBatch: embedBatch as unknown as (input: string[]) => Promise<number[][]>,
+        }),
+    }));
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+    await closeAllMemorySearchManagersImport();
     embedBatch.mockClear();
     embedBatch.mockImplementation(async (input: string[]) => input.map(() => [0.2, 0.2, 0.2]));
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-async-"));
@@ -61,6 +66,17 @@ describe("memory search async sync", () => {
     await closeAllMemorySearchManagers();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
+
+  async function createMemoryManagerOrThrow(
+    cfg: OpenClawConfig,
+    agentId = "main",
+  ): Promise<MemoryIndexManager> {
+    const result = await getMemorySearchManager({ cfg, agentId });
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    return result.manager as unknown as MemoryIndexManager;
+  }
 
   it("does not await sync when searching", async () => {
     const cfg = buildConfig();
