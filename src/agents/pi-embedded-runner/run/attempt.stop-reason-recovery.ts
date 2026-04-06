@@ -64,6 +64,16 @@ export function isAnthropicRefusalStopReasonMessage(message: unknown): boolean {
   return stopReason === "refusal" || stopReason === "sensitive";
 }
 
+export function shouldRollbackAnthropicRefusedTurn(params: {
+  modelApi?: string;
+  errorMessage?: unknown;
+}): boolean {
+  return (
+    params.modelApi === "anthropic-messages" &&
+    isAnthropicRefusalStopReasonMessage(params.errorMessage)
+  );
+}
+
 function rewindRefusedTurnLeaf(
   sessionManager: RefusedTurnSessionManager,
   activeSession: RefusedTurnActiveSession,
@@ -84,6 +94,7 @@ function rewindRefusedTurnLeaf(
 export function rollbackAnthropicRefusedTurn(params: {
   activeSession: RefusedTurnActiveSession;
   sessionManager?: RefusedTurnSessionManager;
+  modelApi?: string;
 }): boolean {
   const sessionManager = params.sessionManager;
   if (!sessionManager?.getLeafEntry) {
@@ -94,7 +105,10 @@ export function rollbackAnthropicRefusedTurn(params: {
   if (
     assistantLeaf?.type !== "message" ||
     assistantLeaf.message?.role !== "assistant" ||
-    !isAnthropicRefusalStopReasonMessage(assistantLeaf.message?.errorMessage)
+    !shouldRollbackAnthropicRefusedTurn({
+      modelApi: params.modelApi,
+      errorMessage: assistantLeaf.message?.errorMessage,
+    })
   ) {
     return false;
   }

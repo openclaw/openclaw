@@ -167,8 +167,8 @@ import {
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
 import {
-  isAnthropicRefusalStopReasonMessage,
   rollbackAnthropicRefusedTurn,
+  shouldRollbackAnthropicRefusedTurn,
   wrapStreamFnHandleSensitiveStopReason,
 } from "./attempt.stop-reason-recovery.js";
 import {
@@ -1859,15 +1859,17 @@ export async function runEmbeddedAttempt(
           .find(
             (message): message is AssistantMessage =>
               message.role === "assistant" &&
-              isAnthropicRefusalStopReasonMessage(
-                (message as { errorMessage?: unknown }).errorMessage,
-              ),
+              shouldRollbackAnthropicRefusedTurn({
+                modelApi: params.model.api,
+                errorMessage: (message as { errorMessage?: unknown }).errorMessage,
+              }),
           );
         if (
           refusalAssistant &&
           rollbackAnthropicRefusedTurn({
             activeSession,
             sessionManager,
+            modelApi: params.model.api,
           })
         ) {
           preservedRefusalAssistant = refusalAssistant;

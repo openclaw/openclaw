@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractUnhandledStopReason,
   rollbackAnthropicRefusedTurn,
+  shouldRollbackAnthropicRefusedTurn,
   wrapStreamFnHandleSensitiveStopReason,
 } from "./attempt.stop-reason-recovery.js";
 
@@ -89,6 +90,18 @@ describe("extractUnhandledStopReason", () => {
   });
 });
 
+describe("shouldRollbackAnthropicRefusedTurn", () => {
+  it("requires an anthropic-messages run", () => {
+    expect(
+      shouldRollbackAnthropicRefusedTurn({
+        modelApi: "openai-responses",
+        errorMessage:
+          "The model stopped because the provider returned an unhandled stop reason: refusal. Please rephrase and try again.",
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("rollbackAnthropicRefusedTurn", () => {
   it("rewinds the refused assistant turn and the triggering user turn", () => {
     const activeSession = {
@@ -141,9 +154,49 @@ describe("rollbackAnthropicRefusedTurn", () => {
     const changed = rollbackAnthropicRefusedTurn({
       activeSession,
       sessionManager,
+      modelApi: "anthropic-messages",
     });
 
     expect(changed).toBe(true);
     expect(activeSession.agent.state.messages).toEqual([]);
+  });
+
+  it("does not rewind non-anthropic refusal-shaped errors", () => {
+    const activeSession = {
+      agent: {
+        state: {
+          messages: ["unchanged"] as unknown[],
+        },
+      },
+    };
+    const sessionManager = {
+      getLeafEntry: () => ({
+        type: "message",
+        parentId: "user-1",
+        message: {
+          role: "assistant",
+          errorMessage:
+            "The model stopped because the provider returned an unhandled stop reason: refusal. Please rephrase and try again.",
+        },
+      }),
+      branch: () => {
+        throw new Error("branch should not be called");
+      },
+      resetLeaf: () => {
+        throw new Error("resetLeaf should not be called");
+      },
+      buildSessionContext: () => ({
+        messages: [],
+      }),
+    };
+
+    const changed = rollbackAnthropicRefusedTurn({
+      activeSession,
+      sessionManager,
+      modelApi: "openai-responses",
+    });
+
+    expect(changed).toBe(false);
+    expect(activeSession.agent.state.messages).toEqual(["unchanged"]);
   });
 });
