@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -105,7 +106,11 @@ function assertGatewayConfigMutationAllowed(params: {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
   const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
-    (path) => getValueAtPath(params.currentConfig, path) !== getValueAtPath(nextConfig, path),
+    (path) =>
+      !isDeepStrictEqual(
+        getValueAtPath(params.currentConfig, path),
+        getValueAtPath(nextConfig, path),
+      ),
   );
   if (changedProtectedPaths.length === 0) {
     return;
