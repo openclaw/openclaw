@@ -67,7 +67,7 @@ export async function writeRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const filePath = resolveRestartSentinelPath(env);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const data: RestartSentinel = { version: 1, payload };
   await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
   return filePath;

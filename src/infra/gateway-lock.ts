@@ -264,7 +264,7 @@ export async function acquireGatewayLock(
   const sleep =
     opts.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
   const { lockPath, configPath } = resolveGatewayLockPath(env, opts.lockDir);
-  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  await fs.mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
 
   const startedAt = now();
   let lastPayload: LockPayload | null = null;
