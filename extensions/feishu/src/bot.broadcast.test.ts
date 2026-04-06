@@ -91,6 +91,7 @@ describe("broadcast dispatch", () => {
       },
       session: {
         resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
+        readSessionUpdatedAt: vi.fn(() => undefined),
       },
       reply: {
         resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,

@@ -44,6 +44,60 @@ type FeishuMessageReactionCreateResponse = Awaited<
   ReturnType<ReturnType<typeof createFeishuClient>["im"]["messageReaction"]["create"]>
 >;
 
+type FeishuReactionListItem = {
+  reaction_id?: string;
+  operator_type?: string;
+  operator_id?: {
+    open_id?: string;
+    user_id?: string;
+    union_id?: string;
+  };
+};
+
+type FeishuReactionListResponse = {
+  code?: number;
+  msg?: string;
+  data?: {
+    items?: FeishuReactionListItem[];
+  };
+};
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function pickTypingReactionIdForCleanup(params: {
+  items: FeishuReactionListItem[] | undefined;
+  botOpenId?: string;
+}): string | undefined {
+  const botOpenId = asNonEmptyString(params.botOpenId);
+  let firstAppReactionId: string | undefined;
+  let appReactionCount = 0;
+
+  for (const item of params.items ?? []) {
+    const reactionId = asNonEmptyString(item?.reaction_id);
+    if (!reactionId || item?.operator_type !== "app") {
+      continue;
+    }
+    appReactionCount += 1;
+
+    const operatorOpenId = asNonEmptyString(item?.operator_id?.open_id);
+    if (botOpenId && operatorOpenId === botOpenId) {
+      return reactionId;
+    }
+
+    if (!firstAppReactionId) {
+      firstAppReactionId = reactionId;
+    }
+  }
+
+  // No known bot open_id: only accept a unique app reaction to avoid wrong cleanup.
+  if (!botOpenId) {
+    return appReactionCount === 1 ? firstAppReactionId : undefined;
+  }
+  return undefined;
+}
+
 /**
  * Check whether an error represents a rate-limit or quota-exceeded condition
  * from the Feishu API that should stop the typing keepalive loop.
@@ -108,9 +162,10 @@ export async function addTypingIndicator(params: {
   cfg: ClawdbotConfig;
   messageId: string;
   accountId?: string;
+  botOpenId?: string;
   runtime?: RuntimeEnv;
 }): Promise<TypingIndicatorState> {
-  const { cfg, messageId, accountId, runtime } = params;
+  const { cfg, messageId, accountId, botOpenId, runtime } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     return { messageId, reactionId: null };
@@ -139,8 +194,48 @@ export async function addTypingIndicator(params: {
     }
 
     const typedResponse: FeishuMessageReactionCreateResponse = response;
-    const reactionId = typedResponse.data?.reaction_id ?? null;
-    return { messageId, reactionId };
+    const directReactionId = asNonEmptyString(typedResponse.data?.reaction_id);
+    if (directReactionId) {
+      return { messageId, reactionId: directReactionId };
+    }
+
+    // Some SDK responses omit reaction_id even on success. Resolve cleanup target
+    // by listing current Typing reactions and matching this bot's operator open_id.
+    const listResult = (await client.im.messageReaction.list({
+      path: { message_id: messageId },
+      params: { reaction_type: TYPING_EMOJI },
+    })) as FeishuReactionListResponse;
+    const listBackoffCode = getBackoffCodeFromResponse(listResult);
+    if (listBackoffCode !== undefined) {
+      if (getFeishuRuntime().logging.shouldLogVerbose()) {
+        runtime?.log?.(
+          `[feishu] typing indicator lookup response contains backoff code ${listBackoffCode}, stopping keepalive`,
+        );
+      }
+      throw new FeishuBackoffError(listBackoffCode);
+    }
+    if (typeof listResult.code === "number" && listResult.code !== 0) {
+      if (getFeishuRuntime().logging.shouldLogVerbose()) {
+        runtime?.log?.(
+          `[feishu] typing indicator lookup failed: ${listResult.msg ?? `code ${String(listResult.code)}`}`,
+        );
+      }
+      return { messageId, reactionId: null };
+    }
+
+    const fallbackReactionId = pickTypingReactionIdForCleanup({
+      items: listResult.data?.items,
+      botOpenId,
+    });
+    if (fallbackReactionId) {
+      return { messageId, reactionId: fallbackReactionId };
+    }
+    if (getFeishuRuntime().logging.shouldLogVerbose()) {
+      runtime?.log?.(
+        "[feishu] typing indicator response missing reaction_id and lookup found no unique cleanup target",
+      );
+    }
+    return { messageId, reactionId: null };
   } catch (err) {
     if (isFeishuBackoffError(err)) {
       if (getFeishuRuntime().logging.shouldLogVerbose()) {

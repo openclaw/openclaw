@@ -255,8 +255,13 @@ export function normalizeMentions(
   }
   const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  let result = text;
-  for (const mention of mentions) {
+
+  // Sort by key length descending so longer keys match first (e.g. @_user_10 before @_user_1)
+  const sorted = [...mentions].sort((a, b) => b.key.length - a.key.length);
+
+  // Build a single regex with alternation of all keys, longest first
+  const mentionMap = new Map<string, string>();
+  for (const mention of sorted) {
     const mentionId = mention.id.open_id;
     const replacement =
       botStripId && mentionId === botStripId
@@ -264,9 +269,12 @@ export function normalizeMentions(
         : mentionId
           ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
           : `@${mention.name}`;
-    result = result.replace(new RegExp(escaped(mention.key), "g"), () => replacement).trim();
+    mentionMap.set(mention.key, replacement);
   }
-  return result;
+
+  const combinedPattern = sorted.map((m) => escaped(m.key)).join("|");
+  const combinedRegex = new RegExp(combinedPattern, "g");
+  return text.replace(combinedRegex, (match) => mentionMap.get(match) ?? match).trim();
 }
 
 export function normalizeFeishuCommandProbeBody(text: string): string {

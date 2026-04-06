@@ -1,64 +1,70 @@
-import {
-  defineBundledChannelEntry,
-  loadBundledEntryExportSync,
-} from "openclaw/plugin-sdk/channel-entry-contract";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { registerFeishuBitableTools } from "./src/bitable.js";
+import { registerFeishuChatTools } from "./src/chat.js";
+import { registerFeishuDocTools } from "./src/docx.js";
+import { registerFeishuDriveTools } from "./src/drive.js";
+import { registerFeishuPermTools } from "./src/perm.js";
+import { registerFeishuWikiTools } from "./src/wiki.js";
 
-type FeishuSubagentHooksModule = typeof import("./api.js");
+export { feishuPlugin } from "./src/channel.js";
+export { setFeishuRuntime } from "./src/runtime.js";
+export { getBotOpenId } from "./src/monitor.js";
+export { createFeishuReplyDispatcher } from "./src/reply-dispatcher.js";
+export {
+  sendMessageFeishu,
+  sendCardFeishu,
+  updateCardFeishu,
+  editMessageFeishu,
+  getMessageFeishu,
+} from "./src/send.js";
+export {
+  uploadImageFeishu,
+  uploadFileFeishu,
+  sendImageFeishu,
+  sendFileFeishu,
+  sendMediaFeishu,
+} from "./src/media.js";
+export { probeFeishu } from "./src/probe.js";
+export {
+  addReactionFeishu,
+  removeReactionFeishu,
+  listReactionsFeishu,
+  FeishuEmoji,
+} from "./src/reactions.js";
+export {
+  extractMentionTargets,
+  extractMessageBody,
+  isMentionForwardRequest,
+  formatMentionForText,
+  formatMentionForCard,
+  formatMentionAllForText,
+  formatMentionAllForCard,
+  buildMentionedMessage,
+  buildMentionedCardContent,
+  type MentionTarget,
+} from "./src/mention.js";
 
+type MonitorFeishuProvider = typeof import("./src/monitor.js").monitorFeishuProvider;
+type FeishuSubagentHooksModule = typeof import("./src/subagent-hooks.js");
+
+let feishuMonitorPromise: Promise<typeof import("./src/monitor.js")> | null = null;
 let feishuSubagentHooksPromise: Promise<FeishuSubagentHooksModule> | null = null;
 
+function loadFeishuMonitorModule() {
+  feishuMonitorPromise ??= import("./src/monitor.js");
+  return feishuMonitorPromise;
+}
+
 function loadFeishuSubagentHooksModule() {
-  feishuSubagentHooksPromise ??= import("./api.js");
+  feishuSubagentHooksPromise ??= import("./src/subagent-hooks.js");
   return feishuSubagentHooksPromise;
 }
 
-function registerFeishuDocTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuDocTools",
-  });
-  register(api);
-}
-
-function registerFeishuChatTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuChatTools",
-  });
-  register(api);
-}
-
-function registerFeishuWikiTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuWikiTools",
-  });
-  register(api);
-}
-
-function registerFeishuDriveTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuDriveTools",
-  });
-  register(api);
-}
-
-function registerFeishuPermTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuPermTools",
-  });
-  register(api);
-}
-
-function registerFeishuBitableTools(api: OpenClawPluginApi) {
-  const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
-    specifier: "./api.js",
-    exportName: "registerFeishuBitableTools",
-  });
-  register(api);
+export async function monitorFeishuProvider(
+  ...args: Parameters<MonitorFeishuProvider>
+): ReturnType<MonitorFeishuProvider> {
+  const { monitorFeishuProvider } = await loadFeishuMonitorModule();
+  return await monitorFeishuProvider(...args);
 }
 
 export default defineBundledChannelEntry({
@@ -67,7 +73,7 @@ export default defineBundledChannelEntry({
   description: "Feishu/Lark channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "feishuPlugin",
   },
   runtime: {
@@ -75,6 +81,18 @@ export default defineBundledChannelEntry({
     exportName: "setFeishuRuntime",
   },
   registerFull(api) {
+    // Expose the native feishu reply dispatcher on the runtime so external
+    // plugins (e.g. bot-company) can create streaming-card capable dispatchers
+    // instead of falling back to the generic route-reply path.
+    (async () => {
+      const { createFeishuReplyDispatcher } = await import("./src/reply-dispatcher.js");
+      const replyRuntime = (api.runtime as { channel?: { reply?: Record<string, unknown> } })
+        ?.channel?.reply;
+      if (replyRuntime && typeof replyRuntime.createFeishuReplyDispatcher !== "function") {
+        replyRuntime.createFeishuReplyDispatcher = createFeishuReplyDispatcher;
+      }
+    })();
+
     api.on("subagent_spawning", async (event, ctx) => {
       const { handleFeishuSubagentSpawning } = await loadFeishuSubagentHooksModule();
       return await handleFeishuSubagentSpawning(event, ctx);

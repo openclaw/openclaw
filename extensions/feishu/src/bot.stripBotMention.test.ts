@@ -107,6 +107,23 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     );
   });
 
+  it("avoids cascading rewrite when mention keys overlap by prefix", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "请 @_user_10 处理，再请 @_user_1 复核",
+        [
+          { key: "@_user_1", name: "One", id: { open_id: "ou_user_1" } },
+          { key: "@_user_10", name: "Ten", id: { open_id: "ou_user_10" } },
+        ],
+        "group",
+      ) as any,
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe(
+      '请 <at user_id="ou_user_10">Ten</at> 处理，再请 <at user_id="ou_user_1">One</at> 复核',
+    );
+  });
+
   it("treats $ in display name as literal (no replacement-pattern interpolation)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_user_1 hi", [{ key: "@_user_1", name: "$& the user", id: { open_id: "ou_x" } }]),

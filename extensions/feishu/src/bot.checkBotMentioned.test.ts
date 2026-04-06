@@ -128,6 +128,21 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.content).toBe("hello world");
   });
 
+  it("strips bot mention placeholder and normalizes others to <at> tags", () => {
+    const event = makeEvent(
+      "group",
+      [
+        { key: "@_bot_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
+        { key: "@_user_1", name: "Luke", id: { open_id: "ou_luke" } },
+      ],
+      "@Bot @_bot_1 请 @Luke @_user_1 review",
+    );
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    // Bot mention placeholder (@_bot_1) is stripped so slash commands like @Bot /help
+    // retain the leading /. Non-bot mentions are normalized to <at> tags.
+    expect(ctx.content).toBe('@Bot  请 @Luke <at user_id="ou_luke">Luke</at> review');
+  });
+
   it("returns mentionedBot=true for post message with at (no top-level mentions)", () => {
     const BOT_OPEN_ID = "ou_bot_123";
     const event = makePostEvent({

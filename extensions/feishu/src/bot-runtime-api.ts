@@ -10,3 +10,4 @@ export {
   normalizeAgentId,
 } from "../runtime-api.js";
 export { loadSessionStore, resolveSessionStoreEntry } from "../runtime-api.js";
+export { appendAssistantMessageToSessionTranscript } from "../runtime-api.js";

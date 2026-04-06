@@ -13,6 +13,7 @@ export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
 
 export type FeishuDomain = "feishu" | "lark" | (string & {});
 export type FeishuConnectionMode = "websocket" | "webhook";
+export type FeishuDispatchMode = "auto" | "plugin";
 
 export type FeishuDefaultAccountSelectionSource =
   | "explicit-default"
@@ -58,6 +59,7 @@ export type FeishuMessageContext = {
 export type FeishuSendResult = {
   messageId: string;
   chatId: string;
+  meta?: Record<string, unknown>;
 };
 
 export type FeishuChatType = "p2p" | "group" | "private";
