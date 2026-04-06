@@ -13,8 +13,7 @@ OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs.
 
 - Provider: `comfy`
 - Models: `comfy/workflow`
-- Shared surfaces: `image_generate`, `video_generate`
-- Plugin tool: `music_generate`
+- Shared surfaces: `image_generate`, `video_generate`, `music_generate`
 - Auth: none for local ComfyUI; `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for Comfy Cloud
 - API: ComfyUI `/prompt` / `/history` / `/view` and Comfy Cloud `/api/*`
 
@@ -24,7 +23,7 @@ OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs.
 - Image editing with 1 uploaded reference image
 - Video generation from a workflow JSON
 - Video generation with 1 uploaded reference image
-- Music or audio generation through the bundled `music_generate` tool
+- Music or audio generation through the shared `music_generate` tool
 - Output download from a configured node or all matching output nodes
 
 The bundled plugin is workflow-driven, so OpenClaw does not try to map generic
@@ -162,8 +161,8 @@ the configured graph. OpenClaw does not pass input videos into Comfy workflows.
 
 ## Music workflows
 
-The bundled plugin registers a `music_generate` tool for workflow-defined audio
-or music outputs:
+The bundled plugin registers a music-generation provider for workflow-defined
+audio or music outputs, surfaced through the shared `music_generate` tool:
 
 ```text
 /tool music_generate prompt="Warm ambient synth loop with soft tape texture"

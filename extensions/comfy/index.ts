@@ -1,6 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
-import { createComfyMusicGenerateTool } from "./music-generate-tool.js";
+import { buildComfyMusicGenerationProvider } from "./music-generation-provider.js";
 import { buildComfyVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "comfy";
@@ -18,7 +18,7 @@ export default definePluginEntry({
       auth: [],
     });
     api.registerImageGenerationProvider(buildComfyImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildComfyMusicGenerationProvider());
     api.registerVideoGenerationProvider(buildComfyVideoGenerationProvider());
-    api.registerTool(createComfyMusicGenerateTool(api));
   },
 });
