@@ -28,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-core", () => ({
 }));
 
 const { createVault } = createMemoryWikiTestHarness();
+type CreateVaultOptions = NonNullable<Parameters<typeof createVault>[0]>;
 let suiteRoot = "";
 let caseIndex = 0;
 
@@ -49,7 +50,7 @@ afterAll(async () => {
 });
 
 async function createQueryVault(options?: {
-  config?: MemoryWikiPluginConfig;
+  config?: CreateVaultOptions["config"];
   initialize?: boolean;
 }) {
   return createVault({
