@@ -9,16 +9,25 @@ export type CommandGroupPlaceholder = {
 
 export type CommandGroupEntry = {
   placeholders: readonly CommandGroupPlaceholder[];
+  names?: readonly string[];
   register: (program: Command) => Promise<void> | void;
 };
 
-function findCommandGroupEntry(
+export function getCommandGroupNames(entry: CommandGroupEntry): readonly string[] {
+  return entry.names ?? entry.placeholders.map((placeholder) => placeholder.name);
+}
+
+export function findCommandGroupEntry(
   entries: readonly CommandGroupEntry[],
   name: string,
 ): CommandGroupEntry | undefined {
-  return entries.find((entry) =>
-    entry.placeholders.some((placeholder) => placeholder.name === name),
-  );
+  return entries.find((entry) => getCommandGroupNames(entry).includes(name));
+}
+
+export function removeCommandGroupNames(program: Command, entry: CommandGroupEntry) {
+  for (const name of new Set(getCommandGroupNames(entry))) {
+    removeCommandByName(program, name);
+  }
 }
 
 export async function registerCommandGroupByName(
@@ -30,14 +39,12 @@ export async function registerCommandGroupByName(
   if (!entry) {
     return false;
   }
-  for (const placeholder of entry.placeholders) {
-    removeCommandByName(program, placeholder.name);
-  }
+  removeCommandGroupNames(program, entry);
   await entry.register(program);
   return true;
 }
 
-function registerLazyCommandGroup(
+export function registerLazyCommandGroup(
   program: Command,
   entry: CommandGroupEntry,
   placeholder: CommandGroupPlaceholder,
@@ -46,7 +53,7 @@ function registerLazyCommandGroup(
     program,
     name: placeholder.name,
     description: placeholder.description,
-    removeNames: entry.placeholders.map((candidate) => candidate.name),
+    removeNames: [...new Set(getCommandGroupNames(entry))],
     register: async () => {
       await entry.register(program);
     },
