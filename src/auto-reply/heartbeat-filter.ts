@@ -81,8 +81,11 @@ export function isHeartbeatOkResponse(message: { role: string; content?: unknown
     return false;
   }
   const text = extractMessageText(message.content);
-  if (!text) {
-    return false;
+  // Empty/blank assistant responses from heartbeat runs are classified as
+  // "ok-empty" no-ops by runHeartbeatOnce — treat them as removable acks
+  // so they don't accumulate in history after transcript pruning was removed.
+  if (!text || !text.trim()) {
+    return true;
   }
   const normalized = stripMarkup(text);
   if (!normalized.includes(HEARTBEAT_TOKEN)) {

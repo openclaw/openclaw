@@ -129,13 +129,22 @@ describe("isHeartbeatOkResponse", () => {
     ).toBe(false);
   });
 
-  it("returns false for empty content", () => {
+  it("returns true for empty content (ok-empty no-op heartbeat)", () => {
     expect(
       isHeartbeatOkResponse({
         role: "assistant",
         content: "",
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("returns true for whitespace-only content", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: "   ",
+      }),
+    ).toBe(true);
   });
 
   it("returns true for HEARTBEAT_OK with responsePrefix", () => {
