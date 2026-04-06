@@ -72,6 +72,15 @@ describe("isHeartbeatUserMessage", () => {
       }),
     ).toBe(true);
   });
+
+  it("returns true for custom prompt using 'return'", () => {
+    expect(
+      isHeartbeatUserMessage({
+        role: "user",
+        content: "return HEARTBEAT_OK if nothing is needed",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("isHeartbeatOkResponse", () => {
@@ -154,6 +163,31 @@ describe("isHeartbeatOkResponse", () => {
         content: "<b>HEARTBEAT_OK</b>",
       }),
     ).toBe(true);
+  });
+
+  it("returns true for HEARTBEAT_OK with short alphanumeric suffix", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: "HEARTBEAT_OK all good",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for HEARTBEAT_OK followed by long real content", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content:
+          "HEARTBEAT_OK " +
+          "but I noticed you have 3 urgent emails and a calendar event in 30 minutes. " +
+          "Also your Tesla is at 15% charge and the weather forecast shows heavy rain. " +
+          "I recommend charging the car now and bringing an umbrella. " +
+          "Additionally there are 5 open PRs that need your review and the CI pipeline " +
+          "has been failing for the last 3 hours due to a flaky test in the extension shards. " +
+          "I have drafted a summary of all action items for your review.",
+      }),
+    ).toBe(false);
   });
 });
 

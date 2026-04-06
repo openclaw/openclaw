@@ -1,3 +1,4 @@
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 /**
@@ -37,12 +38,13 @@ export function isHeartbeatUserMessage(message: { role: string; content?: unknow
     return false;
   }
   const text = extractMessageText(message.content);
-  // All heartbeat prompt variants (default, task-based, custom) use one of
-  // these instruction phrases.  A plain mention of "HEARTBEAT_OK" in normal
-  // conversation (e.g. "what does HEARTBEAT_OK mean?") won't match.
+  // Heartbeat prompts instruct the model with a verb + HEARTBEAT_OK pattern.
+  // A plain mention of "HEARTBEAT_OK" in normal conversation (e.g. "what does
+  // HEARTBEAT_OK mean?") won't match.  We accept common instruction verbs to
+  // cover default, task-based, and custom heartbeat prompts.
   return (
     text.includes(HEARTBEAT_TOKEN) &&
-    (/reply\s+HEARTBEAT_OK/i.test(text) || /respond.*HEARTBEAT_OK/i.test(text))
+    /(?:reply|respond|return|say|output|answer)\s+(?:with\s+)?HEARTBEAT_OK/i.test(text)
   );
 }
 
@@ -100,9 +102,11 @@ export function isHeartbeatOkResponse(message: { role: string; content?: unknown
     return false;
   }
 
-  // Content after the token must be empty or non-alphanumeric noise (emoji,
-  // punctuation).  Any word character after the token means real content.
-  if (after && /[a-zA-Z0-9]/.test(after)) {
+  // Content after the token is allowed up to DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  // matching the suppression logic in heartbeat.ts (stripHeartbeatToken).
+  // Short suffixes like "all good" or "👍" are treated as ack noise.
+  // Anything longer is real content worth preserving.
+  if (after.length > DEFAULT_HEARTBEAT_ACK_MAX_CHARS) {
     return false;
   }
 
