@@ -90,6 +90,66 @@ function formatCompactionReason(reason?: string): string | undefined {
   return text;
 }
 
+type CompactionDryRunInspectDetails = {
+  topContributors?: Array<{ role?: string; chars?: number; tool?: string }>;
+  lightTrim?: {
+    trimmedMessages?: number;
+    trimmedToolResults?: number;
+    tokenDelta?: number;
+  };
+};
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatCompactionDryRunHints(
+  details: CompactionDryRunInspectDetails | undefined,
+  telemetry: ReturnType<typeof extractCompactionStageTelemetry>,
+): string[] {
+  const hints: string[] = [];
+
+  if (details?.lightTrim) {
+    const trimParts: string[] = [];
+    const trimmedMessages = Math.max(0, details.lightTrim.trimmedMessages ?? 0);
+    const trimmedToolResults = Math.max(0, details.lightTrim.trimmedToolResults ?? 0);
+    if (trimmedMessages > 0) {
+      trimParts.push(pluralize(trimmedMessages, "msg"));
+    }
+    if (trimmedToolResults > 0) {
+      trimParts.push(pluralize(trimmedToolResults, "tool"));
+    }
+    if (trimParts.length > 0) {
+      const tokenDelta = Math.max(0, details.lightTrim.tokenDelta ?? 0);
+      hints.push(
+        tokenDelta > 0
+          ? `light-trim=${trimParts.join("/")} (-${formatTokenCount(tokenDelta)} tok)`
+          : `light-trim=${trimParts.join("/")}`,
+      );
+    }
+  }
+
+  const droppedMessages = Math.max(0, telemetry?.droppedMessages ?? 0);
+  const droppedChunks = Math.max(0, telemetry?.droppedChunks ?? 0);
+  if (droppedMessages > 0 || droppedChunks > 0) {
+    const pruneParts: string[] = [];
+    if (droppedMessages > 0) {
+      pruneParts.push(pluralize(droppedMessages, "msg"));
+    }
+    if (droppedChunks > 0) {
+      pruneParts.push(pluralize(droppedChunks, "chunk"));
+    }
+    hints.push(`history-prune=${pruneParts.join("/")}`);
+  }
+
+  const qualityRetriesPlanned = Math.max(0, telemetry?.qualityRetriesPlanned ?? 0);
+  if (telemetry?.qualityGuardEnabled && qualityRetriesPlanned > 0) {
+    hints.push(`quality-guard≤${pluralize(qualityRetriesPlanned, "retry")}`);
+  }
+
+  return hints;
+}
+
 function formatCompactionDryRunLine(params: {
   result: Awaited<ReturnType<typeof compactEmbeddedPiSession>>;
   contextSummary: string;
@@ -97,9 +157,7 @@ function formatCompactionDryRunLine(params: {
   const telemetry = extractCompactionStageTelemetry(params.result.result?.details);
   const details =
     params.result.result?.details && typeof params.result.result.details === "object"
-      ? (params.result.result.details as {
-          topContributors?: Array<{ role?: string; chars?: number; tool?: string }>;
-        })
+      ? (params.result.result.details as CompactionDryRunInspectDetails)
       : undefined;
   const stagePlan = telemetry?.plan?.map((entry) => entry.stage).join(" → ") || "finalize";
   const entryReason = telemetry?.entryReason?.replaceAll("_", " ") ?? "summary ready";
@@ -107,9 +165,13 @@ function formatCompactionDryRunLine(params: {
   const topLabel = topContributor?.tool
     ? `${topContributor.role}:${topContributor.tool}`
     : topContributor?.role;
-  return topLabel
-    ? `Dry-run: would run ${stagePlan} (${entryReason}) • top=${topLabel} • ${params.contextSummary}`
-    : `Dry-run: would run ${stagePlan} (${entryReason}) • ${params.contextSummary}`;
+  const parts = [`Dry-run: would run ${stagePlan} (${entryReason})`];
+  if (topLabel) {
+    parts.push(`top=${topLabel}`);
+  }
+  parts.push(...formatCompactionDryRunHints(details, telemetry));
+  parts.push(params.contextSummary);
+  return parts.join(" • ");
 }
 
 export const handleCompactCommand: CommandHandler = async (params) => {

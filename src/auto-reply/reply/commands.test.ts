@@ -1500,6 +1500,8 @@ describe("/compact command", () => {
       "Dry-run: would run prune_history → summarize_history → quality_retry → finalize",
     );
     expect(result?.reply?.text).toContain("top=assistant");
+    expect(result?.reply?.text).toContain("history-prune=2 msgs/1 chunk");
+    expect(result?.reply?.text).toContain("quality-guard≤1 retry");
     expect(vi.mocked(compactEmbeddedPiSession)).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "session-1",
@@ -1508,6 +1510,75 @@ describe("/compact command", () => {
         customInstructions: "focus on decisions",
       }),
     );
+  });
+
+  it("surfaces projected light-trim impact in /compact --dry-run replies", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: "/tmp/openclaw-session-store.json" },
+    } as OpenClawConfig;
+    const params = buildParams("/compact --inspect", cfg);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "dry run",
+      result: {
+        summary: "light_trim → summarize_history → finalize",
+        firstKeptEntryId: "",
+        tokensBefore: 2400,
+        tokensAfter: 2400,
+        details: {
+          dryRun: true,
+          topContributors: [{ role: "toolResult", tool: "exec", chars: 1800 }],
+          lightTrim: {
+            trimmedMessages: 1,
+            trimmedToolResults: 1,
+            tokensBefore: 2400,
+            tokensAfter: 1500,
+            tokenDelta: 900,
+          },
+          stageTelemetry: {
+            entryStage: "light_trim",
+            entryReason: "oversized_tool_results_present",
+            outcomeStage: "light_trim",
+            outcomeReason: "oversized_tool_results_present",
+            plan: [
+              { stage: "light_trim", reason: "oversized_tool_results_present" },
+              { stage: "summarize_history", reason: "messages_to_summarize_present" },
+              { stage: "finalize", reason: "summary_ready" },
+            ],
+            historyPruned: false,
+            splitTurn: false,
+            recentTurnsPreserve: 3,
+            qualityGuardEnabled: false,
+            qualityRetriesPlanned: 0,
+            qualityRetriesUsed: 0,
+            droppedChunks: 0,
+            droppedMessages: 0,
+            droppedSummaryUsed: false,
+          },
+        },
+      },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          totalTokens: 2400,
+        },
+      },
+      true,
+    );
+
+    expect(result?.reply?.text).toContain(
+      "Dry-run: would run light_trim → summarize_history → finalize",
+    );
+    expect(result?.reply?.text).toContain("top=toolResult:exec");
+    expect(result?.reply?.text).toContain("light-trim=1 msg/1 tool (-900 tok)");
   });
 });
 
