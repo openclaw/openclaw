@@ -227,7 +227,7 @@ function rewriteRedirectInitForMethod(params: {
   };
 }
 
-async function fetchWithRuntimeDispatcher(
+export async function fetchWithRuntimeDispatcher(
   input: RequestInfo | URL,
   init?: DispatcherAwareRequestInit,
 ): Promise<Response> {

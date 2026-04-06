@@ -1,17 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../../../../../src/infra/net/undici-runtime.js";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { performMatrixRequest } from "./transport.js";
-
-function createPinnedDispatcherCompatibilityError(): Error {
-  const cause = Object.assign(new Error("invalid onRequestStart method"), {
-    code: "UND_ERR_INVALID_ARG",
-  });
-  return Object.assign(new TypeError("fetch failed"), { cause });
-}
 
 describe("performMatrixRequest", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
+    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   });
 
   it("rejects oversized raw responses before buffering the whole body", async () => {
@@ -115,12 +110,15 @@ describe("performMatrixRequest", () => {
     }
   }, 5_000);
 
-  it("retries without the direct pinned dispatcher when the runtime rejects that dispatcher shape", async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+  it("uses undici runtime fetch for pinned Matrix requests so the dispatcher stays bound", async () => {
+    let ambientFetchCalls = 0;
+    vi.stubGlobal("fetch", (async () => {
+      ambientFetchCalls += 1;
+      throw new Error("expected pinned Matrix requests to avoid ambient fetch");
+    }) as typeof fetch);
+    const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      if (requestInit.dispatcher) {
-        throw createPinnedDispatcherCompatibilityError();
-      }
+      expect(requestInit.dispatcher).toBeDefined();
       return new Response('{"ok":true}', {
         status: 200,
         headers: {
@@ -128,7 +126,12 @@ describe("performMatrixRequest", () => {
         },
       });
     });
-    vi.stubGlobal("fetch", fetchMock);
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: class MockAgent {},
+      EnvHttpProxyAgent: class MockEnvHttpProxyAgent {},
+      ProxyAgent: class MockProxyAgent {},
+      fetch: runtimeFetch,
+    };
 
     const result = await performMatrixRequest({
       homeserver: "http://127.0.0.1:8008",
@@ -140,12 +143,10 @@ describe("performMatrixRequest", () => {
     });
 
     expect(result.text).toBe('{"ok":true}');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(ambientFetchCalls).toBe(0);
+    expect(runtimeFetch).toHaveBeenCalledTimes(1);
     expect(
-      (fetchMock.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
+      (runtimeFetch.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
     ).toBeDefined();
-    expect(
-      (fetchMock.mock.calls[1]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
-    ).toBeUndefined();
   });
 });
