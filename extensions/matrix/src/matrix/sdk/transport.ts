@@ -1,10 +1,8 @@
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildTimeoutAbortSignal,
-  canBypassPinnedDispatcherForCompatibility,
   closeDispatcher,
   createPinnedDispatcher,
-  isPinnedDispatcherRuntimeCompatibilityError,
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
 } from "../../runtime-api.js";
@@ -86,10 +84,43 @@ function buildBufferedResponse(params: {
   return response;
 }
 
+type ErrorWithCause = {
+  code?: unknown;
+  message?: unknown;
+  cause?: unknown;
+};
+
+function* iterateErrorCauseChain(error: unknown): Generator<ErrorWithCause> {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    yield current as ErrorWithCause;
+    current = (current as ErrorWithCause).cause;
+  }
+}
+
+function canBypassPinnedDispatcherForCompatibility(policy?: PinnedDispatcherPolicy): boolean {
+  return !policy || policy.mode === "direct";
+}
+
+function isPinnedDispatcherRuntimeCompatibilityError(error: unknown): boolean {
+  for (const candidate of iterateErrorCauseChain(error)) {
+    const message = typeof candidate.message === "string" ? candidate.message : "";
+    if (
+      candidate.code === "UND_ERR_INVALID_ARG" &&
+      message.toLowerCase().includes("onrequeststart")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function fetchWithPinnedDispatcherCompatibilityRetry(params: {
   url: string;
   init: RequestInit & { dispatcher?: unknown };
-  canBypassPinnedDispatcher: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   dispatcher: ReturnType<typeof createPinnedDispatcher> | undefined;
 }): Promise<Response> {
   try {
@@ -97,7 +128,7 @@ async function fetchWithPinnedDispatcherCompatibilityRetry(params: {
   } catch (error) {
     if (
       !params.dispatcher ||
-      !params.canBypassPinnedDispatcher ||
+      !canBypassPinnedDispatcherForCompatibility(params.dispatcherPolicy) ||
       !isPinnedDispatcherRuntimeCompatibilityError(error)
     ) {
       throw error;
@@ -136,9 +167,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
       dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.ssrfPolicy);
       const response = await fetchWithPinnedDispatcherCompatibilityRetry({
         url: currentUrl.toString(),
-        canBypassPinnedDispatcher: canBypassPinnedDispatcherForCompatibility(
-          params.dispatcherPolicy,
-        ),
+        dispatcherPolicy: params.dispatcherPolicy,
         dispatcher,
         init: {
           ...params.init,

@@ -61,10 +61,8 @@ export {
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export {
   assertHttpUrlTargetsPrivateNetwork,
-  canBypassPinnedDispatcherForCompatibility,
   closeDispatcher,
   createPinnedDispatcher,
-  isPinnedDispatcherRuntimeCompatibilityError,
   isPrivateOrLoopbackHost,
   resolvePinnedHostnameWithPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,

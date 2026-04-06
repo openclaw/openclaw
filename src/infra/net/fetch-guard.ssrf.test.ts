@@ -317,7 +317,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     }
   });
 
-  it("retries without the direct pinned dispatcher when the runtime rejects that dispatcher shape", async () => {
+  it("fails closed when the runtime rejects the pinned dispatcher shape", async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       if (requestInit.dispatcher) {
@@ -326,42 +326,11 @@ describe("fetchWithSsrFGuard hardening", () => {
       return okResponse();
     });
 
-    const result = await fetchWithSsrFGuard({
-      url: "https://public.example/resource",
-      fetchImpl,
-      lookupFn: createPublicLookup(),
-    });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(
-      (fetchImpl.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
-    ).toBeDefined();
-    expect(
-      (fetchImpl.mock.calls[1]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
-    ).toBeUndefined();
-    await result.release();
-  });
-
-  it("does not bypass proxy routing when proxy dispatchers fail the same way", async () => {
-    const fetchImpl = vi.fn(async () => {
-      throw createPinnedDispatcherCompatibilityError();
-    });
-    const lookupFn = vi.fn(async (hostname: string) => [
-      {
-        address: hostname === "proxy.example" ? "93.184.216.35" : "93.184.216.34",
-        family: 4,
-      },
-    ]) as unknown as LookupFn;
-
     await expect(
       fetchWithSsrFGuard({
         url: "https://public.example/resource",
         fetchImpl,
-        lookupFn,
-        dispatcherPolicy: {
-          mode: "explicit-proxy",
-          proxyUrl: "http://proxy.example:7890",
-        },
+        lookupFn: createPublicLookup(),
       }),
     ).rejects.toThrow("fetch failed");
     expect(fetchImpl).toHaveBeenCalledTimes(1);

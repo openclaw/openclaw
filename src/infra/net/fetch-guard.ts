@@ -1,10 +1,6 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import {
-  canBypassPinnedDispatcherForCompatibility,
-  isPinnedDispatcherRuntimeCompatibilityError,
-} from "./pinned-dispatcher-compat.ts";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
@@ -190,29 +186,6 @@ function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestIni
   return { ...init, headers: retainSafeRedirectHeaders(init.headers) };
 }
 
-async function fetchWithPinnedDispatcherCompatibilityRetry(params: {
-  url: string;
-  init: DispatcherAwareRequestInit;
-  dispatcher: Dispatcher | null;
-  fetchImpl: FetchLike;
-  canBypassPinnedDispatcher: boolean;
-}): Promise<Response> {
-  try {
-    return await params.fetchImpl(params.url, params.init);
-  } catch (error) {
-    if (
-      !params.dispatcher ||
-      !params.canBypassPinnedDispatcher ||
-      !isPinnedDispatcherRuntimeCompatibilityError(error)
-    ) {
-      throw error;
-    }
-    await closeDispatcher(params.dispatcher);
-    const { dispatcher: _dispatcher, ...retryInit } = params.init;
-    return await params.fetchImpl(params.url, retryInit);
-  }
-}
-
 function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
   if (!headers) {
     return headers;
@@ -349,24 +322,8 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
       const response = shouldUseRuntimeFetch
-        ? await fetchWithPinnedDispatcherCompatibilityRetry({
-            url: parsedUrl.toString(),
-            init,
-            dispatcher,
-            canBypassPinnedDispatcher: canBypassPinnedDispatcherForCompatibility(
-              params.dispatcherPolicy,
-            ),
-            fetchImpl: fetchWithRuntimeDispatcher,
-          })
-        : await fetchWithPinnedDispatcherCompatibilityRetry({
-            url: parsedUrl.toString(),
-            init,
-            dispatcher,
-            canBypassPinnedDispatcher: canBypassPinnedDispatcherForCompatibility(
-              params.dispatcherPolicy,
-            ),
-            fetchImpl: defaultFetch,
-          });
+        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
+        : await defaultFetch(parsedUrl.toString(), init);
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");

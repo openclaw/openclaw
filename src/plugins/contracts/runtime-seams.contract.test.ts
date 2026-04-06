@@ -142,7 +142,7 @@ describe("shared runtime seam contracts", () => {
     };
 
     const lookupFn = vi.fn(
-      async () => ({ address: "93.184.216.34", family: 4 }) as const,
+      async () => [{ address: "93.184.216.34", family: 4 }] as const,
     ) as unknown as NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
 
     const result = await fetchWithSsrFGuard({

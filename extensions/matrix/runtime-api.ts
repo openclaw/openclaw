@@ -12,10 +12,8 @@ export * from "./src/storage-paths.js";
 export { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./src/matrix/deps.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
-  canBypassPinnedDispatcherForCompatibility,
   closeDispatcher,
   createPinnedDispatcher,
-  isPinnedDispatcherRuntimeCompatibilityError,
   resolvePinnedHostnameWithPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromAllowPrivateNetwork,

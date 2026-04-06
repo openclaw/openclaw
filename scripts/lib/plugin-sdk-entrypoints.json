@@ -169,6 +169,8 @@
   "memory-core-host-runtime-files",
   "memory-lancedb",
   "msteams",
+  "music-generation",
+  "music-generation-core",
   "models-provider-runtime",
   "skill-commands-runtime",
   "native-command-registry",

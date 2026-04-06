@@ -10,10 +10,6 @@ export {
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
-export {
-  canBypassPinnedDispatcherForCompatibility,
-  isPinnedDispatcherRuntimeCompatibilityError,
-} from "../infra/net/pinned-dispatcher-compat.ts";
 export { formatErrorMessage } from "../infra/errors.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export {
