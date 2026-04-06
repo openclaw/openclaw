@@ -17,6 +17,7 @@ import { formatError } from "../server-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
+const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DEEP_SLEEP_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 const DEEP_SLEEP_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
@@ -56,11 +57,19 @@ type DoctorMemoryDreamingPayload = {
   storageMode: "inline" | "separate" | "both";
   separateReports: boolean;
   shortTermCount: number;
+  recallSignalCount: number;
+  dailySignalCount: number;
+  totalSignalCount: number;
+  phaseSignalCount: number;
+  lightPhaseHitCount: number;
+  remPhaseHitCount: number;
   promotedTotal: number;
   promotedToday: number;
   storePath?: string;
+  phaseSignalPath?: string;
   lastPromotedAt?: string;
   storeError?: string;
+  phaseSignalError?: string;
   phases: {
     light: DoctorMemoryLightDreamingPayload;
     deep: DoctorMemoryDeepDreamingPayload;
@@ -106,11 +115,19 @@ function resolveDreamingConfig(
 ): Omit<
   DoctorMemoryDreamingPayload,
   | "shortTermCount"
+  | "recallSignalCount"
+  | "dailySignalCount"
+  | "totalSignalCount"
+  | "phaseSignalCount"
+  | "lightPhaseHitCount"
+  | "remPhaseHitCount"
   | "promotedTotal"
   | "promotedToday"
   | "storePath"
+  | "phaseSignalPath"
   | "lastPromotedAt"
   | "storeError"
+  | "phaseSignalError"
 > {
   const resolved = resolveMemoryDreamingConfig({
     pluginConfig: resolveMemoryCorePluginConfig(cfg),
@@ -180,12 +197,28 @@ function isShortTermMemoryPath(filePath: string): boolean {
 type DreamingStoreStats = Pick<
   DoctorMemoryDreamingPayload,
   | "shortTermCount"
+  | "recallSignalCount"
+  | "dailySignalCount"
+  | "totalSignalCount"
+  | "phaseSignalCount"
+  | "lightPhaseHitCount"
+  | "remPhaseHitCount"
   | "promotedTotal"
   | "promotedToday"
   | "storePath"
+  | "phaseSignalPath"
   | "lastPromotedAt"
   | "storeError"
+  | "phaseSignalError"
 >;
+
+function toNonNegativeInt(value: unknown): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(num));
+}
 
 async function loadDreamingStoreStats(
   workspaceDir: string,
@@ -193,18 +226,26 @@ async function loadDreamingStoreStats(
   timezone?: string,
 ): Promise<DreamingStoreStats> {
   const storePath = path.join(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH);
+  const phaseSignalPath = path.join(workspaceDir, SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH);
   try {
     const raw = await fs.readFile(storePath, "utf-8");
     const parsed = JSON.parse(raw) as unknown;
     const store = asRecord(parsed);
     const entries = asRecord(store?.entries) ?? {};
     let shortTermCount = 0;
+    let recallSignalCount = 0;
+    let dailySignalCount = 0;
+    let totalSignalCount = 0;
+    let phaseSignalCount = 0;
+    let lightPhaseHitCount = 0;
+    let remPhaseHitCount = 0;
     let promotedTotal = 0;
     let promotedToday = 0;
     let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
     let latestPromotedAt: string | undefined;
+    const activeKeys = new Set<string>();
 
-    for (const value of Object.values(entries)) {
+    for (const [entryKey, value] of Object.entries(entries)) {
       const entry = asRecord(value);
       if (!entry) {
         continue;
@@ -217,6 +258,12 @@ async function loadDreamingStoreStats(
       const promotedAt = normalizeTrimmedString(entry.promotedAt);
       if (!promotedAt) {
         shortTermCount += 1;
+        activeKeys.add(entryKey);
+        const recallCount = toNonNegativeInt(entry.recallCount);
+        const dailyCount = toNonNegativeInt(entry.dailyCount);
+        recallSignalCount += recallCount;
+        dailySignalCount += dailyCount;
+        totalSignalCount += recallCount + dailyCount;
         continue;
       }
       promotedTotal += 1;
@@ -230,28 +277,74 @@ async function loadDreamingStoreStats(
       }
     }
 
+    let phaseSignalError: string | undefined;
+    try {
+      const phaseRaw = await fs.readFile(phaseSignalPath, "utf-8");
+      const parsedPhase = JSON.parse(phaseRaw) as unknown;
+      const phaseStore = asRecord(parsedPhase);
+      const phaseEntries = asRecord(phaseStore?.entries) ?? {};
+      for (const [key, value] of Object.entries(phaseEntries)) {
+        if (!activeKeys.has(key)) {
+          continue;
+        }
+        const phaseEntry = asRecord(value);
+        const lightHits = toNonNegativeInt(phaseEntry?.lightHits);
+        const remHits = toNonNegativeInt(phaseEntry?.remHits);
+        lightPhaseHitCount += lightHits;
+        remPhaseHitCount += remHits;
+        phaseSignalCount += lightHits + remHits;
+      }
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        phaseSignalError = formatError(err);
+      }
+    }
+
     return {
       shortTermCount,
+      recallSignalCount,
+      dailySignalCount,
+      totalSignalCount,
+      phaseSignalCount,
+      lightPhaseHitCount,
+      remPhaseHitCount,
       promotedTotal,
       promotedToday,
       storePath,
+      phaseSignalPath,
       ...(latestPromotedAt ? { lastPromotedAt: latestPromotedAt } : {}),
+      ...(phaseSignalError ? { phaseSignalError } : {}),
     };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | undefined)?.code;
     if (code === "ENOENT") {
       return {
         shortTermCount: 0,
+        recallSignalCount: 0,
+        dailySignalCount: 0,
+        totalSignalCount: 0,
+        phaseSignalCount: 0,
+        lightPhaseHitCount: 0,
+        remPhaseHitCount: 0,
         promotedTotal: 0,
         promotedToday: 0,
         storePath,
+        phaseSignalPath,
       };
     }
     return {
       shortTermCount: 0,
+      recallSignalCount: 0,
+      dailySignalCount: 0,
+      totalSignalCount: 0,
+      phaseSignalCount: 0,
+      lightPhaseHitCount: 0,
+      remPhaseHitCount: 0,
       promotedTotal: 0,
       promotedToday: 0,
       storePath,
+      phaseSignalPath,
       storeError: formatError(err),
     };
   }
@@ -259,22 +352,42 @@ async function loadDreamingStoreStats(
 
 function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStats {
   let shortTermCount = 0;
+  let recallSignalCount = 0;
+  let dailySignalCount = 0;
+  let totalSignalCount = 0;
+  let phaseSignalCount = 0;
+  let lightPhaseHitCount = 0;
+  let remPhaseHitCount = 0;
   let promotedTotal = 0;
   let promotedToday = 0;
   let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
   let lastPromotedAt: string | undefined;
   const storePaths = new Set<string>();
+  const phaseSignalPaths = new Set<string>();
   const storeErrors: string[] = [];
+  const phaseSignalErrors: string[] = [];
 
   for (const stat of stats) {
     shortTermCount += stat.shortTermCount;
+    recallSignalCount += stat.recallSignalCount;
+    dailySignalCount += stat.dailySignalCount;
+    totalSignalCount += stat.totalSignalCount;
+    phaseSignalCount += stat.phaseSignalCount;
+    lightPhaseHitCount += stat.lightPhaseHitCount;
+    remPhaseHitCount += stat.remPhaseHitCount;
     promotedTotal += stat.promotedTotal;
     promotedToday += stat.promotedToday;
     if (stat.storePath) {
       storePaths.add(stat.storePath);
     }
+    if (stat.phaseSignalPath) {
+      phaseSignalPaths.add(stat.phaseSignalPath);
+    }
     if (stat.storeError) {
       storeErrors.push(stat.storeError);
+    }
+    if (stat.phaseSignalError) {
+      phaseSignalErrors.push(stat.phaseSignalError);
     }
     const promotedAtMs = stat.lastPromotedAt ? Date.parse(stat.lastPromotedAt) : Number.NaN;
     if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
@@ -285,14 +398,26 @@ function mergeDreamingStoreStats(stats: DreamingStoreStats[]): DreamingStoreStat
 
   return {
     shortTermCount,
+    recallSignalCount,
+    dailySignalCount,
+    totalSignalCount,
+    phaseSignalCount,
+    lightPhaseHitCount,
+    remPhaseHitCount,
     promotedTotal,
     promotedToday,
     ...(storePaths.size === 1 ? { storePath: [...storePaths][0] } : {}),
+    ...(phaseSignalPaths.size === 1 ? { phaseSignalPath: [...phaseSignalPaths][0] } : {}),
     ...(lastPromotedAt ? { lastPromotedAt } : {}),
     ...(storeErrors.length === 1
       ? { storeError: storeErrors[0] }
       : storeErrors.length > 1
         ? { storeError: `${storeErrors.length} dreaming stores had read errors.` }
+        : {}),
+    ...(phaseSignalErrors.length === 1
+      ? { phaseSignalError: phaseSignalErrors[0] }
+      : phaseSignalErrors.length > 1
+        ? { phaseSignalError: `${phaseSignalErrors.length} phase signal stores had read errors.` }
         : {}),
   };
 }
@@ -472,6 +597,12 @@ export const doctorHandlers: GatewayRequestHandlers = {
             )
           : {
               shortTermCount: 0,
+              recallSignalCount: 0,
+              dailySignalCount: 0,
+              totalSignalCount: 0,
+              phaseSignalCount: 0,
+              lightPhaseHitCount: 0,
+              remPhaseHitCount: 0,
               promotedTotal: 0,
               promotedToday: 0,
             };

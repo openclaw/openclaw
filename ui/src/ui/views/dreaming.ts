@@ -55,7 +55,8 @@ function parseDiaryEntries(raw: string): DiaryEntry[] {
 export type DreamingProps = {
   active: boolean;
   shortTermCount: number;
-  longTermCount: number;
+  totalSignalCount: number;
+  phaseSignalCount: number;
   promotedCount: number;
   dreamingOf: string | null;
   nextCycle: string | null;
@@ -245,11 +246,11 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
             </div>
             <div
               class="dreams__bubble-dot"
-              style="top: calc(50% - 100px); left: calc(50% - 80px); width: 12px; height: 12px; animation-delay: 0.2s;"
+              style="top: calc(50% - 160px); left: calc(50% - 120px); width: 12px; height: 12px; animation-delay: 0.2s;"
             ></div>
             <div
               class="dreams__bubble-dot"
-              style="top: calc(50% - 70px); left: calc(50% - 50px); width: 8px; height: 8px; animation-delay: 0.4s;"
+              style="top: calc(50% - 120px); left: calc(50% - 90px); width: 8px; height: 8px; animation-delay: 0.4s;"
             ></div>
           `
         : nothing}
@@ -284,16 +285,16 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
         <div class="dreams__stat-divider"></div>
         <div class="dreams__stat">
           <span class="dreams__stat-value" style="color: var(--accent);"
-            >${props.longTermCount}</span
+            >${props.totalSignalCount}</span
           >
-          <span class="dreams__stat-label">Long-term</span>
+          <span class="dreams__stat-label">Signals</span>
         </div>
         <div class="dreams__stat-divider"></div>
         <div class="dreams__stat">
           <span class="dreams__stat-value" style="color: var(--accent-2);"
-            >${props.promotedCount}</span
+            >${props.phaseSignalCount}</span
           >
-          <span class="dreams__stat-label">Promoted Today</span>
+          <span class="dreams__stat-label">Phase Hits</span>
         </div>
       </div>
 
