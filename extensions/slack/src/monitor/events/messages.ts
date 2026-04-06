@@ -117,6 +117,16 @@ export function registerSlackMessageEvents(params: {
 
       const mention = event as SlackAppMentionEvent;
 
+      // With ignoreSelf disabled on Bolt, app_mention events from the bot's own
+      // messages (e.g. echoed content that @-mentions itself) must be filtered
+      // to prevent self-triggered reply loops.
+      if (
+        (ctx.botUserId && mention.user === ctx.botUserId) ||
+        (ctx.botId && (mention as unknown as { bot_id?: string }).bot_id === ctx.botId)
+      ) {
+        return;
+      }
+
       // Skip app_mention for DMs - they're already handled by message.im event
       // This prevents duplicate processing when both message and app_mention fire for DMs
       const channelType = normalizeSlackChannelType(mention.channel_type, mention.channel);

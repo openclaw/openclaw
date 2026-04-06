@@ -109,12 +109,13 @@ function makeAppMentionEvent(overrides?: {
   channel?: string;
   channelType?: "channel" | "group" | "im" | "mpim";
   ts?: string;
+  user?: string;
 }) {
   return {
     type: "app_mention",
     channel: overrides?.channel ?? "C123",
     channel_type: overrides?.channelType ?? "channel",
-    user: "U1",
+    user: overrides?.user ?? "U1",
     text: "<@U_BOT> hello",
     ts: overrides?.ts ?? "123.456",
   };
@@ -344,6 +345,18 @@ describe("registerSlackMessageEvents", () => {
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
     expect(messageQueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops self-authored app_mention events by user ID", async () => {
+    // With ignoreSelf disabled on Bolt, the bot's own messages that @-mention
+    // itself (e.g. echoed content) would be delivered as app_mention events.
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "app_mention",
+      overrides: { dmPolicy: "open", botUserId: "U_BOT" },
+      event: makeAppMentionEvent({ channel: "C123", channelType: "channel", user: "U_BOT" }),
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
   });
 
   it("skips app_mention events for DM channel ids even with contradictory channel_type", async () => {
