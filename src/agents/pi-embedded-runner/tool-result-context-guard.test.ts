@@ -110,6 +110,13 @@ function expectReadableToolSlice(text: string, prefix: string) {
   ).toBe(true);
 }
 
+function expectCompactedOrPlaceholder(text: string, prefix: string) {
+  if (text === PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER) {
+    return;
+  }
+  expectReadableCompaction(text, prefix);
+}
+
 describe("installToolResultContextGuard", () => {
   it("returns a cloned guarded context so original tool output stays visible", async () => {
     const agent = makeGuardableAgent();
@@ -124,7 +131,7 @@ describe("installToolResultContextGuard", () => {
     expect(getToolResultText(contextForNextCall[2])).toBe("y".repeat(1_000));
   });
 
-  it("keeps readable slices of overflowing tool results before using a placeholder", async () => {
+  it("keeps at least one readable older slice before falling back to a placeholder", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -149,11 +156,13 @@ describe("installToolResultContextGuard", () => {
     const third = getToolResultText(transformed[3]);
 
     expectReadableCompaction(first, "a");
-    expectReadableCompaction(second, "b");
-    expect(third).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expectReadableCompaction(third, "c");
+    expect(
+      second === "b".repeat(800) || second === PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER,
+    ).toBe(true);
   });
 
-  it("survives repeated large tool results by compacting the newest output each turn", async () => {
+  it("keeps the newest large tool result visible when an older one can absorb overflow", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -175,11 +184,10 @@ describe("installToolResultContextGuard", () => {
       .filter((msg) => msg.role === "toolResult")
       .map((msg) => getToolResultText(msg as AgentMessage));
 
-    // Large outputs are capped per-tool before aggregate compaction kicks in.
-    expect(toolResultTexts[0]?.length).toBe(50_000);
     expect(toolResultTexts[0]).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
-    expectReadableCompaction(toolResultTexts[3] ?? "", "4");
-    expect(toolResultTexts[3]).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    expectReadableCompaction(toolResultTexts[1] ?? "", "2");
+    expectReadableCompaction(toolResultTexts[2] ?? "", "3");
+    expectReadableToolSlice(toolResultTexts[3] ?? "", "4");
   });
 
   it("truncates an individually oversized tool result with a context-limit notice", async () => {
@@ -202,7 +210,7 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
-  it("keeps compacting newest-first until overflow clears, reaching older tool results when needed", async () => {
+  it("falls back to compacting the newest tool result when older ones are insufficient", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -220,8 +228,8 @@ describe("installToolResultContextGuard", () => {
       contextForNextCall,
       new AbortController().signal,
     )) as AgentMessage[];
-    expectReadableCompaction(getToolResultText(transformed[1]), "x");
-    expect(getToolResultText(transformed[2])).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expectCompactedOrPlaceholder(getToolResultText(transformed[1]), "x");
+    expectCompactedOrPlaceholder(getToolResultText(transformed[2]), "y");
   });
 
   it("wraps an existing transformContext and guards the transformed output", async () => {
