@@ -420,7 +420,10 @@ export function resolveMessageRoutingModel(
       continue;
     }
     const matched = rule.match.some(
-      (keyword) => typeof keyword === "string" && normalizedText.includes(keyword.toLowerCase()),
+      (keyword) =>
+        typeof keyword === "string" &&
+        keyword.trim().length > 0 &&
+        normalizedText.includes(keyword.toLowerCase()),
     );
     if (matched) {
       return rule.model?.trim() || undefined;
