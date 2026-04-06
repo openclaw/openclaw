@@ -730,6 +730,8 @@ Manager handoff triage helper:
 
 - `scripts/runtime/sense_runtime_manager_handoff_triage.py`
 - `scripts/runtime/sense-runtime-manager-handoff-triage.sh`
+- `scripts/runtime/sense_runtime_manager_entry.py`
+- `scripts/runtime/sense-runtime-manager-entry.sh`
 
 This helper is intentionally lightweight. It reads `manager_handoff` and decides whether the next manager turn should:
 
@@ -747,6 +749,19 @@ Current confidence rule is:
   - `rerun_full_evaluator`
 
 Failed or stopped handoffs also fall back to `rerun_full_evaluator`.
+
+Manager entry now uses handoff triage as a thin pre-check before the full evaluator:
+
+- `use_handoff`
+  - accept `suggested_next_step` as the provisional next move
+  - do not run the full evaluator
+- `hint_only`
+  - run the full evaluator
+  - keep handoff fields as supplemental context in the entry result
+- `rerun_full_evaluator`
+  - ignore the handoff shortcut and run the full evaluator normally
+
+This keeps the handoff as a next-turn hint only. It does not add another runtime loop.
 
 Current convergence states are:
 
