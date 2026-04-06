@@ -303,7 +303,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveExternalOAuthProfiles: (ctx) => {
+    resolveExternalAuthProfiles: (ctx) => {
       const profile = readOpenAICodexCliOAuthProfile({
         env: ctx.env,
         store: ctx.store,

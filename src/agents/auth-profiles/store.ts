@@ -14,12 +14,23 @@ import {
   overlayExternalOAuthProfiles,
   shouldPersistExternalOAuthProfile,
 } from "./external-oauth.js";
-import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
+import {
+  ensureAuthStoreFile,
+  resolveAuthStatePath,
+  resolveAuthStorePath,
+  resolveLegacyAuthStorePath,
+} from "./paths.js";
+import {
+  coerceAuthProfileState,
+  mergeAuthProfileState,
+  loadPersistedAuthProfileState,
+  savePersistedAuthProfileState,
+} from "./state.js";
 import type {
   AuthProfileCredential,
+  AuthProfileSecretsStore,
   AuthProfileStore,
   OAuthCredentials,
-  ProfileUsageStats,
 } from "./types.js";
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
@@ -35,7 +46,12 @@ const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "o
 const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
 const loadedAuthStoreCache = new Map<
   string,
-  { mtimeMs: number | null; syncedAtMs: number; store: AuthProfileStore }
+  {
+    authMtimeMs: number | null;
+    stateMtimeMs: number | null;
+    syncedAtMs: number;
+    store: AuthProfileStore;
+  }
 >();
 
 function resolveRuntimeStoreKey(agentDir?: string): string {
@@ -104,12 +120,17 @@ function readAuthStoreMtimeMs(authPath: string): number | null {
   }
 }
 
-function readCachedAuthProfileStore(
-  authPath: string,
-  mtimeMs: number | null,
-): AuthProfileStore | null {
-  const cached = loadedAuthStoreCache.get(authPath);
-  if (!cached || cached.mtimeMs !== mtimeMs) {
+function readCachedAuthProfileStore(params: {
+  authPath: string;
+  authMtimeMs: number | null;
+  stateMtimeMs: number | null;
+}): AuthProfileStore | null {
+  const cached = loadedAuthStoreCache.get(params.authPath);
+  if (
+    !cached ||
+    cached.authMtimeMs !== params.authMtimeMs ||
+    cached.stateMtimeMs !== params.stateMtimeMs
+  ) {
     return null;
   }
   if (Date.now() - cached.syncedAtMs >= EXTERNAL_CLI_SYNC_TTL_MS) {
@@ -118,15 +139,17 @@ function readCachedAuthProfileStore(
   return cloneAuthProfileStore(cached.store);
 }
 
-function writeCachedAuthProfileStore(
-  authPath: string,
-  mtimeMs: number | null,
-  store: AuthProfileStore,
-): void {
-  loadedAuthStoreCache.set(authPath, {
-    mtimeMs,
+function writeCachedAuthProfileStore(params: {
+  authPath: string;
+  authMtimeMs: number | null;
+  stateMtimeMs: number | null;
+  store: AuthProfileStore;
+}): void {
+  loadedAuthStoreCache.set(params.authPath, {
+    authMtimeMs: params.authMtimeMs,
+    stateMtimeMs: params.stateMtimeMs,
     syncedAtMs: Date.now(),
-    store: cloneAuthProfileStore(store),
+    store: cloneAuthProfileStore(params.store),
   });
 }
 
@@ -286,37 +309,11 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
     normalized[key] = parsed.credential;
   }
   warnRejectedCredentialEntries("auth-profiles.json", rejected);
-  const order =
-    record.order && typeof record.order === "object"
-      ? Object.entries(record.order as Record<string, unknown>).reduce(
-          (acc, [provider, value]) => {
-            if (!Array.isArray(value)) {
-              return acc;
-            }
-            const list = value
-              .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-              .filter(Boolean);
-            if (list.length === 0) {
-              return acc;
-            }
-            acc[provider] = list;
-            return acc;
-          },
-          {} as Record<string, string[]>,
-        )
-      : undefined;
+  const legacyState = coerceAuthProfileState(record);
   return {
     version: Number(record.version ?? AUTH_STORE_VERSION),
     profiles: normalized,
-    order,
-    lastGood:
-      record.lastGood && typeof record.lastGood === "object"
-        ? (record.lastGood as Record<string, string>)
-        : undefined,
-    usageStats:
-      record.usageStats && typeof record.usageStats === "object"
-        ? (record.usageStats as Record<string, ProfileUsageStats>)
-        : undefined,
+    ...legacyState,
   };
 }
 
@@ -360,7 +357,7 @@ function mergeAuthProfileStores(
 function buildPersistedAuthProfileStore(
   store: AuthProfileStore,
   params?: { agentDir?: string },
-): AuthProfileStore {
+): AuthProfileSecretsStore {
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).flatMap(([profileId, credential]) => {
       if (
@@ -387,14 +384,11 @@ function buildPersistedAuthProfileStore(
       }
       return [[profileId, credential]];
     }),
-  ) as AuthProfileStore["profiles"];
+  ) as AuthProfileSecretsStore["profiles"];
 
   return {
     version: AUTH_STORE_VERSION,
     profiles,
-    order: store.order ?? undefined,
-    lastGood: store.lastGood ?? undefined,
-    usageStats: store.usageStats ?? undefined,
   };
 }
 
@@ -460,9 +454,18 @@ function applyLegacyStore(store: AuthProfileStore, legacy: LegacyAuthStore): voi
   }
 }
 
-function loadCoercedStore(authPath: string): AuthProfileStore | null {
+function loadCoercedStore(authPath: string, agentDir?: string): AuthProfileStore | null {
   const raw = loadJsonFile(authPath);
-  return coerceAuthStore(raw);
+  const store = coerceAuthStore(raw);
+  if (!store) {
+    return null;
+  }
+  const persistedState = loadPersistedAuthProfileState(agentDir);
+  const embeddedState = coerceAuthProfileState(raw);
+  return {
+    ...store,
+    ...mergeAuthProfileState(embeddedState, persistedState),
+  };
 }
 
 function shouldLogAuthStoreTiming(): boolean {
@@ -515,19 +518,31 @@ function loadAuthProfileStoreForAgent(
 ): AuthProfileStore {
   const readOnly = options?.readOnly === true;
   const authPath = resolveAuthStorePath(agentDir);
+  const statePath = resolveAuthStatePath(agentDir);
+  const authMtimeMs = readAuthStoreMtimeMs(authPath);
+  const stateMtimeMs = readAuthStoreMtimeMs(statePath);
   if (!readOnly) {
-    const cached = readCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath));
+    const cached = readCachedAuthProfileStore({
+      authPath,
+      authMtimeMs,
+      stateMtimeMs,
+    });
     if (cached) {
       return cached;
     }
   }
-  const asStore = loadCoercedStore(authPath);
+  const asStore = loadCoercedStore(authPath, agentDir);
   if (asStore) {
     // Runtime secret activation must remain read-only:
     // sync external CLI credentials in-memory, but never persist while readOnly.
     syncExternalCliCredentialsTimed(asStore, { log: !readOnly });
     if (!readOnly) {
-      writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), asStore);
+      writeCachedAuthProfileStore({
+        authPath,
+        authMtimeMs: readAuthStoreMtimeMs(authPath),
+        stateMtimeMs: readAuthStoreMtimeMs(statePath),
+        store: asStore,
+      });
     }
     return asStore;
   }
@@ -538,11 +553,20 @@ function loadAuthProfileStoreForAgent(
     const mainRaw = loadJsonFile(mainAuthPath);
     const mainStore = coerceAuthStore(mainRaw);
     if (mainStore && Object.keys(mainStore.profiles).length > 0) {
-      // Clone main store to subagent directory for auth inheritance
-      saveJsonFile(authPath, mainStore);
+      // Clone only secret-bearing profiles to subagent directory for auth inheritance.
+      saveJsonFile(authPath, {
+        version: AUTH_STORE_VERSION,
+        profiles: mainStore.profiles,
+      } satisfies AuthProfileSecretsStore);
       log.info("inherited auth-profiles from main agent", { agentDir });
-      writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), mainStore);
-      return mainStore;
+      const inherited = { version: mainStore.version, profiles: { ...mainStore.profiles } };
+      writeCachedAuthProfileStore({
+        authPath,
+        authMtimeMs: readAuthStoreMtimeMs(authPath),
+        stateMtimeMs: readAuthStoreMtimeMs(statePath),
+        store: inherited,
+      });
+      return inherited;
     }
   }
 
@@ -583,7 +607,12 @@ function loadAuthProfileStoreForAgent(
   }
 
   if (!readOnly) {
-    writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), store);
+    writeCachedAuthProfileStore({
+      authPath,
+      authMtimeMs: readAuthStoreMtimeMs(authPath),
+      stateMtimeMs: readAuthStoreMtimeMs(statePath),
+      store,
+    });
   }
   return store;
 }
@@ -633,12 +662,19 @@ export function ensureAuthProfileStore(
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
   const authPath = resolveAuthStorePath(agentDir);
+  const statePath = resolveAuthStatePath(agentDir);
   const runtimeKey = resolveRuntimeStoreKey(agentDir);
   const payload = buildPersistedAuthProfileStore(store, { agentDir });
   saveJsonFile(authPath, payload);
+  savePersistedAuthProfileState(store, agentDir);
   const runtimeStore = cloneAuthProfileStore(store);
   syncExternalCliCredentialsTimed(runtimeStore, { log: false });
-  writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), runtimeStore);
+  writeCachedAuthProfileStore({
+    authPath,
+    authMtimeMs: readAuthStoreMtimeMs(authPath),
+    stateMtimeMs: readAuthStoreMtimeMs(statePath),
+    store: runtimeStore,
+  });
   if (runtimeAuthStoreSnapshots.has(runtimeKey)) {
     runtimeAuthStoreSnapshots.set(runtimeKey, cloneAuthProfileStore(runtimeStore));
   }
