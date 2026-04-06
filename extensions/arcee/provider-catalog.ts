@@ -21,11 +21,22 @@ export function toArceeOpenRouterModelId(modelId: string): string {
   return `arcee/${normalized}`;
 }
 
+export function buildArceeCatalogModels(): NonNullable<ModelProviderConfig["models"]> {
+  return ARCEE_MODEL_CATALOG.map(buildArceeModelDefinition);
+}
+
+export function buildArceeOpenRouterCatalogModels(): NonNullable<ModelProviderConfig["models"]> {
+  return buildArceeCatalogModels().map((model) => ({
+    ...model,
+    id: toArceeOpenRouterModelId(model.id),
+  }));
+}
+
 export function buildArceeProvider(): ModelProviderConfig {
   return {
     baseUrl: ARCEE_BASE_URL,
     api: "openai-completions",
-    models: ARCEE_MODEL_CATALOG.map(buildArceeModelDefinition),
+    models: buildArceeCatalogModels(),
   };
 }
 
@@ -33,9 +44,6 @@ export function buildArceeOpenRouterProvider(): ModelProviderConfig {
   return {
     baseUrl: OPENROUTER_BASE_URL,
     api: "openai-completions",
-    models: ARCEE_MODEL_CATALOG.map((model) => ({
-      ...buildArceeModelDefinition(model),
-      id: toArceeOpenRouterModelId(model.id),
-    })),
+    models: buildArceeOpenRouterCatalogModels(),
   };
 }

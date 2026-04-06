@@ -15,7 +15,7 @@ describe("config io shell env expected keys", () => {
     ]);
 
     vi.resetModules();
-    const { resolveShellEnvExpectedKeys } = await import("./io.js");
+    const { resolveShellEnvExpectedKeys } = await import("./shell-env-expected-keys.js");
 
     expect(resolveShellEnvExpectedKeys({} as NodeJS.ProcessEnv)).toEqual(
       expect.arrayContaining([
