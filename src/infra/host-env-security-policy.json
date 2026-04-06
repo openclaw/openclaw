@@ -1,5 +1,5 @@
 {
-  "blockedKeys": [
+  "blockedEverywhereKeys": [
     "NODE_OPTIONS",
     "NODE_PATH",
     "PYTHONHOME",
@@ -55,7 +55,7 @@
     "ANT_OPTS",
     "HGRCPATH"
   ],
-  "blockedOverrideKeys": [
+  "blockedOverrideOnlyKeys": [
     "HOME",
     "GRADLE_USER_HOME",
     "ZDOTDIR",
@@ -128,9 +128,6 @@
     "UV_PYTHON",
     "UV_EXTRA_INDEX_URL",
     "UV_DEFAULT_INDEX",
-    "DOCKER_HOST",
-    "DOCKER_TLS_VERIFY",
-    "DOCKER_CERT_PATH",
     "DOCKER_CONTEXT",
     "LIBRARY_PATH",
     "CPATH",
