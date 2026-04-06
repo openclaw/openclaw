@@ -1,13 +1,15 @@
 import {
   buildNoCapabilityModelConfiguredMessage,
+  resolveCapabilityModelCandidates,
+  throwCapabilityGenerationFailure,
+} from "../../../src/media-generation/runtime-shared.js";
+import {
   createSubsystemLogger,
   describeFailoverError,
   getImageGenerationProvider,
   isFailoverError,
   listImageGenerationProviders,
   parseImageGenerationModelRef,
-  resolveCapabilityModelCandidates,
-  throwCapabilityGenerationFailure,
   type AuthProfileStore,
   type FallbackAttempt,
   type GeneratedImageAsset,
