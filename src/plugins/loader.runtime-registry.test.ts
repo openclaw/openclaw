@@ -54,12 +54,31 @@ describe("getCompatibleActivePluginRegistry", () => {
         onlyPluginIds: ["demo"],
       }),
     ).toBeUndefined();
+  });
+
+  it("treats an active gateway-bindable registry as compatible with default runtime requests", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayBindableLoadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayBindableLoadOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
     expect(
       __testing.getCompatibleActivePluginRegistry({
-        ...loadOptions,
-        runtimeOptions: undefined,
+        config: gatewayBindableLoadOptions.config,
+        workspaceDir: gatewayBindableLoadOptions.workspaceDir,
       }),
-    ).toBeUndefined();
+    ).toBe(registry);
   });
 
   it("does not embed activation secrets in the loader cache key", () => {
