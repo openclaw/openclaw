@@ -1,6 +1,5 @@
 import path from "node:path";
 
-
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -16,7 +15,11 @@ import {
   resolveDefaultModelRef,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
+import {
+  getApiKeyForModel,
+  normalizeWorkspaceDir,
+  requireApiKey,
+} from "./tool-runtime.helpers.js";
 
 type TextToolAttempt = {
   provider: string;
@@ -53,19 +56,31 @@ export function applyVideoGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   videoGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "videoGenerationModel", videoGenerationModelConfig);
+  return applyAgentDefaultModelConfig(
+    cfg,
+    "videoGenerationModel",
+    videoGenerationModelConfig,
+  );
 }
 
 export function applyMusicGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   musicGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "musicGenerationModel", musicGenerationModelConfig);
+  return applyAgentDefaultModelConfig(
+    cfg,
+    "musicGenerationModel",
+    musicGenerationModelConfig,
+  );
 }
 
 function applyAgentDefaultModelConfig(
   cfg: OpenClawConfig | undefined,
-  key: "imageModel" | "imageGenerationModel" | "videoGenerationModel" | "musicGenerationModel",
+  key:
+    | "imageModel"
+    | "imageGenerationModel"
+    | "videoGenerationModel"
+    | "musicGenerationModel",
   modelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
   if (!cfg) {
@@ -90,19 +105,22 @@ type CapabilityProvider = {
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
-export function findCapabilityProviderById<T extends CapabilityProvider>(params: {
-  providers: T[];
-  providerId?: string;
-}): T | undefined {
+export function findCapabilityProviderById<
+  T extends CapabilityProvider,
+>(params: { providers: T[]; providerId?: string }): T | undefined {
   const selectedProvider = normalizeProviderId(params.providerId ?? "");
   return params.providers.find(
     (provider) =>
       normalizeProviderId(provider.id) === selectedProvider ||
-      (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === selectedProvider),
+      (provider.aliases ?? []).some(
+        (alias) => normalizeProviderId(alias) === selectedProvider,
+      ),
   );
 }
 
-export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
+export function isCapabilityProviderConfigured<
+  T extends CapabilityProvider,
+>(params: {
   providers: T[];
   provider?: T;
   providerId?: string;
@@ -117,7 +135,10 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     });
   if (!provider) {
     return params.providerId
-      ? hasAuthForProvider({ provider: params.providerId, agentDir: params.agentDir })
+      ? hasAuthForProvider({
+          provider: params.providerId,
+          agentDir: params.agentDir,
+        })
       : false;
   }
   if (provider.isConfigured) {
@@ -126,10 +147,15 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       agentDir: params.agentDir,
     });
   }
-  return hasAuthForProvider({ provider: provider.id, agentDir: params.agentDir });
+  return hasAuthForProvider({
+    provider: provider.id,
+    agentDir: params.agentDir,
+  });
 }
 
-export function resolveCapabilityModelCandidatesForTool<T extends CapabilityProvider>(params: {
+export function resolveCapabilityModelCandidatesForTool<
+  T extends CapabilityProvider,
+>(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   providers: T[];
@@ -174,7 +200,9 @@ export function resolveCapabilityModelCandidatesForTool<T extends CapabilityProv
   return orderedRefs;
 }
 
-export function resolveCapabilityModelConfigForTool<T extends CapabilityProvider>(params: {
+export function resolveCapabilityModelConfigForTool<
+  T extends CapabilityProvider,
+>(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   modelConfig?: AgentModelConfig;
@@ -310,11 +338,16 @@ export function resolveMediaToolLocalRoots(
     }
   }
 
-  return uniqueNormalized(
-    workspaceDir
-      ? [...defaultRoots, workspaceDir, ...allowlistRoots]
-      : [...defaultRoots, ...allowlistRoots],
-  );
+  return Array.from(
+    new Set(
+      (workspaceDir
+        ? [...defaultRoots, workspaceDir, ...allowlistRoots]
+        : [...defaultRoots, ...allowlistRoots]
+      )
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ).map((value) => value.replace(/\\/g, "/"));
 }
 
 export function resolvePromptAndModelOverride(
