@@ -432,6 +432,61 @@ def summarize_loop_convergence(convergence: dict | None) -> dict | None:
     }
 
 
+def build_manager_handoff(report: dict) -> dict:
+    loop_convergence = report.get('loop_convergence')
+    loop_convergence_summary = report.get('loop_convergence_summary')
+    summary = loop_convergence_summary if isinstance(loop_convergence_summary, dict) else {}
+    convergence = loop_convergence if isinstance(loop_convergence, dict) else {}
+
+    notes: list[str] = []
+    warnings = report.get('warnings')
+    if isinstance(warnings, list):
+        for item in warnings:
+            if isinstance(item, str) and item.strip():
+                notes.append(item.strip())
+    for field in (
+        convergence.get('reason'),
+        report.get('secondary_gate_reason'),
+        report.get('post_task_followup_block_reason'),
+    ):
+        if isinstance(field, str) and field.strip():
+            notes.append(field.strip())
+    deduped_notes: list[str] = []
+    seen_notes: set[str] = set()
+    for item in notes:
+        if item not in seen_notes:
+            deduped_notes.append(item)
+            seen_notes.add(item)
+    deduped_notes = deduped_notes[:5]
+
+    main_action = report.get('main_action')
+    secondary_action = report.get('secondary_action')
+    last_main_action = (
+        main_action.get('action') if isinstance(main_action, dict) else None
+    )
+    last_secondary_action = (
+        secondary_action.get('action') if isinstance(secondary_action, dict) else None
+    )
+
+    suggested_next_step = summary.get('suggested_next_step')
+    if not suggested_next_step and report.get('executor_state') in {'failed', 'stopped'}:
+        suggested_next_step = None
+
+    return {
+        'handoff_version': 'v1',
+        'source': 'sense_runtime_manager_executor',
+        'executor_state': report.get('executor_state'),
+        'loop_convergence_state': convergence.get('state'),
+        'primary_remaining_issue': summary.get('primary_remaining_issue'),
+        'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),
+        'suggested_next_step': suggested_next_step,
+        'summary_confidence': summary.get('summary_confidence', 0.0),
+        'last_main_action': last_main_action,
+        'last_secondary_action': last_secondary_action,
+        'notes': deduped_notes,
+    }
+
+
 def derive_post_task_final_state(result: dict) -> str:
     provider_status = result.get('provider_status')
     gpu_status = result.get('gpu_status')
@@ -642,6 +697,7 @@ def main() -> int:
             'exit_summary': build_exit_summary(main_placeholder, secondary_placeholder),
             'policy_trace': policy.get('policy_trace', {}),
         }
+        output['manager_handoff'] = build_manager_handoff(output)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
@@ -678,6 +734,7 @@ def main() -> int:
             'exit_summary': build_exit_summary(main_result, secondary_placeholder),
             'policy_trace': policy.get('policy_trace', {}),
         }
+        output['manager_handoff'] = build_manager_handoff(output)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 1
 
@@ -700,6 +757,7 @@ def main() -> int:
             'exit_summary': build_exit_summary(main_result, secondary_placeholder),
             'policy_trace': policy.get('policy_trace', {}),
         }
+        output['manager_handoff'] = build_manager_handoff(output)
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 1
 
@@ -740,6 +798,7 @@ def main() -> int:
                 'exit_summary': build_exit_summary(main_result, secondary_result),
                 'policy_trace': policy.get('policy_trace', {}),
             }
+            output['manager_handoff'] = build_manager_handoff(output)
             print(json.dumps(output, ensure_ascii=False, indent=2))
             return 1
 
@@ -763,6 +822,7 @@ def main() -> int:
                 'exit_summary': build_exit_summary(main_result, secondary_result),
                 'policy_trace': policy.get('policy_trace', {}),
             }
+            output['manager_handoff'] = build_manager_handoff(output)
             print(json.dumps(output, ensure_ascii=False, indent=2))
             return 1
 
@@ -840,6 +900,7 @@ def main() -> int:
             output['executor_state'] = 'completed_with_followup_candidate'
         else:
             output['executor_state'] = 'completed_resolved'
+    output['manager_handoff'] = build_manager_handoff(output)
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
 

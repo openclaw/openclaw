@@ -724,6 +724,8 @@ Current block reasons include:
 
 `loop_convergence_summary` is a lighter manager-facing projection of `remaining_issues`. It classifies a few common issue strings into classifier-compatible labels so the manager can pick the next likely fix from the report alone.
 
+The executor now also emits a thin `manager_handoff` payload for the next manager turn. This is a report-to-input bridge only; it does not trigger another action by itself.
+
 Current convergence states are:
 
 - `resolved`
@@ -752,6 +754,20 @@ The summary currently exposes:
 - `secondary_remaining_issues`
 - `suggested_next_step`
 - `summary_confidence`
+
+Current `manager_handoff` shape is intentionally flat:
+
+- `handoff_version`
+- `source`
+- `executor_state`
+- `loop_convergence_state`
+- `primary_remaining_issue`
+- `secondary_remaining_issues`
+- `suggested_next_step`
+- `summary_confidence`
+- `last_main_action`
+- `last_secondary_action`
+- `notes`
 
 Current confidence gate is intentionally small:
 
