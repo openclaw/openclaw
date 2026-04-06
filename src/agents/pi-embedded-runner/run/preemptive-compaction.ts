@@ -1,9 +1,19 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import { SAFETY_MARGIN, estimateMessagesTokens } from "../../compaction.js";
+import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";
+
+const ESTIMATED_CHARS_PER_TOKEN = 4;
+const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
+
+export type PreemptiveCompactionRoute =
+  | "fits"
+  | "compact_only"
+  | "truncate_tool_results_only"
+  | "compact_then_truncate";
 
 export function estimatePrePromptTokens(params: {
   messages: AgentMessage[];
@@ -30,18 +40,47 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   contextTokenBudget: number;
   reserveTokens: number;
 }): {
+  route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
   estimatedPromptTokens: number;
   promptBudgetBeforeReserve: number;
+  overflowTokens: number;
+  toolResultReducibleChars: number;
 } {
   const estimatedPromptTokens = estimatePrePromptTokens(params);
   const promptBudgetBeforeReserve = Math.max(
     1,
     Math.floor(params.contextTokenBudget) - Math.max(0, Math.floor(params.reserveTokens)),
   );
+  const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
+  const toolResultPotential = estimateToolResultReductionPotential({
+    messages: params.messages,
+    contextWindowTokens: params.contextTokenBudget,
+  });
+  const overflowChars = overflowTokens * ESTIMATED_CHARS_PER_TOKEN;
+  const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * ESTIMATED_CHARS_PER_TOKEN;
+  const truncateOnlyThresholdChars = Math.max(
+    overflowChars + truncationBufferChars,
+    Math.ceil(overflowChars * 1.5),
+  );
+  const toolResultReducibleChars = toolResultPotential.maxReducibleChars;
+
+  let route: PreemptiveCompactionRoute = "fits";
+  if (overflowTokens > 0) {
+    if (toolResultReducibleChars <= 0) {
+      route = "compact_only";
+    } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
+      route = "truncate_tool_results_only";
+    } else {
+      route = "compact_then_truncate";
+    }
+  }
   return {
-    shouldCompact: estimatedPromptTokens > promptBudgetBeforeReserve,
+    route,
+    shouldCompact: route === "compact_only" || route === "compact_then_truncate",
     estimatedPromptTokens,
     promptBudgetBeforeReserve,
+    overflowTokens,
+    toolResultReducibleChars,
   };
 }
