@@ -149,6 +149,13 @@ export type AgentDefaultsConfig = {
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /**
+   * List of optional bootstrap filenames to skip writing to the workspace root.
+   * Applies to: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
+   * Required files (AGENTS.md, MEMORY.md, TOOLS.md) cannot be skipped.
+   * Example: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]
+   */
+  skipOptionalBootstrapFiles?: string[];
+  /**
    * Controls when workspace bootstrap files (AGENTS.md, SOUL.md, etc.) are
    * injected into the system prompt:
    * - always: inject on every turn (default)
