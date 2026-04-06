@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
@@ -421,7 +422,7 @@ const SECTION_CATEGORIES: SectionCategory[] = [
   },
   {
     id: "appearance",
-    label: "Appearance",
+    label: t("tabs.appearance"),
     sections: [
       { key: "__appearance__", label: "Theme" },
       { key: "ui", label: "UI" },
@@ -842,7 +843,7 @@ export function renderConfig(props: ConfigProps) {
                 `
               : nothing}
             <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
-              ${props.loading ? "Loading…" : "Reload"}
+              ${props.loading ? t("common.loading") : t("common.reload")}
             </button>
             <button class="btn btn--sm primary" ?disabled=${!canSave} @click=${props.onSave}>
               ${props.saving ? "Saving…" : "Save"}
@@ -896,7 +897,11 @@ export function renderConfig(props: ConfigProps) {
               `
             : nothing}
 
-          <div class="config-top-tabs__scroller" role="tablist" aria-label="Settings sections">
+          <div
+            class="config-top-tabs__scroller"
+            role="tablist"
+            aria-label="${t("common.settingsSections")}"
+          >
             ${topTabs.map(
               (tab) => html`
                 <button

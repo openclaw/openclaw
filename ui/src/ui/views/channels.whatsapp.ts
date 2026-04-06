@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { WhatsAppStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -78,7 +79,7 @@ export function renderWhatsAppCard(params: {
       >
         Logout
       </button>
-      <button class="btn" @click=${() => props.onRefresh(true)}>Refresh</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.refresh")}</button>
     </div>`,
   });
 }
