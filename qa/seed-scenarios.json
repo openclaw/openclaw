@@ -1,0 +1,139 @@
+[
+  {
+    "id": "channel-chat-baseline",
+    "title": "Channel baseline conversation",
+    "surface": "channel",
+    "objective": "Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.",
+    "successCriteria": [
+      "Agent replies in the shared channel transcript.",
+      "Agent keeps the conversation scoped to the channel.",
+      "Agent respects mention-driven group routing semantics."
+    ],
+    "docsRefs": ["docs/channels/group-messages.md", "docs/channels/qa-channel.md"],
+    "codeRefs": ["extensions/qa-channel/src/inbound.ts", "extensions/qa-lab/src/bus-state.ts"]
+  },
+  {
+    "id": "cron-one-minute-ping",
+    "title": "Cron one-minute ping",
+    "surface": "cron",
+    "objective": "Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.",
+    "successCriteria": [
+      "Agent schedules a cron reminder roughly one minute ahead.",
+      "Reminder returns through qa-channel.",
+      "Agent recognizes the reminder as part of the original task."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/channels/qa-channel.md"],
+    "codeRefs": ["extensions/qa-lab/src/bus-server.ts", "extensions/qa-lab/src/self-check.ts"]
+  },
+  {
+    "id": "dm-chat-baseline",
+    "title": "DM baseline conversation",
+    "surface": "dm",
+    "objective": "Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.",
+    "successCriteria": [
+      "Agent replies in DM without channel routing mistakes.",
+      "Agent explains the QA lab and message bus correctly.",
+      "Agent keeps the dev C-3PO personality."
+    ],
+    "docsRefs": ["docs/channels/qa-channel.md", "docs/help/testing.md"],
+    "codeRefs": ["extensions/qa-channel/src/gateway.ts", "extensions/qa-lab/src/lab-server.ts"]
+  },
+  {
+    "id": "lobster-invaders-build",
+    "title": "Build Lobster Invaders",
+    "surface": "workspace",
+    "objective": "Verify the agent can read the repo, create a tiny playable artifact, and report what changed.",
+    "successCriteria": [
+      "Agent inspects source before coding.",
+      "Agent builds a tiny playable Lobster Invaders artifact.",
+      "Agent explains how to run or view the artifact."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/web/dashboard.md"],
+    "codeRefs": ["extensions/qa-lab/src/report.ts", "extensions/qa-lab/web/src/app.ts"]
+  },
+  {
+    "id": "memory-recall",
+    "title": "Memory recall after context switch",
+    "surface": "memory",
+    "objective": "Verify the agent can store a fact, switch topics, then recall the fact accurately later.",
+    "successCriteria": [
+      "Agent acknowledges the seeded fact.",
+      "Agent later recalls the same fact correctly.",
+      "Recall stays scoped to the active QA conversation."
+    ],
+    "docsRefs": ["docs/help/testing.md"],
+    "codeRefs": ["extensions/qa-lab/src/scenario.ts"]
+  },
+  {
+    "id": "model-switch-follow-up",
+    "title": "Model switch follow-up",
+    "surface": "models",
+    "objective": "Verify the agent can switch to a different configured model and continue coherently.",
+    "successCriteria": [
+      "Agent reflects the model switch request.",
+      "Follow-up answer remains coherent with prior context.",
+      "Final report notes whether the switch actually happened."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/web/dashboard.md"],
+    "codeRefs": ["extensions/qa-lab/src/report.ts"]
+  },
+  {
+    "id": "reaction-edit-delete",
+    "title": "Reaction, edit, delete lifecycle",
+    "surface": "message-actions",
+    "objective": "Verify the agent can use channel-owned message actions and that the QA transcript reflects them.",
+    "successCriteria": [
+      "Agent adds at least one reaction.",
+      "Agent edits or replaces a message when asked.",
+      "Transcript shows the action lifecycle correctly."
+    ],
+    "docsRefs": ["docs/channels/qa-channel.md"],
+    "codeRefs": [
+      "extensions/qa-channel/src/channel-actions.ts",
+      "extensions/qa-lab/src/self-check-scenario.ts"
+    ]
+  },
+  {
+    "id": "source-docs-discovery-report",
+    "title": "Source and docs discovery report",
+    "surface": "discovery",
+    "objective": "Verify the agent can read repo docs and source, expand the QA plan, and publish a worked or did-not-work report.",
+    "successCriteria": [
+      "Agent reads docs and source before proposing more tests.",
+      "Agent identifies extra candidate scenarios beyond the seed list.",
+      "Agent ends with a worked or failed QA report."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/web/dashboard.md", "docs/channels/qa-channel.md"],
+    "codeRefs": [
+      "extensions/qa-lab/src/report.ts",
+      "extensions/qa-lab/src/self-check.ts",
+      "src/agents/system-prompt.ts"
+    ]
+  },
+  {
+    "id": "subagent-handoff",
+    "title": "Subagent handoff",
+    "surface": "subagents",
+    "objective": "Verify the agent can delegate a bounded task to a subagent and fold the result back into the main thread.",
+    "successCriteria": [
+      "Agent launches a bounded subagent task.",
+      "Subagent result is acknowledged in the main flow.",
+      "Final answer attributes delegated work clearly."
+    ],
+    "docsRefs": ["docs/tools/subagents.md", "docs/help/testing.md"],
+    "codeRefs": ["src/agents/system-prompt.ts", "extensions/qa-lab/src/report.ts"]
+  },
+  {
+    "id": "thread-follow-up",
+    "title": "Threaded follow-up",
+    "surface": "thread",
+    "objective": "Verify the agent can keep follow-up work inside a thread and not leak context into the root channel.",
+    "successCriteria": [
+      "Agent creates or uses a thread for deeper work.",
+      "Follow-up messages stay attached to the thread.",
+      "Thread report references the correct prior context."
+    ],
+    "docsRefs": ["docs/channels/qa-channel.md", "docs/channels/group-messages.md"],
+    "codeRefs": ["extensions/qa-channel/src/protocol.ts", "extensions/qa-lab/src/bus-state.ts"]
+  }
+]
