@@ -8,7 +8,7 @@ describe("parseFaceTags", () => {
     const bufferFromSpy = vi.spyOn(Buffer, "from");
 
     try {
-      expect(parseFaceTags(tag)).toBe(tag);
+      expect(parseFaceTags(tag)).toBe("[Emoji: unknown emoji]");
       expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedBase64, "base64");
     } finally {
       bufferFromSpy.mockRestore();

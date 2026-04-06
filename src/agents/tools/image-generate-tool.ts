@@ -575,6 +575,10 @@ export function createImageGenerateTool(options?: {
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
+        maxBytes:
+          typeof effectiveCfg?.agents?.defaults?.mediaMaxMb === "number"
+            ? Math.floor(effectiveCfg.agents.defaults.mediaMaxMb * 1024 * 1024)
+            : undefined,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
