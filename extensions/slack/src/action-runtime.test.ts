@@ -672,4 +672,37 @@ describe("handleSlackAction", () => {
       },
     });
   });
+
+  it("passes resolved bot token to downloadSlackFile when no userToken override", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction({ action: "downloadFile", fileId: "F789" }, slackConfig());
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(opts?.token).toBe("tok");
+  });
+
+  it("passes resolved user token to downloadSlackFile when userToken is configured", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction(
+      { action: "downloadFile", fileId: "F789" },
+      slackConfig({
+        accounts: {
+          default: {
+            botToken: "xoxb-bot",
+            userToken: "xoxp-user",
+          },
+        },
+      }),
+    );
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(opts?.token).toBe("xoxp-user");
+  });
+
+  it("omits token when neither botToken nor userToken is available for downloadFile", async () => {
+    downloadSlackFile.mockResolvedValueOnce(null);
+    await handleSlackAction({ action: "downloadFile", fileId: "F789" }, {
+      channels: { slack: {} },
+    } as OpenClawConfig);
+    const opts = downloadSlackFile.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(opts?.token).toBeUndefined();
+  });
 });
