@@ -20,11 +20,11 @@ const {
   })),
 }));
 
-vi.mock("@openclaw/plugin-sdk/provider-auth-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("@openclaw/plugin-sdk/provider-http", () => ({
+vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   fetchWithTimeout: fetchWithTimeoutMock,
   postJsonRequest: postJsonRequestMock,
