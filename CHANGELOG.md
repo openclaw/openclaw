@@ -385,7 +385,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/attachments: offload large inbound images without leaking `media://` markers into text-only runs, preserve mixed attachment order for model input/transcripts, and fail closed when model image capability cannot be resolved. (#55513) Thanks @Syysean.
 - Telegram/outbound chunking: use static markdown chunking when Telegram runtime state is unavailable so long outbound Telegram messages still split correctly after cold starts. (#57816) Thanks @ForestDengHK.
 
-- Agents/session keys: normalize whitespace-only embedded runner session keys before backfill fallback so hooks, workspace resolution, and compaction do not receive invalid blank session identifiers. (#60555) Thanks @100yenadmin.
+- Agents/session keys: normalize whitespace-only embedded runner session keys before backfill fallback so hooks, workspace resolution, and compaction do not receive invalid blank session identifiers. (#60552) Thanks @100yenadmin.
+
 ## 2026.4.2
 
 ### Breaking
