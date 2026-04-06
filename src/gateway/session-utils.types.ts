@@ -5,6 +5,7 @@ import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
   SessionsListResultBase,
+  SessionsListRpcResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -113,6 +114,11 @@ export type SessionsPreviewResult = {
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
+
+export type SessionsListRpcResult = SessionsListRpcResultBase<
+  GatewaySessionsDefaults,
+  GatewaySessionRow
+>;
 
 export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   entry: SessionEntry;

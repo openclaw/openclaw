@@ -30,6 +30,8 @@ export type IncludeResolver = {
   readFile: (path: string) => string;
   readFileWithGuards?: (params: IncludeFileReadParams) => string;
   parseJson: (raw: string) => unknown;
+  /** Fires for each included file (resolved absolute path) before it is read. */
+  onResolvedIncludePath?: (resolvedPath: string) => void;
 };
 
 type IncludeFileReadParams = {
@@ -204,6 +206,8 @@ class IncludeProcessor {
 
     this.checkCircular(resolvedPath);
     this.checkDepth(includePath);
+
+    this.resolver.onResolvedIncludePath?.(resolvedPath);
 
     const raw = this.readFile(includePath, resolvedPath, root);
     const parsed = this.parseFile(includePath, resolvedPath, raw);

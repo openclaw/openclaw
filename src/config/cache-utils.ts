@@ -58,9 +58,12 @@ function isCacheEntryExpired(storedAt: number, now: number, ttlMs: number): bool
   return now - storedAt > ttlMs;
 }
 
+type CacheMaxEntriesResolver = number | undefined | (() => number | undefined);
+
 export function createExpiringMapCache<TKey, TValue>(options: {
   ttlMs: CacheTtlResolver;
   pruneIntervalMs?: CachePruneIntervalResolver;
+  maxEntries?: CacheMaxEntriesResolver;
   clock?: () => number;
 }): ExpiringMapCache<TKey, TValue> {
   const cache = new Map<TKey, ExpiringMapCacheEntry<TValue>>();
@@ -69,6 +72,39 @@ export function createExpiringMapCache<TKey, TValue>(options: {
 
   function getTtlMs(): number {
     return Math.max(0, Math.floor(resolveCacheNumeric(options.ttlMs)));
+  }
+
+  function getMaxEntries(): number | undefined {
+    if (options.maxEntries === undefined) {
+      return undefined;
+    }
+    const raw =
+      typeof options.maxEntries === "function" ? options.maxEntries() : options.maxEntries;
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+      return undefined;
+    }
+    return Math.floor(raw);
+  }
+
+  function evictOldestIfOverCap(): void {
+    const maxEntries = getMaxEntries();
+    if (maxEntries === undefined) {
+      return;
+    }
+    while (cache.size > maxEntries) {
+      let evictKey: TKey | undefined;
+      let evictAt = Infinity;
+      for (const [key, entry] of cache.entries()) {
+        if (entry.storedAt < evictAt) {
+          evictAt = entry.storedAt;
+          evictKey = key;
+        }
+      }
+      if (evictKey === undefined) {
+        break;
+      }
+      cache.delete(evictKey);
+    }
   }
 
   function maybePruneExpiredEntries(nowMs: number, ttlMs: number): void {
@@ -115,6 +151,7 @@ export function createExpiringMapCache<TKey, TValue>(options: {
         storedAt: nowMs,
         value,
       });
+      evictOldestIfOverCap();
     },
     delete: (key) => {
       cache.delete(key);

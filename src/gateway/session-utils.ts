@@ -41,6 +41,7 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
+import { getFileStatSnapshot } from "../config/cache-utils.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -128,6 +129,7 @@ export type {
   GatewaySessionRow,
   GatewaySessionsDefaults,
   SessionsListResult,
+  SessionsListRpcResult,
   SessionsPatchResult,
   SessionsPreviewEntry,
   SessionsPreviewResult,
@@ -1192,6 +1194,77 @@ export function resolveGatewaySessionThinkingDefault(params: {
       catalog: params.modelCatalog,
     })
   );
+}
+
+/**
+ * Cheap identity for combined session stores: sorted `path:mtime:size` markers.
+ * Used to skip `sessions.list` recomputation when backing files are unchanged.
+ */
+export function collectCombinedSessionStoreStatFingerprint(cfg: OpenClawConfig): string {
+  const storeConfig = cfg.session?.store;
+  const storePaths: string[] =
+    storeConfig && !isStorePathTemplate(storeConfig)
+      ? [resolveStorePath(storeConfig)]
+      : resolveAllAgentSessionStoreTargetsSync(cfg).map((t) => t.storePath);
+
+  const markers: string[] = [];
+  const seen = new Set<string>();
+  for (const storePath of storePaths) {
+    if (seen.has(storePath)) {
+      continue;
+    }
+    seen.add(storePath);
+    const snap = getFileStatSnapshot(storePath);
+    markers.push(snap ? `${storePath}:${snap.mtimeMs}:${snap.sizeBytes}` : `${storePath}:missing`);
+  }
+  markers.sort();
+  return markers.join("\n");
+}
+
+export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+} {
+  const storeConfig = cfg.session?.store;
+  if (storeConfig && !isStorePathTemplate(storeConfig)) {
+    const storePath = resolveStorePath(storeConfig);
+    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+    const store = loadSessionStore(storePath);
+    const combined: Record<string, SessionEntry> = {};
+    for (const [key, entry] of Object.entries(store)) {
+      const canonicalKey = canonicalizeSessionKeyForAgent(defaultAgentId, key);
+      mergeSessionEntryIntoCombined({
+        cfg,
+        combined,
+        entry,
+        agentId: defaultAgentId,
+        canonicalKey,
+      });
+    }
+    return { storePath, store: combined };
+  }
+
+  const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
+  const combined: Record<string, SessionEntry> = {};
+  for (const target of targets) {
+    const agentId = target.agentId;
+    const storePath = target.storePath;
+    const store = loadSessionStore(storePath);
+    for (const [key, entry] of Object.entries(store)) {
+      const canonicalKey = canonicalizeSessionKeyForAgent(agentId, key);
+      mergeSessionEntryIntoCombined({
+        cfg,
+        combined,
+        entry,
+        agentId,
+        canonicalKey,
+      });
+    }
+  }
+
+  const storePath =
+    typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
+  return { storePath, store: combined };
 }
 
 export function getSessionDefaults(

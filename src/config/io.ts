@@ -28,6 +28,7 @@ import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import { getFileStatSnapshot } from "./cache-utils.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
   type EnvSubstitutionWarning,
@@ -230,6 +231,11 @@ export type ConfigWriteOptions = {
    * an unrelated plugin rule prevents the full write from succeeding.
    */
   skipPluginValidation?: boolean;
+  /**
+   * Internal-only flag: keep runtime snapshots live during write so a caller
+   * can refresh them explicitly after persistence succeeds.
+   */
+  preserveRuntimeSnapshot?: boolean;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -1971,7 +1977,19 @@ export function createConfigIO(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
   ): Promise<{ persistedHash: string; persistedConfig: OpenClawConfig }> {
-    clearConfigCache();
+    const preserveRuntimeSnapshot = options.preserveRuntimeSnapshot === true;
+    // Always clear parse-cache entries first so this write computes from a fresh
+    // on-disk snapshot and does not reuse stale cache state.
+    clearConfigCacheEntry();
+    const finalizeRuntimeInvalidation = () => {
+      if (preserveRuntimeSnapshot) {
+        return;
+      }
+      // Direct io.writeConfigFile() callers still force a runtime reload, but
+      // only after persistence succeeds. This avoids clearing the active
+      // runtime snapshot during the write window.
+      clearConfigCache();
+    };
     const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
     let persistCandidate: unknown = cfg;
     const snapshot =
@@ -2247,6 +2265,7 @@ export function createConfigIO(
             undefined,
             await deps.fs.promises.stat(configPath).catch(() => null),
           );
+          finalizeRuntimeInvalidation();
           return { persistedHash: nextHash, persistedConfig: stampedOutputConfig };
         }
         await deps.fs.promises.unlink(tmp).catch(() => {
@@ -2262,6 +2281,7 @@ export function createConfigIO(
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
+      finalizeRuntimeInvalidation();
       return { persistedHash: nextHash, persistedConfig: stampedOutputConfig };
     } catch (err) {
       if (!configCommitted) {
@@ -2287,20 +2307,278 @@ export function createConfigIO(
   };
 }
 
+function buildSortedConfigStatFingerprint(configPath: string, includePaths: string[]): string {
+  const markers: string[] = [];
+  const seenPaths = new Set<string>();
+  const pushPathMarker = (filePath: string) => {
+    if (seenPaths.has(filePath)) {
+      return;
+    }
+    seenPaths.add(filePath);
+    const snap = getFileStatSnapshot(filePath);
+    markers.push(
+      snap ? `cfg:${filePath}:${snap.mtimeMs}:${snap.sizeBytes}` : `cfg:${filePath}:missing`,
+    );
+  };
+  pushPathMarker(configPath);
+  for (const p of includePaths) {
+    pushPathMarker(p);
+  }
+  markers.sort();
+  return markers.join("\n");
+}
+
+function computeResolvedConfigSourceStatFingerprint(
+  deps: Required<ConfigIoDeps>,
+  configPath: string,
+): { fingerprint: string; includePaths: string[]; includesResolved: boolean } {
+  const includePaths: string[] = [];
+  let includesResolved = false;
+
+  if (!deps.fs.existsSync(configPath)) {
+    return {
+      fingerprint: buildSortedConfigStatFingerprint(configPath, []),
+      includePaths,
+      includesResolved,
+    };
+  }
+
+  let raw: string;
+  try {
+    raw = deps.fs.readFileSync(configPath, "utf-8");
+  } catch {
+    return {
+      fingerprint: buildSortedConfigStatFingerprint(configPath, []),
+      includePaths,
+      includesResolved,
+    };
+  }
+
+  const parsedRes = parseConfigJson5(raw, deps.json5);
+  if (!parsedRes.ok) {
+    return {
+      fingerprint: buildSortedConfigStatFingerprint(configPath, []),
+      includePaths,
+      includesResolved,
+    };
+  }
+
+  includesResolved = true;
+  try {
+    resolveConfigIncludes(parsedRes.parsed, configPath, {
+      readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+      readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+        readConfigIncludeFileWithGuards({
+          includePath,
+          resolvedPath,
+          rootRealDir,
+          ioFs: deps.fs,
+        }),
+      parseJson: (rawInner) => deps.json5.parse(rawInner),
+      onResolvedIncludePath: (resolvedPath) => {
+        includePaths.push(resolvedPath);
+      },
+    });
+  } catch {
+    // Broken includes: do not trust include paths from this failed attempt.
+    return {
+      fingerprint: buildSortedConfigStatFingerprint(configPath, includePaths),
+      includePaths,
+      includesResolved: false,
+    };
+  }
+
+  return {
+    fingerprint: buildSortedConfigStatFingerprint(configPath, includePaths),
+    includePaths,
+    includesResolved,
+  };
+}
+
+type ConfigSourceStatFingerprintMemo = {
+  configPath: string;
+  rootMtimeMs: number | null;
+  rootSizeBytes: number | null;
+  includePaths: string[];
+  includesResolved: boolean;
+  fingerprint: string;
+};
+
+let configSourceStatFingerprintMemo: ConfigSourceStatFingerprintMemo | null = null;
+
+/** Test-only: clears the default-deps fingerprint memo used by `sessions.list` cache keys. */
+export function clearResolvedConfigSourceStatFingerprintSyncCacheForTest(): void {
+  configSourceStatFingerprintMemo = null;
+}
+
+function fingerprintRootStatParts(configPath: string): {
+  mtimeMs: number | null;
+  sizeBytes: number | null;
+} {
+  const snap = getFileStatSnapshot(configPath);
+  if (!snap) {
+    return { mtimeMs: null, sizeBytes: null };
+  }
+  return { mtimeMs: snap.mtimeMs, sizeBytes: snap.sizeBytes };
+}
+
+/**
+ * Sorted stat fingerprint for the active config file plus every `$include` target.
+ * Keeps derived caches (for example `sessions.list`) aligned with modular configs.
+ *
+ * With default deps (no overrides), repeats reuse resolved `$include` paths and only
+ * re-stat files until the root config file changes.
+ */
+export function collectResolvedConfigSourceStatFingerprintSync(
+  overrides: ConfigIoDeps = {},
+): string {
+  const deps = normalizeDeps(overrides);
+  const requestedConfigPath = resolveConfigPathForDeps(deps);
+  const candidatePaths = deps.configPath
+    ? [requestedConfigPath]
+    : resolveDefaultConfigCandidates(deps.env, deps.homedir);
+  const configPath =
+    candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
+
+  const useMemo = Object.keys(overrides).length === 0;
+  const rootParts = fingerprintRootStatParts(configPath);
+
+  if (
+    useMemo &&
+    configSourceStatFingerprintMemo &&
+    configSourceStatFingerprintMemo.configPath === configPath &&
+    configSourceStatFingerprintMemo.rootMtimeMs === rootParts.mtimeMs &&
+    configSourceStatFingerprintMemo.rootSizeBytes === rootParts.sizeBytes
+  ) {
+    if (!configSourceStatFingerprintMemo.includesResolved) {
+      // Stale include resolution can skip or hide include-file updates under a fixed root stat.
+      // Recompute to avoid trusting cached include paths from failed parses.
+      const computed = computeResolvedConfigSourceStatFingerprint(deps, configPath);
+      configSourceStatFingerprintMemo = {
+        configPath,
+        rootMtimeMs: rootParts.mtimeMs,
+        rootSizeBytes: rootParts.sizeBytes,
+        includePaths: computed.includePaths,
+        includesResolved: computed.includesResolved,
+        fingerprint: computed.fingerprint,
+      };
+      return computed.fingerprint;
+    }
+    const fpFast = buildSortedConfigStatFingerprint(
+      configPath,
+      configSourceStatFingerprintMemo.includePaths,
+    );
+    if (fpFast === configSourceStatFingerprintMemo.fingerprint) {
+      return fpFast;
+    }
+  }
+
+  const computed = computeResolvedConfigSourceStatFingerprint(deps, configPath);
+  if (useMemo) {
+    configSourceStatFingerprintMemo = {
+      configPath,
+      rootMtimeMs: rootParts.mtimeMs,
+      rootSizeBytes: rootParts.sizeBytes,
+      includePaths: computed.includePaths,
+      includesResolved: computed.includesResolved,
+      fingerprint: computed.fingerprint,
+    };
+  }
+  return computed.fingerprint;
+}
+
 // NOTE: These wrappers intentionally do *not* cache the resolved config path at
 // module scope. `OPENCLAW_CONFIG_PATH` (and friends) are expected to work even
 // when set after the module has been imported (tests, one-off scripts, etc.).
 const AUTO_OWNER_DISPLAY_SECRET_BY_PATH = new Map<string, string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT = new Set<string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED = new Set<string>();
+/**
+ * Stat fingerprint captured at the moment `loadConfig()` last parsed from disk.
+ * Compared against the live stat fingerprint to detect when the config cache
+ * is returning a stale object that doesn't match the current on-disk state.
+ */
+let configStatFingerprintAtLastLoad: string | null = null;
+type ConfigCacheEntry = {
+  configPath: string;
+  expiresAt: number;
+  config: OpenClawConfig;
+};
+let configCache: ConfigCacheEntry | null = null;
+
+function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
+  if (env.OPENCLAW_DISABLE_CONFIG_CACHE === "1") {
+    return 0;
+  }
+  const raw = env.OPENCLAW_CONFIG_CACHE_MS;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return 0;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+  return Math.floor(parsed);
+}
+
+function shouldUseConfigCache(env: NodeJS.ProcessEnv): boolean {
+  return resolveConfigCacheMs(env) > 0;
+}
+
+export function getConfigStatFingerprintAtLastLoad(): string | null {
+  return configStatFingerprintAtLastLoad;
+}
+
+export function resetConfigStatFingerprintAtLastLoadForTest(): void {
+  configStatFingerprintAtLastLoad = null;
+}
+
+function clearConfigCacheEntry(): void {
+  configCache = null;
+}
 export function clearConfigCache(): void {
-  // Compat shim: runtime snapshot is the only in-process cache now.
+  clearConfigCacheEntry();
+  resetConfigRuntimeState();
 }
 
 export function registerConfigWriteListener(
   listener: (event: ConfigWriteNotification) => void,
 ): () => void {
   return registerRuntimeConfigWriteListener(listener);
+}
+
+export function setRuntimeConfigSnapshot(
+  config: OpenClawConfig,
+  sourceConfig?: OpenClawConfig,
+): void {
+  configCache = null;
+  // Keep TOCTOU-sensitive `cfga` sessions-list cache keys aligned when swapping runtime snapshots.
+  configStatFingerprintAtLastLoad = collectResolvedConfigSourceStatFingerprintSync();
+  setRuntimeConfigSnapshotState(config, sourceConfig);
+}
+
+export function resetConfigRuntimeState(): void {
+  configCache = null;
+  configStatFingerprintAtLastLoad = null;
+  resetConfigRuntimeStateState();
+}
+
+export function clearRuntimeConfigSnapshot(): void {
+  resetConfigRuntimeState();
+}
+
+export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
+  return getRuntimeConfigSnapshotState();
+}
+
+export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
+  return getRuntimeConfigSourceSnapshotState();
+}
+
+export function setRuntimeConfigSnapshotRefreshHandler(
+  refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
+): void {
+  setRuntimeConfigSnapshotRefreshHandlerState(refreshHandler);
 }
 
 function isCompatibleTopLevelRuntimeProjectionShape(params: {
@@ -2361,10 +2639,39 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
 }
 
 export function loadConfig(): OpenClawConfig {
+  const io = createConfigIO();
+  const configPath = io.configPath;
+  const now = Date.now();
+  // Prefer the in-memory runtime snapshot before the parse cache so concurrent readers
+  // still see last-known-good resolved config during `writeConfigFile(...,
+  // preserveRuntimeSnapshot: true)` (and after `clearConfigCacheEntry()` clears the TTL
+  // cache) instead of falling back to a fresh disk read with unresolved SecretRefs.
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
+  if (runtimeConfigSnapshot) {
+    return runtimeConfigSnapshot;
+  }
+  if (shouldUseConfigCache(process.env)) {
+    const cached = configCache;
+    if (cached && cached.configPath === configPath && cached.expiresAt > now) {
+      return cached.config;
+    }
+    const config = io.loadConfig();
+    configStatFingerprintAtLastLoad = collectResolvedConfigSourceStatFingerprintSync();
+    configCache = {
+      configPath,
+      expiresAt: now + resolveConfigCacheMs(process.env),
+      config,
+    };
+    return config;
+  }
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
-  return loadPinnedRuntimeConfig(() => createConfigIO().loadConfig());
+  return loadPinnedRuntimeConfig(() => {
+    const config = io.loadConfig();
+    configStatFingerprintAtLastLoad = collectResolvedConfigSourceStatFingerprintSync();
+    return config;
+  });
 }
 
 export function getRuntimeConfig(): OpenClawConfig {
@@ -2452,6 +2759,7 @@ export async function writeConfigFile(
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
     skipOutputLogs: options.skipOutputLogs,
     skipPluginValidation: options.skipPluginValidation,
+    preserveRuntimeSnapshot: true,
   });
   if (
     options.skipRuntimeSnapshotRefresh &&

@@ -173,6 +173,14 @@ const runtimePluginsLoader = createLazyPromiseLoader(() =>
   importRuntimeModule<RuntimePluginsModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
 );
 
+/** Monotonic counter bumped on every registry mutation; used to invalidate caches that depend on subagent state. */
+let subagentRegistryGeneration = 0;
+
+/** Return the current monotonic generation counter for the subagent registry. */
+export function getSubagentRegistryGeneration(): number {
+  return subagentRegistryGeneration;
+}
+
 let sweeper: NodeJS.Timeout | null = null;
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
 let sweepInProgress = false;
@@ -327,7 +335,21 @@ async function resolveSubagentRegistryContextEngine(
   return await resolveContextEngine(cfg, options);
 }
 
-function persistSubagentRuns() {
+/**
+ * Persist the current subagent-runs map to disk.
+ *
+ * IMPORTANT: pass `{ bumpGeneration: true }` only when the preceding mutation
+ * changed `sessions.list`-visible subagent state (for example Map .set() /
+ * .delete(), or endedAt/outcome/endedReason/startedAt/sessionStartedAt changes).
+ *
+ * Bookkeeping-only updates can persist without a generation bump when safe
+ * (for example steer-restart suppression flags and ended-hook bookkeeping),
+ * to avoid invalidating list caches unnecessarily.
+ */
+function persistSubagentRuns(opts?: { bumpGeneration?: boolean }) {
+  if (opts?.bumpGeneration === true) {
+    subagentRegistryGeneration += 1;
+  }
   subagentRegistryDeps.persistSubagentRunsToDisk(subagentRuns);
 }
 
@@ -588,7 +610,20 @@ function resumeSubagentRun(runId: string) {
   if (!entry) {
     return;
   }
-  if (entry.cleanupCompletedAt) {
+  const orphanReason = resolveSubagentRunOrphanReason({ entry });
+  if (orphanReason) {
+    if (
+      reconcileOrphanedRun({
+        runId,
+        entry,
+        reason: orphanReason,
+        source: "resume",
+        runs: subagentRuns,
+        resumedRuns,
+      })
+    ) {
+      persistSubagentRuns({ bumpGeneration: true });
+    }
     return;
   }
   if (entry.pauseReason === "sessions_yield") {
@@ -694,7 +729,7 @@ function restoreSubagentRunsOnce() {
         resumedRuns,
       })
     ) {
-      persistSubagentRuns();
+      persistSubagentRuns({ bumpGeneration: true });
     }
     if (subagentRuns.size === 0) {
       return;
@@ -881,7 +916,7 @@ async function sweepSubagentRuns() {
     }
 
     if (mutated) {
-      persistSubagentRuns();
+      persistSubagentRuns({ bumpGeneration: true });
     }
     if (subagentRuns.size === 0) {
       stopSweeper();
@@ -918,7 +953,7 @@ function ensureListener() {
           if (typeof entry.sessionStartedAt !== "number") {
             entry.sessionStartedAt = startedAt;
           }
-          persistSubagentRuns();
+          persistSubagentRuns({ bumpGeneration: true });
         }
         return;
       }
@@ -1047,7 +1082,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   }
   listenerStarted = false;
   if (opts?.persist !== false) {
-    persistSubagentRuns();
+    persistSubagentRuns({ bumpGeneration: true });
   }
 }
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { __testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
@@ -17,6 +18,9 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
+beforeEach(() => {
+  controlPlaneRateLimitTesting.resetControlPlaneRateLimitState();
+});
 
 let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
 let sharedTempRoot: string;
@@ -329,21 +333,114 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
 
-    // Patch with the same config — no actual changes
-    const res = await rpcReq<{
+    // Normalize through config.set first so the subsequent config.patch reapply
+    // checks the true no-op path instead of first-write normalization.
+    const setRes = await rpcReq<{
+      ok?: boolean;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.set", {
+      raw: JSON.stringify(current.payload?.config ?? {}),
+      baseHash: current.payload?.hash,
+    });
+    expect(setRes.ok).toBe(true);
+
+    const normalized = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+    expect(normalized.ok).toBe(true);
+    expect(typeof normalized.payload?.hash).toBe("string");
+
+    // Re-apply the normalized config via config.patch — this must be a no-op.
+    const second = await rpcReq<{
       ok?: boolean;
       noop?: boolean;
       config?: Record<string, unknown>;
     }>(requireWs(), "config.patch", {
+      raw: JSON.stringify(setRes.payload?.config ?? {}),
+      baseHash: normalized.payload?.hash,
+    });
+
+    expect(second.ok).toBe(true);
+    expect(second.payload?.noop).toBe(true);
+    // Config hash should not change on no-op reapply.
+    const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+    expect(after.payload?.hash).toBe(normalized.payload?.hash);
+  });
+
+  it("does not noop config.patch when source config changed", async () => {
+    // Normalize via config.set to get a clean baseline.
+    const current = await rpcReq<{
+      config?: Record<string, unknown>;
+      hash?: string;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    const setRes = await rpcReq<{ ok?: boolean }>(requireWs(), "config.set", {
       raw: JSON.stringify(current.payload?.config ?? {}),
       baseHash: current.payload?.hash,
     });
+    expect(setRes.ok).toBe(true);
+    const normalized = await rpcReq<{
+      config?: Record<string, unknown>;
+      hash?: string;
+    }>(requireWs(), "config.get", {});
+    expect(normalized.ok).toBe(true);
 
-    expect(res.ok).toBe(true);
-    expect(res.payload?.noop).toBe(true);
-    // Config hash should not change (no file write)
-    const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
-    expect(after.payload?.hash).toBe(current.payload?.hash);
+    // Patch with a toggled gateway.controlUi.enabled value — the source config
+    // changes, so config.patch must NOT return noop.
+    const cfg = normalized.payload?.config ?? {};
+    const gw = (cfg as Record<string, Record<string, unknown>>).gateway ?? {};
+    const controlUi = (gw.controlUi as Record<string, unknown>) ?? {};
+    const patchRes = await rpcReq<{
+      ok?: boolean;
+      noop?: boolean;
+    }>(requireWs(), "config.patch", {
+      raw: JSON.stringify({ gateway: { controlUi: { enabled: !controlUi.enabled } } }),
+      baseHash: normalized.payload?.hash,
+    });
+
+    expect(patchRes.ok).toBe(true);
+    expect(patchRes.payload?.noop).not.toBe(true);
+  });
+
+  it("does not noop config.patch when removing a persisted key that falls back from env", async () => {
+    await withEnvAsync({ ELEVENLABS_API_KEY: "env-elevenlabs-key" }, async () => {
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        talk: {
+          provider: "elevenlabs",
+          voiceId: "voice-123",
+          apiKey: "env-elevenlabs-key", // pragma: allowlist secret
+        },
+      });
+
+      const current = await rpcReq<{
+        hash?: string;
+      }>(requireWs(), "config.get", {});
+      expect(current.ok).toBe(true);
+      expect(typeof current.payload?.hash).toBe("string");
+
+      const patchRes = await rpcReq<{
+        ok?: boolean;
+        noop?: boolean;
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({
+          talk: {
+            apiKey: null,
+            providers: {
+              elevenlabs: {
+                apiKey: null,
+              },
+            },
+          },
+        }),
+        baseHash: current.payload?.hash,
+      });
+
+      expect(patchRes.ok).toBe(true);
+      expect(patchRes.payload?.noop).not.toBe(true);
+
+      const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+      expect(after.ok).toBe(true);
+      expect(after.payload?.hash).not.toBe(current.payload?.hash);
+    });
   });
 
   it("rejects config.patch when raw is null", async () => {
@@ -520,6 +617,67 @@ describe("gateway server sessions", () => {
     });
     expect(workSessions.ok).toBe(true);
     expect(workSessions.payload?.sessions.map((s) => s.key)).toEqual(["agent:work:main"]);
+  });
+
+  it("sessions.list stays consistent after config.set round-trip", async () => {
+    const dir = await resetTempDir("config-roundtrip-sessions");
+    const prevSessionConfig = testState.sessionConfig;
+    const prevAgentsConfig = testState.agentsConfig;
+    testState.sessionConfig = {
+      store: path.join(dir, "{agentId}", "sessions.json"),
+    };
+    testState.agentsConfig = {
+      list: [{ id: "home", default: true }],
+    };
+    try {
+      const homeDir = path.join(dir, "home");
+      await fs.mkdir(homeDir, { recursive: true });
+      await writeSessionStore({
+        storePath: path.join(homeDir, "sessions.json"),
+        agentId: "home",
+        entries: {
+          main: {
+            sessionId: "sess-home-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const params = {
+        includeGlobal: false,
+        includeUnknown: false,
+        agentId: "home",
+      } as const;
+
+      const before = await rpcReq<{
+        sessions: Array<{ key: string }>;
+      }>(requireWs(), "sessions.list", params);
+      expect(before.ok).toBe(true);
+      const keysBefore = before.payload?.sessions.map((s) => s.key).toSorted() ?? [];
+
+      const current = await rpcReq<{
+        hash?: string;
+        config?: Record<string, unknown>;
+      }>(requireWs(), "config.get", {});
+      expect(current.ok).toBe(true);
+      expect(typeof current.payload?.hash).toBe("string");
+
+      const setRes = await rpcReq<{ ok?: boolean }>(requireWs(), "config.set", {
+        raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+        baseHash: current.payload?.hash,
+      });
+      expect(setRes.ok).toBe(true);
+
+      const after = await rpcReq<{
+        sessions: Array<{ key: string }>;
+      }>(requireWs(), "sessions.list", params);
+      expect(after.ok).toBe(true);
+      const keysAfter = after.payload?.sessions.map((s) => s.key).toSorted() ?? [];
+      expect(keysAfter).toEqual(keysBefore);
+    } finally {
+      testState.sessionConfig = prevSessionConfig;
+      testState.agentsConfig = prevAgentsConfig;
+    }
   });
 
   it("resolves and patches main alias to default agent main key", async () => {

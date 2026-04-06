@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
@@ -97,6 +97,11 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
+import {
+  notifySessionsListFullComputation,
+  tryReadSessionsListResultCache,
+  writeSessionsListResultCache,
+} from "../sessions-list-result-cache.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
@@ -450,6 +455,36 @@ function hasTrackedActiveSessionRun(params: {
   return false;
 }
 
+function attachTrackedActiveSessionRuns<T extends SessionsListResult>(params: {
+  context: GatewayRequestContext;
+  result: T;
+}): T {
+  return {
+    ...params.result,
+    sessions: params.result.sessions.map((session) =>
+      Object.assign({}, session, {
+        hasActiveRun: hasTrackedActiveSessionRun({
+          context: params.context,
+          requestedKey: session.key,
+          canonicalKey: session.key,
+        }),
+      }),
+    ),
+  };
+}
+
+function hashSessionsListResult(result: SessionsListResult): string {
+  // `count` is intentionally omitted from the hash payload: when it changes because session
+  // data changed, the store/config fingerprint already invalidates the cache entry.
+  // `path` is included so clients cannot treat `{ unchanged: true }` as valid across store moves.
+  const serialized = JSON.stringify({
+    path: result.path,
+    sessions: result.sessions,
+    defaults: result.defaults,
+  });
+  return createHash("sha256").update(serialized).digest("hex").slice(0, 16);
+}
+
 async function interruptSessionRunIfActive(params: {
   req: GatewayRequestHandlerOptions["req"];
   context: GatewayRequestContext;
@@ -668,7 +703,32 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
+    const cached = tryReadSessionsListResultCache({ cfg, listParams: p });
+    if (cached) {
+      const ts = Date.now();
+      const cachedResult = attachTrackedActiveSessionRuns({ context, result: cached });
+      const hash = hashSessionsListResult(cachedResult);
+      const clientHash = typeof p.lastHash === "string" ? p.lastHash : undefined;
+      if (clientHash && clientHash === hash) {
+        respond(true, { unchanged: true, hash, ts, count: cachedResult.count }, undefined);
+        return;
+      }
+      respond(
+        true,
+        {
+          ts,
+          path: cachedResult.path,
+          count: cachedResult.count,
+          defaults: cachedResult.defaults,
+          sessions: cachedResult.sessions,
+          hash,
+        },
+        undefined,
+      );
+      return;
+    }
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+    notifySessionsListFullComputation();
     const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
     const result = await listSessionsFromStoreAsync({
       cfg,
@@ -677,22 +737,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       modelCatalog,
       opts: p,
     });
-    respond(
-      true,
-      {
-        ...result,
-        sessions: result.sessions.map((session) =>
-          Object.assign({}, session, {
-            hasActiveRun: hasTrackedActiveSessionRun({
-              context,
-              requestedKey: session.key,
-              canonicalKey: session.key,
-            }),
-          }),
-        ),
-      },
-      undefined,
-    );
+    const visibleResult = attachTrackedActiveSessionRuns({ context, result });
+    const hash = hashSessionsListResult(visibleResult);
+    writeSessionsListResultCache({ cfg, listParams: p, hash, result });
+    const clientHash = typeof p.lastHash === "string" ? p.lastHash : undefined;
+    if (clientHash && clientHash === hash) {
+      respond(true, { unchanged: true, hash, ts: Date.now(), count: result.count }, undefined);
+      return;
+    }
+    respond(true, { ...visibleResult, ts: Date.now(), hash }, undefined);
   },
   "sessions.cleanup": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {

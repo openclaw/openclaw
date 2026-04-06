@@ -5,10 +5,13 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
   resolveConfigSnapshotHash,
+  validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyMergePatch } from "../../config/merge-patch.js";
+import { applyLegacyMigrations } from "../../config/legacy.js";
+import { materializeRuntimeConfig } from "../../config/materialize.js";
+import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
 import {
   redactConfigObject,
   redactConfigSnapshot,
@@ -391,41 +394,80 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const merged = applyMergePatch(snapshot.config, parsedRes.parsed, {
+    const mergedRuntime = applyMergePatch(snapshot.config, parsedRes.parsed, {
       mergeObjectArraysById: true,
     });
     const schemaPatch = loadSchemaWithPlugins();
-    const restoredMerge = restoreRedactedValues(merged, snapshot.config, schemaPatch.uiHints);
-    if (!restoredMerge.ok) {
+    const restoredRuntime = restoreRedactedValues(
+      mergedRuntime,
+      snapshot.config,
+      schemaPatch.uiHints,
+    );
+    if (!restoredRuntime.ok) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          restoredMerge.humanReadableMessage ?? "invalid config",
+          restoredRuntime.humanReadableMessage ?? "invalid config",
         ),
       );
       return;
     }
-    const validated = validateConfigObjectWithPlugins(restoredMerge.result);
-    if (!validated.ok) {
+    const migratedRuntime = applyLegacyMigrations(restoredRuntime.result);
+    const resolvedRuntime = (migratedRuntime.next ?? restoredRuntime.result) as OpenClawConfig;
+    const sourcePatch = createMergePatch(snapshot.config, resolvedRuntime);
+    const mergedSource = applyMergePatch(snapshot.sourceConfig, sourcePatch, {
+      mergeObjectArraysById: true,
+    }) as OpenClawConfig;
+    const validatedSource = validateConfigObjectRawWithPlugins(mergedSource);
+    if (!validatedSource.ok) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, summarizeConfigValidationIssues(validated.issues), {
-          details: { issues: validated.issues },
-        }),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          summarizeConfigValidationIssues(validatedSource.issues),
+          {
+            details: { issues: validatedSource.issues },
+          },
+        ),
       );
       return;
     }
+    const materializedCandidate = materializeRuntimeConfig(validatedSource.config, "snapshot");
     const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
-      config: validated.config,
+      config: materializedCandidate,
       respond,
     });
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const changedPaths = diffConfigPaths(snapshot.config, validated.config);
+    const validatedMaterialized = validateConfigObjectWithPlugins(materializedCandidate);
+    if (!validatedMaterialized.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          summarizeConfigValidationIssues(validatedMaterialized.issues),
+          {
+            details: { issues: validatedMaterialized.issues },
+          },
+        ),
+      );
+      return;
+    }
+    const nextRuntimeConfig = validatedMaterialized.config;
+    // Noop detection uses two layers:
+    // 1. Source-level: diff the persisted/source-shaped config so removing a
+    //    literal key that falls back from env is NOT a noop.
+    // 2. Materialized: compare snapshot-shaped configs so identity patches
+    //    (e.g. config.get → JSON → config.patch) still hit the noop path.
+    const sourceChangedPaths = diffConfigPaths(snapshot.sourceConfig, validatedSource.config);
+    const materializedChangedPaths = diffConfigPaths(snapshot.config, nextRuntimeConfig);
+    const changedPaths =
+      sourceChangedPaths.length > 0 ? sourceChangedPaths : materializedChangedPaths;
     const actor = resolveControlPlaneActor(client);
 
     // No-op: if the validated config is identical to the current config,
@@ -442,7 +484,7 @@ export const configHandlers: GatewayRequestHandlers = {
           ok: true,
           noop: true,
           path: resolveGatewayConfigPath(snapshot),
-          config: redactConfigObject(validated.config, schemaPatch.uiHints),
+          config: redactConfigObject(nextRuntimeConfig, schemaPatch.uiHints),
         },
         undefined,
       );
@@ -455,7 +497,7 @@ export const configHandlers: GatewayRequestHandlers = {
     // Compare before the write so we invalidate clients authenticated against the
     // previous shared secret immediately after the config update succeeds.
     const disconnectSharedAuthClients =
-      didSharedGatewayAuthChange(snapshot.config, validated.config) ||
+      didSharedGatewayAuthChange(snapshot.config, nextRuntimeConfig) ||
       didActiveSharedGatewayAuthChange({
         fallbackPrev: snapshot.config,
         next: preparedSecretsSnapshot.config,
@@ -463,7 +505,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const writeResult = await commitGatewayConfigWrite({
       snapshot,
       writeOptions,
-      nextConfig: validated.config,
+      nextConfig: validatedSource.config,
       context,
       disconnectSharedAuthClients,
     });
@@ -474,7 +516,7 @@ export const configHandlers: GatewayRequestHandlers = {
       mode: "config.patch",
       configPath: writeResult.path,
       changedPaths,
-      nextConfig: validated.config,
+      nextConfig: nextRuntimeConfig,
       actor,
       context,
     });
@@ -483,7 +525,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
-        config: redactConfigObject(validated.config, schemaPatch.uiHints),
+        config: redactConfigObject(nextRuntimeConfig, schemaPatch.uiHints),
         restart,
         sentinel: {
           path: sentinelPath,
@@ -513,7 +555,8 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
+    const materializedApplied = materializeRuntimeConfig(parsed.config, "snapshot");
+    const changedPaths = diffConfigPaths(snapshot.config, materializedApplied);
     const actor = resolveControlPlaneActor(client);
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,

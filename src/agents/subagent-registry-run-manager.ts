@@ -105,7 +105,7 @@ export function createSubagentRunManager(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
   endedHookInFlightRunIds: Set<string>;
-  persist(): void;
+  persist(opts?: { bumpGeneration?: boolean }): void;
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   ensureRuntimePluginsLoaded:
@@ -226,7 +226,7 @@ export function createSubagentRunManager(params: {
         mutated = true;
       }
       if (mutated) {
-        params.persist();
+        params.persist({ bumpGeneration: true });
       }
       await params.completeSubagentRun({
         runId,
@@ -363,7 +363,7 @@ export function createSubagentRunManager(params: {
 
     params.runs.set(nextRunId, next);
     params.ensureListener();
-    params.persist();
+    params.persist({ bumpGeneration: true });
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     params.startSweeper();
     void waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
@@ -443,7 +443,7 @@ export function createSubagentRunManager(params: {
       });
     }
     params.ensureListener();
-    params.persist();
+    params.persist({ bumpGeneration: true });
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     params.startSweeper();
     // Wait for subagent completion via gateway RPC (cross-process).
@@ -467,7 +467,7 @@ export function createSubagentRunManager(params: {
     }
     const didDelete = params.runs.delete(runId);
     if (didDelete) {
-      params.persist();
+      params.persist({ bumpGeneration: true });
     }
     if (params.runs.size === 0) {
       params.stopSweeper();
@@ -525,7 +525,7 @@ export function createSubagentRunManager(params: {
       updated += 1;
     }
     if (updated > 0) {
-      params.persist();
+      params.persist({ bumpGeneration: true });
       for (const entry of entriesByChildSessionKey.values()) {
         const emitEndedHook = () =>
           emitSubagentEndedHookOnce({

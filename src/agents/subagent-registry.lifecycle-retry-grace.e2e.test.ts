@@ -102,6 +102,7 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
+  initializeGlobalHookRunner: vi.fn(),
 }));
 
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
@@ -377,6 +378,90 @@ describe("subagent registry lifecycle error grace", () => {
     await waitForAgentCallCount(1);
     expect(readFirstAnnounceOutcome()?.status).toBe("error");
     expect(readFirstAnnounceOutcome()?.error).toContain("fatal failure");
+  });
+
+  it("bumps registry generation when registering a live run", () => {
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    registerCompletionRun("run-generation-register", "generation-register", "generation register");
+
+    const afterGen = mod.getSubagentRegistryGeneration();
+    expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
+  it("bumps registry generation when lifecycle end completion mutates run timing/status", async () => {
+    registerCompletionRun("run-generation-end", "generation-end", "generation end test");
+    setAssistantOutput("agent:main:subagent:generation-end", "done");
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    emitLifecycleEvent("run-generation-end", { phase: "end", endedAt: Date.now() });
+    await flushAsync();
+
+    await waitForAgentCallCount(1);
+    const afterGen = mod.getSubagentRegistryGeneration();
+    expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
+  it("bumps registry generation when deferred lifecycle error completion mutates run status", async () => {
+    registerCompletionRun("run-generation-error", "generation-error", "generation error test");
+    setAssistantOutput("agent:main:subagent:generation-error", "fatal");
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    emitLifecycleEvent("run-generation-error", {
+      phase: "error",
+      error: "terminal failure",
+      endedAt: 3_000,
+    });
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushAsync();
+
+    await waitForAgentCallCount(1);
+    const afterGen = mod.getSubagentRegistryGeneration();
+    expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
+  it("bumps registry generation when releaseSubagentRun deletes a live run", () => {
+    registerCompletionRun("run-generation-release", "generation-release", "generation release");
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    mod.releaseSubagentRun("run-generation-release");
+
+    const afterGen = mod.getSubagentRegistryGeneration();
+    expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
+  it("bumps registry generation when markSubagentRunTerminated kills a live run", () => {
+    registerCompletionRun("run-generation-kill", "generation-kill", "generation kill test");
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    const killed = mod.markSubagentRunTerminated({
+      runId: "run-generation-kill",
+      reason: "killed",
+    });
+
+    expect(killed).toBe(1);
+    const afterGen = mod.getSubagentRegistryGeneration();
+    expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
+  it("does not bump registry generation for steer-restart bookkeeping toggles", () => {
+    registerCompletionRun(
+      "run-generation-bookkeeping",
+      "generation-bookkeeping",
+      "generation bookkeeping test",
+    );
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    const marked = mod.markSubagentRunForSteerRestart("run-generation-bookkeeping");
+    expect(marked).toBe(true);
+    expect(mod.getSubagentRegistryGeneration()).toBe(beforeGen);
+
+    const cleared = mod.clearSubagentRunSteerRestart("run-generation-bookkeeping");
+    expect(cleared).toBe(true);
+    expect(mod.getSubagentRegistryGeneration()).toBe(beforeGen);
   });
 
   it("freezes completion result at run termination across deferred announce retries", async () => {
