@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeTaskFlow } from "../../../src/plugins/runtime/runtime-taskflow.js";
-import { createMockServerResponse } from "../../../src/test-utils/mock-http-response.js";
+import { createMockServerResponse } from "../../../test/helpers/plugins/mock-http-response.js";
+import { createRuntimeTaskFlow } from "../../../test/helpers/plugins/runtime-taskflow.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createTaskFlowWebhookRequestHandler, type TaskFlowWebhookTarget } from "./http.js";
 
