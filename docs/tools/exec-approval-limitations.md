@@ -16,6 +16,22 @@ However, when using parameterized commands (e.g., Python scripts with different 
 
 Example:
 
-```bash
 python email_sender.py --content-file Day_007.md
 python email_sender.py --content-file Day_008.md
+
+Even though the same script is executed, approvals may not carry over due to argument and file-binding behavior.
+
+## Impact
+
+- Repeated approval prompts in dynamic workflows
+- Reduced usability when working with parameterized commands
+
+## Suggested Improvements
+
+- Improve reuse of approvals for similar interpreter-based commands
+- Provide clearer UX around what is being approved
+- Enhance documentation around file-binding and argv semantics
+
+## Related Issue
+
+- #61667
