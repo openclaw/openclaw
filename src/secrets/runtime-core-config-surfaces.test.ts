@@ -108,15 +108,6 @@ describe("secrets runtime snapshot core config surfaces", () => {
   it("resolves config env refs for core surfaces", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        agents: {
-          defaults: {
-            memorySearch: {
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
-              },
-            },
-          },
-        },
         models: {
           providers: {
             openai: {
@@ -141,30 +132,11 @@ describe("secrets runtime snapshot core config surfaces", () => {
             },
           },
         },
-        talk: {
-          providers: {
-            "acme-speech": {
-              apiKey: { source: "env", provider: "default", id: "TALK_PROVIDER_API_KEY" },
-            },
-          },
-        },
-        gateway: {
-          mode: "remote",
-          remote: {
-            url: "wss://gateway.example",
-            token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-            password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
-          },
-        },
       }),
       env: {
         OPENAI_API_KEY: "sk-env-openai",
         OPENAI_PROVIDER_AUTH_HEADER: "Bearer sk-env-header",
         REVIEW_SKILL_API_KEY: "sk-skill-ref",
-        MEMORY_REMOTE_API_KEY: "mem-ref-key",
-        TALK_PROVIDER_API_KEY: "talk-provider-ref-key",
-        REMOTE_GATEWAY_TOKEN: "remote-token-ref",
-        REMOTE_GATEWAY_PASSWORD: "remote-password-ref",
       },
       loadablePluginOrigins: new Map(),
     });
@@ -174,10 +146,5 @@ describe("secrets runtime snapshot core config surfaces", () => {
       "Bearer sk-env-header",
     );
     expect(snapshot.config.skills?.entries?.["review-pr"]?.apiKey).toBe("sk-skill-ref");
-    expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
-    expect((snapshot.config.talk as { apiKey?: unknown } | undefined)?.apiKey).toBeUndefined();
-    expect(snapshot.config.talk?.providers?.["acme-speech"]?.apiKey).toBe("talk-provider-ref-key");
-    expect(snapshot.config.gateway?.remote?.token).toBe("remote-token-ref");
-    expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
   });
 });

@@ -15,8 +15,6 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
-const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
-
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
@@ -97,7 +95,7 @@ let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntim
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
-describe("secrets runtime snapshot core auth stores", () => {
+describe("secrets runtime snapshot core auth inline placeholders", () => {
   beforeAll(async () => {
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
@@ -115,45 +113,35 @@ describe("secrets runtime snapshot core auth stores", () => {
     clearConfigCache();
   });
 
-  it("resolves auth profile SecretRefs from env and inline placeholders", async () => {
+  it("resolves inline placeholder auth profiles to env refs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({}),
       env: {
         OPENAI_API_KEY: "sk-env-openai",
-        GITHUB_TOKEN: "ghp-env-token",
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadablePluginOrigins: new Map(),
       loadAuthStore: () =>
         loadAuthStoreWithProfiles({
-          "openai:default": {
+          "openai:inline": {
             type: "api_key",
             provider: "openai",
-            key: "old-openai",
-            keyRef: OPENAI_ENV_KEY_REF,
-          },
-          "github-copilot:default": {
-            type: "token",
-            provider: "github-copilot",
-            token: "old-gh",
-            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+            key: "${OPENAI_API_KEY}",
           },
         }),
     });
 
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
-        "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
-      ]),
-    );
-    expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+    expect(snapshot.authStores[0]?.store.profiles["openai:inline"]).toMatchObject({
       type: "api_key",
       key: "sk-env-openai",
     });
-    expect(snapshot.authStores[0]?.store.profiles["github-copilot:default"]).toMatchObject({
-      type: "token",
-      token: "ghp-env-token",
+    const inlineProfile = snapshot.authStores[0]?.store.profiles["openai:inline"] as
+      | Record<string, unknown>
+      | undefined;
+    expect(inlineProfile?.keyRef).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
     });
   });
 });

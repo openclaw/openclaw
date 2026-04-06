@@ -1,5 +1,4 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -14,8 +13,6 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
-
-const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -85,19 +82,12 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
   ];
 }
 
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
-
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
-describe("secrets runtime snapshot core auth stores", () => {
+describe("secrets runtime snapshot agent and gateway surfaces", () => {
   beforeAll(async () => {
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
@@ -115,45 +105,47 @@ describe("secrets runtime snapshot core auth stores", () => {
     clearConfigCache();
   });
 
-  it("resolves auth profile SecretRefs from env and inline placeholders", async () => {
+  it("resolves env refs for memory, talk, and gateway surfaces", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({}),
+      config: asConfig({
+        agents: {
+          defaults: {
+            memorySearch: {
+              remote: {
+                apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
+              },
+            },
+          },
+        },
+        talk: {
+          providers: {
+            "acme-speech": {
+              apiKey: { source: "env", provider: "default", id: "TALK_PROVIDER_API_KEY" },
+            },
+          },
+        },
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example",
+            token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+            password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
+          },
+        },
+      }),
       env: {
-        OPENAI_API_KEY: "sk-env-openai",
-        GITHUB_TOKEN: "ghp-env-token",
+        MEMORY_REMOTE_API_KEY: "mem-ref-key",
+        TALK_PROVIDER_API_KEY: "talk-provider-ref-key",
+        REMOTE_GATEWAY_TOKEN: "remote-token-ref",
+        REMOTE_GATEWAY_PASSWORD: "remote-password-ref",
       },
-      agentDirs: ["/tmp/openclaw-agent-main"],
       loadablePluginOrigins: new Map(),
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key: "old-openai",
-            keyRef: OPENAI_ENV_KEY_REF,
-          },
-          "github-copilot:default": {
-            type: "token",
-            provider: "github-copilot",
-            token: "old-gh",
-            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
-          },
-        }),
     });
 
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
-        "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
-      ]),
-    );
-    expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
-      type: "api_key",
-      key: "sk-env-openai",
-    });
-    expect(snapshot.authStores[0]?.store.profiles["github-copilot:default"]).toMatchObject({
-      type: "token",
-      token: "ghp-env-token",
-    });
+    expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
+    expect((snapshot.config.talk as { apiKey?: unknown } | undefined)?.apiKey).toBeUndefined();
+    expect(snapshot.config.talk?.providers?.["acme-speech"]?.apiKey).toBe("talk-provider-ref-key");
+    expect(snapshot.config.gateway?.remote?.token).toBe("remote-token-ref");
+    expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
   });
 });
