@@ -261,6 +261,8 @@ USER node
 #   - GET /healthz (liveness) and GET /readyz (readiness)
 #   - aliases: /health and /ready
 # For external access from host/ingress, override bind to "lan" and set auth.
-HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+ # Port for Hugging Face
+EXPOSE 7860
+
+# Updated Start Command for Hugging Face
+CMD ["node", "openclaw.mjs", "gateway", "--bind", "0.0.0.0", "--port", "7860", "--allow-unconfigured"]
