@@ -270,6 +270,7 @@ export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) =>
 type GatewayHttpRequestStage = {
   name: string;
   run: () => Promise<boolean> | boolean;
+  critical?: boolean;
 };
 
 export async function runGatewayHttpRequestStages(
@@ -281,6 +282,9 @@ export async function runGatewayHttpRequestStages(
         return true;
       }
     } catch (err) {
+      if (stage.critical) {
+        throw err;
+      }
       // Log and skip the failing stage so subsequent stages (control-ui,
       // gateway-probes, etc.) remain reachable.  A common trigger is a
       // plugin-owned route/runtime code can still fail to load when an
@@ -312,6 +316,7 @@ function buildPluginRequestStages(params: {
   return [
     {
       name: "plugin-auth",
+      critical: true,
       run: async () => {
         if (params.gatewayAuthBypassPaths.has(params.requestPath)) {
           return false;
@@ -891,6 +896,7 @@ export function createGatewayHttpServer(opts: {
       if (canvasHost) {
         requestStages.push({
           name: "canvas-auth",
+          critical: true,
           run: async () => {
             if (!isCanvasPath(requestPath)) {
               return false;
