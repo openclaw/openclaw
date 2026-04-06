@@ -722,6 +722,8 @@ Current block reasons include:
 
 `loop_convergence` is observational only. It does not trigger a new retry or a third execution pass.
 
+`loop_convergence_summary` is a lighter manager-facing projection of `remaining_issues`. It classifies a few common issue strings into classifier-compatible labels so the manager can pick the next likely fix from the report alone.
+
 Current convergence states are:
 
 - `resolved`
@@ -734,6 +736,22 @@ Current convergence states are:
   - no follow-up action was executed
 
 This second-order evaluation is intentionally report-only to avoid adding another loop layer.
+
+Current `loop_convergence_summary` mapping is intentionally minimal:
+
+- `nim is not running` -> `runtime_capability_issue_nim`
+- `gpu runtime not enabled` -> `runtime_capability_issue_gpu`
+- `provider runtime not recognizing configured provider` -> `provider_recognition_issue`
+- `API key missing: ...` -> `provider_api_key_issue`
+- `runtime selected model differs from configured selected model` -> `selected_model_mismatch_issue`
+- `runtime not recognizing selected model` -> `selected_model_retry_issue`
+
+The summary currently exposes:
+
+- `primary_remaining_issue`
+- `secondary_remaining_issues`
+- `suggested_next_step`
+- `summary_confidence`
 
 Current confidence gate is intentionally small:
 

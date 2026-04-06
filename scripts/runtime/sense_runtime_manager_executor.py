@@ -366,6 +366,72 @@ def evaluate_loop_convergence(
     }
 
 
+def classify_remaining_issue(issue: str) -> str | None:
+    normalized = issue.strip()
+    mapping = (
+        ('API key missing:', 'provider_api_key_issue'),
+        ('provider runtime not recognizing configured provider', 'provider_recognition_issue'),
+        ('nim is not running', 'runtime_capability_issue_nim'),
+        ('gpu runtime not enabled', 'runtime_capability_issue_gpu'),
+        ('runtime selected model differs from configured selected model', 'selected_model_mismatch_issue'),
+        ('runtime not recognizing selected model', 'selected_model_retry_issue'),
+    )
+    for prefix, classified in mapping:
+        if normalized.startswith(prefix):
+            return classified
+    return None
+
+
+def summarize_loop_convergence(convergence: dict | None) -> dict | None:
+    if not isinstance(convergence, dict):
+        return None
+    remaining_issues = convergence.get('remaining_issues')
+    if not isinstance(remaining_issues, list):
+        remaining_issues = []
+
+    priority_order = {
+        'provider_api_key_issue': 0,
+        'provider_recognition_issue': 1,
+        'runtime_capability_issue_nim': 2,
+        'runtime_capability_issue_gpu': 3,
+        'selected_model_mismatch_issue': 4,
+        'selected_model_retry_issue': 5,
+    }
+    classified: list[str] = []
+    for item in remaining_issues:
+        if not isinstance(item, str):
+            continue
+        classified_issue = classify_remaining_issue(item)
+        if classified_issue and classified_issue not in classified:
+            classified.append(classified_issue)
+
+    classified.sort(key=lambda item: priority_order.get(item, 999))
+    primary = classified[0] if classified else None
+    secondary = classified[1:] if len(classified) > 1 else []
+    suggested_map = {
+        'provider_api_key_issue': 'check_api_key_config',
+        'provider_recognition_issue': 'check_provider_config',
+        'runtime_capability_issue_nim': 'start_nim_runtime',
+        'runtime_capability_issue_gpu': 'configure_gpu_runtime',
+        'selected_model_mismatch_issue': 'check_selected_model_config',
+        'selected_model_retry_issue': 'check_selected_model_config',
+    }
+    confidence_map = {
+        'provider_api_key_issue': 0.86,
+        'provider_recognition_issue': 0.8,
+        'runtime_capability_issue_nim': 0.72,
+        'runtime_capability_issue_gpu': 0.7,
+        'selected_model_mismatch_issue': 0.68,
+        'selected_model_retry_issue': 0.6,
+    }
+    return {
+        'primary_remaining_issue': primary,
+        'secondary_remaining_issues': secondary,
+        'suggested_next_step': suggested_map.get(primary),
+        'summary_confidence': confidence_map.get(primary, 0.4 if primary else 0.0),
+    }
+
+
 def derive_post_task_final_state(result: dict) -> str:
     provider_status = result.get('provider_status')
     gpu_status = result.get('gpu_status')
@@ -741,6 +807,9 @@ def main() -> int:
             None,
             main_warnings,
         )
+        output['loop_convergence_summary'] = summarize_loop_convergence(
+            output['loop_convergence']
+        )
         if allow_followup:
             followup_action = str(post_task_evaluation.get('next_action'))
             followup_step = str(post_task_evaluation.get('next_step'))
@@ -762,6 +831,9 @@ def main() -> int:
                 main_result,
                 followup_result,
                 main_warnings,
+            )
+            output['loop_convergence_summary'] = summarize_loop_convergence(
+                output['loop_convergence']
             )
             output['executor_state'] = 'completed_with_followup_executed'
         elif post_task_evaluation.get('next_action'):
