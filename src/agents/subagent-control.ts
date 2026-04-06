@@ -32,15 +32,18 @@ import {
 } from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
-  clearSubagentRunSteerRestart,
-  countPendingDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
+} from "./subagent-registry-read.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
+import {
+  clearSubagentRunSteerRestart,
+  countPendingDescendantRuns,
   markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteer,
-  type SubagentRunRecord,
 } from "./subagent-registry.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 export const DEFAULT_RECENT_MINUTES = 30;

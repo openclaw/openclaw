@@ -1,4 +1,3 @@
-import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
@@ -8,7 +7,6 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalRequestAllowedDecisions,
-  type ExecApprovalDecision,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
@@ -26,11 +24,15 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
+import {
+  handleApprovalWaitDecision,
+  handlePendingApprovalRequest,
+  handleApprovalResolve,
+  isApprovalDecision,
+  respondPendingApprovalLookupError,
+  resolvePendingApprovalRecord,
+} from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-const APPROVAL_NOT_FOUND_DETAILS = {
-  reason: ErrorCodes.APPROVAL_NOT_FOUND,
-} as const;
 
 const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
@@ -41,27 +43,6 @@ type ExecApprovalIosPushDelivery = {
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
   handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
 };
-
-function resolvePendingApprovalRecord(manager: ExecApprovalManager, inputId: string) {
-  const resolvedId = manager.lookupPendingId(inputId);
-  if (resolvedId.kind === "none") {
-    return { ok: false as const, response: "missing" as const };
-  }
-  if (resolvedId.kind === "ambiguous") {
-    return {
-      ok: false as const,
-      response: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "ambiguous approval id prefix; use the full id",
-      },
-    };
-  }
-  const snapshot = manager.getSnapshot(resolvedId.id);
-  if (!snapshot || snapshot.resolvedAtMs !== undefined) {
-    return { ok: false as const, response: "missing" as const };
-  }
-  return { ok: true as const, approvalId: resolvedId.id, snapshot };
-}
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
@@ -83,19 +64,13 @@ export function createExecApprovalHandlers(
         return;
       }
       const p = params as { id: string };
-      const resolved = resolvePendingApprovalRecord(manager, p.id);
+      const resolved = resolvePendingApprovalRecord({
+        manager,
+        inputId: p.id,
+        exposeAmbiguousPrefixError: true,
+      });
       if (!resolved.ok) {
-        if (resolved.response === "missing") {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
-              details: APPROVAL_NOT_FOUND_DETAILS,
-            }),
-          );
-          return;
-        }
-        respond(false, undefined, errorShape(resolved.response.code, resolved.response.message));
+        respondPendingApprovalLookupError({ respond, response: resolved.response });
         return;
       }
       const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(
@@ -272,107 +247,63 @@ export function createExecApprovalHandlers(
         createdAtMs: record.createdAtMs,
         expiresAtMs: record.expiresAtMs,
       };
-      context.broadcast("exec.approval.requested", requestEvent, { dropIfSlow: true });
-      const hasExecApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
-      const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
-        turnSourceChannel: record.request.turnSourceChannel,
-        turnSourceAccountId: record.request.turnSourceAccountId,
-      });
-      let forwarded = false;
-      if (opts?.forwarder) {
-        try {
-          forwarded = await opts.forwarder.handleRequested(requestEvent);
-        } catch (err) {
-          context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
-        }
-      }
-      let deliveredToIosPush = false;
-      if (opts?.iosPushDelivery?.handleRequested) {
-        try {
-          deliveredToIosPush = await opts.iosPushDelivery.handleRequested(requestEvent);
-        } catch (err) {
-          context.logGateway?.error?.(`exec approvals: iOS push request failed: ${String(err)}`);
-        }
-      }
-
-      if (!hasExecApprovalClients && !forwarded && !hasTurnSourceRoute && !deliveredToIosPush) {
-        manager.expire(record.id, "no-approval-route");
-        respond(
-          true,
-          {
-            id: record.id,
-            decision: null,
-            createdAtMs: record.createdAtMs,
-            expiresAtMs: record.expiresAtMs,
-          },
-          undefined,
-        );
-        return;
-      }
-
-      // Only send immediate "accepted" response when twoPhase is requested.
-      // This preserves single-response semantics for existing callers.
-      if (twoPhase) {
-        respond(
-          true,
-          {
-            status: "accepted",
-            id: record.id,
-            createdAtMs: record.createdAtMs,
-            expiresAtMs: record.expiresAtMs,
-          },
-          undefined,
-        );
-      }
-
-      const decision = await decisionPromise;
-      if (decision === null) {
-        void opts?.iosPushDelivery?.handleExpired?.(requestEvent).catch((err) => {
-          context.logGateway?.error?.(`exec approvals: iOS push expire failed: ${String(err)}`);
-        });
-      }
-      // Send final response with decision for callers using expectFinal:true.
-      respond(
-        true,
-        {
-          id: record.id,
-          decision,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
+      await handlePendingApprovalRequest({
+        manager,
+        record,
+        decisionPromise,
+        respond,
+        context,
+        clientConnId: client?.connId,
+        requestEventName: "exec.approval.requested",
+        requestEvent,
+        twoPhase,
+        deliverRequest: () => {
+          const deliveryTasks: Array<Promise<boolean>> = [];
+          if (opts?.forwarder) {
+            deliveryTasks.push(
+              opts.forwarder.handleRequested(requestEvent).catch((err) => {
+                context.logGateway?.error?.(
+                  `exec approvals: forward request failed: ${String(err)}`,
+                );
+                return false;
+              }),
+            );
+          }
+          if (opts?.iosPushDelivery?.handleRequested) {
+            deliveryTasks.push(
+              opts.iosPushDelivery.handleRequested(requestEvent).catch((err) => {
+                context.logGateway?.error?.(
+                  `exec approvals: iOS push request failed: ${String(err)}`,
+                );
+                return false;
+              }),
+            );
+          }
+          if (deliveryTasks.length === 0) {
+            return false;
+          }
+          return (async () => {
+            let delivered = false;
+            for (const task of deliveryTasks) {
+              delivered = (await task) || delivered;
+            }
+            return delivered;
+          })();
         },
-        undefined,
-      );
+        afterDecision: async (decision) => {
+          if (decision === null) {
+            await opts?.iosPushDelivery?.handleExpired?.(requestEvent);
+          }
+        },
+        afterDecisionErrorLabel: "exec approvals: iOS push expire failed",
+      });
     },
     "exec.approval.waitDecision": async ({ params, respond }) => {
-      const p = params as { id?: string };
-      const id = typeof p.id === "string" ? p.id.trim() : "";
-      if (!id) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
-        return;
-      }
-      const decisionPromise = manager.awaitDecision(id);
-      if (!decisionPromise) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "approval expired or not found"),
-        );
-        return;
-      }
-      // Capture snapshot before await (entry may be deleted after grace period)
-      const snapshot = manager.getSnapshot(id);
-      const decision = await decisionPromise;
-      // Return decision (can be null on timeout) - let clients handle via askFallback
-      respond(
-        true,
-        {
-          id,
-          decision,
-          createdAtMs: snapshot?.createdAtMs,
-          expiresAtMs: snapshot?.expiresAtMs,
-        },
-        undefined,
-      );
+      await handleApprovalWaitDecision({
+        manager,
+        inputId: (params as { id?: string }).id,
+        respond,
+      });
     },
     "exec.approval.resolve": async ({ params, respond, client, context }) => {
       if (!validateExecApprovalResolveParams(params)) {
@@ -389,70 +320,48 @@ export function createExecApprovalHandlers(
         return;
       }
       const p = params as { id: string; decision: string };
-      const decision = p.decision as ExecApprovalDecision;
-      if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
+      if (!isApprovalDecision(p.decision)) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const resolved = resolvePendingApprovalRecord(manager, p.id);
-      if (!resolved.ok) {
-        if (resolved.response === "missing") {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
-              details: APPROVAL_NOT_FOUND_DETAILS,
-            }),
-          );
-          return;
-        }
-        respond(false, undefined, errorShape(resolved.response.code, resolved.response.message));
-        return;
-      }
-      const approvalId = resolved.approvalId;
-      const snapshot = resolved.snapshot;
-      const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot?.request);
-      if (snapshot && !allowedDecisions.includes(decision)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "allow-always is unavailable because the effective policy requires approval every time",
-            {
-              details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
-            },
-          ),
-        );
-        return;
-      }
-      const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
-      const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
-      if (!ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
-            details: APPROVAL_NOT_FOUND_DETAILS,
-          }),
-        );
-        return;
-      }
-      const resolvedEvent: ExecApprovalResolved = {
-        id: approvalId,
-        decision,
-        resolvedBy,
-        ts: Date.now(),
-        request: snapshot?.request,
-      };
-      context.broadcast("exec.approval.resolved", resolvedEvent, { dropIfSlow: true });
-      void opts?.forwarder?.handleResolved(resolvedEvent).catch((err) => {
-        context.logGateway?.error?.(`exec approvals: forward resolve failed: ${String(err)}`);
+      await handleApprovalResolve({
+        manager,
+        inputId: p.id,
+        decision: p.decision,
+        respond,
+        context,
+        client,
+        exposeAmbiguousPrefixError: true,
+        validateDecision: (snapshot) => {
+          const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot.request);
+          return allowedDecisions.includes(p.decision)
+            ? null
+            : {
+                message:
+                  "allow-always is unavailable because the effective policy requires approval every time",
+                details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
+              };
+        },
+        resolvedEventName: "exec.approval.resolved",
+        buildResolvedEvent: ({ approvalId, decision, resolvedBy, snapshot, nowMs }) =>
+          ({
+            id: approvalId,
+            decision,
+            resolvedBy,
+            ts: nowMs,
+            request: snapshot.request,
+          }) satisfies ExecApprovalResolved,
+        forwardResolved: (resolvedEvent) => opts?.forwarder?.handleResolved(resolvedEvent),
+        forwardResolvedErrorLabel: "exec approvals: forward resolve failed",
+        extraResolvedHandlers: opts?.iosPushDelivery?.handleResolved
+          ? [
+              {
+                run: (resolvedEvent) => opts.iosPushDelivery!.handleResolved!(resolvedEvent),
+                errorLabel: "exec approvals: iOS push resolve failed",
+              },
+            ]
+          : undefined,
       });
-      void opts?.iosPushDelivery?.handleResolved?.(resolvedEvent).catch((err) => {
-        context.logGateway?.error?.(`exec approvals: iOS push resolve failed: ${String(err)}`);
-      });
-      respond(true, { ok: true }, undefined);
     },
   };
 }

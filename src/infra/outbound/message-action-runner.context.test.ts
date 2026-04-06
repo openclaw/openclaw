@@ -482,6 +482,16 @@ describe("runMessageAction context isolation", () => {
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
       message: /Cross-context messaging denied/,
     },
+    {
+      name: "rejects channel ids that resolve to user targets",
+      action: "channel-info" as const,
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        channelId: "U12345678",
+      },
+      message: 'Channel id "U12345678" resolved to a user target.',
+    },
   ])("$name", async ({ action, cfg, actionParams, toolContext, message }) => {
     await expect(
       runDryAction({

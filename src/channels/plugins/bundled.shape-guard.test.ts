@@ -6,6 +6,7 @@ import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 
 afterEach(() => {
+  vi.resetModules();
   vi.doUnmock("../../plugins/discovery.js");
   vi.doUnmock("../../plugins/manifest-registry.js");
   vi.doUnmock("../../infra/boundary-file-read.js");

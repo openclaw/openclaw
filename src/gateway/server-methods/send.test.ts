@@ -414,6 +414,39 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("includes optional poll delivery identifiers in the gateway payload", async () => {
+    mocks.sendPoll.mockResolvedValue({
+      messageId: "poll-rich",
+      channelId: "C123",
+      conversationId: "conv-1",
+      toJid: "jid-1",
+      pollId: "poll-meta-1",
+    });
+
+    const { respond } = await runPoll({
+      to: "channel:C1",
+      question: "Q?",
+      options: ["A", "B"],
+      channel: "slack",
+      idempotencyKey: "idem-poll-rich",
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "idem-poll-rich",
+        messageId: "poll-rich",
+        channel: "slack",
+        channelId: "C123",
+        conversationId: "conv-1",
+        toJid: "jid-1",
+        pollId: "poll-meta-1",
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
   it("auto-picks the single configured channel for poll", async () => {
     const { respond } = await runPoll({
       to: "x",

@@ -3,6 +3,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { failTaskRunByRunId } from "../../tasks/task-executor.js";
 import { createTaskRecord, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
@@ -56,7 +57,7 @@ describe("subagents info", () => {
       startedAt: now - 20_000,
       endedAt: now - 1_000,
       outcome: { status: "ok" },
-    };
+    } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     createTaskRecord({
       runtime: "subagent",
@@ -107,7 +108,7 @@ describe("subagents info", () => {
           "source: subagent",
         ].join("\n"),
       },
-    };
+    } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     createTaskRecord({
       runtime: "subagent",

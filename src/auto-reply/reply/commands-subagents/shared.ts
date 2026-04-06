@@ -1,10 +1,10 @@
 import { resolveModelDisplayName } from "../../../agents/model-selection-display.js";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
 import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
-import {
-  countPendingDescendantRuns,
-  type SubagentRunRecord,
-} from "../../../agents/subagent-registry.js";
+import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
+import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.js";
 import {
   extractAssistantText,
   resolveInternalSessionKey,
@@ -25,7 +25,7 @@ import {
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
-import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
+import { extractMessageText } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
@@ -36,7 +36,7 @@ import {
 
 export { extractAssistantText, stripToolMessages };
 export { resolveCommandSurfaceChannel, resolveChannelAccountId };
-export type { ChatMessage };
+export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
@@ -171,7 +171,14 @@ export function resolveSubagentTarget(
     recentWindowMinutes: RECENT_WINDOW_MINUTES,
     label: (entry) => formatRunLabel(entry),
     isActive: (entry) =>
-      !entry.endedAt || Math.max(0, countPendingDescendantRuns(entry.childSessionKey)) > 0,
+      !entry.endedAt ||
+      Math.max(
+        0,
+        countPendingDescendantRunsFromRuns(
+          getSubagentRunsSnapshotForRead(subagentRuns),
+          entry.childSessionKey,
+        ),
+      ) > 0,
     errors: {
       missingTarget: "Missing subagent id.",
       invalidIndex: (value) => `Invalid subagent index: ${value}`,

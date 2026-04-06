@@ -5,6 +5,7 @@ import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { parseInlineDirectives } from "./directive-handling.parse.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() =>
   vi.fn(async () => ({ valid: true, parsed: {} })),
@@ -160,7 +161,7 @@ function buildParams(commandBody: string, cfg: OpenClawConfig): HandleCommandsPa
       from: "user-1",
       to: "bot-1",
     },
-    directives: {},
+    directives: parseInlineDirectives(""),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
     workspaceDir: "/tmp",
@@ -417,9 +418,9 @@ describe("command gating", () => {
     for (const testCase of cases) {
       const previousWriteCount = writeConfigFileMock.mock.calls.length;
       const result = await handleConfigCommand(testCase.params, true);
-      expect(result?.shouldContinue, testCase.name).toBe(false);
-      expect(result?.reply?.text, testCase.name).toContain(testCase.expectedText);
-      expect(writeConfigFileMock.mock.calls.length, testCase.name).toBe(previousWriteCount);
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain(testCase.expectedText);
+      expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
     }
   });
 

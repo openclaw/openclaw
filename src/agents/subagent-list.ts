@@ -13,13 +13,12 @@ import {
 import { resolveModelDisplayName, resolveModelDisplayRef } from "./model-selection-display.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "./subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
-  countPendingDescendantRuns,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
-  type SubagentRunRecord,
-} from "./subagent-registry.js";
+} from "./subagent-registry-read.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type SubagentListItem = {
   index: number;
@@ -122,12 +121,8 @@ export function createPendingDescendantCounter(runsSnapshot?: Map<string, Subage
     if (pendingDescendantCache.has(sessionKey)) {
       return pendingDescendantCache.get(sessionKey) ?? 0;
     }
-    const pending = Math.max(
-      0,
-      runsSnapshot
-        ? countPendingDescendantRunsFromRuns(runsSnapshot, sessionKey)
-        : countPendingDescendantRuns(sessionKey),
-    );
+    const snapshot = runsSnapshot ?? getSubagentRunsSnapshotForRead(subagentRuns);
+    const pending = Math.max(0, countPendingDescendantRunsFromRuns(snapshot, sessionKey));
     pendingDescendantCache.set(sessionKey, pending);
     return pending;
   };

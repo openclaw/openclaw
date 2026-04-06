@@ -1,50 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { subagentRuns } from "../../agents/subagent-registry-memory.js";
+import {
+  countPendingDescendantRunsFromRuns,
+  listRunsForControllerFromRuns,
+} from "../../agents/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../agents/subagent-registry-state.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.test-helpers.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ReplyPayload } from "../types.js";
-import { buildStatusReply } from "./commands-status.js";
-import type { CommandHandlerResult } from "./commands-types.js";
-
-async function buildStatusReplyForTests(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  verbose?: boolean;
-}): Promise<CommandHandlerResult> {
-  const sessionKey = params.sessionKey ?? "agent:main:main";
-  const reply = await buildStatusReply({
-    cfg: params.cfg,
-    command: {
-      isAuthorizedSender: true,
-      channel: "whatsapp",
-      senderId: "owner",
-    } as never,
-    sessionEntry: {
-      sessionId: "status-session",
-      updatedAt: Date.now(),
-    },
-    sessionKey,
-    parentSessionKey: sessionKey,
-    provider: "anthropic",
-    model: "claude-opus-4-6",
-    contextTokens: 0,
-    resolvedFastMode: false,
-    resolvedVerboseLevel: params.verbose ? "on" : "off",
-    resolvedReasoningLevel: "off",
-    resolvedElevatedLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    isGroup: false,
-    defaultGroupActivation: () => "mention",
-  });
-  return { shouldContinue: false, reply };
-}
-
-function requireReplyText(reply: ReplyPayload | undefined): string {
-  expect(reply?.text).toBeDefined();
-  return reply?.text as string;
-}
+import { buildSubagentsStatusLine } from "./commands-status-subagents.js";
 
 beforeEach(() => {
   resetSubagentRegistryForTests();
@@ -107,19 +72,17 @@ describe("subagents status", () => {
       expectedText: ["🤖 Subagents: 1 active", "· 1 done"],
       unexpectedText: [] as string[],
     },
-  ])("$name", async ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
+  ])("$name", ({ seedRuns, verboseLevel, expectedText, unexpectedText }) => {
     seedRuns();
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
-    const result = await buildStatusReplyForTests({
-      cfg,
-      verbose: verboseLevel === "on",
-    });
-    expect(result.shouldContinue).toBe(false);
-    const text = requireReplyText(result.reply);
+    const runsSnapshot = getSubagentRunsSnapshotForRead(subagentRuns);
+    const runs = listRunsForControllerFromRuns(runsSnapshot, "agent:main:main");
+    const text =
+      buildSubagentsStatusLine({
+        runs,
+        verboseEnabled: verboseLevel === "on",
+        pendingDescendantsForRun: (entry) =>
+          countPendingDescendantRunsFromRuns(runsSnapshot, entry.childSessionKey),
+      }) ?? "";
     for (const expected of expectedText) {
       expect(text).toContain(expected);
     }

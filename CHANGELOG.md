@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Remote operator task updates now surface task IDs, progress, artifact hints, and next actions in Telegram-visible task/status replies, and audio-only mention-gated voice notes keep preflight transcription even when the local audio lane is busy.
+- Providers/Anthropic: skip `service_tier` injection for OAuth-authenticated stream wrapper requests so Claude OAuth requests stop failing with HTTP 401. (#60356) thanks @openperf.
 
 ## 2026.4.5
 
