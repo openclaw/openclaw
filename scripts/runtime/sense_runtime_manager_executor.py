@@ -257,6 +257,29 @@ def derive_recovery_bucket(
     return 'none'
 
 
+def derive_recovery_owner(
+    recovery_bucket: str | None,
+    error_source_layer: str | None,
+    error_stage: str | None,
+) -> str:
+    bucket = str(recovery_bucket or '')
+    source_layer = str(error_source_layer or '')
+    stage = str(error_stage or '')
+    if bucket == 'auth':
+        return 'auth'
+    if bucket in {'runtime_submit', 'runtime_poll'}:
+        return 'runtime'
+    if bucket in {'executor_gate', 'control_plane'}:
+        return 'manager_control_plane'
+    if bucket == 'config_mapping':
+        return 'config'
+    if bucket == 'none':
+        return 'none'
+    if source_layer in {'ENTRY', 'DISPATCH', 'EXECUTOR'} and stage in {'DISPATCH', 'TRIAGE', 'EXECUTOR_GATE'}:
+        return 'manager_control_plane'
+    return 'none'
+
+
 def finalize_output(output: dict) -> dict:
     output['error_code'] = normalize_executor_error_code(output)
     output['error_detail_code'] = normalize_executor_error_detail_code(output)
@@ -275,6 +298,11 @@ def finalize_output(output: dict) -> dict:
     output['recovery_bucket'] = derive_recovery_bucket(
         output.get('error_code'),
         output.get('error_detail_code'),
+        output.get('error_source_layer'),
+        output.get('error_stage'),
+    )
+    output['recovery_owner'] = derive_recovery_owner(
+        output.get('recovery_bucket'),
         output.get('error_source_layer'),
         output.get('error_stage'),
     )
@@ -737,6 +765,7 @@ def build_manager_handoff(report: dict) -> dict:
         'recovery_hint': report.get('recovery_hint'),
         'recovery_priority': report.get('recovery_priority'),
         'recovery_bucket': report.get('recovery_bucket'),
+        'recovery_owner': report.get('recovery_owner'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),

@@ -395,6 +395,29 @@ def derive_recovery_bucket(
     return 'none'
 
 
+def derive_recovery_owner(
+    recovery_bucket: str | None,
+    error_source_layer: str | None,
+    error_stage: str | None,
+) -> str:
+    bucket = str(recovery_bucket or '')
+    source_layer = str(error_source_layer or '')
+    stage = str(error_stage or '')
+    if bucket == 'auth':
+        return 'auth'
+    if bucket in {'runtime_submit', 'runtime_poll'}:
+        return 'runtime'
+    if bucket in {'executor_gate', 'control_plane'}:
+        return 'manager_control_plane'
+    if bucket == 'config_mapping':
+        return 'config'
+    if bucket == 'none':
+        return 'none'
+    if source_layer in {'ENTRY', 'DISPATCH', 'EXECUTOR'} and stage in {'DISPATCH', 'TRIAGE', 'EXECUTOR_GATE'}:
+        return 'manager_control_plane'
+    return 'none'
+
+
 def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
     entry_status = 'completed' if isinstance(entry_result, dict) else None
     bridge_status = None
@@ -520,6 +543,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_recovery_hint': manager_handoff.get('recovery_hint'),
         'last_recovery_priority': manager_handoff.get('recovery_priority'),
         'last_recovery_bucket': manager_handoff.get('recovery_bucket'),
+        'last_recovery_owner': manager_handoff.get('recovery_owner'),
     }
 
 
@@ -608,6 +632,11 @@ def main() -> int:
             'recovery_hint': derive_recovery_hint(error_code, error_detail_code, error_stage),
             'recovery_priority': derive_recovery_priority(error_code, error_detail_code, error_stage),
             'recovery_bucket': derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage),
+            'recovery_owner': derive_recovery_owner(
+                derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage),
+                error_source_layer,
+                error_stage,
+            ),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
@@ -670,6 +699,11 @@ def main() -> int:
             'recovery_hint': derive_recovery_hint(error_code, error_detail_code, error_stage),
             'recovery_priority': derive_recovery_priority(error_code, error_detail_code, error_stage),
             'recovery_bucket': derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage),
+            'recovery_owner': derive_recovery_owner(
+                derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage),
+                error_source_layer,
+                error_stage,
+            ),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
