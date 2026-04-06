@@ -2893,60 +2893,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
           },
-          bedrockDiscovery: {
-            type: "object",
-            properties: {
-              enabled: {
-                type: "boolean",
-                title: "Bedrock Discovery Enabled",
-                description:
-                  "Enables periodic Bedrock model discovery and catalog refresh for Bedrock-backed providers. Keep disabled unless Bedrock is actively used and IAM permissions are correctly configured.",
-              },
-              region: {
-                type: "string",
-                title: "Bedrock Discovery Region",
-                description:
-                  "AWS region used for Bedrock discovery calls when discovery is enabled for your deployment. Use the region where your Bedrock models are provisioned to avoid empty discovery results.",
-              },
-              providerFilter: {
-                type: "array",
-                items: {
-                  type: "string",
-                },
-                title: "Bedrock Discovery Provider Filter",
-                description:
-                  "Optional provider allowlist filter for Bedrock discovery so only selected providers are refreshed. Use this to limit discovery scope in multi-provider environments.",
-              },
-              refreshInterval: {
-                type: "integer",
-                minimum: 0,
-                maximum: 9007199254740991,
-                title: "Bedrock Discovery Refresh Interval (s)",
-                description:
-                  "Refresh cadence for Bedrock discovery polling in seconds to detect newly available models over time. Use longer intervals in production to reduce API cost and control-plane noise.",
-              },
-              defaultContextWindow: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-                title: "Bedrock Default Context Window",
-                description:
-                  "Fallback context-window value applied to discovered models when provider metadata lacks explicit limits. Use realistic defaults to avoid oversized prompts that exceed true provider constraints.",
-              },
-              defaultMaxTokens: {
-                type: "integer",
-                exclusiveMinimum: 0,
-                maximum: 9007199254740991,
-                title: "Bedrock Default Max Tokens",
-                description:
-                  "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
-              },
-            },
-            additionalProperties: false,
-            title: "Bedrock Model Discovery",
-            description:
-              "Automatic AWS Bedrock model discovery settings used to synthesize provider model entries from account visibility. Keep discovery scoped and refresh intervals conservative to reduce API churn.",
-          },
         },
         additionalProperties: false,
         title: "Models",
@@ -3101,6 +3047,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         title: "Video Generation Model Fallbacks",
                         description: "Ordered fallback video-generation models (provider/model).",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              musicGenerationModel: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      primary: {
+                        type: "string",
+                        title: "Music Generation Model",
+                        description:
+                          "Optional music-generation model (provider/model) used by the shared music generation capability.",
+                      },
+                      fallbacks: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Music Generation Model Fallbacks",
+                        description: "Ordered fallback music-generation models (provider/model).",
                       },
                     },
                     additionalProperties: false,
@@ -3292,256 +3265,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
-              cliBackends: {
-                type: "object",
-                propertyNames: {
-                  type: "string",
-                },
-                additionalProperties: {
-                  type: "object",
-                  properties: {
-                    command: {
-                      type: "string",
-                    },
-                    args: {
-                      type: "array",
-                      items: {
-                        type: "string",
-                      },
-                    },
-                    output: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "json",
-                        },
-                        {
-                          type: "string",
-                          const: "text",
-                        },
-                        {
-                          type: "string",
-                          const: "jsonl",
-                        },
-                      ],
-                    },
-                    resumeOutput: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "json",
-                        },
-                        {
-                          type: "string",
-                          const: "text",
-                        },
-                        {
-                          type: "string",
-                          const: "jsonl",
-                        },
-                      ],
-                    },
-                    input: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "arg",
-                        },
-                        {
-                          type: "string",
-                          const: "stdin",
-                        },
-                      ],
-                    },
-                    maxPromptArgChars: {
-                      type: "integer",
-                      exclusiveMinimum: 0,
-                      maximum: 9007199254740991,
-                    },
-                    env: {
-                      type: "object",
-                      propertyNames: {
-                        type: "string",
-                      },
-                      additionalProperties: {
-                        type: "string",
-                      },
-                    },
-                    clearEnv: {
-                      type: "array",
-                      items: {
-                        type: "string",
-                      },
-                    },
-                    modelArg: {
-                      type: "string",
-                    },
-                    modelAliases: {
-                      type: "object",
-                      propertyNames: {
-                        type: "string",
-                      },
-                      additionalProperties: {
-                        type: "string",
-                      },
-                    },
-                    sessionArg: {
-                      type: "string",
-                    },
-                    sessionArgs: {
-                      type: "array",
-                      items: {
-                        type: "string",
-                      },
-                    },
-                    resumeArgs: {
-                      type: "array",
-                      items: {
-                        type: "string",
-                      },
-                    },
-                    sessionMode: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "always",
-                        },
-                        {
-                          type: "string",
-                          const: "existing",
-                        },
-                        {
-                          type: "string",
-                          const: "none",
-                        },
-                      ],
-                    },
-                    sessionIdFields: {
-                      type: "array",
-                      items: {
-                        type: "string",
-                      },
-                    },
-                    systemPromptArg: {
-                      type: "string",
-                    },
-                    systemPromptMode: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "append",
-                        },
-                        {
-                          type: "string",
-                          const: "replace",
-                        },
-                      ],
-                    },
-                    systemPromptWhen: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "first",
-                        },
-                        {
-                          type: "string",
-                          const: "always",
-                        },
-                        {
-                          type: "string",
-                          const: "never",
-                        },
-                      ],
-                    },
-                    imageArg: {
-                      type: "string",
-                    },
-                    imageMode: {
-                      anyOf: [
-                        {
-                          type: "string",
-                          const: "repeat",
-                        },
-                        {
-                          type: "string",
-                          const: "list",
-                        },
-                      ],
-                    },
-                    serialize: {
-                      type: "boolean",
-                    },
-                    reliability: {
-                      type: "object",
-                      properties: {
-                        watchdog: {
-                          type: "object",
-                          properties: {
-                            fresh: {
-                              type: "object",
-                              properties: {
-                                noOutputTimeoutMs: {
-                                  type: "integer",
-                                  minimum: 1000,
-                                  maximum: 9007199254740991,
-                                },
-                                noOutputTimeoutRatio: {
-                                  type: "number",
-                                  minimum: 0.05,
-                                  maximum: 0.95,
-                                },
-                                minMs: {
-                                  type: "integer",
-                                  minimum: 1000,
-                                  maximum: 9007199254740991,
-                                },
-                                maxMs: {
-                                  type: "integer",
-                                  minimum: 1000,
-                                  maximum: 9007199254740991,
-                                },
-                              },
-                              additionalProperties: false,
-                            },
-                            resume: {
-                              type: "object",
-                              properties: {
-                                noOutputTimeoutMs: {
-                                  type: "integer",
-                                  minimum: 1000,
-                                  maximum: 9007199254740991,
-                                },
-                                noOutputTimeoutRatio: {
-                                  type: "number",
-                                  minimum: 0.05,
-                                  maximum: 0.95,
-                                },
-                                minMs: {
-                                  type: "integer",
-                                  minimum: 1000,
-                                  maximum: 9007199254740991,
-                                },
-                                maxMs: {
-                                  type: "integer",
-                                  minimum: 1000,
-                                  maximum: 9007199254740991,
-                                },
-                              },
-                              additionalProperties: false,
-                            },
-                          },
-                          additionalProperties: false,
-                        },
-                      },
-                      additionalProperties: false,
-                    },
-                  },
-                  required: ["command"],
-                  additionalProperties: false,
-                },
-                title: "CLI Backends",
-                description: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
-              },
               memorySearch: {
                 type: "object",
                 properties: {
@@ -3670,7 +3393,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     title: "Memory Search Provider",
                     description:
-                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
                   },
                   remote: {
                     type: "object",
@@ -3825,7 +3548,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     maximum: 9007199254740991,
                     title: "Memory Search Output Dimensionality",
                     description:
-                      "Gemini embedding-2 only: chooses the output vector size for memory embeddings. Use 768, 1536, or 3072 (default), and expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+                      "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
                   },
                   local: {
                     type: "object",
@@ -17140,6 +16863,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             additionalProperties: false,
           },
+          experimental: {
+            type: "object",
+            properties: {
+              planTool: {
+                type: "boolean",
+                title: "Enable Structured Plan Tool",
+                description:
+                  "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+              },
+            },
+            additionalProperties: false,
+            title: "Experimental Tools",
+            description:
+              "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+          },
         },
         additionalProperties: false,
         title: "Tools",
@@ -20210,7 +19948,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           provider: {
             type: "string",
             title: "Talk Active Provider",
-            description: 'Active Talk provider id (for example "elevenlabs").',
+            description: 'Active Talk provider id (for example "acme-speech").',
           },
           providers: {
             type: "object",
@@ -20220,32 +19958,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             additionalProperties: {
               type: "object",
               properties: {
-                voiceId: {
-                  type: "string",
-                  title: "Talk Provider Voice ID",
-                  description: "Provider default voice ID for Talk mode.",
-                },
-                voiceAliases: {
-                  type: "object",
-                  propertyNames: {
-                    type: "string",
-                  },
-                  additionalProperties: {
-                    type: "string",
-                  },
-                  title: "Talk Provider Voice Aliases",
-                  description: "Optional provider voice alias map for Talk directives.",
-                },
-                modelId: {
-                  type: "string",
-                  title: "Talk Provider Model ID",
-                  description: "Provider default model ID for Talk mode.",
-                },
-                outputFormat: {
-                  type: "string",
-                  title: "Talk Provider Output Format",
-                  description: "Provider default output format for Talk mode.",
-                },
                 apiKey: {
                   anyOf: [
                     {
@@ -20316,6 +20028,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
               },
               additionalProperties: {},
+              title: "Talk Provider Config",
+              description: "Provider-owned Talk config fields for the matching provider id.",
             },
             title: "Talk Provider Settings",
             description:
@@ -23188,6 +22902,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
       tags: ["performance", "media", "tools"],
     },
+    "tools.media.asyncCompletion.directSend": {
+      label: "Async Media Completion Direct Send",
+      help: "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+      tags: ["storage", "media", "tools"],
+    },
     "tools.media.audio.enabled": {
       label: "Enable Audio Understanding",
       help: "Enable audio understanding so voice notes or audio clips can be transcribed/summarized for agent context. Disable when audio ingestion is outside policy or unnecessary for your workflows.",
@@ -23519,6 +23238,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent-to-Agent Target Allowlist",
       help: "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
       tags: ["access", "tools"],
+    },
+    "tools.experimental": {
+      label: "Experimental Tools",
+      help: "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+      tags: ["security", "tools", "advanced"],
+    },
+    "tools.experimental.planTool": {
+      label: "Enable Structured Plan Tool",
+      help: "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+      tags: ["security", "tools", "advanced"],
     },
     "tools.elevated": {
       label: "Elevated Tool Access",
@@ -24261,7 +23990,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.provider": {
       label: "Memory Search Provider",
-      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.remote.baseUrl": {
@@ -24312,7 +24041,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.outputDimensionality": {
       label: "Memory Search Output Dimensionality",
-      help: "Gemini embedding-2 only: chooses the output vector size for memory embeddings. Use 768, 1536, or 3072 (default), and expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+      help: "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.fallback": {
@@ -24896,41 +24625,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
       tags: ["models"],
     },
-    "models.bedrockDiscovery": {
-      label: "Bedrock Model Discovery",
-      help: "Automatic AWS Bedrock model discovery settings used to synthesize provider model entries from account visibility. Keep discovery scoped and refresh intervals conservative to reduce API churn.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.enabled": {
-      label: "Bedrock Discovery Enabled",
-      help: "Enables periodic Bedrock model discovery and catalog refresh for Bedrock-backed providers. Keep disabled unless Bedrock is actively used and IAM permissions are correctly configured.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.region": {
-      label: "Bedrock Discovery Region",
-      help: "AWS region used for Bedrock discovery calls when discovery is enabled for your deployment. Use the region where your Bedrock models are provisioned to avoid empty discovery results.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.providerFilter": {
-      label: "Bedrock Discovery Provider Filter",
-      help: "Optional provider allowlist filter for Bedrock discovery so only selected providers are refreshed. Use this to limit discovery scope in multi-provider environments.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.refreshInterval": {
-      label: "Bedrock Discovery Refresh Interval (s)",
-      help: "Refresh cadence for Bedrock discovery polling in seconds to detect newly available models over time. Use longer intervals in production to reduce API cost and control-plane noise.",
-      tags: ["performance", "models"],
-    },
-    "models.bedrockDiscovery.defaultContextWindow": {
-      label: "Bedrock Default Context Window",
-      help: "Fallback context-window value applied to discovered models when provider metadata lacks explicit limits. Use realistic defaults to avoid oversized prompts that exceed true provider constraints.",
-      tags: ["models"],
-    },
-    "models.bedrockDiscovery.defaultMaxTokens": {
-      label: "Bedrock Default Max Tokens",
-      help: "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
-      tags: ["security", "auth", "performance", "models"],
-    },
     "auth.cooldowns.billingBackoffHours": {
       label: "Billing Backoff (hours)",
       help: "Base backoff (hours) when a profile fails due to billing/insufficient credits (default: 5).",
@@ -25021,6 +24715,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Ordered fallback video-generation models (provider/model).",
       tags: ["reliability", "media"],
     },
+    "agents.defaults.musicGenerationModel.primary": {
+      label: "Music Generation Model",
+      help: "Optional music-generation model (provider/model) used by the shared music generation capability.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.musicGenerationModel.fallbacks": {
+      label: "Music Generation Model Fallbacks",
+      help: "Ordered fallback music-generation models (provider/model).",
+      tags: ["reliability"],
+    },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",
       help: "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
@@ -25060,11 +24764,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Human Delay Max (ms)",
       help: "Maximum delay in ms for custom humanDelay (default: 2500).",
       tags: ["performance"],
-    },
-    "agents.defaults.cliBackends": {
-      label: "CLI Backends",
-      help: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
-      tags: ["advanced"],
     },
     "agents.defaults.compaction": {
       label: "Compaction",
@@ -26199,7 +25898,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "talk.provider": {
       label: "Talk Active Provider",
-      help: 'Active Talk provider id (for example "elevenlabs").',
+      help: 'Active Talk provider id (for example "acme-speech").',
       tags: ["media"],
     },
     "talk.providers": {
@@ -26207,24 +25906,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
       tags: ["media"],
     },
-    "talk.providers.*.voiceId": {
-      label: "Talk Provider Voice ID",
-      help: "Provider default voice ID for Talk mode.",
-      tags: ["media"],
-    },
-    "talk.providers.*.voiceAliases": {
-      label: "Talk Provider Voice Aliases",
-      help: "Optional provider voice alias map for Talk directives.",
-      tags: ["media"],
-    },
-    "talk.providers.*.modelId": {
-      label: "Talk Provider Model ID",
-      help: "Provider default model ID for Talk mode.",
-      tags: ["models", "media"],
-    },
-    "talk.providers.*.outputFormat": {
-      label: "Talk Provider Output Format",
-      help: "Provider default output format for Talk mode.",
+    "talk.providers.*": {
+      label: "Talk Provider Config",
+      help: "Provider-owned Talk config fields for the matching provider id.",
       tags: ["media"],
     },
     "talk.providers.*.apiKey": {
@@ -26880,6 +26564,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.4",
+  version: "2026.4.5",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

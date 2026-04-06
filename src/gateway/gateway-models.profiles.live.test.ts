@@ -18,7 +18,11 @@ import {
   isAnthropicRateLimitError,
 } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
-import { isHighSignalLiveModelRef } from "../agents/live-model-filter.js";
+import {
+  getHighSignalLiveModelPriorityIndex,
+  isHighSignalLiveModelRef,
+  selectHighSignalLiveItems,
+} from "../agents/live-model-filter.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
@@ -28,7 +32,7 @@ import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discover
 import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
+import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -66,6 +70,7 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
+  "google/gemini-2.5-flash",
   "google/gemini-3-flash-preview",
   "google/gemini-3-pro-preview",
   "google/gemini-3.1-flash-lite-preview",
@@ -224,49 +229,6 @@ async function withGatewayLiveModelTimeout<T>(operation: Promise<T>, context: st
   });
 }
 
-function capByProviderSpread<T>(
-  items: T[],
-  maxItems: number,
-  providerOf: (item: T) => string,
-): T[] {
-  if (maxItems <= 0 || items.length <= maxItems) {
-    return items;
-  }
-  const providerOrder: string[] = [];
-  const grouped = new Map<string, T[]>();
-  for (const item of items) {
-    const provider = providerOf(item);
-    const bucket = grouped.get(provider);
-    if (bucket) {
-      bucket.push(item);
-      continue;
-    }
-    providerOrder.push(provider);
-    grouped.set(provider, [item]);
-  }
-
-  const selected: T[] = [];
-  while (selected.length < maxItems && grouped.size > 0) {
-    for (const provider of providerOrder) {
-      const bucket = grouped.get(provider);
-      if (!bucket || bucket.length === 0) {
-        continue;
-      }
-      const item = bucket.shift();
-      if (item) {
-        selected.push(item);
-      }
-      if (bucket.length === 0) {
-        grouped.delete(provider);
-      }
-      if (selected.length >= maxItems) {
-        break;
-      }
-    }
-  }
-  return selected;
-}
-
 function logProgress(message: string): void {
   process.stderr.write(`[live] ${message}\n`);
 }
@@ -421,6 +383,12 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
   it("strips scaffolding for Gemini preview models with known transcript wrappers", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
+        "<final>Visible</final>",
+        "google/gemini-2.5-flash",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
         "google/gemini-3.1-flash-preview",
       ),
@@ -448,7 +416,7 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
         "<think>hidden</think>Visible",
         "google/gemini-2.5-flash",
       ),
-    ).toBe("<think>hidden</think>Visible");
+    ).toBe("Visible");
   });
 
   it("strips scaffolding for known OpenAI transcript wrappers", () => {
@@ -542,7 +510,11 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("no allowed providers are available") ||
     msg.includes("provider unavailable") ||
     msg.includes("upstream provider unavailable") ||
-    msg.includes("upstream error from google")
+    msg.includes("upstream error from google") ||
+    msg.includes("temporarily rate-limited upstream") ||
+    msg.includes("unable to access non-serverless model") ||
+    msg.includes("create and start a new dedicated endpoint") ||
+    msg.includes("no available capacity was found for the model")
   );
 }
 
@@ -553,6 +525,21 @@ function isOllamaUnavailableErrorMessage(raw: string): boolean {
     (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
     (msg.includes("localhost:11434") && msg.includes("econnrefused"))
   );
+}
+
+function isAudioOnlyModelErrorMessage(raw: string): boolean {
+  return /requires that either input content or output modality contain audio/i.test(raw);
+}
+
+function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
+  return (
+    /does not support parameter reasoningeffort/i.test(raw) ||
+    /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
+  );
+}
+
+function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
+  return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
 
 function isInstructionsRequiredError(error: string): boolean {
@@ -632,6 +619,20 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
+  });
+});
+
+describe("getHighSignalLiveModelPriorityIndex", () => {
+  it("prefers curated Google replacements over big-pickle", () => {
+    expect(
+      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
+    ).toBe(1);
+    expect(
+      getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-2.5-flash" }),
+    ).toBe(2);
+    expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
+      null,
+    );
   });
 });
 
@@ -1672,6 +1673,21 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (provider unavailable)`);
             break;
           }
+          if (isAudioOnlyModelErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (audio-only model)`);
+            break;
+          }
+          if (isUnsupportedReasoningEffortErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (reasoning unsupported)`);
+            break;
+          }
+          if (isUnsupportedThinkingToggleErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (thinking toggle unsupported)`);
+            break;
+          }
           if (model.provider === "openrouter" && isPromptProbeMiss(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (openrouter prompt probe miss)`);
@@ -1782,12 +1798,14 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     client.stop();
     await server.close({ reason: "live test complete" });
     await fs.rm(toolProbePath, { force: true });
-    await fs.rm(tempDir, { recursive: true, force: true });
+    // Give the filesystem a short retry window while agent/runtime teardown
+    // releases handles inside these temporary live-test directories.
+    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     if (tempAgentDir) {
-      await fs.rm(tempAgentDir, { recursive: true, force: true });
+      await fs.rm(tempAgentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
     if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
+      await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 
     process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
@@ -1861,9 +1879,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           logProgress("[all-models] no API keys found; skipping");
           return;
         }
-        const selectedCandidates = capByProviderSpread(
+        const selectedCandidates = selectHighSignalLiveItems(
           candidates,
           maxModels > 0 ? maxModels : candidates.length,
+          (model) => ({ provider: model.provider, id: model.id }),
           (model) => model.provider,
         );
         logProgress(`[all-models] selection=${useExplicit ? "explicit" : "high-signal"}`);

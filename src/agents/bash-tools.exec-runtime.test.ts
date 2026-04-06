@@ -126,7 +126,9 @@ describe("resolveExecTarget", () => {
         elevatedRequested: false,
         sandboxAvailable: true,
       }),
-    ).toThrow("exec host not allowed");
+    ).toThrow(
+      "exec host not allowed (requested gateway; configured host is auto; set tools.exec.host=gateway or auto to allow this override).",
+    );
   });
 
   it("allows per-call host=sandbox override when configured host is auto", () => {
@@ -153,7 +155,9 @@ describe("resolveExecTarget", () => {
         elevatedRequested: false,
         sandboxAvailable: false,
       }),
-    ).toThrow("exec host not allowed");
+    ).toThrow(
+      "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
+    );
   });
 
   it("allows explicit auto request when configured host is auto", () => {
@@ -180,7 +184,9 @@ describe("resolveExecTarget", () => {
         elevatedRequested: false,
         sandboxAvailable: true,
       }),
-    ).toThrow("exec host not allowed");
+    ).toThrow(
+      "exec host not allowed (requested auto; configured host is gateway; set tools.exec.host=auto to allow this override).",
+    );
   });
 
   it("allows exact node matches", () => {

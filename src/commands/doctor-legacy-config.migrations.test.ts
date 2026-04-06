@@ -222,6 +222,37 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("migrates legacy Bedrock discovery config into plugin-owned discovery config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        mode: "merge",
+        bedrockDiscovery: {
+          enabled: true,
+          region: "us-east-1",
+          providerFilter: ["anthropic"],
+        },
+      },
+    });
+
+    expect(res.config.models).toEqual({
+      mode: "merge",
+    });
+    expect(res.config.plugins?.entries?.["amazon-bedrock"]).toEqual({
+      config: {
+        discovery: {
+          enabled: true,
+          region: "us-east-1",
+          providerFilter: ["anthropic"],
+        },
+      },
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved models.bedrockDiscovery → plugins.entries.amazon-bedrock.config.discovery.",
+      ]),
+    );
+  });
+
   it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
@@ -705,7 +736,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       talk: {
         voiceId: "voice-123",
         voiceAliases: {
-          Clawd: "EXAVITQu4vr4xnSDxMaL",
+          Clawd: "VoiceAlias1234567890",
         },
         modelId: "eleven_v3",
         outputFormat: "pcm_44100",
@@ -720,7 +751,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         elevenlabs: {
           voiceId: "voice-123",
           voiceAliases: {
-            Clawd: "EXAVITQu4vr4xnSDxMaL",
+            Clawd: "VoiceAlias1234567890",
           },
           modelId: "eleven_v3",
           outputFormat: "pcm_44100",
@@ -730,7 +761,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
     });
-    expect(res.changes).toEqual(["Moved legacy talk flat fields → talk.providers.elevenlabs."]);
+    expect(res.changes).toEqual([
+      "Moved talk legacy fields (voiceId, voiceAliases, modelId, outputFormat, apiKey) → talk.providers.elevenlabs (filled missing provider fields only).",
+    ]);
   });
 
   it("normalizes talk provider ids without overriding explicit provider config", () => {

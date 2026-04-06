@@ -1,17 +1,15 @@
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
+import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
-
-type ChannelSecretTargetRegistrySurface = {
-  secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
-};
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
 const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
-  return (getBundledChannelContractSurfaces() as ChannelSecretTargetRegistrySurface[]).flatMap(
-    (surface) => surface.secretTargetRegistryEntries ?? [],
-  );
+  const entries: SecretTargetRegistryEntry[] = [];
+  for (const plugin of iterateBootstrapChannelPlugins()) {
+    entries.push(...(plugin.secrets?.secretTargetRegistryEntries ?? []));
+  }
+  return entries;
 }
 
 const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [

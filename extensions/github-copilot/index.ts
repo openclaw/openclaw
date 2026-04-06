@@ -11,6 +11,12 @@ import { wrapCopilotProviderStream } from "./stream.js";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 
+type GithubCopilotPluginConfig = {
+  discovery?: {
+    enabled?: boolean;
+  };
+};
+
 async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
 }
@@ -19,6 +25,7 @@ export default definePluginEntry({
   name: "GitHub Copilot Provider",
   description: "Bundled GitHub Copilot provider plugin",
   register(api) {
+    const pluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
     function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
       githubToken: string;
       hasProfile: boolean;
@@ -125,6 +132,11 @@ export default definePluginEntry({
       catalog: {
         order: "late",
         run: async (ctx) => {
+          const discoveryEnabled =
+            pluginConfig.discovery?.enabled ?? ctx.config?.models?.copilotDiscovery?.enabled;
+          if (discoveryEnabled === false) {
+            return null;
+          }
           const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
             await loadGithubCopilotRuntime();
           const { githubToken, hasProfile } = resolveFirstGithubToken({

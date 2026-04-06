@@ -23,6 +23,28 @@ function buildConfig(
 }
 
 describe("matrix native approval adapter", () => {
+  it("describes the correct Matrix exec-approval setup path", () => {
+    const text = matrixApprovalCapability.describeExecApprovalSetup?.({
+      channel: "matrix",
+      channelLabel: "Matrix",
+    });
+
+    expect(text).toContain("`channels.matrix.execApprovals.approvers`");
+    expect(text).toContain("`channels.matrix.dm.allowFrom`");
+  });
+
+  it("describes the named-account Matrix exec-approval setup path", () => {
+    const text = matrixApprovalCapability.describeExecApprovalSetup?.({
+      channel: "matrix",
+      channelLabel: "Matrix",
+      accountId: "work",
+    });
+
+    expect(text).toContain("`channels.matrix.accounts.work.execApprovals.approvers`");
+    expect(text).toContain("`channels.matrix.accounts.work.dm.allowFrom`");
+    expect(text).not.toContain("`channels.matrix.execApprovals.approvers`");
+  });
+
   it("describes native matrix approval delivery capabilities", () => {
     const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),

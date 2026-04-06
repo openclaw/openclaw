@@ -17,8 +17,6 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import { migrateLegacyConfig } from "../config/legacy-migrate.js";
-import { migrateLegacyXSearchConfig } from "../config/legacy-x-search.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
@@ -34,6 +32,11 @@ import {
   createResolverContext,
   type SecretResolverWarning,
 } from "./runtime-shared.js";
+import {
+  clearActiveRuntimeWebToolsMetadata,
+  getActiveRuntimeWebToolsMetadata as getActiveRuntimeWebToolsMetadataFromState,
+  setActiveRuntimeWebToolsMetadata,
+} from "./runtime-web-tools-state.js";
 import { resolveRuntimeWebTools, type RuntimeWebToolsMetadata } from "./runtime-web-tools.js";
 
 export type { SecretResolverWarning } from "./runtime-shared.js";
@@ -98,6 +101,7 @@ function cloneRefreshContext(context: SecretsRuntimeRefreshContext): SecretsRunt
 function clearActiveSecretsRuntimeState(): void {
   activeSnapshot = null;
   activeRefreshContext = null;
+  clearActiveRuntimeWebToolsMetadata();
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -169,10 +173,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
-  const migrated = migrateLegacyConfig(params.config);
-  const migratedConfig = migrated.config ?? migrateLegacyXSearchConfig(params.config).config;
-  const sourceConfig = structuredClone(migratedConfig);
-  const resolvedConfig = structuredClone(migratedConfig);
+  const sourceConfig = structuredClone(params.config);
+  const resolvedConfig = structuredClone(params.config);
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
     resolveLoadablePluginOrigins({ config: sourceConfig, env: runtimeEnv });
@@ -256,6 +258,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
   activeRefreshContext = cloneRefreshContext(refreshContext);
+  setActiveRuntimeWebToolsMetadata(next.webTools);
   setRuntimeConfigSnapshotRefreshHandler({
     refresh: async ({ sourceConfig }) => {
       if (!activeSnapshot || !activeRefreshContext) {
@@ -286,10 +289,7 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
 }
 
 export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | null {
-  if (!activeSnapshot) {
-    return null;
-  }
-  return structuredClone(activeSnapshot.webTools);
+  return getActiveRuntimeWebToolsMetadataFromState();
 }
 
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {

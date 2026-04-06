@@ -534,6 +534,108 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
+  it.each([
+    {
+      label: "openai",
+      model: {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      },
+    },
+    {
+      label: "openai-codex",
+      model: {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+      },
+    },
+    {
+      label: "azure-openai-responses",
+      model: {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "azure-openai-responses",
+        provider: "azure-openai-responses",
+        baseUrl: "https://azure.example.openai.azure.com/openai/v1",
+      },
+    },
+    {
+      label: "custom-openai-responses",
+      model: {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "custom-openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+      },
+    },
+  ])("replays assistant phase metadata for $label responses payloads", ({ model }) => {
+    const params = buildOpenAIResponsesParams(
+      {
+        ...model,
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+            content: [
+              {
+                type: "text",
+                text: "Working...",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_commentary",
+                  phase: "commentary",
+                }),
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: "Continue",
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ role?: string; id?: string; phase?: string }>;
+    };
+
+    const assistantItem = params.input?.find((item) => item.role === "assistant");
+    expect(assistantItem).toMatchObject({
+      role: "assistant",
+      id: "msg_commentary",
+      phase: "commentary",
+    });
+  });
+
   it("strips the internal cache boundary from OpenAI system prompts", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -580,7 +682,7 @@ describe("openai transport stream", () => {
           {
             name: "lookup_weather",
             description: "Get forecast",
-            parameters: { type: "object", properties: {} },
+            parameters: { type: "object", properties: {}, additionalProperties: false },
           },
         ],
       } as never,
@@ -588,6 +690,50 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean }> };
 
     expect(params.tools?.[0]?.strict).toBe(true);
+    expect(params.tools?.[0]).toMatchObject({
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+        required: [],
+      },
+    });
+  });
+
+  it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: { path: { type: "string" } },
+              required: [],
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean }> };
+
+    expect(params.tools?.[0]?.strict).toBe(false);
   });
 
   it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
@@ -1012,7 +1158,7 @@ describe("openai transport stream", () => {
           {
             name: "lookup_weather",
             description: "Get forecast",
-            parameters: { type: "object", properties: {} },
+            parameters: { type: "object", properties: {}, additionalProperties: false },
           },
         ],
       } as never,
@@ -1020,6 +1166,37 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
     expect(params.tools?.[0]?.function?.strict).toBe(true);
+  });
+
+  it("falls back to completions strict:false when a native OpenAI tool schema is not strict-compatible", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
+
+    expect(params.tools?.[0]?.function?.strict).toBe(false);
   });
 
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {

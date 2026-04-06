@@ -11,13 +11,14 @@ title: "OAuth"
 # OAuth
 
 OpenClaw supports “subscription auth” via OAuth for providers that offer it
-(notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, new
-setup should use the local **Claude CLI** login path on the gateway host, but
-Anthropic distinguishes between direct Claude Code usage and OpenClaw's reuse
-path. Anthropic's public Claude Code docs say direct Claude Code use stays
-inside Claude subscription limits. Separately, Anthropic notified OpenClaw
-users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that OpenClaw counts as
-a third-party harness and now requires **Extra Usage** for that traffic.
+(notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic, the practical split
+is now:
+
+- **Anthropic API key**: normal Anthropic API billing
+- **Anthropic subscription auth inside OpenClaw**: Anthropic notified OpenClaw
+  users on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that this now
+  requires **Extra Usage**
+
 OpenAI Codex OAuth is explicitly supported for use in external tools like
 OpenClaw. This page explains:
 
@@ -96,62 +97,23 @@ OpenClaw-driven Claude-login traffic.
 
 ## Anthropic Claude CLI migration
 
-If Claude CLI is already installed and signed in on the gateway host, you can
-switch Anthropic model selection over to the local CLI backend. This is a
-supported OpenClaw path when you want to reuse a local Claude CLI login on the
-same host.
-
-Prerequisites:
-
-- the `claude` binary is installed on the gateway host
-- Claude CLI is already authenticated there via `claude auth login`
-
-Migration command:
-
-```bash
-openclaw models auth login --provider anthropic --method cli --set-default
-```
-
-Onboarding shortcut:
-
-```bash
-openclaw onboard --auth-choice anthropic-cli
-```
-
-This keeps existing Anthropic auth profiles for rollback, but rewrites the main
-default-model path from `anthropic/...` to `claude-cli/...`, rewrites matching
-Anthropic Claude fallbacks, and adds matching `claude-cli/...` allowlist
-entries under `agents.defaults.models`.
-
-Verify:
-
-```bash
-openclaw models status
-```
+Anthropic no longer has a supported local Claude CLI migration path in
+OpenClaw. Use Anthropic API keys for Anthropic traffic, or keep legacy
+token-based auth only where it is already configured and with the expectation
+that Anthropic treats that OpenClaw path as **Extra Usage**.
 
 ## OAuth exchange (how login works)
 
 OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
 
-### Anthropic Claude CLI
+### Anthropic setup-token
 
 Flow shape:
 
-Claude CLI path:
-
-1. sign in with `claude auth login` on the gateway host
-2. run `openclaw models auth login --provider anthropic --method cli --set-default`
-3. store no new auth profile; switch model selection to `claude-cli/...`
-4. keep existing Anthropic auth profiles for rollback
-
-Anthropic's public Claude Code docs describe this direct Claude subscription
-login flow for `claude` itself. OpenClaw can reuse that local login, but
-Anthropic separately classifies the OpenClaw-controlled path as third-party
-harness usage for billing purposes.
-
-Interactive assistant path:
-
-- `openclaw onboard` / `openclaw configure` → auth choice `anthropic-cli`
+1. start Anthropic setup-token or paste-token from OpenClaw
+2. OpenClaw stores the resulting Anthropic credential in an auth profile
+3. model selection stays on `anthropic/...`
+4. existing Anthropic auth profiles remain available for rollback/order control
 
 ### OpenAI Codex (ChatGPT OAuth)
 

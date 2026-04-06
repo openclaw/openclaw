@@ -283,7 +283,7 @@ API key auth, and dynamic model resolution.
 
     Real bundled examples:
 
-    - `google` and `google-gemini-cli`: `google-gemini`
+    - `google`: `google-gemini`
     - `openrouter`, `kilocode`, `opencode`, and `opencode-go`: `passthrough-gemini`
     - `amazon-bedrock` and `anthropic-vertex`: `anthropic-by-model`
     - `minimax`: `hybrid-anthropic-openai`
@@ -303,7 +303,7 @@ API key auth, and dynamic model resolution.
 
     Real bundled examples:
 
-    - `google` and `google-gemini-cli`: `google-thinking`
+    - `google`: `google-thinking`
     - `kilocode`: `kilocode-thinking`
     - `moonshot`: `moonshot-thinking`
     - `minimax` and `minimax-portal`: `minimax-fast-mode`
@@ -512,6 +512,13 @@ API key auth, and dynamic model resolution.
       | 41 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
       | 42 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
       | 43 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+
+      Prompt tuning note:
+
+      - `resolveSystemPromptContribution` lets a provider inject cache-aware
+        system-prompt guidance for a model family. Prefer it over
+        `before_prompt_build` when the behavior belongs to one provider/model
+        family and should preserve the stable/dynamic cache split.
 
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).
