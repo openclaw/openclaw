@@ -9,11 +9,15 @@ import type {
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  getSessionPlanState,
+  getSessionRuntimeMode,
   loadSessionStore,
+  readSessionRuntimeStateFromStorePath,
   resolveStorePath,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { SessionPlanState, SessionRuntimeMode } from "../../config/sessions/types.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   buildAgentMainSessionKey,
@@ -142,6 +146,66 @@ function formatSessionTaskLine(params: {
   const detail = formatTaskStatusDetail(task);
   const parts = [headline, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
+}
+
+function formatPlanModeStatusSection(params: {
+  runtimeMode: SessionRuntimeMode;
+  planState?: SessionPlanState;
+}): string {
+  const lines = [`🗂 Plan Mode: ${params.runtimeMode}`];
+  if (params.runtimeMode !== "plan") {
+    return lines.join("\n");
+  }
+
+  const content = params.planState?.content?.trim();
+  const todos =
+    params.planState?.todos
+      ?.map((todo) => {
+        const id = todo.id.trim();
+        const text = todo.text.trim();
+        if (!id || !text) {
+          return undefined;
+        }
+        return `- [${todo.status.replaceAll("_", " ")}] ${id}: ${text}`;
+      })
+      .filter((todo): todo is string => Boolean(todo)) ?? [];
+
+  if (!content && todos.length === 0) {
+    lines.push("📝 Plan: active, but no plan details are persisted yet.");
+    return lines.join("\n");
+  }
+  if (content) {
+    lines.push("📝 Plan:", content);
+  }
+  if (todos.length > 0) {
+    lines.push("☑ Todos:", ...todos);
+  }
+  return lines.join("\n");
+}
+
+function resolvePlanModeSnapshot(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  storePath: string;
+}): {
+  runtimeMode: SessionRuntimeMode;
+  planState?: SessionPlanState;
+} {
+  const fallback = readSessionRuntimeStateFromStorePath({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  const runtimeMode =
+    (typeof params.cfg.session?.store === "string"
+      ? getSessionRuntimeMode(params.sessionKey, params.cfg)
+      : undefined) ??
+    fallback?.runtimeMode ??
+    "auto";
+  const planState =
+    (typeof params.cfg.session?.store === "string"
+      ? getSessionPlanState(params.sessionKey, params.cfg)
+      : undefined) ?? fallback?.planState;
+  return { runtimeMode, planState };
 }
 
 async function resolveModelOverride(params: {
@@ -508,14 +572,22 @@ export function createSessionStatusTool(opts?: {
       });
       const fullStatusText =
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
+      const planMode = resolvePlanModeSnapshot({
+        cfg,
+        sessionKey: resolved.key,
+        storePath,
+      });
+      const fullStatusWithPlan = `${fullStatusText}\n${formatPlanModeStatusSection(planMode)}`;
 
       return {
-        content: [{ type: "text", text: fullStatusText }],
+        content: [{ type: "text", text: fullStatusWithPlan }],
         details: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
-          statusText: fullStatusText,
+          planMode: planMode.runtimeMode,
+          planState: planMode.planState,
+          statusText: fullStatusWithPlan,
         },
       };
     },

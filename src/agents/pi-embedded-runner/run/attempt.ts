@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
@@ -10,6 +11,7 @@ import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
+import { readSessionRuntimeStateFromStorePath } from "../../../config/sessions.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -710,6 +712,12 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
       },
     });
+    const planModeState = params.sessionKey
+      ? readSessionRuntimeStateFromStorePath({
+          sessionKey: params.sessionKey,
+          storePath: path.join(path.dirname(path.resolve(params.sessionFile)), "sessions.json"),
+        })
+      : null;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -739,6 +747,8 @@ export async function runEmbeddedAttempt(
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
       promptContribution,
+      planModeActive: planModeState?.runtimeMode === "plan",
+      planState: planModeState?.runtimeMode === "plan" ? planModeState.planState : undefined,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
