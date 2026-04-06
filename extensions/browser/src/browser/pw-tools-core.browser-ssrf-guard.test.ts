@@ -71,6 +71,26 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
   });
 
+  it("re-checks batched click-triggered navigations with the session safety helper", async () => {
+    pageState.page = { url: vi.fn(() => "https://example.com") };
+    pageState.locator = { click: vi.fn(async () => {}) };
+
+    await interactions.batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      actions: [{ kind: "click", ref: "1" }],
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "tab-1",
+    });
+  });
+
   it("re-checks current page URL before snapshotting AI content", async () => {
     const snapshotForAI = vi.fn(async () => ({ full: 'button "Save"' }));
     pageState.page = {

@@ -754,6 +754,7 @@ async function executeSingleAction(
   cdpUrl: string,
   targetId?: string,
   evaluateEnabled?: boolean,
+  ssrfPolicy?: SsrFPolicy,
   depth = 0,
 ): Promise<void> {
   if (depth > MAX_BATCH_DEPTH) {
@@ -774,6 +775,7 @@ async function executeSingleAction(
         >,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
       });
       break;
     case "type":
@@ -786,6 +788,7 @@ async function executeSingleAction(
         submit: action.submit,
         slowly: action.slowly,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
       });
       break;
     case "press":
@@ -794,6 +797,7 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         key: action.key,
         delayMs: action.delayMs,
+        ssrfPolicy,
       });
       break;
     case "hover":
@@ -893,6 +897,7 @@ async function executeSingleAction(
         actions: action.actions,
         stopOnError: action.stopOnError,
         evaluateEnabled,
+        ssrfPolicy,
         depth: depth + 1,
       });
       break;
@@ -907,6 +912,7 @@ export async function batchViaPlaywright(opts: {
   actions: BrowserActRequest[];
   stopOnError?: boolean;
   evaluateEnabled?: boolean;
+  ssrfPolicy?: SsrFPolicy;
   depth?: number;
 }): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
   const depth = opts.depth ?? 0;
@@ -919,7 +925,14 @@ export async function batchViaPlaywright(opts: {
   const results: Array<{ ok: boolean; error?: string }> = [];
   for (const action of opts.actions) {
     try {
-      await executeSingleAction(action, opts.cdpUrl, opts.targetId, opts.evaluateEnabled, depth);
+      await executeSingleAction(
+        action,
+        opts.cdpUrl,
+        opts.targetId,
+        opts.evaluateEnabled,
+        opts.ssrfPolicy,
+        depth,
+      );
       results.push({ ok: true });
     } catch (err) {
       const message = formatErrorMessage(err);

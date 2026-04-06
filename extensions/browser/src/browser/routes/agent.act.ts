@@ -1109,6 +1109,7 @@ export function registerBrowserAgentActRoutes(
               actions,
               stopOnError,
               evaluateEnabled,
+              ssrfPolicy,
             });
             return res.json({ ok: true, targetId: tab.targetId, results: result.results });
           }
