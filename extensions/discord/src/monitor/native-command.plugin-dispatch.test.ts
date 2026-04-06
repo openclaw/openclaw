@@ -738,6 +738,39 @@ describe("Discord native plugin command dispatch", () => {
     });
   });
 
+  it("does not bypass configured ACP readiness for Discord /new", async () => {
+    const { cfg, interaction } = createConfiguredAcpCase({
+      channelType: ChannelType.GuildText,
+      channelId: "1478844424791396446",
+      peerKind: "channel",
+      guildId: "1459246755253325866",
+      guildName: "Ops",
+    });
+    const resolveRouteState = vi.fn(async () =>
+      createConfiguredRouteState({
+        sessionKey: "agent:claude:acp:binding:discord:default:9373ab192b2317f4",
+        agentId: "claude",
+      }),
+    );
+    discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(resolveRouteState);
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    const dispatchSpy = createDispatchSpy();
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(resolveRouteState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enforceConfiguredBindingReadiness: true,
+      }),
+    );
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("allows recovery commands through configured ACP bindings even when ensure fails", async () => {
     const { cfg, interaction } = createConfiguredAcpCase({
       channelType: ChannelType.GuildText,
