@@ -27,6 +27,7 @@ type MockOpenAiRequestSnapshot = {
   allInputText: string;
   toolOutput: string;
   model: string;
+  imageInputCount: number;
   plannedToolName?: string;
 };
 
@@ -157,6 +158,25 @@ function extractAllInputTexts(input: ResponsesInputItem[]) {
     }
   }
   return texts.join("\n");
+}
+
+function countImageInputs(input: ResponsesInputItem[]) {
+  let count = 0;
+  for (const item of input) {
+    if (!Array.isArray(item.content)) {
+      continue;
+    }
+    for (const entry of item.content) {
+      if (
+        entry &&
+        typeof entry === "object" &&
+        (entry as { type?: unknown }).type === "input_image"
+      ) {
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
@@ -301,6 +321,7 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   const orbitCode = extractOrbitCode(memorySnippet);
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
   const exactReplyDirective = extractExactReplyDirective(allInputText);
+  const imageInputCount = countImageInputs(input);
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
@@ -331,6 +352,9 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   }
   if (/image generation check/i.test(prompt) && mediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
+  }
+  if (/image understanding check/i.test(prompt) && imageInputCount > 0) {
+    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
   if (toolOutput && /delegate|subagent/i.test(prompt)) {
     return `Protocol note: delegated result acknowledged. The bounded subagent task returned and is folded back into the main thread.`;
@@ -558,6 +582,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         allInputText: extractAllInputTexts(input),
         toolOutput: extractToolOutput(input),
         model: typeof body.model === "string" ? body.model : "",
+        imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
       };
       requests.push(lastRequest);

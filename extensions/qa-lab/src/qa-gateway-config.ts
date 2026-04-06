@@ -49,7 +49,7 @@ export function buildQaGatewayConfig(params: {
         name: "gpt-5.4",
         api: "openai-responses",
         reasoning: false,
-        input: ["text"],
+        input: ["text", "image"],
         cost: {
           input: 0,
           output: 0,
@@ -64,7 +64,7 @@ export function buildQaGatewayConfig(params: {
         name: "gpt-5.4-alt",
         api: "openai-responses",
         reasoning: false,
-        input: ["text"],
+        input: ["text", "image"],
         cost: {
           input: 0,
           output: 0,
