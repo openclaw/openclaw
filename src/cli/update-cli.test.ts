@@ -1028,6 +1028,7 @@ describe("update-cli", () => {
     await updateCommand({ channel: "dev", yes: true });
 
     expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(
       vi
