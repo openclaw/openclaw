@@ -1086,6 +1086,7 @@ describe("short-term promotion", () => {
               source: "memory",
               snippet,
               recallCount: 2,
+              dailyCount: 0,
               totalScore: 1.8,
               maxScore: 0.95,
               firstRecalledAt: "2026-04-01T00:00:00.000Z",

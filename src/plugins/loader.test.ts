@@ -28,7 +28,10 @@ import {
 import {
   buildMemoryPromptSection,
   getMemoryRuntime,
+  listMemoryCorpusSupplements,
+  registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
+  registerMemoryPromptSupplement,
   registerMemoryPromptSection,
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
@@ -1381,7 +1384,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
       id: "active",
       create: async () => ({ provider: null }),
     });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => null,
+    });
     registerMemoryPromptSection(() => ["active memory section"]);
+    registerMemoryPromptSupplement("memory-wiki", () => ["active wiki supplement"]);
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,
       forceFlushTranscriptBytes: 2,
@@ -1448,7 +1456,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-memory")?.status).toBe("loaded");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "active memory section",
+      "active wiki supplement",
     ]);
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
@@ -1468,6 +1478,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
             create: async () => ({ provider: null }),
           });
           api.registerMemoryPromptSection(() => ["stale failure section"]);
+          api.registerMemoryPromptSupplement(() => ["stale failure supplement"]);
+          api.registerMemoryCorpusSupplement({
+            search: async () => [],
+            get: async () => null,
+          });
           api.registerMemoryFlushPlan(() => ({
             softThresholdTokens: 10,
             forceFlushTranscriptBytes: 20,
@@ -1504,6 +1519,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(listMemoryCorpusSupplements()).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(listMemoryEmbeddingProviders()).toEqual([]);
