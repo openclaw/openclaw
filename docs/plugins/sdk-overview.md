@@ -232,6 +232,8 @@ explicitly promotes one as public.
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
+    | `plugin-sdk/music-generation` | Music generation provider/request/result types |
+    | `plugin-sdk/music-generation-core` | Shared music-generation types, failover helpers, provider lookup, and model-ref parsing |
     | `plugin-sdk/video-generation` | Video generation provider/request/result types |
     | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
@@ -288,6 +290,7 @@ methods:
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions   |
 | `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis       |
 | `api.registerImageGenerationProvider(...)`       | Image generation                 |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                 |
 | `api.registerVideoGenerationProvider(...)`       | Video generation                 |
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider      |
 | `api.registerWebSearchProvider(...)`             | Web search                       |
