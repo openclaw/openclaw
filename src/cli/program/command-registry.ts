@@ -1,5 +1,6 @@
 import type { Command } from "commander";
-import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
+import { getPrimaryCommand } from "../argv.js";
+import { shouldRegisterPrimaryCommandOnly } from "../command-registration-policy.js";
 import { removeCommandByName } from "./command-tree.js";
 import type { ProgramContext } from "./context.js";
 import {
@@ -26,13 +27,6 @@ export type CommandRegistration = {
 type CoreCliEntry = {
   commands: CoreCliCommandDescriptor[];
   register: (params: CommandRegisterParams) => Promise<void> | void;
-};
-
-const shouldRegisterCorePrimaryOnly = (argv: string[]) => {
-  if (hasHelpOrVersion(argv)) {
-    return false;
-  }
-  return true;
 };
 
 // Note for humans and agents:
@@ -259,7 +253,7 @@ export async function registerCoreCliByName(
 
 export function registerCoreCliCommands(program: Command, ctx: ProgramContext, argv: string[]) {
   const primary = getPrimaryCommand(argv);
-  if (primary && shouldRegisterCorePrimaryOnly(argv)) {
+  if (primary && shouldRegisterPrimaryCommandOnly(argv)) {
     const entry = coreEntries.find((candidate) =>
       candidate.commands.some((cmd) => cmd.name === primary),
     );

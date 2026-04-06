@@ -18,6 +18,11 @@ import {
   hasHelpOrVersion,
   isRootHelpInvocation,
 } from "./argv.js";
+import {
+  shouldRegisterPrimaryCommandOnly,
+  shouldSkipPluginCommandRegistration,
+} from "./command-registration-policy.js";
+import { shouldEnsureCliPathForCommandPath } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { tryRouteCli } from "./route.js";
@@ -46,42 +51,11 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   return next;
 }
 
-export function shouldRegisterPrimarySubcommand(argv: string[]): boolean {
-  return !hasHelpOrVersion(argv);
-}
-
-export function shouldSkipPluginCommandRegistration(params: {
-  argv: string[];
-  primary: string | null;
-  hasBuiltinPrimary: boolean;
-}): boolean {
-  if (params.hasBuiltinPrimary) {
-    return true;
-  }
-  if (!params.primary) {
-    return hasHelpOrVersion(params.argv);
-  }
-  return false;
-}
-
 export function shouldEnsureCliPath(argv: string[]): boolean {
   if (hasHelpOrVersion(argv)) {
     return false;
   }
-  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
-  if (!primary) {
-    return true;
-  }
-  if (primary === "status" || primary === "health" || primary === "sessions") {
-    return false;
-  }
-  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
-    return false;
-  }
-  if (primary === "models" && (secondary === "list" || secondary === "status")) {
-    return false;
-  }
-  return true;
+  return shouldEnsureCliPathForCommandPath(getCommandPathWithRootOptions(argv, 2));
 }
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
@@ -200,7 +174,7 @@ export async function runCli(argv: string[] = process.argv) {
     // Register the primary command (builtin or subcli) so help and command parsing
     // are correct even with lazy command registration.
     const primary = getPrimaryCommand(parseArgv);
-    if (primary) {
+    if (primary && shouldRegisterPrimaryCommandOnly(parseArgv)) {
       const { getProgramContext } = await import("./program/program-context.js");
       const ctx = getProgramContext(program);
       if (ctx) {
