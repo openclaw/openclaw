@@ -16,7 +16,7 @@ import {
 } from "../infra/node-commands.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { isRecord, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
 import type { PluginActivationSource } from "./config-state.js";
@@ -405,15 +405,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "MCP server registration missing name",
-      });
-      return;
-    }
-    if (!isRecord(server)) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `MCP server "${name}" registration must be an object`,
       });
       return;
     }

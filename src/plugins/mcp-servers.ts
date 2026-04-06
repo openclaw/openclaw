@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { isRecord } from "../utils.js";
 import type { BundleMcpConfig } from "./bundle-mcp.js";
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
@@ -12,10 +13,6 @@ export type PluginMcpServerConfigResult = {
 type PluginMcpServerConfigNormalizationResult =
   | { ok: true; server: OpenClawPluginMcpServerConfig }
   | { ok: false; error: string };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function isPluginEnabledByConfig(pluginId: string, cfg?: OpenClawConfig): boolean {
   const entry = cfg?.plugins?.entries?.[pluginId];
