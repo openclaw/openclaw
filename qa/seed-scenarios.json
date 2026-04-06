@@ -232,13 +232,13 @@
   },
   {
     "id": "config-patch-hot-apply",
-    "title": "Config patch hot apply",
+    "title": "Config patch skill disable",
     "surface": "config",
-    "objective": "Verify a hot-reloadable config.patch takes effect immediately without a disruptive restart.",
+    "objective": "Verify config.patch can disable a workspace skill and the restarted gateway exposes the new disabled state cleanly.",
     "successCriteria": [
-      "config.patch succeeds with no restart dependency.",
-      "Old mention routing behavior stops working immediately.",
-      "New mention routing behavior works in the same gateway lifetime."
+      "config.patch succeeds for the skill toggle change.",
+      "A workspace skill works before the patch.",
+      "The same skill is reported disabled after the restart triggered by the patch."
     ],
     "docsRefs": ["docs/gateway/configuration.md", "docs/gateway/protocol.md"],
     "codeRefs": ["src/gateway/server-methods/config.ts", "extensions/qa-lab/src/suite.ts"]
