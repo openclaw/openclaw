@@ -310,7 +310,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
           tableMode,
         });
         didSendReply = true;
-        if (info.kind === "final") {
+        if (info.kind !== "tool") {
           const shouldLog = deliveredPayload.text ? true : undefined;
           params.rememberSentText(deliveredPayload.text, {
             combinedBody: params.context.Body as string | undefined,
@@ -323,9 +323,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
         const reply = resolveSendableOutboundReplyParts(deliveredPayload);
         if (shouldLogVerbose()) {
           const preview = deliveredPayload.text != null ? reply.text : "<media>";
-          logVerbose(
-            `Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`,
-          );
+          logVerbose(`Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`);
         }
       },
       onReplyStart: params.msg.sendComposing,

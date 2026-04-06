@@ -102,7 +102,6 @@ const BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS = {
     'if (startupConfig.autoCapture && startupConfig.reviewMode !== "off")',
   ],
 } as const satisfies Record<string, readonly string[]>;
-
 type FileFilter = {
   excludeTests?: boolean;
   testOnly?: boolean;

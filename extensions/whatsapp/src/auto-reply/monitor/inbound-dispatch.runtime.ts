@@ -11,6 +11,7 @@ export {
   resolveMarkdownTableMode,
   resolveSendableOutboundReplyParts,
   resolveTextChunkLimit,
+  resolveToolDeliveryPayload,
   shouldLogVerbose,
   toLocationContext,
   type getChildLogger,

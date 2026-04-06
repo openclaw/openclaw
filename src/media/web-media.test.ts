@@ -596,6 +596,41 @@ describe("loadWebMedia", () => {
     expect(result.buffer).toBe(optimizedBuffer);
   });
 
+  it("converts HEIC files identified by extension even when the mime type is mislabeled", async () => {
+    const inputBuffer = Buffer.from("fake-heic");
+    const convertedBuffer = Buffer.from("converted-jpeg-source");
+    const optimizedBuffer = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const convertHeicToJpegMock = vi.fn().mockResolvedValueOnce(convertedBuffer);
+    const resizeToJpegMock = vi.fn().mockResolvedValueOnce(optimizedBuffer);
+    vi.doMock("./image-ops.js", async () => {
+      const actual = await vi.importActual<typeof import("./image-ops.js")>("./image-ops.js");
+      return {
+        ...actual,
+        convertHeicToJpeg: convertHeicToJpegMock,
+        resizeToJpeg: resizeToJpegMock,
+      };
+    });
+    const { optimizeImageToJpeg } = await importFreshModule<typeof import("./web-media.js")>(
+      import.meta.url,
+      "./web-media.js?scope=heic-extension-fallback",
+    );
+
+    const result = await optimizeImageToJpeg(inputBuffer, 1024, {
+      contentType: "application/octet-stream",
+      fileName: "tiny.heic",
+    });
+
+    expect(convertHeicToJpegMock).toHaveBeenCalledWith(inputBuffer);
+    expect(resizeToJpegMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: convertedBuffer,
+        maxSide: 2048,
+        quality: 80,
+      }),
+    );
+    expect(result.buffer).toBe(optimizedBuffer);
+  });
+
   it("relabels audio-only webm files as audio before delivery", async () => {
     const audioOnlyWebmFile = path.join(fixtureRoot, "voice.webm");
     await fs.writeFile(audioOnlyWebmFile, Buffer.from("fake-webm"));
