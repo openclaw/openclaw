@@ -805,6 +805,7 @@ export async function installPluginFromClawHub(
       CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY,
     );
   }
+  const canonicalPackageName = detail.package?.name ?? parsed.name;
   logClawHubPackageSummary({
     detail,
     version: versionState.version,
@@ -838,7 +839,7 @@ export async function installPluginFromClawHub(
         .join(", ");
       const fallbackVerification = await verifyClawHubArchiveFiles({
         archivePath: archive.archivePath,
-        packageName: parsed.name,
+        packageName: canonicalPackageName,
         version: versionState.version,
         files: versionState.verification.files,
       });

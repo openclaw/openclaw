@@ -355,6 +355,68 @@ describe("installPluginFromClawHub", () => {
     );
   });
 
+  it("validates _meta.json against the canonical package name instead of the requested alias", async () => {
+    const archive = await createClawHubArchive({
+      "openclaw.plugin.json": '{"id":"demo"}',
+      "_meta.json": '{"slug":"demo","version":"2026.3.22"}',
+    });
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "DemoAlias" });
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.3.22",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: null,
+        files: [
+          {
+            path: "openclaw.plugin.json",
+            size: 13,
+            sha256: sha256Hex('{"id":"demo"}'),
+          },
+        ],
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+      ...archive,
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:DemoAlias",
+    });
+
+    expect(result).toMatchObject({ ok: true, pluginId: "demo" });
+    expect(fetchClawHubPackageDetailMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "DemoAlias",
+      }),
+    );
+    expect(fetchClawHubPackageVersionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "demo",
+      }),
+    );
+  });
+
   it("fails closed when sha256hash is present but unrecognized instead of silently falling back", async () => {
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {
