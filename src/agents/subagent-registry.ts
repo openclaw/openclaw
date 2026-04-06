@@ -95,6 +95,7 @@ let subagentRegistryRuntimePromise: Promise<
 > | null = null;
 
 let sweeper: NodeJS.Timeout | null = null;
+let sweepInProgress = false;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 // Use var to avoid TDZ when init runs across circular imports during bootstrap.
@@ -449,6 +450,9 @@ function startSweeper() {
     return;
   }
   sweeper = setInterval(() => {
+    if (sweepInProgress) {
+      return;
+    }
     void sweepSubagentRuns();
   }, 60_000);
   sweeper.unref?.();
@@ -463,41 +467,49 @@ function stopSweeper() {
 }
 
 async function sweepSubagentRuns() {
-  const now = Date.now();
-  let mutated = false;
-  for (const [runId, entry] of subagentRuns.entries()) {
-    if (!entry.archiveAtMs || entry.archiveAtMs > now) {
-      continue;
-    }
-    clearPendingLifecycleError(runId);
-    void notifyContextEngineSubagentEnded({
-      childSessionKey: entry.childSessionKey,
-      reason: "swept",
-      workspaceDir: entry.workspaceDir,
-    });
-    subagentRuns.delete(runId);
-    mutated = true;
-    // Archive/purge is terminal for the run record; remove any retained attachments too.
-    await safeRemoveAttachmentsDir(entry);
-    try {
-      await subagentRegistryDeps.callGateway({
-        method: "sessions.delete",
-        params: {
-          key: entry.childSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-        },
-        timeoutMs: 10_000,
+  if (sweepInProgress) {
+    return;
+  }
+  sweepInProgress = true;
+  try {
+    const now = Date.now();
+    let mutated = false;
+    for (const [runId, entry] of subagentRuns.entries()) {
+      if (!entry.archiveAtMs || entry.archiveAtMs > now) {
+        continue;
+      }
+      clearPendingLifecycleError(runId);
+      void notifyContextEngineSubagentEnded({
+        childSessionKey: entry.childSessionKey,
+        reason: "swept",
+        workspaceDir: entry.workspaceDir,
       });
-    } catch {
-      // ignore
+      subagentRuns.delete(runId);
+      mutated = true;
+      // Archive/purge is terminal for the run record; remove any retained attachments too.
+      await safeRemoveAttachmentsDir(entry);
+      try {
+        await subagentRegistryDeps.callGateway({
+          method: "sessions.delete",
+          params: {
+            key: entry.childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // ignore
+      }
     }
-  }
-  if (mutated) {
-    persistSubagentRuns();
-  }
-  if (subagentRuns.size === 0) {
-    stopSweeper();
+    if (mutated) {
+      persistSubagentRuns();
+    }
+    if (subagentRuns.size === 0) {
+      stopSweeper();
+    }
+  } finally {
+    sweepInProgress = false;
   }
 }
 
