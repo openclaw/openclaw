@@ -411,6 +411,68 @@ def main() -> int:
             str(item.get('route_signature') or ''),
         )
     )
+    notification_digest_grouped: dict[str, dict[str, object]] = {}
+    for item in route_severity_compact:
+        group_key = str(item.get('notification_group_key') or '')
+        if not group_key:
+            continue
+        aggregate = notification_digest_grouped.setdefault(
+            group_key,
+            {
+                'notification_group_key': group_key,
+                'notification_title': item.get('notification_title'),
+                'notification_title_short': item.get('notification_title_short'),
+                'count': 0,
+                'latest_timestamp': item.get('latest_timestamp'),
+                'max_recovery_rank': 0,
+                'band': item.get('band', 'none'),
+                'sample_error_code': item.get('sample_error_code'),
+                '_band_level': PRIORITY_LEVEL.get(str(item.get('band') or 'none'), 0),
+                '_latest_dt': None,
+            },
+        )
+        aggregate['count'] = int(aggregate.get('count', 0)) + int(item.get('count', 0))
+        score = int(item.get('max_recovery_rank', 0))
+        if score > int(aggregate.get('max_recovery_rank', 0)):
+            aggregate['max_recovery_rank'] = score
+        band = str(item.get('band') or 'none')
+        band_level = PRIORITY_LEVEL.get(band, 0)
+        if band_level > int(aggregate.get('_band_level', 0)):
+            aggregate['_band_level'] = band_level
+            aggregate['band'] = band
+        error_code = item.get('sample_error_code')
+        if aggregate.get('sample_error_code') is None and isinstance(error_code, str) and error_code.strip():
+            aggregate['sample_error_code'] = error_code
+        parsed_dt, original_value = parse_timestamp(item.get('latest_timestamp'))
+        current_latest = aggregate.get('_latest_dt')
+        if parsed_dt is not None:
+            if current_latest is None or parsed_dt >= current_latest:
+                aggregate['_latest_dt'] = parsed_dt
+                aggregate['latest_timestamp'] = parsed_dt.isoformat().replace('+00:00', 'Z')
+        elif aggregate.get('latest_timestamp') is None and original_value is not None:
+            aggregate['latest_timestamp'] = original_value
+
+    notification_digest_summary: list[dict[str, object]] = []
+    for aggregate in notification_digest_grouped.values():
+        notification_digest_summary.append(
+            {
+                'notification_group_key': aggregate['notification_group_key'],
+                'notification_title': aggregate['notification_title'],
+                'notification_title_short': aggregate['notification_title_short'],
+                'count': aggregate['count'],
+                'latest_timestamp': aggregate['latest_timestamp'],
+                'max_recovery_rank': aggregate['max_recovery_rank'],
+                'band': aggregate['band'],
+                'sample_error_code': aggregate['sample_error_code'],
+            }
+        )
+    notification_digest_summary.sort(
+        key=lambda item: (
+            -int(item.get('max_recovery_rank', 0)),
+            -int(item.get('count', 0)),
+            str(item.get('notification_group_key') or ''),
+        )
+    )
 
     output = {
         'total_records': len(filtered_records),
@@ -421,6 +483,7 @@ def main() -> int:
         'priority_heatmap': priority_heatmap,
         'priority_heatmap_compact': priority_heatmap_compact,
         'route_severity_compact': route_severity_compact,
+        'notification_digest_summary': notification_digest_summary,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
