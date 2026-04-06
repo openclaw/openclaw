@@ -4,27 +4,13 @@ import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 import {
   loadStatusProviderUsageModule,
   resolveStatusGatewayHealth,
-  resolveStatusRuntimeDetails,
   resolveStatusSecurityAudit,
+  resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
+import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
-import {
-  buildStatusAgentsValue,
-  buildStatusFooterLines,
-  buildStatusHealthRows,
-  buildStatusHeartbeatValue,
-  buildStatusLastHeartbeatValue,
-  buildStatusMemoryValue,
-  buildStatusPairingRecoveryLines,
-  buildStatusPluginCompatibilityLines,
-  buildStatusSecurityAuditLines,
-  buildStatusSessionsRows,
-  buildStatusSystemEventsRows,
-  buildStatusSystemEventsTrailer,
-  buildStatusTasksValue,
-  statusHealthColumns,
-} from "./status.command-sections.ts";
+import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
 
 let statusScanModulePromise: Promise<typeof import("./status.scan.js")> | undefined;
 let statusScanFastJsonModulePromise:
@@ -33,6 +19,9 @@ let statusScanFastJsonModulePromise:
 let statusAllModulePromise: Promise<typeof import("./status-all.js")> | undefined;
 let statusCommandTextRuntimePromise:
   | Promise<typeof import("./status.command.text-runtime.js")>
+  | undefined;
+let statusGatewayConnectionRuntimePromise:
+  | Promise<typeof import("./status.gateway-connection.runtime.js")>
   | undefined;
 let statusNodeModeModulePromise: Promise<typeof import("./status.node-mode.js")> | undefined;
 
@@ -54,6 +43,11 @@ function loadStatusAllModule() {
 function loadStatusCommandTextRuntime() {
   statusCommandTextRuntimePromise ??= import("./status.command.text-runtime.js");
   return statusCommandTextRuntimePromise;
+}
+
+function loadStatusGatewayConnectionRuntime() {
+  statusGatewayConnectionRuntimePromise ??= import("./status.gateway-connection.runtime.js");
+  return statusGatewayConnectionRuntimePromise;
 }
 
 function loadStatusNodeModeModule() {
@@ -126,21 +120,6 @@ export async function statusCommand(
     return;
   }
 
-  const runSecurityAudit = async () =>
-    await resolveStatusSecurityAudit({
-      config: scan.cfg,
-      sourceConfig: scan.sourceConfig,
-    });
-  const securityAudit = opts.json
-    ? await runSecurityAudit()
-    : await withProgress(
-        {
-          label: "Running security audit…",
-          indeterminate: true,
-          enabled: true,
-        },
-        async () => await runSecurityAudit(),
-      );
   const {
     cfg,
     osSummary,
@@ -167,17 +146,29 @@ export async function statusCommand(
   } = scan;
 
   const {
+    securityAudit,
     usage,
     health,
     lastHeartbeat,
     gatewayService: daemon,
     nodeService: nodeDaemon,
-  } = await resolveStatusRuntimeDetails({
+  } = await resolveStatusRuntimeSnapshot({
     config: scan.cfg,
+    sourceConfig: scan.sourceConfig,
     timeoutMs: opts.timeoutMs,
     usage: opts.usage,
     deep: opts.deep,
     gatewayReachable,
+    includeSecurityAudit: true,
+    resolveSecurityAudit: async (input) =>
+      await withProgress(
+        {
+          label: "Running security audit…",
+          indeterminate: true,
+          enabled: true,
+        },
+        async () => await resolveStatusSecurityAudit(input),
+      ),
     resolveUsage: async (timeoutMs) =>
       await withProgress(
         {
@@ -200,17 +191,11 @@ export async function statusCommand(
 
   const rich = true;
   const {
-    buildStatusGatewaySurfaceValues,
-    buildStatusChannelsTableRows,
-    buildStatusOverviewRows,
     buildStatusUpdateSurface,
     formatCliCommand,
-    formatStatusDashboardValue,
-    formatHealthChannelLines,
     formatKTokens,
     formatPromptCacheCompact,
     formatPluginCompatibilityNotice,
-    formatStatusTailscaleValue,
     formatTimeAgo,
     formatTokensCompact,
     formatUpdateAvailableHint,
@@ -221,8 +206,6 @@ export async function statusCommand(
     resolveMemoryFtsState,
     resolveMemoryVectorState,
     shortenText,
-    statusChannelsTableColumns,
-    summarizePluginCompatibility,
     theme,
   } = await loadStatusCommandTextRuntime();
   const muted = (value: string) => (rich ? theme.muted(value) : value);
@@ -234,13 +217,14 @@ export async function statusCommand(
   });
 
   if (opts.verbose) {
-    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
+    const { buildGatewayConnectionDetails } = await loadStatusGatewayConnectionRuntime();
     const details = buildGatewayConnectionDetails({ config: scan.cfg });
-    runtime.log(info("Gateway connection:"));
-    for (const line of details.message.split("\n")) {
-      runtime.log(`  ${line}`);
-    }
-    runtime.log("");
+    logGatewayConnectionDetails({
+      runtime,
+      info,
+      message: details.message,
+      trailingBlankLine: true,
+    });
   }
 
   const tableWidth = getTerminalTableWidth();
@@ -259,199 +243,72 @@ export async function statusCommand(
       node: nodeDaemon,
     }),
   );
-  const { dashboardUrl, gatewayValue, gatewayServiceValue, nodeServiceValue } =
-    buildStatusGatewaySurfaceValues({
+  const pairingRecovery = resolvePairingRecoveryContext({
+    error: gatewayProbe?.error ?? null,
+    closeReason: gatewayProbe?.close?.reason ?? null,
+  });
+
+  const usageLines = usage
+    ? await loadStatusProviderUsageModule().then(({ formatUsageReportLines }) =>
+        formatUsageReportLines(usage),
+      )
+    : undefined;
+  const lines = await buildStatusCommandReportLines(
+    await buildStatusCommandReportData({
+      opts,
       cfg,
+      update,
+      osSummary,
+      tailscaleMode,
+      tailscaleDns,
+      tailscaleHttpsUrl,
       gatewayMode,
       remoteUrlMissing,
       gatewayConnection,
       gatewayReachable,
       gatewayProbe,
       gatewayProbeAuth,
+      gatewayProbeAuthWarning,
       gatewaySelf,
       gatewayService: daemon,
       nodeService: nodeDaemon,
       nodeOnlyGateway,
-      decorateOk: ok,
-      decorateWarn: warn,
-    });
-  const pairingRecovery = resolvePairingRecoveryContext({
-    error: gatewayProbe?.error ?? null,
-    closeReason: gatewayProbe?.close?.reason ?? null,
-  });
-
-  const agentsValue = buildStatusAgentsValue({ agentStatus, formatTimeAgo });
-
-  const defaults = summary.sessions.defaults;
-  const defaultCtx = defaults.contextTokens
-    ? ` (${formatKTokens(defaults.contextTokens)} ctx)`
-    : "";
-  const eventsValue =
-    summary.queuedSystemEvents.length > 0 ? `${summary.queuedSystemEvents.length} queued` : "none";
-  const tasksValue = buildStatusTasksValue({ summary, warn, muted });
-
-  const probesValue = health ? ok("enabled") : muted("skipped (use --deep)");
-
-  const heartbeatValue = buildStatusHeartbeatValue({ summary });
-  const lastHeartbeatValue = buildStatusLastHeartbeatValue({
-    deep: opts.deep,
-    gatewayReachable,
-    lastHeartbeat,
-    warn,
-    muted,
-    formatTimeAgo,
-  });
-
-  const storeLabel =
-    summary.sessions.paths.length > 1
-      ? `${summary.sessions.paths.length} stores`
-      : (summary.sessions.paths[0] ?? "unknown");
-
-  const memoryValue = buildStatusMemoryValue({
-    memory,
-    memoryPlugin,
-    ok,
-    warn,
-    muted,
-    resolveMemoryVectorState,
-    resolveMemoryFtsState,
-    resolveMemoryCacheSummary,
-  });
-
-  const channelLabel = updateSurface.channelLabel;
-  const gitLabel = updateSurface.gitLabel;
-  const pluginCompatibilitySummary = summarizePluginCompatibility(pluginCompatibility);
-  const pluginCompatibilityValue =
-    pluginCompatibilitySummary.noticeCount === 0
-      ? ok("none")
-      : warn(
-          `${pluginCompatibilitySummary.noticeCount} notice${pluginCompatibilitySummary.noticeCount === 1 ? "" : "s"} · ${pluginCompatibilitySummary.pluginCount} plugin${pluginCompatibilitySummary.pluginCount === 1 ? "" : "s"}`,
-        );
-
-  const overviewRows = buildStatusOverviewRows({
-    prefixRows: [{ Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` }],
-    dashboardValue: formatStatusDashboardValue(dashboardUrl),
-    tailscaleValue: formatStatusTailscaleValue({
-      tailscaleMode,
-      dnsName: tailscaleDns,
-      httpsUrl: tailscaleHttpsUrl,
-      decorateOff: muted,
-      decorateWarn: warn,
-    }),
-    channelLabel,
-    gitLabel,
-    updateValue: updateSurface.updateAvailable
-      ? warn(`available · ${updateSurface.updateLine}`)
-      : updateSurface.updateLine,
-    gatewayValue,
-    gatewayAuthWarning: gatewayProbeAuthWarning ? warn(gatewayProbeAuthWarning) : null,
-    gatewayServiceValue,
-    nodeServiceValue,
-    agentsValue,
-    suffixRows: [
-      { Item: "Memory", Value: memoryValue },
-      { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
-      { Item: "Probes", Value: probesValue },
-      { Item: "Events", Value: eventsValue },
-      { Item: "Tasks", Value: tasksValue },
-      { Item: "Heartbeat", Value: heartbeatValue },
-      ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
-      {
-        Item: "Sessions",
-        Value: `${summary.sessions.count} active · default ${defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`,
-      },
-    ],
-  });
-  const securityAuditLines = buildStatusSecurityAuditLines({
-    securityAudit,
-    theme,
-    shortenText,
-    formatCliCommand,
-  });
-
-  const sessionsColumns = [
-    { key: "Key", header: "Key", minWidth: 20, flex: true },
-    { key: "Kind", header: "Kind", minWidth: 6 },
-    { key: "Age", header: "Age", minWidth: 9 },
-    { key: "Model", header: "Model", minWidth: 14 },
-    { key: "Tokens", header: "Tokens", minWidth: 16 },
-    ...(opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
-  ];
-  const sessionsRows = buildStatusSessionsRows({
-    recent: summary.sessions.recent,
-    verbose: opts.verbose,
-    shortenText,
-    formatTimeAgo,
-    formatTokensCompact,
-    formatPromptCacheCompact,
-    muted,
-  });
-  const healthRows = health
-    ? buildStatusHealthRows({
-        health,
-        formatHealthChannelLines,
-        ok,
-        warn,
-        muted,
-      })
-    : undefined;
-  const usageLines = usage
-    ? await loadStatusProviderUsageModule().then(({ formatUsageReportLines }) =>
-        formatUsageReportLines(usage),
-      )
-    : undefined;
-  const updateHint = formatUpdateAvailableHint(update);
-  const lines = await buildStatusCommandReportLines({
-    heading: theme.heading,
-    muted: theme.muted,
-    renderTable,
-    width: tableWidth,
-    overviewRows,
-    showTaskMaintenanceHint: summary.taskAudit.errors > 0,
-    taskMaintenanceHint: `Task maintenance: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
-    pluginCompatibilityLines: buildStatusPluginCompatibilityLines({
-      notices: pluginCompatibility,
-      formatNotice: formatPluginCompatibilityNotice,
-      warn: theme.warn,
-      muted: theme.muted,
-    }),
-    pairingRecoveryLines: buildStatusPairingRecoveryLines({
-      pairingRecovery,
-      warn: theme.warn,
-      muted: theme.muted,
-      formatCliCommand,
-    }),
-    securityAuditLines,
-    channelsColumns: statusChannelsTableColumns,
-    channelsRows: buildStatusChannelsTableRows({
-      rows: channels.rows,
+      summary,
+      securityAudit,
+      health,
+      usageLines,
+      lastHeartbeat,
+      agentStatus,
+      channels,
       channelIssues,
+      memory,
+      memoryPlugin,
+      pluginCompatibility,
+      pairingRecovery,
+      tableWidth,
       ok,
       warn,
       muted,
-      accentDim: theme.accentDim,
-      formatIssueMessage: (message) => shortenText(message, 84),
-    }),
-    sessionsColumns,
-    sessionsRows,
-    systemEventsRows: buildStatusSystemEventsRows({
-      queuedSystemEvents: summary.queuedSystemEvents,
-    }),
-    systemEventsTrailer: buildStatusSystemEventsTrailer({
-      queuedSystemEvents: summary.queuedSystemEvents,
-      muted,
-    }),
-    healthColumns: health ? statusHealthColumns : undefined,
-    healthRows,
-    usageLines,
-    footerLines: buildStatusFooterLines({
-      updateHint,
-      warn: theme.warn,
+      shortenText,
       formatCliCommand,
-      nodeOnlyGateway,
-      gatewayReachable,
+      formatTimeAgo,
+      formatKTokens,
+      formatTokensCompact,
+      formatPromptCacheCompact,
+      formatHealthChannelLines,
+      formatPluginCompatibilityNotice,
+      formatUpdateAvailableHint,
+      resolveMemoryVectorState,
+      resolveMemoryFtsState,
+      resolveMemoryCacheSummary,
+      accentDim: theme.accentDim,
+      theme,
+      renderTable,
+      updateValue: updateSurface.updateAvailable
+        ? warn(`available · ${updateSurface.updateLine}`)
+        : updateSurface.updateLine,
     }),
-  });
+  );
   for (const line of lines) {
     runtime.log(line);
   }

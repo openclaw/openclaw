@@ -1,10 +1,7 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
-import {
-  resolveStatusRuntimeDetails,
-  resolveStatusSecurityAudit,
-} from "./status-runtime-shared.ts";
+import { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
 
 type StatusJsonScanLike = {
   cfg: OpenClawConfig;
@@ -55,19 +52,15 @@ export async function resolveStatusJsonOutput(params: {
   suppressHealthErrors?: boolean;
 }) {
   const { scan, opts } = params;
-  const securityAudit = params.includeSecurityAudit
-    ? await resolveStatusSecurityAudit({
-        config: scan.cfg,
-        sourceConfig: scan.sourceConfig,
-      })
-    : undefined;
-  const { usage, health, lastHeartbeat, gatewayService, nodeService } =
-    await resolveStatusRuntimeDetails({
+  const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } =
+    await resolveStatusRuntimeSnapshot({
       config: scan.cfg,
+      sourceConfig: scan.sourceConfig,
       timeoutMs: opts.timeoutMs,
       usage: opts.usage,
       deep: opts.deep,
       gatewayReachable: scan.gatewayReachable,
+      includeSecurityAudit: params.includeSecurityAudit,
       suppressHealthErrors: params.suppressHealthErrors,
     });
 

@@ -17,23 +17,29 @@ export type StatusOverviewRow = {
   Value: string;
 };
 
-type UpdateConfigChannel = NonNullable<OpenClawConfig["update"]>["channel"];
+type StatusUpdateLike = UpdateCheckResult;
 
 export function resolveStatusUpdateChannelInfo(params: {
-  updateConfigChannel?: UpdateConfigChannel;
-  update: UpdateCheckResult;
+  updateConfigChannel?: string | null;
+  update: {
+    installKind?: UpdateCheckResult["installKind"];
+    git?: {
+      tag?: string | null;
+      branch?: string | null;
+    } | null;
+  };
 }) {
   return resolveUpdateChannelDisplay({
     configChannel: normalizeUpdateChannel(params.updateConfigChannel),
-    installKind: params.update.installKind ?? null,
+    installKind: params.update.installKind ?? "unknown",
     gitTag: params.update.git?.tag ?? null,
     gitBranch: params.update.git?.branch ?? null,
   });
 }
 
 export function buildStatusUpdateSurface(params: {
-  updateConfigChannel?: UpdateConfigChannel;
-  update: UpdateCheckResult;
+  updateConfigChannel?: string | null;
+  update: StatusUpdateLike;
 }) {
   const channelInfo = resolveStatusUpdateChannelInfo({
     updateConfigChannel: params.updateConfigChannel,
@@ -174,6 +180,129 @@ export function buildStatusOverviewRows(params: {
   );
   rows.push(...(params.suffixRows ?? []));
   return rows;
+}
+
+export function buildStatusOverviewSurfaceRows(params: {
+  cfg: Pick<OpenClawConfig, "update" | "gateway">;
+  update: StatusUpdateLike;
+  tailscaleMode: string;
+  tailscaleDns?: string | null;
+  tailscaleHttpsUrl?: string | null;
+  tailscaleBackendState?: string | null;
+  includeBackendStateWhenOff?: boolean;
+  includeBackendStateWhenOn?: boolean;
+  includeDnsNameWhenOff?: boolean;
+  decorateTailscaleOff?: (value: string) => string;
+  decorateTailscaleWarn?: (value: string) => string;
+  gatewayMode: "local" | "remote";
+  remoteUrlMissing: boolean;
+  gatewayConnection: {
+    url: string;
+    urlSource?: string;
+  };
+  gatewayReachable: boolean;
+  gatewayProbe: {
+    connectLatencyMs?: number | null;
+    error?: string | null;
+  } | null;
+  gatewayProbeAuth: {
+    token?: string;
+    password?: string;
+  } | null;
+  gatewayProbeAuthWarning?: string | null;
+  gatewaySelf:
+    | {
+        host?: string | null;
+        ip?: string | null;
+        version?: string | null;
+        platform?: string | null;
+      }
+    | null
+    | undefined;
+  gatewayService: {
+    label: string;
+    installed: boolean | null;
+    managedByOpenClaw?: boolean;
+    loadedText: string;
+    runtimeShort?: string | null;
+    runtime?: {
+      status?: string | null;
+      pid?: number | null;
+    } | null;
+  };
+  nodeService: {
+    label: string;
+    installed: boolean | null;
+    managedByOpenClaw?: boolean;
+    loadedText: string;
+    runtimeShort?: string | null;
+    runtime?: {
+      status?: string | null;
+      pid?: number | null;
+    } | null;
+  };
+  nodeOnlyGateway?: {
+    gatewayValue: string;
+  } | null;
+  decorateOk?: (value: string) => string;
+  decorateWarn?: (value: string) => string;
+  prefixRows?: StatusOverviewRow[];
+  middleRows?: StatusOverviewRow[];
+  suffixRows?: StatusOverviewRow[];
+  agentsValue: string;
+  updateValue?: string;
+  gatewayAuthWarningValue?: string | null;
+  gatewaySelfFallbackValue?: string | null;
+}) {
+  const updateSurface = buildStatusUpdateSurface({
+    updateConfigChannel: params.cfg.update?.channel,
+    update: params.update,
+  });
+  const { dashboardUrl, gatewayValue, gatewaySelfValue, gatewayServiceValue, nodeServiceValue } =
+    buildStatusGatewaySurfaceValues({
+      cfg: params.cfg,
+      gatewayMode: params.gatewayMode,
+      remoteUrlMissing: params.remoteUrlMissing,
+      gatewayConnection: params.gatewayConnection,
+      gatewayReachable: params.gatewayReachable,
+      gatewayProbe: params.gatewayProbe,
+      gatewayProbeAuth: params.gatewayProbeAuth,
+      gatewaySelf: params.gatewaySelf,
+      gatewayService: params.gatewayService,
+      nodeService: params.nodeService,
+      nodeOnlyGateway: params.nodeOnlyGateway,
+      decorateOk: params.decorateOk,
+      decorateWarn: params.decorateWarn,
+    });
+  return buildStatusOverviewRows({
+    prefixRows: params.prefixRows,
+    dashboardValue: formatStatusDashboardValue(dashboardUrl),
+    tailscaleValue: formatStatusTailscaleValue({
+      tailscaleMode: params.tailscaleMode,
+      dnsName: params.tailscaleDns,
+      httpsUrl: params.tailscaleHttpsUrl,
+      backendState: params.tailscaleBackendState,
+      includeBackendStateWhenOff: params.includeBackendStateWhenOff,
+      includeBackendStateWhenOn: params.includeBackendStateWhenOn,
+      includeDnsNameWhenOff: params.includeDnsNameWhenOff,
+      decorateOff: params.decorateTailscaleOff,
+      decorateWarn: params.decorateTailscaleWarn,
+    }),
+    channelLabel: updateSurface.channelLabel,
+    gitLabel: updateSurface.gitLabel,
+    updateValue: params.updateValue ?? updateSurface.updateLine,
+    gatewayValue,
+    gatewayAuthWarning:
+      params.gatewayAuthWarningValue !== undefined
+        ? params.gatewayAuthWarningValue
+        : params.gatewayProbeAuthWarning,
+    middleRows: params.middleRows,
+    gatewaySelfValue: params.gatewaySelfFallbackValue ?? gatewaySelfValue,
+    gatewayServiceValue,
+    nodeServiceValue,
+    agentsValue: params.agentsValue,
+    suffixRows: params.suffixRows,
+  });
 }
 
 export function formatGatewayAuthUsed(
