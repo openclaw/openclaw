@@ -134,5 +134,13 @@ export interface AcpRuntime {
 
   cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
 
-  close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void>;
+  close(input: {
+    handle: AcpRuntimeHandle;
+    reason: string;
+    /**
+     * Discard backend-owned persistent session state so the next ensureSession
+     * starts fresh instead of reopening the same conversation.
+     */
+    discardPersistentState?: boolean;
+  }): Promise<void>;
 }

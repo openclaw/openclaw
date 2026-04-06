@@ -186,6 +186,7 @@ export async function resetAcpSessionInPlace(params: {
       cfg: params.cfg,
       sessionKey,
       reason: `${params.reason}-in-place-reset`,
+      discardPersistentState: true,
       clearMeta: false,
       allowBackendUnavailable: true,
       requireAcpSession: false,

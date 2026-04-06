@@ -1257,6 +1257,7 @@ export class AcpSessionManager {
             await runtime.close({
               handle,
               reason: input.reason,
+              discardPersistentState: input.discardPersistentState,
             }),
           fallbackCode: "ACP_TURN_FAILED",
           fallbackMessage: "ACP close failed before completion.",
