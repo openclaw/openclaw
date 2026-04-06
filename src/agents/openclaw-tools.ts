@@ -231,7 +231,7 @@ export function createOpenClawTools(
     createCanvasTool({ config: options?.config }),
     options?.fsPolicy?.workspaceOnly
       ? wrapToolWorkspaceRootGuardWithOptions(nodesTool, workspaceDir, {
-          pathParamNames: ["path", "outPath"],
+          pathParamNames: ["outPath"],
         })
       : nodesTool,
     createCronTool({

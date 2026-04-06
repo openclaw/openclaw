@@ -54,7 +54,7 @@ describe("createOpenClawTools nodes workspaceOnly guard", () => {
     expect(mocks.wrapToolWorkspaceRootGuardWithOptions).toHaveBeenCalledWith(
       mocks.nodesTool,
       "/tmp/workspace",
-      { pathParamNames: ["path", "outPath"] },
+      { pathParamNames: ["outPath"] },
     );
     expect(tools.find((tool) => tool.name === "nodes")).toBe(mocks.wrappedNodesTool);
   });
