@@ -1974,8 +1974,12 @@ export async function runEmbeddedAttempt(
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
+      // Only consider assistant messages from the current turn. Without this
+      // guard, an idle timeout (zero streamed tokens) causes the PREVIOUS
+      // turn's assistant response to be delivered again via the fallback in
+      // buildEmbeddedRunPayloads. See: fork fix for repeat-response bug.
       const lastAssistant = messagesSnapshot
-        .slice()
+        .slice(prePromptMessageCount)
         .toReversed()
         .find((m) => m.role === "assistant");
 
