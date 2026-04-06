@@ -1,6 +1,6 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadConfig } from "../config/config.js";
 import { getGatewayBroadcastRuntime } from "../gateway/server-broadcast-runtime.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { broadcastClawMissionSnapshot } from "./gateway-events.js";
 import { clawMissionService } from "./service.js";
 
@@ -73,9 +73,9 @@ async function drainClawRuntimeQueue(): Promise<void> {
     do {
       state.wakeRequested = false;
       if (!state.recovered) {
-        const recovered = await clawMissionService.recoverInterruptedMissions();
-        if (recovered) {
-          broadcastClawMissionSnapshot(getGatewayBroadcastRuntime(), { snapshot: recovered });
+        const recoveredSnapshots = await clawMissionService.recoverInterruptedMissions();
+        for (const snapshot of recoveredSnapshots) {
+          broadcastClawMissionSnapshot(getGatewayBroadcastRuntime(), { snapshot });
         }
         state.recovered = true;
       }

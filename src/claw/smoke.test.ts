@@ -193,7 +193,7 @@ describe("claw smoke", () => {
     await service.approveMissionStart(missionId);
     await service.runNextMissionCycle();
 
-    const recovered = await service.recoverInterruptedMissions();
+    const recovered = (await service.recoverInterruptedMissions())[0];
     expect(recovered?.mission?.status).toBe("blocked");
     const decision = recovered?.mission?.decisions.find(
       (entry) => entry.kind === "recovery_uncertain" && entry.status === "pending",
