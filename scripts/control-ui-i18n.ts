@@ -110,6 +110,10 @@ const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
   { source: "iMessage", target: "iMessage" },
 ];
 
+function resolveCliExecutable(command: "npm" | "pnpm"): string {
+  return process.platform === "win32" ? `${command}.cmd` : command;
+}
+
 function usage(): never {
   console.error(
     [
@@ -548,7 +552,7 @@ async function resolvePiCommand(): Promise<PiCommand> {
   if (!existsSync(cliPath)) {
     await mkdir(runtimeDir, { recursive: true });
     await runProcess(
-      "npm",
+      resolveCliExecutable("npm"),
       [
         "install",
         "--silent",
@@ -580,6 +584,7 @@ async function runProcess(
     const child = spawn(executable, args, {
       cwd: options.cwd ?? ROOT,
       env: process.env,
+      shell: process.platform === "win32" && executable.toLowerCase().endsWith(".cmd"),
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -611,7 +616,7 @@ async function runProcess(
 
 async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
   const result = await runProcess(
-    "pnpm",
+    resolveCliExecutable("pnpm"),
     ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)],
     {
       input: source,

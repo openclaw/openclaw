@@ -151,6 +151,7 @@ export const tr: TranslationMap = {
   tabs: {
     agents: "Aracılar",
     overview: "Genel Bakış",
+    claw: "Claw",
     channels: "Kanallar",
     instances: "Örnekler",
     sessions: "Oturumlar",
@@ -172,6 +173,7 @@ export const tr: TranslationMap = {
   subtitles: {
     agents: "Çalışma alanları, araçlar, kimlikler.",
     overview: "Durum, giriş noktaları, sağlık.",
+    claw: "Goal intake, approvals, and mission state.",
     channels: "Kanallar ve ayarlar.",
     instances: "Bağlı istemciler ve düğümler.",
     sessions: "Etkin oturumlar ve varsayılanlar.",
