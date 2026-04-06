@@ -50,7 +50,7 @@ Claw governance must preserve these principles:
 
 Claw v1 defaults:
 
-- `maxActiveMissions = 2`
+- `maxActiveMissions = 1`
 - per-mission live child agent cap = `4`
 - spawn depth cap = `2`
 - max active browser profiles per mission = `1`

@@ -16,6 +16,11 @@ export const CLAW_MISSION_STATUSES = [
 
 export type ClawMissionStatus = (typeof CLAW_MISSION_STATUSES)[number];
 
+export type ClawContinuationPhase = Extract<
+  ClawMissionStatus,
+  "running" | "recovering" | "verifying"
+>;
+
 export type ClawManagedFlowStatus =
   | "queued"
   | "running"
@@ -84,6 +89,38 @@ export type ClawMissionFileEntry = {
   kind: "markdown" | "state" | "audit" | "directory";
 };
 
+export type ClawMissionPacket = {
+  source: "fallback" | "planned";
+  summary: string;
+  scopeIn: string[];
+  scopeOut: string[];
+  phases: string[];
+  tasks: string[];
+  doneCriteria: string[];
+  lifecycleNote: string;
+};
+
+export type ClawAuditRole = "operator" | "system" | "planner" | "runner" | "verifier" | "helper";
+
+export type ClawAuditSideEffectClass =
+  | "local_read_only"
+  | "local_mutation"
+  | "process_control"
+  | "browser_navigation"
+  | "browser_mutation"
+  | "external_read_only"
+  | "external_mutation"
+  | "decision_request"
+  | "control_change";
+
+export type ClawAuditOutcome =
+  | "completed"
+  | "requested"
+  | "blocked"
+  | "failed"
+  | "rejected"
+  | "resumed";
+
 export type ClawInboxItem = {
   id: string;
   missionId: string;
@@ -100,6 +137,7 @@ export type ClawMissionSummary = {
   title: string;
   goal: string;
   status: ClawMissionStatus;
+  continuationPhase: ClawContinuationPhase | null;
   createdAt: string;
   updatedAt: string;
   approvedAt?: string | null;
@@ -119,6 +157,7 @@ export type ClawMissionDetail = ClawMissionSummary & {
   preflight: ClawPreflightCheck[];
   decisions: ClawPendingDecision[];
   files: ClawMissionFileEntry[];
+  packet: ClawMissionPacket;
   artifactsDir: string;
   logsDir: string;
   auditLogPath: string;
@@ -130,7 +169,18 @@ export type ClawAuditEntry = {
   missionId: string;
   at: string;
   actor: "system" | "operator";
+  role?: ClawAuditRole | null;
+  phase?: ClawMissionStatus | "planning" | null;
   type: string;
+  actionType?: string | null;
+  toolName?: string | null;
+  targetSummary?: string | null;
+  sideEffectClass?: ClawAuditSideEffectClass | null;
+  intentSummary?: string | null;
+  outcome?: ClawAuditOutcome | null;
+  errorSummary?: string | null;
+  artifactRefs?: string[];
+  checkpointRevision?: number | null;
   summary: string;
   detail?: string | null;
 };

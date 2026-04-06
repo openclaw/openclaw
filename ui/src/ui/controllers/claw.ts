@@ -29,6 +29,12 @@ export type ClawState = {
   clawInbox: ClawInboxItem[];
   clawAuditLoading: boolean;
   clawAuditEntries: ClawAuditEntry[];
+  clawAuditFilters: {
+    role: string;
+    toolName: string;
+    sideEffectClass: string;
+    outcome: string;
+  };
   clawArtifactsLoading: boolean;
   clawArtifacts: ClawArtifactEntry[];
 };
@@ -36,7 +42,9 @@ export type ClawState = {
 function isClawEnabled(state: Pick<ClawState, "configForm" | "configSnapshot">): boolean {
   const config = state.configForm ?? state.configSnapshot?.config ?? null;
   const claw = config?.claw;
-  return Boolean(claw && typeof claw === "object" && (claw as { enabled?: unknown }).enabled === true);
+  return Boolean(
+    claw && typeof claw === "object" && (claw as { enabled?: unknown }).enabled === true,
+  );
 }
 
 function clearClawState(state: ClawState): void {
@@ -47,6 +55,12 @@ function clearClawState(state: ClawState): void {
   state.clawControl = null;
   state.clawInbox = [];
   state.clawAuditEntries = [];
+  state.clawAuditFilters = {
+    role: "",
+    toolName: "",
+    sideEffectClass: "",
+    outcome: "",
+  };
   state.clawArtifacts = [];
 }
 
@@ -273,4 +287,12 @@ export async function stopAllClawNow(state: ClawState) {
 
 export async function setClawAutonomy(state: ClawState, enabled: boolean) {
   await mutateControl(state, "claw.control.setAutonomy", { enabled });
+}
+
+export function setClawAuditFilter(
+  state: ClawState,
+  key: keyof ClawState["clawAuditFilters"],
+  value: string,
+) {
+  state.clawAuditFilters[key] = value;
 }
