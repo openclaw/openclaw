@@ -927,7 +927,7 @@ describe("runHeartbeatOnce", () => {
       };
       const mainSessionKey = resolveMainSessionKey(cfg);
       const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
-      const subagentKey = `agent:${agentId}/subagent:task-abc`;
+      const subagentKey = `agent:${agentId}:subagent:task-abc`;
 
       if (injectVia === "config" && cfg.agents?.defaults?.heartbeat) {
         cfg.agents.defaults.heartbeat.session = subagentKey;
