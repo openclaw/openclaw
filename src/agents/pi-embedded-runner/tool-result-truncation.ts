@@ -3,6 +3,7 @@ import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
+import { formatContextLimitTruncationNotice } from "./tool-result-context-guard.js";
 import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
@@ -34,19 +35,14 @@ export const HARD_MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
  */
 const MIN_KEEP_CHARS = 2_000;
 
-/**
- * Suffix appended to truncated tool results.
- */
-const TRUNCATION_SUFFIX =
-  "\n\n⚠️ [Content truncated — original was too large for the model's context window. " +
-  "The content above is a partial view. If you need more, request specific sections or use " +
-  "offset/limit parameters to read smaller chunks.]";
-const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + TRUNCATION_SUFFIX.length;
-
 type ToolResultTruncationOptions = {
   suffix?: string | ((truncatedChars: number) => string);
   minKeepChars?: number;
 };
+
+const DEFAULT_SUFFIX = (truncatedChars: number) =>
+  formatContextLimitTruncationNotice(truncatedChars);
+const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
 
 /**
  * Marker inserted between head and tail when using head+tail truncation.
@@ -86,7 +82,7 @@ export function truncateToolResultText(
   const suffixFactory: (truncatedChars: number) => string =
     typeof options.suffix === "function"
       ? options.suffix
-      : () => (options.suffix ?? TRUNCATION_SUFFIX);
+      : () => (options.suffix ?? DEFAULT_SUFFIX(1));
   const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   if (text.length <= maxChars) {
     return text;
@@ -179,7 +175,7 @@ export function truncateToolResultMessage(
   const suffixFactory: (truncatedChars: number) => string =
     typeof options.suffix === "function"
       ? options.suffix
-      : () => (options.suffix ?? TRUNCATION_SUFFIX);
+      : () => (options.suffix ?? DEFAULT_SUFFIX(1));
   const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
