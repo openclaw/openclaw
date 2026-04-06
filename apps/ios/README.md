@@ -64,10 +64,12 @@ Release behavior:
 - Beta release uses canonical `ai.openclaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
 - Beta release also switches the app to `OpenClawPushTransport=relay`, `OpenClawPushDistribution=official`, and `OpenClawPushAPNsEnvironment=production`.
 - The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
-- Root `package.json.version` is the only version source for iOS.
-- A root version like `2026.4.1-beta.1` becomes:
-  - `CFBundleShortVersionString = 2026.4.1`
-  - `CFBundleVersion = next TestFlight build number for 2026.4.1`
+- `apps/ios/version.json` is the canonical iOS version source.
+- `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
+- A canonical iOS version like `1.2.3-beta.1` becomes:
+  - `CFBundleShortVersionString = 1.2.3`
+  - `CFBundleVersion = next TestFlight build number for 1.2.3`
+- See `apps/ios/VERSIONING.md` for the full workflow.
 
 Required env for beta builds:
 
@@ -127,7 +129,8 @@ pnpm ios:beta
 ```
 
 5. Expected behavior:
-   - Fastlane reads `package.json.version`
+   - Fastlane reads `apps/ios/version.json`
+   - verifies synced iOS versioning artifacts
    - resolves the next TestFlight build number for that short version
    - generates `apps/ios/build/BetaRelease.xcconfig`
    - archives `OpenClaw`
@@ -139,6 +142,30 @@ pnpm ios:beta
    - Fastlane log line like `Uploaded iOS beta: version=<version> short=<short> build=<build>`
 
 7. If this is a fresh clone on a maintainer machine that already works elsewhere, it is OK to copy the non-secret `apps/ios/fastlane/.env` from another trusted local clone on the same Mac. The Keychain-backed private key remains machine-local and is not stored in the repo.
+
+## iOS Versioning Workflow
+
+- Canonical iOS version: `apps/ios/version.json`
+- iOS-only changelog: `apps/ios/CHANGELOG.md`
+- Generated checked-in artifacts:
+  - `apps/ios/Config/Version.xcconfig`
+  - `apps/ios/fastlane/metadata/en-US/release_notes.txt`
+- Useful commands:
+
+```bash
+pnpm ios:version
+pnpm ios:version:sync
+pnpm ios:version:check
+```
+
+When bumping the iOS version:
+
+1. Update `apps/ios/version.json`.
+2. Add or update the matching section in `apps/ios/CHANGELOG.md`.
+3. Run `pnpm ios:version:sync`.
+4. Then run the normal build, archive, or beta upload flow.
+
+See `apps/ios/VERSIONING.md` for the detailed spec.
 
 ## APNs Expectations For Local/Manual Builds
 

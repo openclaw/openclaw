@@ -36,6 +36,7 @@ Or set `APP_STORE_CONNECT_API_KEY_PATH`.
 ## Notes
 
 - Locale files live under `metadata/en-US/`.
+- `release_notes.txt` is generated from `apps/ios/CHANGELOG.md`; update the changelog, then run `pnpm ios:version:sync`.
 - `privacy_url.txt` is set to `https://openclaw.ai/privacy`.
 - If app lookup fails in `deliver`, set one of:
   - `ASC_APP_IDENTIFIER` (bundle ID)
