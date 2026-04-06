@@ -167,7 +167,8 @@ function bindTaskRecord(record: TaskRecord, legacyRequesterSessionColumn: boolea
   }
   return {
     ...bindTaskRecordBase(record),
-    requester_session_key: record.scopeKind === "system" ? "" : record.requesterSessionKey,
+    requester_session_key:
+      record.scopeKind === "system" ? "" : record.requesterSessionKey || record.ownerKey || "",
   };
 }
 

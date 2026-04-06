@@ -419,4 +419,93 @@ describe("task-registry store runtime", () => {
       error: "session missing",
     });
   });
+
+  it("marks system-scoped legacy task lost without NOT NULL constraint violation", () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-task-store-system-lost-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+    mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(sqlitePath);
+    db.exec(`
+      CREATE TABLE task_runs (
+        task_id TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL,
+        source_id TEXT,
+        requester_session_key TEXT NOT NULL,
+        child_session_key TEXT,
+        parent_task_id TEXT,
+        agent_id TEXT,
+        run_id TEXT,
+        label TEXT,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL,
+        delivery_status TEXT NOT NULL,
+        notify_policy TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        last_event_at INTEGER,
+        cleanup_after INTEGER,
+        error TEXT,
+        progress_summary TEXT,
+        terminal_summary TEXT,
+        terminal_outcome TEXT
+      );
+    `);
+    db.exec(`
+      CREATE TABLE task_delivery_state (
+        task_id TEXT PRIMARY KEY,
+        requester_origin_json TEXT,
+        last_notified_event_at INTEGER
+      );
+    `);
+    db.prepare(`
+      INSERT INTO task_runs (
+        task_id,
+        runtime,
+        source_id,
+        requester_session_key,
+        run_id,
+        task,
+        status,
+        delivery_status,
+        notify_policy,
+        created_at,
+        last_event_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "system-cron-task",
+      "cron",
+      "nightly-job",
+      "",
+      "system-cron-run",
+      "Nightly system job",
+      "running",
+      "not_applicable",
+      "silent",
+      100,
+      100,
+    );
+    db.close();
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(() =>
+      markTaskLostById({
+        taskId: "system-cron-task",
+        endedAt: 200,
+        lastEventAt: 200,
+        error: "backing session missing",
+      }),
+    ).not.toThrow();
+    expect(findTaskByRunId("system-cron-run")).toMatchObject({
+      taskId: "system-cron-task",
+      status: "lost",
+      error: "backing session missing",
+    });
+
+    resetTaskRegistryForTests();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
 });
