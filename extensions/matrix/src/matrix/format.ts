@@ -309,20 +309,51 @@ function mutateInlineTokensWithMentions(params: {
   return { children: nextChildren, roomMentioned };
 }
 
-// Compact loose lists by hiding paragraph tokens inside list items,
+// Compact loose lists by hiding a list item's single wrapper paragraph,
 // mirroring what markdown-it already does for tight lists. Without this
 // Element renders <p> margins inside <li>, splitting numbers from content.
+//
+// Keep multi-paragraph items visible so separate paragraphs do not collapse
+// together inside the same list item.
 function compactLooseListTokens(tokens: MarkdownToken[]): void {
-  let insideListItem = 0;
-  for (const token of tokens) {
+  const listItemStack: Array<{
+    level: number;
+    immediateParagraphOpenIndexes: number[];
+    immediateParagraphCloseIndexes: number[];
+  }> = [];
+
+  for (const [index, token] of tokens.entries()) {
     if (token.type === "list_item_open") {
-      insideListItem++;
-    } else if (token.type === "list_item_close") {
-      insideListItem--;
-    } else if (insideListItem > 0) {
-      if (token.type === "paragraph_open" || token.type === "paragraph_close") {
-        token.hidden = true;
+      listItemStack.push({
+        level: token.level,
+        immediateParagraphOpenIndexes: [],
+        immediateParagraphCloseIndexes: [],
+      });
+      continue;
+    }
+
+    if (token.type === "list_item_close") {
+      const item = listItemStack.pop();
+      if (
+        item &&
+        item.immediateParagraphOpenIndexes.length === 1 &&
+        item.immediateParagraphCloseIndexes.length === 1
+      ) {
+        tokens[item.immediateParagraphOpenIndexes[0]].hidden = true;
+        tokens[item.immediateParagraphCloseIndexes[0]].hidden = true;
       }
+      continue;
+    }
+
+    const currentItem = listItemStack.at(-1);
+    if (!currentItem || token.level !== currentItem.level + 1) {
+      continue;
+    }
+
+    if (token.type === "paragraph_open") {
+      currentItem.immediateParagraphOpenIndexes.push(index);
+    } else if (token.type === "paragraph_close") {
+      currentItem.immediateParagraphCloseIndexes.push(index);
     }
   }
 }
