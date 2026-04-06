@@ -4,8 +4,8 @@ describePluginRegistrationContract({
   pluginId: "comfy",
   providerIds: ["comfy"],
   imageGenerationProviderIds: ["comfy"],
+  musicGenerationProviderIds: ["comfy"],
   videoGenerationProviderIds: ["comfy"],
-  toolNames: ["music_generate"],
   requireGenerateImage: true,
   requireGenerateVideo: true,
 });

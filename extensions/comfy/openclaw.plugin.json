@@ -7,8 +7,8 @@
   },
   "contracts": {
     "imageGenerationProviders": ["comfy"],
-    "videoGenerationProviders": ["comfy"],
-    "tools": ["music_generate"]
+    "musicGenerationProviders": ["comfy"],
+    "videoGenerationProviders": ["comfy"]
   },
   "configSchema": {
     "type": "object",
