@@ -332,6 +332,7 @@ export async function fillFormViaPlaywright(opts: {
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  ssrfPolicy?: SsrFPolicy;
   fn: string;
   ref?: string;
   timeoutMs?: number;
@@ -421,7 +422,15 @@ export async function evaluateViaPlaywright(opts: {
         fnBody: fnText,
         timeoutMs: evaluateTimeout,
       });
-      return await awaitEvalWithAbort(evalPromise, abortPromise);
+      const result = await awaitEvalWithAbort(evalPromise, abortPromise);
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response: null,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
+      return result;
     }
 
     // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
@@ -451,7 +460,15 @@ export async function evaluateViaPlaywright(opts: {
       fnBody: fnText,
       timeoutMs: evaluateTimeout,
     });
-    return await awaitEvalWithAbort(evalPromise, abortPromise);
+    const result = await awaitEvalWithAbort(evalPromise, abortPromise);
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+    return result;
   } finally {
     if (signal && abortListener) {
       signal.removeEventListener("abort", abortListener);
@@ -880,6 +897,7 @@ async function executeSingleAction(
       await evaluateViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
+        ssrfPolicy,
         fn: action.fn,
         ref: action.ref,
         timeoutMs: action.timeoutMs,
@@ -895,6 +913,7 @@ async function executeSingleAction(
       await batchViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
+        ssrfPolicy,
         actions: action.actions,
         stopOnError: action.stopOnError,
         evaluateEnabled,

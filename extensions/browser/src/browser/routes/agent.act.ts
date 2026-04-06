@@ -539,6 +539,7 @@ export function registerBrowserAgentActRoutes(
             const clickRequest: Parameters<typeof pw.clickViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               doubleClick,
               ssrfPolicy,
             };
@@ -1047,6 +1048,7 @@ export function registerBrowserAgentActRoutes(
             const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               fn,
               ref,
               signal: req.signal,
@@ -1106,6 +1108,7 @@ export function registerBrowserAgentActRoutes(
             const result = await pw.batchViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
               actions,
               stopOnError,
               evaluateEnabled,
