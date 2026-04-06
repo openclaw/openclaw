@@ -95,8 +95,9 @@ async function shouldTreatDeliveredTextAsVisible(params: {
     return false;
   }
   const { getChannelPlugin } = await loadChannelPluginRuntime();
+  const outbound = getChannelPlugin(channelId)?.outbound;
   const visibilityOverride =
-    getChannelPlugin(channelId)?.outbound?.shouldTreatDeliveredTextAsVisible;
+    outbound?.shouldTreatDeliveredTextAsVisible ?? outbound?.shouldTreatRoutedTextAsVisible;
   if (visibilityOverride) {
     return visibilityOverride({
       kind: params.kind,

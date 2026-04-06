@@ -225,6 +225,13 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     hint?: ChannelOutboundPayloadHint;
   }) => Promise<void> | void;
+  /**
+   * @deprecated Use shouldTreatDeliveredTextAsVisible instead.
+   */
+  shouldTreatRoutedTextAsVisible?: (params: {
+    kind: "tool" | "block" | "final";
+    text?: string;
+  }) => boolean;
   shouldTreatDeliveredTextAsVisible?: (params: {
     kind: "tool" | "block" | "final";
     text?: string;

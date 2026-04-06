@@ -18,19 +18,26 @@ const deliveryMocks = vi.hoisted(() => ({
 }));
 
 const channelPluginMocks = vi.hoisted(() => ({
+  shouldTreatDeliveredTextAsVisible: (({
+    kind,
+    text,
+  }: {
+    kind: "tool" | "block" | "final";
+    text?: string;
+  }) => kind === "block" && typeof text === "string" && text.trim().length > 0) as
+    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
+    | undefined,
+  shouldTreatRoutedTextAsVisible: undefined as
+    | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
+    | undefined,
   getChannelPlugin: vi.fn((channelId: string) => {
     if (channelId !== "discord" && channelId !== "telegram") {
       return undefined;
     }
     return {
       outbound: {
-        shouldTreatDeliveredTextAsVisible: ({
-          kind,
-          text,
-        }: {
-          kind: "tool" | "block" | "final";
-          text?: string;
-        }) => kind === "block" && typeof text === "string" && text.trim().length > 0,
+        shouldTreatDeliveredTextAsVisible: channelPluginMocks.shouldTreatDeliveredTextAsVisible,
+        shouldTreatRoutedTextAsVisible: channelPluginMocks.shouldTreatRoutedTextAsVisible,
       },
     };
   }),
@@ -90,6 +97,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     deliveryMocks.runMessageAction.mockClear();
     deliveryMocks.runMessageAction.mockResolvedValue({ ok: true as const });
     channelPluginMocks.getChannelPlugin.mockClear();
+    channelPluginMocks.shouldTreatDeliveredTextAsVisible = ({
+      kind,
+      text,
+    }: {
+      kind: "tool" | "block" | "final";
+      text?: string;
+    }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
+    channelPluginMocks.shouldTreatRoutedTextAsVisible = undefined;
   });
 
   it("bypasses TTS when skipTts is requested", async () => {
@@ -194,6 +209,24 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
   });
 
   it("treats direct discord block text as visible", async () => {
+    const coordinator = createCoordinator();
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+    await coordinator.settleVisibleText();
+
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+  });
+
+  it("honors the legacy routed visibility hook name for plugin compatibility", async () => {
+    channelPluginMocks.shouldTreatDeliveredTextAsVisible = undefined;
+    channelPluginMocks.shouldTreatRoutedTextAsVisible = ({
+      kind,
+      text,
+    }: {
+      kind: "tool" | "block" | "final";
+      text?: string;
+    }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
     const coordinator = createCoordinator();
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
