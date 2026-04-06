@@ -59,7 +59,6 @@ Optional settings in your OpenClaw config:
         config: {
           command: "pdf-to-markdown", // path to CLI binary
           timeoutMs: 30000, // extraction timeout per document
-          autoEnable: true, // auto-set engine to "auto"
         },
       },
     },

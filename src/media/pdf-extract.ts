@@ -272,7 +272,7 @@ export async function extractPdfContentNutrient(
     engineConfigured = "nutrient",
   } = params;
 
-  if (pageNumbers && pageNumbers.length > 0) {
+  if (pageNumbers) {
     throw new PdfExtractionEngineError(
       "unsupported_pages",
       "Nutrient PDF extraction does not support page filtering yet.",
