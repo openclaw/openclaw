@@ -24,6 +24,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
     private var pendingExecApprovalPrompts: [PendingExecApprovalPrompt] = []
+    private var pendingExecApprovalRequestedPushIDs: [String] = []
+    private var pendingExecApprovalResolvedPushIDs: [String] = []
 
     weak var appModel: NodeAppModel? {
         didSet {
@@ -56,6 +58,24 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                     }
                 }
             }
+            if !self.pendingExecApprovalRequestedPushIDs.isEmpty {
+                let pending = self.pendingExecApprovalRequestedPushIDs
+                self.pendingExecApprovalRequestedPushIDs.removeAll()
+                Task { @MainActor in
+                    for approvalId in pending {
+                        _ = await model.handleExecApprovalRequestedRemotePush(approvalId: approvalId)
+                    }
+                }
+            }
+            if !self.pendingExecApprovalResolvedPushIDs.isEmpty {
+                let pending = self.pendingExecApprovalResolvedPushIDs
+                self.pendingExecApprovalResolvedPushIDs.removeAll()
+                Task { @MainActor in
+                    for approvalId in pending {
+                        await model.handleExecApprovalResolvedRemotePush(approvalId: approvalId)
+                    }
+                }
+            }
         }
     }
 
@@ -64,8 +84,11 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool
     {
+        GatewayDiagnostics.log("app delegate: didFinishLaunching")
         self.registerBackgroundWakeRefreshTask()
-        UNUserNotificationCenter.current().delegate = self
+        let notificationCenter = UNUserNotificationCenter.current()
+        notificationCenter.delegate = self
+        ExecApprovalNotificationBridge.registerCategory(center: notificationCenter)
         application.registerForRemoteNotifications()
         return true
     }
@@ -98,12 +121,22 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 notificationCenter: notificationCenter)
             {
                 if let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo) {
-                    self.appModel?.dismissPendingExecApprovalPrompt(approvalId: approvalId)
+                    if let appModel = self.appModel {
+                        await appModel.handleExecApprovalResolvedRemotePush(approvalId: approvalId)
+                    } else {
+                        self.pendingExecApprovalResolvedPushIDs.append(approvalId)
+                    }
                 }
                 completionHandler(.newData)
                 return
             }
             guard let appModel = self.appModel else {
+                if ExecApprovalNotificationBridge.payloadKind(userInfo: userInfo)
+                    == ExecApprovalNotificationBridge.requestedKind,
+                   let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo)
+                {
+                    self.pendingExecApprovalRequestedPushIDs.append(approvalId)
+                }
                 self.logger.info("APNs wake skipped: appModel unavailable")
                 self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_no_model")
                 completionHandler(.noData)
@@ -119,6 +152,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
+        GatewayDiagnostics.log("app delegate: scene phase changed=\(String(describing: phase))")
         if phase == .background {
             self.scheduleBackgroundWakeRefresh(afterSeconds: 120, reason: "scene_background")
         }
