@@ -1,27 +1,19 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
-  CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
-  estimateContextChars,
   estimateMessageCharsCached,
   getToolResultText,
   invalidateMessageCharsCacheEntry,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
 
-// Keep a conservative input budget to absorb tokenizer variance and provider framing overhead.
-const CONTEXT_INPUT_HEADROOM_RATIO = 0.75;
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
-const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 
 export const CONTEXT_LIMIT_TRUNCATION_NOTICE = "more characters truncated";
-
-export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
-  "Preemptive context overflow: estimated context size exceeds safe threshold during tool loop";
 const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO =
-  CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
+  4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 
 type GuardableTransformContext = (
   messages: AgentMessage[],
@@ -184,14 +176,6 @@ export function installToolResultContextGuard(params: {
   contextWindowTokens: number;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
-  const contextBudgetChars = Math.max(
-    1_024,
-    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * CONTEXT_INPUT_HEADROOM_RATIO),
-  );
-  const preemptiveOverflowChars = Math.max(
-    contextBudgetChars,
-    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
-  );
   const maxSingleToolResultChars = Math.max(
     1_024,
     Math.floor(
@@ -221,14 +205,6 @@ export function installToolResultContextGuard(params: {
         messages: contextMessages,
         maxSingleToolResultChars,
       });
-    }
-
-    const postEnforcementChars = estimateContextChars(
-      contextMessages,
-      createMessageCharEstimateCache(),
-    );
-    if (postEnforcementChars > preemptiveOverflowChars) {
-      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
     }
 
     return contextMessages;
