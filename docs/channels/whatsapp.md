@@ -11,10 +11,9 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 
 ## Install (on demand)
 
-- Onboarding (`openclaw onboard`) and `openclaw channels login --channel whatsapp`
-  prompt to install the WhatsApp plugin the first time you select it.
-- `openclaw channels login --channel whatsapp` also offers the install flow when
-  the plugin is not present yet.
+- Onboarding (`openclaw onboard`), `openclaw channels add --channel whatsapp`,
+  and `openclaw channels login --channel whatsapp` prompt to install the
+  WhatsApp plugin the first time you select it.
 - Dev channel + git checkout: defaults to the local plugin path.
 - Stable/Beta: defaults to the npm package `@openclaw/whatsapp`.
 
