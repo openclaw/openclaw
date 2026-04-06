@@ -26,6 +26,7 @@ export function guardSessionManager(
     inputProvenance?: InputProvenance;
     allowSyntheticToolResults?: boolean;
     allowedToolNames?: Iterable<string>;
+    suppressNextUserMessagePersistence?: boolean;
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void;
@@ -73,6 +74,7 @@ export function guardSessionManager(
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     allowedToolNames: opts?.allowedToolNames,
+    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
     onUserMessagePersisted: opts?.onUserMessagePersisted,
     beforeMessageWriteHook: beforeMessageWrite,
   });

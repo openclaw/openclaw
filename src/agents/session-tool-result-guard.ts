@@ -126,6 +126,12 @@ export function installSessionToolResultGuard(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void;
+    /**
+     * If true, drop exactly the next user message that would otherwise be
+     * persisted. Used for fallback retries when the original turn is already
+     * on disk and only the model prompt needs to be re-sent.
+     */
+    suppressNextUserMessagePersistence?: boolean;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -150,6 +156,7 @@ export function installSessionToolResultGuard(
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
   const beforeWrite = opts?.beforeMessageWriteHook;
+  let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -211,6 +218,11 @@ export function installSessionToolResultGuard(
       nextMessage = sanitized[0];
     }
     const nextRole = (nextMessage as { role?: unknown }).role;
+
+    if (nextRole === "user" && suppressNextUserMessagePersistence) {
+      suppressNextUserMessagePersistence = false;
+      return undefined;
+    }
 
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);

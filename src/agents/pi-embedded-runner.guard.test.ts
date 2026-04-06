@@ -35,4 +35,35 @@ describe("guardSessionManager integration", () => {
       "assistant",
     ]);
   });
+
+  it("suppresses only the next persisted user message when requested", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      suppressNextUserMessagePersistence: true,
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    appendMessage({
+      role: "user",
+      content: "retry prompt",
+      timestamp: Date.now(),
+    } as AgentMessage);
+    appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "retry answer" }],
+      timestamp: Date.now(),
+    } as AgentMessage);
+    appendMessage({
+      role: "user",
+      content: "follow up",
+      timestamp: Date.now(),
+    } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "user"]);
+    expect(messages[1]).toMatchObject({ role: "user", content: "follow up" });
+  });
 });
