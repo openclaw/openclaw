@@ -9,6 +9,7 @@ import type {
 import {
   asBoolean,
   asFiniteNumber,
+  asFiniteNumber as asNumber,
   asObject,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,

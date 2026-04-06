@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
-import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  type ConfiguredProviderCatalogEntry,
+  findCatalogTemplate,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
@@ -41,7 +43,7 @@ export function buildOpenAISyntheticCatalogEntry(
     contextWindow: number;
     contextTokens?: number;
   },
-): ProviderRuntimeModel | undefined {
+): ConfiguredProviderCatalogEntry | undefined {
   if (!template) {
     return undefined;
   }
