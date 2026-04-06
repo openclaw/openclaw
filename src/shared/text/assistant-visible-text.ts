@@ -519,6 +519,150 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Leaked reasoning preamble detector
+// ---------------------------------------------------------------------------
+
+const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff]/u;
+const SUSPICIOUS_PREAMBLE_QUICK_RE =
+  /<\s*final\b|<\s*think\b|\b(?:let me|i need to|i should|i'm going to|i am going to|the user|sophie[, ]|cybera[, ]|shodan[, ]|for the record)\b|[\u3400-\u9fff\uf900-\ufaff]/iu;
+const SUSPICIOUS_LINE_RE =
+  /^\s*(?:[-*]\s+)?(?:let me\b|i need to\b|i should\b|i'm going to\b|i am going to\b|need to\b|sophie[, :]?\b|cybera[, :]?\b|shodan[, :]?\b|for the record\b|now i\b|supporting evidence\b|root cause\b)/iu;
+
+function stripCodeForScoring(text: string): string {
+  const codeRegions = findCodeRegions(text);
+  if (codeRegions.length === 0) return text;
+  let result = "";
+  let lastIndex = 0;
+  for (const region of codeRegions) {
+    result += text.slice(lastIndex, region.start);
+    lastIndex = region.end;
+  }
+  result += text.slice(lastIndex);
+  return result;
+}
+
+function scoreSuspiciousPreamble(text: string): number {
+  const scorableText = stripCodeForScoring(text);
+  if (!scorableText.trim()) return 0;
+  let score = 0;
+  if (/<\s*think\b|<\s*final\b|chain[- ]of[- ]thought|internal reasoning/iu.test(scorableText)) {
+    score += 3;
+  }
+  const lines = scorableText.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 8);
+  let suspiciousLineCount = 0;
+  for (const line of lines) {
+    if (SUSPICIOUS_LINE_RE.test(line)) {
+      suspiciousLineCount += 1;
+      score += 1;
+    }
+  }
+  if (CJK_RE.test(scorableText)) {
+    score += suspiciousLineCount > 0 ? 2 : 1;
+  }
+  if (suspiciousLineCount >= 2) {
+    score += 1;
+  }
+  return score;
+}
+
+function looksUserFacingStart(text: string): boolean {
+  const trimmed = text.trimStart();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("```") || /^<\s*(think|final)\b/i.test(trimmed)) return false;
+  const firstLine = trimmed.split("\n", 1)[0] ?? "";
+  if (SUSPICIOUS_LINE_RE.test(firstLine)) return false;
+  return true;
+}
+
+function hasFencedCode(text: string): boolean {
+  return /^\s*(?:```|~~~)/m.test(text);
+}
+
+function stripLeakedReasoningPreamble(text: string): string {
+  if (!text || !SUSPICIOUS_PREAMBLE_QUICK_RE.test(text)) return text;
+
+  const codeRegions = findCodeRegions(text);
+
+  const paragraphBreakRe = /\n{2,}/g;
+  let paragraphMatch: RegExpExecArray | null;
+  let paragraphCount = 0;
+  while ((paragraphMatch = paragraphBreakRe.exec(text)) !== null && paragraphCount < 4) {
+    const splitIndex = paragraphMatch.index + paragraphMatch[0].length;
+    if (isInsideCode(splitIndex, codeRegions)) continue;
+    const prefix = text.slice(0, paragraphMatch.index).trim();
+    const suffix = text.slice(splitIndex).trimStart();
+    if (!prefix || !suffix) continue;
+    paragraphCount += 1;
+    if (hasFencedCode(prefix)) continue;
+    if (scoreSuspiciousPreamble(prefix) >= 3 && looksUserFacingStart(suffix)) return suffix;
+  }
+
+  const lineBreakRe = /\n/g;
+  let lineMatch: RegExpExecArray | null;
+  let lineCount = 0;
+  while ((lineMatch = lineBreakRe.exec(text)) !== null && lineCount < 6) {
+    const splitIndex = lineMatch.index + lineMatch[0].length;
+    if (isInsideCode(splitIndex, codeRegions)) continue;
+    const prefix = text.slice(0, lineMatch.index);
+    const suffix = text.slice(splitIndex).trimStart();
+    if (!prefix.trim() || !suffix) continue;
+    lineCount += 1;
+    if (hasFencedCode(prefix)) continue;
+    if (scoreSuspiciousPreamble(prefix) >= 3 && looksUserFacingStart(suffix)) return suffix;
+  }
+
+  return text;
+}
+
+// ---------------------------------------------------------------------------
+// Structural contamination detector
+// ---------------------------------------------------------------------------
+
+const CONTAM_ENVELOPE_RE =
+  /\{\s*"schema"[^}]*\}(?:\s*\{\s*"(?:message_id|sender_id|label|name|username)"[^}]*\})+/gs;
+const CONTAM_CSS_RE = /(?:^|\n)\s*(?:[a-z-]+\s*:\s*[^;]+;\s*){3,}(?:\n|$)/gm;
+const CONTAM_FENCE_RE = /```\s*```/g;
+const CONTAM_CODE_DEBRIS_RE = /(?:^|\n)\s*\.\w+\([^)]*\)\)?;?/gm;
+const CONTAM_FOOTER_RE = /(?:^|\n)(?:Copyright ©|Powered by|Manage your notification settings).*$/gim;
+
+function isInsideCodeAt(offset: number, length: number, text: string): boolean {
+  const codeRegions = findCodeRegions(text);
+  for (const region of codeRegions) {
+    if (offset < region.end && offset + length > region.start) return true;
+  }
+  return false;
+}
+
+function stripStructuralContamination(text: string): string {
+  if (!text || text.length < 50) return text;
+
+  let result = text.replace(CONTAM_ENVELOPE_RE, (match, offset) => {
+    if (isInsideCodeAt(offset, match.length, text)) return match;
+    return "";
+  });
+  result = result.replace(CONTAM_CSS_RE, (match, offset) => {
+    if (isInsideCodeAt(offset, match.length, result)) return match;
+    return "";
+  });
+  result = result.replace(CONTAM_FENCE_RE, (match, offset) => {
+    if (isInsideCodeAt(offset, match.length, result)) return match;
+    return "";
+  });
+  result = result.replace(CONTAM_CODE_DEBRIS_RE, (match, offset) => {
+    if (isInsideCodeAt(offset, match.length, result)) return match;
+    return "";
+  });
+  result = result.replace(CONTAM_FOOTER_RE, (match, offset) => {
+    if (isInsideCodeAt(offset, match.length, result)) return match;
+    return "";
+  });
+  result = result.replace(/\n{3,}/g, "\n\n");
+  return result.trim();
+}
+
+export { stripStructuralContamination };
+
 export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
 
 type AssistantVisibleTextPipelineOptions = {
@@ -528,6 +672,8 @@ type AssistantVisibleTextPipelineOptions = {
   reasoningMode: ReasoningTagMode;
   reasoningTrim: ReasoningTagTrim;
   stageOrder: "reasoning-first" | "reasoning-last";
+  stripLeakedPreamble?: boolean;
+  stripStructuralContamination?: boolean;
 };
 
 const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
@@ -539,6 +685,8 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
+    stripLeakedPreamble: true,
+    stripStructuralContamination: true,
   },
   history: {
     finalTrim: "none",
@@ -553,6 +701,8 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningMode: "preserve",
     reasoningTrim: "start",
     stageOrder: "reasoning-first",
+    stripLeakedPreamble: true,
+    stripStructuralContamination: true,
   },
 };
 
@@ -592,11 +742,17 @@ function applyAssistantVisibleTextStagePipeline(
     return cleaned;
   };
 
+  let result: string;
   if (options.stageOrder === "reasoning-first") {
-    return applyFinalTrim(stripNonReasoningStages(stripReasoning(text)));
+    result = stripNonReasoningStages(stripReasoning(text));
+  } else {
+    result = stripReasoning(stripNonReasoningStages(text));
   }
 
-  return applyFinalTrim(stripReasoning(stripNonReasoningStages(text)));
+  if (options.stripLeakedPreamble) result = stripLeakedReasoningPreamble(result);
+  if (options.stripStructuralContamination) result = stripStructuralContamination(result);
+
+  return applyFinalTrim(result);
 }
 
 export function sanitizeAssistantVisibleTextWithProfile(
