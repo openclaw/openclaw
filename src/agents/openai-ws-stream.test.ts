@@ -2113,12 +2113,14 @@ describe("createOpenAIWebSocketStreamFn", () => {
       },
     ]);
     expect(deltas[1]).toMatchObject({ delta: "..." });
-    expect(deltas[1]?.partial?.phase).toBe("commentary");
+    // The "..." delta arrives before output_item.done carries the phase,
+    // so the partial still reflects the undefined phase from output_item.added.
+    expect(deltas[1]?.partial?.phase).toBeUndefined();
     expect(deltas[1]?.partial?.content).toEqual([
       {
         type: "text",
         text: "Working...",
-        textSignature: JSON.stringify({ v: 1, id: "item_late_undefined", phase: "commentary" }),
+        textSignature: JSON.stringify({ v: 1, id: "item_late_undefined" }),
       },
     ]);
   });
@@ -3178,9 +3180,7 @@ describe("convertMessagesToInputItems — phase inheritance", () => {
     const items = convertMessagesToInputItems([msg] as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
-    const assistantItems = items.filter(
-      (i: Record<string, unknown>) => i.role === "assistant",
-    );
+    const assistantItems = items.filter((i: Record<string, unknown>) => i.role === "assistant");
     // Should produce 3 separate assistant items because phase changes:
     // A=commentary, Explicit=final_answer, B=commentary
     expect(assistantItems).toHaveLength(3);
