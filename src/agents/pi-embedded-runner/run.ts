@@ -64,10 +64,6 @@ import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
-import {
-  sessionLikelyHasOversizedToolResults,
-  truncateOversizedToolResultsInSession,
-} from "./tool-result-truncation.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
@@ -95,6 +91,10 @@ import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
+import {
+  sessionLikelyHasOversizedToolResults,
+  truncateOversizedToolResultsInSession,
+} from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 import { describeUnknownError } from "./utils.js";
@@ -616,6 +616,7 @@ export async function runEmbeddedPiAgent(
           const {
             aborted,
             promptError,
+            preflightRecovery,
             timedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
@@ -663,6 +664,13 @@ export async function runEmbeddedPiAgent(
             !attempt.lastToolError &&
             attempt.toolMetas.length === 0 &&
             attempt.assistantTexts.length === 0;
+          if (preflightRecovery?.handled) {
+            log.info(
+              `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
+                `completed for ${provider}/${modelId}; retrying prompt`,
+            );
+            continue;
+          }
           const requestedSelection = shouldSwitchToLiveModel({
             cfg: params.config,
             sessionKey: params.sessionKey,
@@ -919,6 +927,25 @@ export async function runEmbeddedPiAgent(
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (compactResult.compacted) {
+                if (preflightRecovery?.route === "compact_then_truncate") {
+                  const truncResult = await truncateOversizedToolResultsInSession({
+                    sessionFile: params.sessionFile,
+                    contextWindowTokens: ctxInfo.tokens,
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey,
+                  });
+                  if (truncResult.truncated) {
+                    log.info(
+                      `[context-overflow-precheck] post-compaction tool-result truncation succeeded for ` +
+                        `${provider}/${modelId}; truncated ${truncResult.truncatedCount} tool result(s)`,
+                    );
+                  } else {
+                    log.warn(
+                      `[context-overflow-precheck] post-compaction tool-result truncation did not help for ` +
+                        `${provider}/${modelId}: ${truncResult.reason ?? "unknown"}`,
+                    );
+                  }
+                }
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
@@ -960,7 +987,8 @@ export async function runEmbeddedPiAgent(
               }
             }
             if (
-              (isCompactionFailure || overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS) &&
+              (isCompactionFailure ||
+                overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS) &&
               log.isEnabled("debug")
             ) {
               log.debug(

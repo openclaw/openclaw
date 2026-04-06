@@ -3,8 +3,8 @@ import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
-import { formatContextLimitTruncationNotice } from "./tool-result-context-guard.js";
 import { log } from "./logger.js";
+import { formatContextLimitTruncationNotice } from "./tool-result-context-guard.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
 /**
@@ -42,7 +42,7 @@ type ToolResultTruncationOptions = {
 
 const DEFAULT_SUFFIX = (truncatedChars: number) =>
   formatContextLimitTruncationNotice(truncatedChars);
-const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
+export const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
 
 /**
  * Marker inserted between head and tail when using head+tail truncation.
@@ -82,7 +82,7 @@ export function truncateToolResultText(
   const suffixFactory: (truncatedChars: number) => string =
     typeof options.suffix === "function"
       ? options.suffix
-      : () => (options.suffix ?? DEFAULT_SUFFIX(1));
+      : () => options.suffix ?? DEFAULT_SUFFIX(1);
   const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   if (text.length <= maxChars) {
     return text;
@@ -175,7 +175,7 @@ export function truncateToolResultMessage(
   const suffixFactory: (truncatedChars: number) => string =
     typeof options.suffix === "function"
       ? options.suffix
-      : () => (options.suffix ?? DEFAULT_SUFFIX(1));
+      : () => options.suffix ?? DEFAULT_SUFFIX(1);
   const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
@@ -251,6 +251,17 @@ function calculateAggregateToolResultChars(contextWindowTokens: number): number 
   return Math.max(calculateMaxToolResultChars(contextWindowTokens), MIN_TRUNCATED_TEXT_CHARS);
 }
 
+export type ToolResultReductionPotential = {
+  maxChars: number;
+  aggregateBudgetChars: number;
+  toolResultCount: number;
+  totalToolResultChars: number;
+  oversizedCount: number;
+  oversizedReducibleChars: number;
+  aggregateReducibleChars: number;
+  maxReducibleChars: number;
+};
+
 function buildAggregateToolResultReplacements(params: {
   branch: Array<{ id: string; type: string; message?: AgentMessage }>;
   aggregateBudgetChars: number;
@@ -258,7 +269,9 @@ function buildAggregateToolResultReplacements(params: {
   const candidates = params.branch
     .map((entry, index) => ({ entry, index }))
     .filter(
-      (item): item is {
+      (
+        item,
+      ): item is {
         entry: { id: string; type: string; message: AgentMessage };
         index: number;
       } =>
@@ -313,94 +326,131 @@ function buildAggregateToolResultReplacements(params: {
   return replacements;
 }
 
-export async function truncateOversizedToolResultsInSession(params: {
-  sessionFile: string;
+export function estimateToolResultReductionPotential(params: {
+  messages: AgentMessage[];
   contextWindowTokens: number;
-  sessionId?: string;
-  sessionKey?: string;
-}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
-  const { sessionFile, contextWindowTokens } = params;
+}): ToolResultReductionPotential {
+  const { messages, contextWindowTokens } = params;
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
   const aggregateBudgetChars = calculateAggregateToolResultChars(contextWindowTokens);
-  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
 
-  try {
-    sessionLock = await acquireSessionWriteLock({ sessionFile });
-    const sessionManager = SessionManager.open(sessionFile);
-    const branch = sessionManager.getBranch();
+  let toolResultCount = 0;
+  let totalToolResultChars = 0;
+  let oversizedCount = 0;
+  let oversizedReducibleChars = 0;
+  const individuallyTrimmedMessages = messages.slice();
 
-    if (branch.length === 0) {
-      return { truncated: false, truncatedCount: 0, reason: "empty session" };
+  for (let index = 0; index < messages.length; index += 1) {
+    const msg = messages[index];
+    if ((msg as { role?: string }).role !== "toolResult") {
+      continue;
     }
-
-    const oversizedIndices: number[] = [];
-    for (let i = 0; i < branch.length; i += 1) {
-      const entry = branch[i];
-      if (entry.type !== "message") {
-        continue;
-      }
-      const msg = entry.message;
-      if ((msg as { role?: string }).role !== "toolResult") {
-        continue;
-      }
-      if (getToolResultTextLength(msg) > maxChars) {
-        oversizedIndices.push(i);
-      }
+    const textLength = getToolResultTextLength(msg);
+    if (textLength <= 0) {
+      continue;
     }
+    toolResultCount += 1;
+    totalToolResultChars += textLength;
+    if (textLength <= maxChars) {
+      continue;
+    }
+    oversizedCount += 1;
+    const truncatedMessage = truncateToolResultMessage(msg, maxChars);
+    individuallyTrimmedMessages[index] = truncatedMessage;
+    oversizedReducibleChars += Math.max(0, textLength - getToolResultTextLength(truncatedMessage));
+  }
 
-    if (oversizedIndices.length === 0) {
-      const replacements = buildAggregateToolResultReplacements({
-        branch: branch as Array<{ id: string; type: string; message?: AgentMessage }>,
-        aggregateBudgetChars,
-      });
-      if (replacements.length === 0) {
-        return {
-          truncated: false,
-          truncatedCount: 0,
-          reason: "no oversized or aggregate tool results",
-        };
-      }
+  const aggregateReplacements = buildAggregateToolResultReplacements({
+    branch: individuallyTrimmedMessages.map((message, index) => ({
+      id: `message-${index}`,
+      type: "message",
+      message,
+    })),
+    aggregateBudgetChars,
+  });
+  const individuallyTrimmedBranch = individuallyTrimmedMessages.map((message, index) => ({
+    id: `message-${index}`,
+    type: "message",
+    message,
+  }));
+  const aggregateReducibleChars = aggregateReplacements.reduce((sum, replacement) => {
+    const match = individuallyTrimmedBranch.find((entry) => entry.id === replacement.entryId);
+    const originalLength =
+      match && match.message
+        ? getToolResultTextLength(match.message)
+        : getToolResultTextLength(replacement.message);
+    const newLength = getToolResultTextLength(replacement.message);
+    return sum + Math.max(0, originalLength - newLength);
+  }, 0);
+  const maxReducibleChars = oversizedCount > 0 ? oversizedReducibleChars : aggregateReducibleChars;
 
-      const rewriteResult = rewriteTranscriptEntriesInSessionManager({
-        sessionManager,
-        replacements,
-      });
-      if (rewriteResult.changed) {
-        emitSessionTranscriptUpdate(sessionFile);
-      }
+  return {
+    maxChars,
+    aggregateBudgetChars,
+    toolResultCount,
+    totalToolResultChars,
+    oversizedCount,
+    oversizedReducibleChars,
+    aggregateReducibleChars,
+    maxReducibleChars,
+  };
+}
 
-      log.info(
-        `[tool-result-truncation] Aggregate-truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
-          `(contextWindow=${contextWindowTokens} aggregateBudgetChars=${aggregateBudgetChars}) ` +
-          `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-      );
+function truncateOversizedToolResultsInExistingSessionManager(params: {
+  sessionManager: SessionManager;
+  contextWindowTokens: number;
+  sessionFile?: string;
+  sessionId?: string;
+  sessionKey?: string;
+}): { truncated: boolean; truncatedCount: number; reason?: string } {
+  const { sessionManager, contextWindowTokens } = params;
+  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  const aggregateBudgetChars = calculateAggregateToolResultChars(contextWindowTokens);
+  const branch = sessionManager.getBranch();
 
+  if (branch.length === 0) {
+    return { truncated: false, truncatedCount: 0, reason: "empty session" };
+  }
+
+  const oversizedIndices: number[] = [];
+  for (let i = 0; i < branch.length; i += 1) {
+    const entry = branch[i];
+    if (entry.type !== "message") {
+      continue;
+    }
+    const msg = entry.message;
+    if ((msg as { role?: string }).role !== "toolResult") {
+      continue;
+    }
+    if (getToolResultTextLength(msg) > maxChars) {
+      oversizedIndices.push(i);
+    }
+  }
+
+  if (oversizedIndices.length === 0) {
+    const replacements = buildAggregateToolResultReplacements({
+      branch: branch as Array<{ id: string; type: string; message?: AgentMessage }>,
+      aggregateBudgetChars,
+    });
+    if (replacements.length === 0) {
       return {
-        truncated: rewriteResult.changed,
-        truncatedCount: rewriteResult.rewrittenEntries,
-        reason: rewriteResult.reason,
+        truncated: false,
+        truncatedCount: 0,
+        reason: "no oversized or aggregate tool results",
       };
     }
-
-    const replacements = oversizedIndices.flatMap((index) => {
-      const entry = branch[index];
-      if (!entry || entry.type !== "message") {
-        return [];
-      }
-      return [{ entryId: entry.id, message: truncateToolResultMessage(entry.message, maxChars) }];
-    });
 
     const rewriteResult = rewriteTranscriptEntriesInSessionManager({
       sessionManager,
       replacements,
     });
-    if (rewriteResult.changed) {
-      emitSessionTranscriptUpdate(sessionFile);
+    if (rewriteResult.changed && params.sessionFile) {
+      emitSessionTranscriptUpdate(params.sessionFile);
     }
 
     log.info(
-      `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
-        `(contextWindow=${contextWindowTokens} maxChars=${maxChars}) ` +
+      `[tool-result-truncation] Aggregate-truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
+        `(contextWindow=${contextWindowTokens} aggregateBudgetChars=${aggregateBudgetChars}) ` +
         `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
     );
 
@@ -409,6 +459,72 @@ export async function truncateOversizedToolResultsInSession(params: {
       truncatedCount: rewriteResult.rewrittenEntries,
       reason: rewriteResult.reason,
     };
+  }
+
+  const replacements = oversizedIndices.flatMap((index) => {
+    const entry = branch[index];
+    if (!entry || entry.type !== "message") {
+      return [];
+    }
+    return [{ entryId: entry.id, message: truncateToolResultMessage(entry.message, maxChars) }];
+  });
+
+  const rewriteResult = rewriteTranscriptEntriesInSessionManager({
+    sessionManager,
+    replacements,
+  });
+  if (rewriteResult.changed && params.sessionFile) {
+    emitSessionTranscriptUpdate(params.sessionFile);
+  }
+
+  log.info(
+    `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
+      `(contextWindow=${contextWindowTokens} maxChars=${maxChars}) ` +
+      `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
+  );
+
+  return {
+    truncated: rewriteResult.changed,
+    truncatedCount: rewriteResult.rewrittenEntries,
+    reason: rewriteResult.reason,
+  };
+}
+
+export function truncateOversizedToolResultsInSessionManager(params: {
+  sessionManager: SessionManager;
+  contextWindowTokens: number;
+  sessionFile?: string;
+  sessionId?: string;
+  sessionKey?: string;
+}): { truncated: boolean; truncatedCount: number; reason?: string } {
+  try {
+    return truncateOversizedToolResultsInExistingSessionManager(params);
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
+    return { truncated: false, truncatedCount: 0, reason: errMsg };
+  }
+}
+
+export async function truncateOversizedToolResultsInSession(params: {
+  sessionFile: string;
+  contextWindowTokens: number;
+  sessionId?: string;
+  sessionKey?: string;
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
+  const { sessionFile, contextWindowTokens } = params;
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+
+  try {
+    sessionLock = await acquireSessionWriteLock({ sessionFile });
+    const sessionManager = SessionManager.open(sessionFile);
+    return truncateOversizedToolResultsInExistingSessionManager({
+      sessionManager,
+      contextWindowTokens,
+      sessionFile,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
@@ -433,25 +549,6 @@ export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
 }): boolean {
-  const { messages, contextWindowTokens } = params;
-  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
-  const aggregateBudgetChars = calculateAggregateToolResultChars(contextWindowTokens);
-  let totalToolResultChars = 0;
-  let toolResultCount = 0;
-
-  for (const msg of messages) {
-    if ((msg as { role?: string }).role !== "toolResult") {
-      continue;
-    }
-    const textLength = getToolResultTextLength(msg);
-    if (textLength > maxChars) {
-      return true;
-    }
-    totalToolResultChars += textLength;
-    if (textLength > 0) {
-      toolResultCount += 1;
-    }
-  }
-
-  return toolResultCount >= 2 && totalToolResultChars > aggregateBudgetChars;
+  const estimate = estimateToolResultReductionPotential(params);
+  return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;
 }
