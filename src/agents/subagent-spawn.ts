@@ -45,6 +45,7 @@ import {
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
 import { readStringParam } from "./tools/common.js";
+import { MAX_SAFE_TIMEOUT_MS } from "./timeout.js";
 
 export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
