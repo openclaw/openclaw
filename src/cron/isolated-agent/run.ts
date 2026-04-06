@@ -718,6 +718,10 @@ export async function runCronIsolatedAgentTurn(params: {
       timeoutMs: prepared.context.timeoutMs,
     });
     if (isAborted()) {
+      prepared.context.cronSession.sessionEntry.status = "timeout";
+      try {
+        await prepared.context.persistSessionEntry();
+      } catch {}
       return prepared.context.withRunSession({ status: "error", error: abortReason() });
     }
     return await finalizeCronRun({
