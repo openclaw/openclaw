@@ -101,6 +101,8 @@ High-level:
 8. Runs `openclaw doctor` as the final “safe update” check.
 9. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
 
+If pnpm bootstrap still fails, the updater now stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
+
 ## `--update` shorthand
 
 `openclaw --update` rewrites to `openclaw update` (useful for shells and launcher scripts).

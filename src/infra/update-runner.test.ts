@@ -627,7 +627,7 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("error");
-    expect(result.reason).toBe("required-manager-unavailable");
+    expect(result.reason).toBe("pnpm-npm-bootstrap-failed");
     expect(calls.some((call) => call === "npm run build")).toBe(false);
     expect(calls.some((call) => call === "npm run lint")).toBe(false);
     expect(calls.some((call) => call.startsWith("git -C /tmp/openclaw-update-preflight-"))).toBe(
