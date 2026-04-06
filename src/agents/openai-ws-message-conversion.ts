@@ -329,6 +329,16 @@ export function convertMessagesToInputItems(
       if (Array.isArray(content)) {
         const textParts: string[] = [];
         let currentTextPhase: OpenAIResponsesAssistantPhase | undefined;
+        const hasExplicitBlockPhase = content.some((block) => {
+          if (!block || typeof block !== "object") {
+            return false;
+          }
+          const record = block as { type?: unknown; textSignature?: unknown };
+          return (
+            record.type === "text" &&
+            Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
+          );
+        });
         const pushAssistantText = (phase?: OpenAIResponsesAssistantPhase) => {
           if (textParts.length === 0) {
             return;
@@ -354,7 +364,12 @@ export function convertMessagesToInputItems(
           if (block.type === "text" && typeof block.text === "string") {
             const parsedSignature = parseAssistantTextSignature(block.textSignature);
             const blockPhase =
-              parsedSignature?.phase ?? assistantMessagePhase;
+              parsedSignature?.phase ??
+              (parsedSignature?.id
+                ? assistantMessagePhase
+                : hasExplicitBlockPhase
+                  ? undefined
+                  : assistantMessagePhase);
             if (textParts.length > 0 && blockPhase !== currentTextPhase) {
               pushAssistantText(currentTextPhase);
             }
