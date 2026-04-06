@@ -51,6 +51,7 @@ openclaw onboard --non-interactive \
 | ---------------------- | ----------------- |
 | Chat completions       | Yes               |
 | Image generation       | Yes               |
+| Music generation       | Yes               |
 | Image understanding    | Yes               |
 | Audio transcription    | Yes               |
 | Video understanding    | Yes               |
@@ -142,6 +143,35 @@ To use Google as the default video provider:
 ```
 
 See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Music generation
+
+The bundled `google` plugin also registers music generation through the shared
+`music_generate` tool.
+
+- Default music model: `google/lyria-3-clip-preview`
+- Also supports `google/lyria-3-pro-preview`
+- Prompt controls: `lyrics` and `instrumental`
+- Output format: `mp3` by default, plus `wav` on `google/lyria-3-pro-preview`
+- Reference inputs: up to 10 images
+- Session-backed runs detach through the shared task/status flow, including `action: "status"`
+
+To use Google as the default music provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "google/lyria-3-clip-preview",
+      },
+    },
+  },
+}
+```
+
+See [Music Generation](/tools/music-generation) for the shared tool
 parameters, provider selection, and failover behavior.
 
 ## Environment note
