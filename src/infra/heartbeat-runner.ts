@@ -44,6 +44,7 @@ import { CommandLane } from "../process/lanes.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
@@ -592,7 +593,11 @@ export async function runHeartbeatOnce(opts: {
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
   const explicitAgentId = typeof opts.agentId === "string" ? opts.agentId.trim() : "";
-  const agentId = normalizeAgentId(explicitAgentId || resolveDefaultAgentId(cfg));
+  const forcedSessionAgentId =
+    explicitAgentId.length > 0 ? undefined : parseAgentSessionKey(opts.sessionKey)?.agentId;
+  const agentId = normalizeAgentId(
+    explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
+  );
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
