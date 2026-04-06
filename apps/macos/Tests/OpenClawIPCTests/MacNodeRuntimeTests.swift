@@ -12,6 +12,22 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func `resolve a2ui host URL uses injected canvas host provider`() async {
+        let runtime = MacNodeRuntime(canvasHostUrlProvider: {
+            "http://127.0.0.1:18789/__openclaw__/cap/node-token"
+        })
+        let resolved = await runtime._test_resolveA2UIHostUrl()
+        #expect(resolved == "http://127.0.0.1:18789/__openclaw__/cap/node-token/__openclaw__/a2ui/?platform=macos")
+    }
+
+    @Test func `resolve a2ui host URL rewrites wildcard host to loopback`() async {
+        let runtime = MacNodeRuntime(canvasHostUrlProvider: {
+            "http://0.0.0.0:18789/__openclaw__/cap/node-token"
+        })
+        let resolved = await runtime._test_resolveA2UIHostUrl()
+        #expect(resolved == "http://127.0.0.1:18789/__openclaw__/cap/node-token/__openclaw__/a2ui/?platform=macos")
+    }
+
     @Test func `handle invoke rejects empty system run`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemRunParams(command: [])

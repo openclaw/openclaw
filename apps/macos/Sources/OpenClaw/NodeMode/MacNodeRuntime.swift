@@ -7,6 +7,7 @@ actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
+    private let canvasHostUrlProvider: @Sendable () async -> String?
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
     private var mainSessionKey: String = "main"
     private var eventSender: (@Sendable (String, String?) async -> Void)?
@@ -17,10 +18,14 @@ actor MacNodeRuntime {
         },
         browserProxyRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
             try await MacNodeBrowserProxy.shared.request(paramsJSON: paramsJSON)
+        },
+        canvasHostUrlProvider: @escaping @Sendable () async -> String? = {
+            await GatewayConnection.shared.canvasHostUrl()
         })
     {
         self.makeMainActorServices = makeMainActorServices
         self.browserProxyRequest = browserProxyRequest
+        self.canvasHostUrlProvider = canvasHostUrlProvider
     }
 
     func updateMainSessionKey(_ sessionKey: String) {
@@ -427,11 +432,28 @@ actor MacNodeRuntime {
     }
 
     private func resolveA2UIHostUrl() async -> String? {
-        guard let raw = await GatewayConnection.shared.canvasHostUrl() else { return nil }
+        guard let raw = await self.canvasHostUrlProvider() else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let baseUrl = URL(string: trimmed) else { return nil }
-        return baseUrl.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=macos"
+        let normalizedBaseUrl = Self.normalizeCanvasHostForClient(baseUrl)
+        return normalizedBaseUrl.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=macos"
     }
+
+    private static func normalizeCanvasHostForClient(_ url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard host == "0.0.0.0" || host == "::" else { return url }
+        components.host = "127.0.0.1"
+        return components.url ?? url
+    }
+
+    #if DEBUG
+    func _test_resolveA2UIHostUrl() async -> String? {
+        await self.resolveA2UIHostUrl()
+    }
+    #endif
 
     private func isA2UIReady(poll: Bool = false) async -> Bool {
         let deadline = poll ? Date().addingTimeInterval(6.0) : Date()
