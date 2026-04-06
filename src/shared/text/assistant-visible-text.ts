@@ -10,8 +10,14 @@ const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
  * This stateful pass hides content from an opening tag through the matching
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
-const TOOL_CALL_QUICK_RE = /<\s*\/?\s*(?:tool_call|function_calls?|tool_calls)\b/i;
-const TOOL_CALL_TAG_NAMES = new Set(["tool_call", "function_call", "function_calls", "tool_calls"]);
+const TOOL_CALL_QUICK_RE = /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|tool_calls)\b/i;
+const TOOL_CALL_TAG_NAMES = new Set([
+  "tool_call",
+  "tool_result",
+  "function_call",
+  "function_calls",
+  "tool_calls",
+]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
 
@@ -151,7 +157,7 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
   };
 }
 
-function stripToolCallXmlTags(text: string): string {
+export function stripToolCallXmlTags(text: string): string {
   if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
     return text;
   }
@@ -224,7 +230,8 @@ function stripToolCallXmlTags(text: string): string {
       }
     } else if (
       tag.isClose &&
-      tag.tagName === toolCallBlockTagName &&
+      (tag.tagName === toolCallBlockTagName ||
+        (toolCallBlockTagName === "tool_result" && tag.tagName === "tool_call")) &&
       !endsInsideQuotedString(text, toolCallContentStart, idx)
     ) {
       inToolCallBlock = false;

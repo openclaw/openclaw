@@ -437,6 +437,116 @@ File contents here`,
     expect(result).toBe("Here's what I found:\nDone checking.");
   });
 
+  it("strips raw <tool_call> XML blocks from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Let me check.\n\n<tool_call> {"name": "read", "arguments": {"file_path": "test.md"}} </tool_call> Done.',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Let me check.\n\n Done.");
+  });
+
+  it("strips raw <tool_result> XML blocks from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Prefix\n<tool_result> {"output": "file contents"} </tool_result>\nSuffix',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
+  });
+
+  it("strips dangling <tool_call> XML content to end-of-string", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Let me run.\n<tool_call>\n{"name": "find", "arguments": {}}\n',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Let me run.");
+  });
+
+  it("strips mixed <tool_call> and <tool_result> XML blocks from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            "I will read the file.",
+            '<tool_call>{"name":"read","arguments":{"path":"/tmp/x"}}</tool_call>',
+            '<tool_result>{"output":"hello world"}</tool_result>',
+            "The file contains: hello world",
+          ].join("\n"),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe(
+      "I will read the file.\n\n\nThe file contains: hello world",
+    );
+  });
+
+  it("strips <tool_result> closed with mismatched </tool_call> tag and preserves trailing text", () => {
+    // Issue #61688: gateway sometimes emits <tool_result>...</tool_call>
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Prefix\n<tool_result> {"output": "data"} </tool_call>\nSuffix',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    // The mismatched closing tag should still exit the block, stripping the
+    // tool XML while preserving legitimate trailing prose.
+    expect(result).not.toContain("<tool_result>");
+    expect(result).not.toContain("output");
+    expect(result).toContain("Prefix");
+    expect(result).toContain("Suffix");
+  });
+
+  it("does not let </tool_result> close a <tool_call> block (prevents payload leak)", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: 'Prefix\n<tool_call>{"name":"x"}</tool_result>LEAK</tool_call>\nSuffix',
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    // </tool_result> must NOT exit a <tool_call> block; the block should
+    // continue until the matching </tool_call>, preventing payload leaks.
+    expect(result).not.toContain("LEAK");
+    expect(result).not.toContain("<tool_call>");
+    expect(result).toContain("Prefix");
+    expect(result).toContain("Suffix");
+  });
+
   it("strips reasoning/thinking tag variants", () => {
     const cases = [
       {
