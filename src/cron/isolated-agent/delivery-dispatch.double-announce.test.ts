@@ -322,6 +322,24 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("skips main-session awareness for isolated cron jobs with a pinned channel but implicit recipient", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Pinned-channel implicit delivery should stay isolated.",
+      deliveryConfig: { mode: "announce", channel: "telegram" },
+      resolvedDeliveryMode: "implicit",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
   it("keeps the cron run successful when awareness queueing throws after delivery", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);

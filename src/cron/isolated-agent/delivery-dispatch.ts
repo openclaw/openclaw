@@ -234,35 +234,8 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
-function hasExplicitCronAwarenessTarget(
-  job: CronJob,
-  delivery: SuccessfulDeliveryTarget,
-): boolean {
-  if (delivery.mode === "explicit") {
-    return true;
-  }
-  const configuredDelivery = job.delivery;
-  if (
-    !configuredDelivery ||
-    configuredDelivery.mode === "none" ||
-    configuredDelivery.mode === "webhook"
-  ) {
-    return false;
-  }
-  const configuredChannel =
-    typeof configuredDelivery.channel === "string"
-      ? configuredDelivery.channel.trim().toLowerCase()
-      : undefined;
-  if (configuredChannel && configuredChannel !== "last") {
-    return true;
-  }
-  if (typeof configuredDelivery.to === "string" && configuredDelivery.to.trim()) {
-    return true;
-  }
-  if (typeof configuredDelivery.accountId === "string" && configuredDelivery.accountId.trim()) {
-    return true;
-  }
-  return configuredDelivery.threadId != null && String(configuredDelivery.threadId).trim() !== "";
+function hasExplicitCronAwarenessTarget(delivery: SuccessfulDeliveryTarget): boolean {
+  return delivery.mode === "explicit";
 }
 
 function shouldQueueCronAwareness(
@@ -276,7 +249,7 @@ function shouldQueueCronAwareness(
   return (
     job.sessionTarget === "isolated" &&
     !deliveryBestEffort &&
-    hasExplicitCronAwarenessTarget(job, delivery)
+    hasExplicitCronAwarenessTarget(delivery)
   );
 }
 
