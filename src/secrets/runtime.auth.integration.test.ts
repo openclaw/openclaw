@@ -18,7 +18,7 @@ import {
   OPENAI_ENV_KEY_REF,
   OPENAI_FILE_KEY_REF,
   type SecretsRuntimeEnvSnapshot,
-} from "./runtime.integration.test-helpers.js";
+} from "./runtime-auth.integration.test-helpers.js";
 import {
   activateSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,

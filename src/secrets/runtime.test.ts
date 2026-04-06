@@ -135,7 +135,7 @@ describe("secrets runtime snapshot", () => {
     clearConfigCache();
   });
 
-  it("resolves env refs for config and auth profiles", async () => {
+  it("resolves core env refs for config and auth profiles", async () => {
     const config = asConfig({
       agents: {
         defaults: {
@@ -185,39 +185,6 @@ describe("secrets runtime snapshot", () => {
           password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
         },
       },
-      channels: {
-        telegram: {
-          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN_REF" },
-          webhookUrl: "https://example.test/telegram-webhook",
-          webhookSecret: { source: "env", provider: "default", id: "TELEGRAM_WEBHOOK_SECRET_REF" },
-          accounts: {
-            work: {
-              botToken: {
-                source: "env",
-                provider: "default",
-                id: "TELEGRAM_WORK_BOT_TOKEN_REF",
-              },
-            },
-          },
-        },
-        slack: {
-          mode: "http",
-          signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET_REF" },
-          accounts: {
-            work: {
-              botToken: { source: "env", provider: "default", id: "SLACK_WORK_BOT_TOKEN_REF" },
-              appToken: { source: "env", provider: "default", id: "SLACK_WORK_APP_TOKEN_REF" },
-            },
-          },
-        },
-      },
-      tools: {
-        web: {
-          search: {
-            apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
-          },
-        },
-      },
     });
 
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -231,15 +198,9 @@ describe("secrets runtime snapshot", () => {
         TALK_PROVIDER_API_KEY: "talk-provider-ref-key", // pragma: allowlist secret
         REMOTE_GATEWAY_TOKEN: "remote-token-ref",
         REMOTE_GATEWAY_PASSWORD: "remote-password-ref", // pragma: allowlist secret
-        TELEGRAM_BOT_TOKEN_REF: "telegram-bot-ref",
-        TELEGRAM_WEBHOOK_SECRET_REF: "telegram-webhook-ref", // pragma: allowlist secret
-        TELEGRAM_WORK_BOT_TOKEN_REF: "telegram-work-ref",
-        SLACK_SIGNING_SECRET_REF: "slack-signing-ref", // pragma: allowlist secret
-        SLACK_WORK_BOT_TOKEN_REF: "slack-work-bot-ref",
-        SLACK_WORK_APP_TOKEN_REF: "slack-work-app-ref",
-        WEB_SEARCH_API_KEY: "web-search-ref", // pragma: allowlist secret
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
+      loadablePluginOrigins: new Map(),
       loadAuthStore: () =>
         loadAuthStoreWithProfiles({
           "openai:default": {
@@ -272,23 +233,11 @@ describe("secrets runtime snapshot", () => {
     expect(snapshot.config.talk?.providers?.["acme-speech"]?.apiKey).toBe("talk-provider-ref-key");
     expect(snapshot.config.gateway?.remote?.token).toBe("remote-token-ref");
     expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
-    expect(snapshot.config.channels?.telegram?.botToken).toEqual({
-      source: "env",
-      provider: "default",
-      id: "TELEGRAM_BOT_TOKEN_REF",
-    });
-    expect(snapshot.config.channels?.telegram?.webhookSecret).toBe("telegram-webhook-ref");
-    expect(snapshot.config.channels?.telegram?.accounts?.work?.botToken).toBe("telegram-work-ref");
-    expect(snapshot.config.channels?.slack?.signingSecret).toBe("slack-signing-ref");
-    expect(snapshot.config.channels?.slack?.accounts?.work?.botToken).toBe("slack-work-bot-ref");
-    expect(snapshot.config.channels?.slack?.accounts?.work?.appToken).toEqual({
-      source: "env",
-      provider: "default",
-      id: "SLACK_WORK_APP_TOKEN_REF",
-    });
-    expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining(["channels.slack.accounts.work.appToken"]),
+      expect.arrayContaining([
+        "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
+        "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
+      ]),
     );
     expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
       type: "api_key",

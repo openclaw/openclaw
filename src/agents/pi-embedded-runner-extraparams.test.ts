@@ -9,13 +9,7 @@ import {
   resolveAnthropicFastMode,
   resolveAnthropicServiceTier,
 } from "../../test/helpers/providers/anthropic-contract.js";
-import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama-runtime.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
-import {
-  createOpenRouterSystemCacheWrapper,
-  createOpenRouterWrapper,
-  isProxyReasoningUnsupported,
-} from "./pi-embedded-runner/proxy-stream-wrappers.js";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],
@@ -131,10 +125,6 @@ import { createGoogleThinkingPayloadWrapper } from "./pi-embedded-runner/google-
 import { log } from "./pi-embedded-runner/logger.js";
 import { createMinimaxFastModeWrapper } from "./pi-embedded-runner/minimax-stream-wrappers.js";
 import {
-  createMoonshotThinkingWrapper,
-  resolveMoonshotThinkingType,
-} from "./pi-embedded-runner/moonshot-stream-wrappers.js";
-import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
   createOpenAIDefaultTransportWrapper,
@@ -216,13 +206,6 @@ beforeEach(() => {
           ? params.context.streamFn
           : createBedrockNoCacheWrapper(params.context.streamFn);
       }
-      if (params.provider === "moonshot") {
-        const thinkingType = resolveMoonshotThinkingType({
-          configuredThinking: params.context.extraParams?.thinking,
-          thinkingLevel: params.context.thinkingLevel,
-        });
-        return createMoonshotThinkingWrapper(params.context.streamFn, thinkingType);
-      }
       if (params.provider === "google") {
         return createGoogleThinkingPayloadWrapper(
           params.context.streamFn,
@@ -243,9 +226,6 @@ beforeEach(() => {
           params.context.streamFn,
           params.context.extraParams?.fastMode === true,
         );
-      }
-      if (params.provider === "ollama") {
-        return createConfiguredOllamaCompatNumCtxWrapper(params.context);
       }
       if (params.provider === "xai") {
         let streamFn = createTestXaiPayloadCompatibilityWrapper(params.context.streamFn);
@@ -277,33 +257,7 @@ beforeEach(() => {
         }
         return streamFn;
       }
-      if (params.provider !== "openrouter") {
-        return params.context.streamFn;
-      }
-
-      const providerRouting =
-        params.context.extraParams?.provider != null &&
-        typeof params.context.extraParams.provider === "object"
-          ? (params.context.extraParams.provider as Record<string, unknown>)
-          : undefined;
-      let streamFn = params.context.streamFn;
-      if (providerRouting) {
-        const underlying = streamFn;
-        streamFn = (model, context, options) =>
-          (underlying as StreamFn)(
-            {
-              ...model,
-              compat: { ...model.compat, openRouterRouting: providerRouting },
-            },
-            context,
-            options,
-          );
-      }
-
-      const skipReasoningInjection =
-        params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
-      const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
-      return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
+      return params.context.streamFn;
     },
   });
 });
@@ -474,65 +428,6 @@ describe("applyExtraParamsToAgent", () => {
     return calls[0]?.headers;
   }
 
-  it("does not inject reasoning when thinkingLevel is off (default) for OpenRouter", () => {
-    // Regression: "off" is a truthy string, so the old code injected
-    // reasoning: { effort: "none" }, causing a 400 on models that require
-    // reasoning (e.g. deepseek/deepseek-r1).
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { model: "deepseek/deepseek-r1" };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(
-      agent,
-      undefined,
-      "openrouter",
-      "deepseek/deepseek-r1",
-      undefined,
-      "off",
-    );
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "deepseek/deepseek-r1",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]).not.toHaveProperty("reasoning");
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
-  });
-
-  it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto", undefined, "low");
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "openrouter/auto",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.reasoning).toEqual({ effort: "low" });
-  });
-
   it("disables thinking for MiniMax anthropic-messages payloads", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -557,31 +452,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
   });
 
-  it("removes legacy reasoning_effort and keeps reasoning unset when thinkingLevel is off", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { reasoning_effort: "high" };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto", undefined, "off");
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "openrouter/auto",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
-    expect(payloads[0]).not.toHaveProperty("reasoning");
-  });
-
   it("strips xai Responses reasoning payload fields", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "xai",
@@ -603,62 +473,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
     expect(payload).not.toHaveProperty("reasoning_effort");
-  });
-
-  it("does not inject effort when payload already has reasoning.max_tokens", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { reasoning: { max_tokens: 256 } };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto", undefined, "low");
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "openrouter/auto",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toEqual({ reasoning: { max_tokens: 256 } });
-  });
-
-  it("does not inject reasoning.effort for x-ai/grok models on OpenRouter (#32039)", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { reasoning_effort: "medium" };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(
-      agent,
-      undefined,
-      "openrouter",
-      "x-ai/grok-4.1-fast",
-      undefined,
-      "medium",
-    );
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "x-ai/grok-4.1-fast",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]).not.toHaveProperty("reasoning");
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
   it("keeps disabled reasoning payloads for native OpenAI responses routes", () => {
@@ -1012,198 +826,6 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.thinking).toBe("off");
-  });
-
-  it("maps thinkingLevel=off to Moonshot thinking.type=disabled", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, undefined, "moonshot", "kimi-k2.5", undefined, "off");
-
-    const model = {
-      api: "openai-completions",
-      provider: "moonshot",
-      id: "kimi-k2.5",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-  });
-
-  it("maps non-off thinking levels to Moonshot thinking.type=enabled and normalizes tool_choice", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { tool_choice: "required" };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, undefined, "moonshot", "kimi-k2.5", undefined, "low");
-
-    const model = {
-      api: "openai-completions",
-      provider: "moonshot",
-      id: "kimi-k2.5",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "enabled" });
-    expect(payloads[0]?.tool_choice).toBe("auto");
-  });
-
-  it("disables thinking instead of broadening pinned Moonshot tool_choice", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        tool_choice: { type: "tool", name: "read" },
-      };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, undefined, "moonshot", "kimi-k2.5", undefined, "low");
-
-    const model = {
-      api: "openai-completions",
-      provider: "moonshot",
-      id: "kimi-k2.5",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
-  });
-
-  it("respects explicit Moonshot thinking param from model config", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "moonshot/kimi-k2.5": {
-              params: {
-                thinking: { type: "disabled" },
-              },
-            },
-          },
-        },
-      },
-    };
-
-    applyExtraParamsToAgent(agent, cfg, "moonshot", "kimi-k2.5", undefined, "high");
-
-    const model = {
-      api: "openai-completions",
-      provider: "moonshot",
-      id: "kimi-k2.5",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-  });
-
-  it("applies Moonshot payload compatibility to Ollama Kimi cloud models", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = { tool_choice: "required" };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, undefined, "ollama", "kimi-k2.5:cloud", undefined, "low");
-
-    const model = {
-      api: "openai-completions",
-      provider: "ollama",
-      id: "kimi-k2.5:cloud",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "enabled" });
-    expect(payloads[0]?.tool_choice).toBe("auto");
-  });
-
-  it("maps thinkingLevel=off for Ollama Kimi cloud models through Moonshot compatibility", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, undefined, "ollama", "kimi-k2.5:cloud", undefined, "off");
-
-    const model = {
-      api: "openai-completions",
-      provider: "ollama",
-      id: "kimi-k2.5:cloud",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-  });
-
-  it("disables thinking instead of broadening pinned Ollama Kimi cloud tool_choice", () => {
-    const payloads: Record<string, unknown>[] = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload: Record<string, unknown> = {
-        tool_choice: { type: "function", function: { name: "read" } },
-      };
-      options?.onPayload?.(payload, _model);
-      payloads.push(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, undefined, "ollama", "kimi-k2.5:cloud", undefined, "low");
-
-    const model = {
-      api: "openai-completions",
-      provider: "ollama",
-      id: "kimi-k2.5:cloud",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, {});
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
-    expect(payloads[0]?.tool_choice).toEqual({
-      type: "function",
-      function: { name: "read" },
-    });
   });
 
   it("keeps anthropic tool payloads native for Kimi", () => {

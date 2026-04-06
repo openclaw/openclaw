@@ -7,6 +7,9 @@ export function collectChannelConfigAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
+  if (!params.config.channels || Object.keys(params.config.channels).length === 0) {
+    return;
+  }
   for (const plugin of iterateBootstrapChannelPlugins()) {
     plugin.secrets?.collectRuntimeConfigAssignments?.(params);
   }
