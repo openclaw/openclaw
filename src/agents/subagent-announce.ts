@@ -161,7 +161,7 @@ async function resolveSubagentAnnounceTarget(params: {
   const parentSessionEntry = loadSessionEntryByKey(requesterSessionKey);
   const requesterSessionEntry = loadRequesterSessionEntry(requesterSessionKey).entry;
   const parentSessionAlive =
-    hasUsableSessionEntry(parentSessionEntry) || requesterSessionEntry != null;
+    hasUsableSessionEntry(parentSessionEntry) || hasUsableSessionEntry(requesterSessionEntry);
 
   if (!parentSessionAlive) {
     const fallback = runtime.resolveRequesterForChildSession(requesterSessionKey);

@@ -423,6 +423,22 @@ describe("subagent announce timeout config", () => {
     expect(directAgentCall?.params?.accountId).toBe("acct-main");
   });
 
+  it("regression, treats blank-session-id parent entries as unusable and still falls back", async () => {
+    const parentSessionKey = "agent:main:subagent:parent-blank";
+    setupParentSessionFallback(parentSessionKey);
+    sessionStore[parentSessionKey] = { sessionId: "   ", updatedAt: Date.now() };
+
+    await runAnnounceFlowForTest("run-parent-blank", {
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: parentSessionKey,
+      childSessionKey: `${parentSessionKey}:subagent:child`,
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    expect(directAgentCall?.params?.sessionKey).toBe("agent:main:main");
+    expect(directAgentCall?.params?.deliver).toBe(true);
+  });
+
   it("uses partial progress on timeout when the child only made tool calls", async () => {
     chatHistoryMessages = [
       { role: "user", content: "do a complex task" },
