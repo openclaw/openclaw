@@ -278,9 +278,9 @@ function createStreamFnWithExtraParams(
   // requestMetadata so it flows through pi-ai's streamBedrock() into AWS
   // ConverseStream API calls. AWS Cost Explorer can then group costs by
   // these metadata keys.
-  if (hasBedrockMetadata) {
+  if (hasBedrockMetadata && agentId) {
     streamParams.requestMetadata = {
-      "openclaw:agentId": agentId!,
+      "openclaw:agentId": agentId,
       ...(agentName ? { "openclaw:agentName": agentName } : {}),
     };
   }
@@ -497,9 +497,7 @@ export function applyExtraParamsToAgent(
     provider,
     modelId,
     agentId,
-    agentName: agentId
-      ? cfg?.agents?.list?.find((a) => a.id === agentId)?.name
-      : undefined,
+    agentName: agentId ? cfg?.agents?.list?.find((a) => a.id === agentId)?.name : undefined,
     agentDir,
     workspaceDir,
     thinkingLevel,

@@ -9,6 +9,7 @@ const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
+const detectMimeMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
 const imageCreateMock = vi.hoisted(() => vi.fn());
@@ -45,6 +46,18 @@ vi.mock("./runtime.js", () => ({
 vi.mock("../../../src/channels/plugins/bundled.js", () => ({
   bundledChannelPlugins: [],
   bundledChannelSetupPlugins: [],
+}));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  detectMime: detectMimeMock,
+  mediaKindFromMime(mime?: string | null): string | undefined {
+    if (!mime) return undefined;
+    if (mime.startsWith("image/")) return "image";
+    if (mime.startsWith("audio/")) return "audio";
+    if (mime.startsWith("video/")) return "video";
+    if (mime.startsWith("application/") || mime.startsWith("text/")) return "document";
+    return undefined;
+  },
 }));
 
 let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
@@ -145,6 +158,9 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     imageGetMock.mockResolvedValue(Buffer.from("image-bytes"));
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
+
+    // Default: buffer sniffing finds nothing; individual tests override when needed.
+    detectMimeMock.mockResolvedValue(undefined);
   });
 
   it("uses msg_type=media for mp4 video", async () => {
@@ -271,6 +287,53 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expectMediaTimeoutClientConfigured();
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "image" }),
+      }),
+    );
+  });
+
+  it("uses msg_type=image for remote image URL with generic filename when content-type is image/png", async () => {
+    // Simulates a CDN or AI-generated image URL that has no image extension
+    // but the remote server correctly advertises image/png.
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("fake-png-bytes"),
+      fileName: "download",
+      kind: "image",
+      contentType: "image/png",
+    });
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: "https://cdn.example.com/ai-generated/abc123",
+    });
+
+    expect(imageCreateMock).toHaveBeenCalled();
+    expect(fileCreateMock).not.toHaveBeenCalled();
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "image" }),
+      }),
+    );
+  });
+
+  it("uses msg_type=image for mediaBuffer when buffer sniffing identifies image/png", async () => {
+    // Simulates tool-generated images passed via mediaBuffer with no filename;
+    // content-type must be resolved via buffer sniffing.
+    detectMimeMock.mockResolvedValueOnce("image/png");
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("fake-png-bytes"),
+      // no fileName — extension-based routing cannot detect image type
+    });
+
+    expect(detectMimeMock).toHaveBeenCalled();
+    expect(imageCreateMock).toHaveBeenCalled();
+    expect(fileCreateMock).not.toHaveBeenCalled();
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ msg_type: "image" }),
