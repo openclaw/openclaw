@@ -1050,6 +1050,7 @@
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/context-engine",
+                  "concepts/context-engine-byterover",
                   "concepts/agent-workspace",
                   "concepts/soul",
                   "concepts/oauth",
