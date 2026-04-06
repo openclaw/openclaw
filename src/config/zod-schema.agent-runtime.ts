@@ -41,13 +41,26 @@ export const HeartbeatSchema = z
     if (!val.every) {
       return;
     }
+    let everyMs: number;
     try {
-      parseDurationMs(val.every, { defaultUnit: "m" });
+      everyMs = parseDurationMs(val.every, { defaultUnit: "m" });
     } catch {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["every"],
         message: "invalid duration (use ms, s, m, h)",
+      });
+      return;
+    }
+    // Node.js setTimeout uses a 32-bit signed integer internally.
+    // Values exceeding ~2,147,483,647ms (~596h) silently clamp to 1ms,
+    // causing heartbeats to fire every millisecond and breaking message processing.
+    if (everyMs > 2_147_483_647) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["every"],
+        message:
+          'heartbeat.every exceeds the Node.js setTimeout limit (~596h). Use "0m" to disable or choose a shorter interval.',
       });
     }
 
