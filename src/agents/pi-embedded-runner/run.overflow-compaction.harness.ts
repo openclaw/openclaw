@@ -69,6 +69,19 @@ export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
+export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
+type MockTruncateOversizedToolResultsResult = {
+  truncated: boolean;
+  truncatedCount: number;
+  reason?: string;
+};
+export const mockedTruncateOversizedToolResultsInSession = vi.fn<
+  () => Promise<MockTruncateOversizedToolResultsResult>
+>(async () => ({
+  truncated: false,
+  truncatedCount: 0,
+  reason: "no oversized tool results",
+}));
 
 type MockFailoverErrorDescription = {
   message: string;
@@ -203,6 +216,14 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedRunEmbeddedAttempt.mockReset();
   mockedRunContextEngineMaintenance.mockReset();
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
+  mockedSessionLikelyHasOversizedToolResults.mockReset();
+  mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
+  mockedTruncateOversizedToolResultsInSession.mockReset();
+  mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
+    truncated: false,
+    truncatedCount: 0,
+    reason: "no oversized tool results",
+  });
 
   mockedCoerceToFailoverError.mockReset();
   mockedCoerceToFailoverError.mockReturnValue(null);
@@ -373,6 +394,11 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./run/attempt.js", () => ({
     runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+  }));
+
+  vi.doMock("./tool-result-truncation.js", () => ({
+    sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
+    truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
   }));
 
   vi.doMock("./context-engine-maintenance.js", () => ({
