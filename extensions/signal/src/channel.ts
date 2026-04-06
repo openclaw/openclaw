@@ -27,8 +27,8 @@ import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
-  signalConfigAdapter,
   createSignalPluginBase,
+  signalConfigAdapter,
   signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";

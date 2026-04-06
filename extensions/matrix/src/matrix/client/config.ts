@@ -16,6 +16,7 @@ import {
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-paths.js";
+import type { MatrixStoredCredentials } from "../credentials-read.js";
 import {
   DEFAULT_ACCOUNT_ID,
   assertHttpUrlTargetsPrivateNetwork,
@@ -28,7 +29,6 @@ import {
 } from "./config-runtime-api.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
-import type { MatrixStoredCredentials } from "../credentials-read.js";
 
 type MatrixAuthClientDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;
@@ -53,12 +53,10 @@ const MATRIX_AUTH_REQUEST_RETRY_RE =
   /\b(fetch failed|econnreset|econnrefused|enotfound|etimedout|ehostunreach|enetunreach|eai_again|und_err_|socket hang up|network|headers timeout|body timeout|connect timeout)\b/i;
 
 export function setMatrixAuthClientDepsForTest(
-  deps?:
-    | {
-        MatrixClient: typeof import("../sdk.js").MatrixClient;
-        ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
-      }
-    | undefined,
+  deps?: {
+    MatrixClient: typeof import("../sdk.js").MatrixClient;
+    ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+  },
 ): void {
   matrixAuthClientDepsForTest = deps;
 }

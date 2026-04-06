@@ -489,7 +489,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("drops forged metadata-only mentions before agent routing", async () => {
-    const { handler, recordInboundSession, resolveAgentRoute } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession, _resolveAgentRoute } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       mentionRegexes: [/@bot/i],
       getMemberDisplayName: async () => "sender",
@@ -1383,7 +1383,7 @@ describe("matrix monitor handler pairing account scope", () => {
         sender: "@user:example.org",
         body: "hello there",
         mentions: { room: true },
-      }) as MatrixRawEvent,
+      }),
     );
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();

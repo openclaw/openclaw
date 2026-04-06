@@ -5,7 +5,6 @@ import {
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  runSetupWizardFinalize,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 

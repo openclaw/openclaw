@@ -29,15 +29,15 @@ async function settleTimers<T>(promise: Promise<T>): Promise<T> {
 
 function mockResponse(statusCode: number, body: string) {
   const httpsRequest = vi.mocked(https.request);
-  httpsRequest.mockImplementation((_url: any, _opts: any, callback: any) => {
-    const res = new EventEmitter() as any;
+  httpsRequest.mockImplementation((_url: unknown, _opts: unknown, callback: unknown) => {
+    const res = new EventEmitter() as unknown;
     res.statusCode = statusCode;
     process.nextTick(() => {
       callback(res);
       res.emit("data", Buffer.from(body));
       res.emit("end");
     });
-    const req = new EventEmitter() as any;
+    const req = new EventEmitter() as unknown;
     req.write = vi.fn();
     req.end = vi.fn();
     req.destroy = vi.fn();
@@ -156,16 +156,16 @@ function mockUserListResponseImpl(
   users: Array<{ user_id: number; username: string; nickname: string }>,
   once: boolean,
 ) {
-  const httpsGet = vi.mocked((https as any).get);
-  const impl = (_url: any, _opts: any, callback: any) => {
-    const res = new EventEmitter() as any;
+  const httpsGet = vi.mocked((https as unknown).get);
+  const impl = (_url: unknown, _opts: unknown, callback: unknown) => {
+    const res = new EventEmitter() as unknown;
     res.statusCode = 200;
     process.nextTick(() => {
       callback(res);
       res.emit("data", Buffer.from(JSON.stringify({ success: true, data: { users } })));
       res.emit("end");
     });
-    const req = new EventEmitter() as any;
+    const req = new EventEmitter() as unknown;
     req.destroy = vi.fn();
     return req;
   };
@@ -251,7 +251,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       incomingUrl: baseUrl,
       mutableWebhookUsername: "anyone",
     });
-    const httpsGet = vi.mocked((https as any).get);
+    const httpsGet = vi.mocked((https as unknown).get);
     expect(httpsGet).toHaveBeenCalledWith(
       expect.stringContaining("method=user_list"),
       expect.any(Object),
@@ -274,7 +274,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
 
     expect(result1).toBe(4);
     expect(result2).toBe(9);
-    const httpsGet = vi.mocked((https as any).get);
+    const httpsGet = vi.mocked((https as unknown).get);
     expect(httpsGet).toHaveBeenCalledTimes(2);
   });
 });
@@ -283,9 +283,9 @@ describe("fetchChatUsers", () => {
   installFakeTimerHarness();
 
   it("filters malformed user entries while keeping valid ones", async () => {
-    const httpsGet = vi.mocked((https as any).get);
-    httpsGet.mockImplementation((_url: any, _opts: any, callback: any) => {
-      const res = new EventEmitter() as any;
+    const httpsGet = vi.mocked((https as unknown).get);
+    httpsGet.mockImplementation((_url: unknown, _opts: unknown, callback: unknown) => {
+      const res = new EventEmitter() as unknown;
       res.statusCode = 200;
       process.nextTick(() => {
         callback(res);
@@ -305,7 +305,7 @@ describe("fetchChatUsers", () => {
         );
         res.emit("end");
       });
-      const req = new EventEmitter() as any;
+      const req = new EventEmitter() as unknown;
       req.destroy = vi.fn();
       return req;
     });
@@ -324,7 +324,7 @@ describe("fetchChatUsers", () => {
 
     await fetchChatUsers(freshUrl);
 
-    const httpsGet = vi.mocked((https as any).get);
+    const httpsGet = vi.mocked((https as unknown).get);
     expect(httpsGet.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
   });
 });

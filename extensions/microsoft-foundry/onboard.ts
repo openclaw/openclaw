@@ -132,7 +132,7 @@ export async function selectFoundryResource(
     throw new Error(buildCreateFoundryHint(selectedSub));
   }
   if (resources.length === 1) {
-    const only = resources[0]!;
+    const only = resources[0];
     await ctx.prompter.note(
       `Using ${only.kind === "AIServices" ? "Azure AI Foundry" : "Azure OpenAI"} resource: ${only.accountName}`,
       "Foundry Resource",
@@ -152,7 +152,7 @@ export async function selectFoundryResource(
         .join(" | "),
     })),
   });
-  return resources.find((resource) => resource.id === selectedResourceId) ?? resources[0]!;
+  return resources.find((resource) => resource.id === selectedResourceId) ?? resources[0];
 }
 
 export async function selectFoundryDeployment(
@@ -169,7 +169,7 @@ export async function selectFoundryDeployment(
     );
   }
   if (deployments.length === 1) {
-    const only = deployments[0]!;
+    const only = deployments[0];
     await ctx.prompter.note(`Using deployment: ${only.name}`, "Model Deployment");
     return only;
   }
@@ -184,7 +184,7 @@ export async function selectFoundryDeployment(
     })),
   });
   return (
-    deployments.find((deployment) => deployment.name === selectedDeploymentName) ?? deployments[0]!
+    deployments.find((deployment) => deployment.name === selectedDeploymentName) ?? deployments[0]
   );
 }
 
@@ -247,7 +247,9 @@ async function promptEndpointAndModelBase(
       ...(options?.endpointInitialValue ? { initialValue: options.endpointInitialValue } : {}),
       validate: (v) => {
         const val = String(v ?? "").trim();
-        if (!val) return "Endpoint URL is required";
+        if (!val) {
+          return "Endpoint URL is required";
+        }
         try {
           new URL(val);
         } catch {
@@ -264,7 +266,9 @@ async function promptEndpointAndModelBase(
       placeholder: "gpt-4o",
       validate: (v) => {
         const val = String(v ?? "").trim();
-        if (!val) return "Model ID is required";
+        if (!val) {
+          return "Model ID is required";
+        }
         return undefined;
       },
     }),

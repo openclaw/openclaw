@@ -13,14 +13,14 @@ function createNostrProfileHttpHandler() {
 }
 
 function getNostrRuntime() {
-  return loadBundledEntryExportSync<() => any>(import.meta.url, {
+  return loadBundledEntryExportSync<() => unknown>(import.meta.url, {
     specifier: "./api.js",
     exportName: "getNostrRuntime",
   })();
 }
 
 function resolveNostrAccount(params: { cfg: unknown; accountId: string }) {
-  return loadBundledEntryExportSync<(params: { cfg: unknown; accountId: string }) => any>(
+  return loadBundledEntryExportSync<(params: { cfg: unknown; accountId: string }) => unknown>(
     import.meta.url,
     {
       specifier: "./api.js",

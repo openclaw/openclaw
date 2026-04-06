@@ -3,12 +3,12 @@ import {
   ChannelType,
   Command,
   StringSelectMenu,
-  type TopLevelComponents,
   type AutocompleteInteraction,
   type ButtonInteraction,
   type CommandInteraction,
   type CommandOptions,
   type StringSelectMenuInteraction,
+  type TopLevelComponents,
 } from "@buape/carbon";
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
@@ -45,8 +45,7 @@ import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
@@ -54,13 +53,13 @@ import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
-  resolveDiscordChannelPolicyCommandAuthorizer,
-  resolveGroupDmAllow,
-  resolveDiscordChannelConfigWithFallback,
   resolveDiscordAllowListMatch,
+  resolveDiscordChannelConfigWithFallback,
+  resolveDiscordChannelPolicyCommandAuthorizer,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
+  resolveGroupDmAllow,
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";

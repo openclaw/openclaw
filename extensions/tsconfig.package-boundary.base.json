@@ -1,10 +1,9 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "baseUrl": "..",
     "ignoreDeprecations": "6.0",
     "paths": {
-      "@openclaw/plugin-sdk/*": ["packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"]
+      "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"]
     }
   }
 }

@@ -5,8 +5,7 @@ import type {
   StringSelectMenuInteraction,
 } from "@buape/carbon";
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";

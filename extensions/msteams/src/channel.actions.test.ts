@@ -109,7 +109,7 @@ async function runAction(params: {
     params: params.params ?? {},
     mediaLocalRoots: params.mediaLocalRoots,
     toolContext: params.toolContext,
-  } as any);
+  } as unknown);
 }
 
 async function expectActionError(
@@ -226,7 +226,7 @@ describe("msteamsPlugin message actions", () => {
               tenantId: "tenant-id",
             },
           },
-        } as any,
+        } as unknown,
       })?.actions,
     ).toContain("upload-file");
   });

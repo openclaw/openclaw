@@ -130,7 +130,9 @@ export function isBotMentioned(
  * "~bot-ship /status" → "/status"
  */
 export function stripBotMention(messageText: string, botShipName: string): string {
-  if (!messageText || !botShipName) return messageText;
+  if (!messageText || !botShipName) {
+    return messageText;
+  }
   return messageText.replace(normalizeShip(botShipName), "").trim();
 }
 

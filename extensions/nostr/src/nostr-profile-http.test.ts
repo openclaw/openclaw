@@ -49,7 +49,7 @@ function createMockRequest(
   const req = new IncomingMessage(socket);
   req.method = method;
   req.url = url;
-  req.headers = { host: "localhost:3000", ...(opts?.headers ?? {}) };
+  req.headers = { host: "localhost:3000", ...opts?.headers };
 
   if (body) {
     const bodyStr = JSON.stringify(body);
@@ -178,14 +178,14 @@ describe("nostr-profile-http", () => {
 
   describe("route matching", () => {
     it("returns false for non-nostr paths", async () => {
-      const { res, run } = createProfileHttpHarness("GET", "/api/channels/telegram/profile");
+      const { _res, run } = createProfileHttpHarness("GET", "/api/channels/telegram/profile");
       const result = await run();
 
       expect(result).toBe(false);
     });
 
     it("returns false for paths without accountId", async () => {
-      const { res, run } = createProfileHttpHarness("GET", "/api/channels/nostr/");
+      const { _res, run } = createProfileHttpHarness("GET", "/api/channels/nostr/");
       const result = await run();
 
       expect(result).toBe(false);

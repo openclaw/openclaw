@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
-import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
+import type { ResolvedFeishuAccount } from "./types.js";
 
 type CreateFeishuClient = typeof import("./client.js").createFeishuClient;
 type CreateFeishuWSClient = typeof import("./client.js").createFeishuWSClient;

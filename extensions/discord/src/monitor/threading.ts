@@ -672,3 +672,34 @@ export function resolveDiscordReplyDeliveryPlan(params: {
   });
   return { deliverTarget, replyTarget, replyReference };
 }
+/**
+ * Extract text from forwarded message snapshots for thread starter resolution.
+ * Discord forwarded messages have empty `content` and store the original text
+ * in `message_snapshots[0].message.content`.
+ */
+function resolveStarterForwardedText(
+  snapshots?: Array<{
+    message?: {
+      content?: string | null;
+      attachments?: unknown[];
+      embeds?: Array<{ title?: string | null; description?: string | null }>;
+      sticker_items?: unknown[];
+    };
+  }>,
+): string {
+  if (!Array.isArray(snapshots) || snapshots.length === 0) {
+    return "";
+  }
+  const blocks: string[] = [];
+  for (const snapshot of snapshots) {
+    const msg = snapshot.message;
+    if (!msg) {
+      continue;
+    }
+    const text = msg.content?.trim() || resolveDiscordEmbedText(msg.embeds?.[0]) || "";
+    if (text) {
+      blocks.push(`[Forwarded message]\n${text}`);
+    }
+  }
+  return blocks.join("\n\n");
+}

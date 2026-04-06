@@ -200,7 +200,7 @@ export default defineSingleProviderPluginEntry({
         return extraParams;
       }
       return {
-        ...(extraParams ?? {}),
+        ...extraParams,
         tool_stream: true,
       };
     },

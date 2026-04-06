@@ -1195,9 +1195,17 @@ export async function runMemoryPromoteExplain(
 
       const rich = isRich();
       const lines = [
-        `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(rich, theme.muted, `(${agentId})`)}`,
-        `${colorize(rich, theme.accent, candidate.key)}`,
-        `${colorize(rich, theme.muted, `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
+        `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(
+          rich,
+          theme.muted,
+          "(" + String(agentId) + ")",
+        )}`,
+        colorize(rich, theme.accent, candidate.key),
+        colorize(
+          rich,
+          theme.muted,
+          `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
+        ),
         candidate.snippet,
         colorize(
           rich,

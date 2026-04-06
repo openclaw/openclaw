@@ -26,8 +26,7 @@ import {
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
@@ -36,8 +35,10 @@ import {
   parseDiscordModalCustomIdForCarbon,
 } from "../component-custom-id.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
-import { type DiscordInteractiveHandlerContext } from "../interactive-dispatch.js";
-import { dispatchDiscordPluginInteractiveHandler } from "../interactive-dispatch.js";
+import {
+  dispatchDiscordPluginInteractiveHandler,
+  type DiscordInteractiveHandlerContext,
+} from "../interactive-dispatch.js";
 import { editDiscordComponentMessage } from "../send.components.js";
 import {
   AGENT_BUTTON_KEY,
@@ -56,14 +57,17 @@ import {
   parseDiscordModalId,
   resolveAgentComponentRoute,
   resolveComponentCommandAuthorized,
-  type ComponentInteractionContext,
   resolveDiscordChannelContext,
-  type DiscordChannelContext,
   resolveDiscordInteractionId,
   resolveInteractionContextWithDmAuth,
   resolveInteractionCustomId,
   resolveModalFieldValues,
   resolvePinnedMainDmOwnerFromAllowlist,
+  type AgentComponentContext,
+  type AgentComponentInteraction,
+  type AgentComponentMessageInteraction,
+  type ComponentInteractionContext,
+  type DiscordChannelContext,
 } from "./agent-components-helpers.js";
 import {
   enqueueSystemEvent,
@@ -77,8 +81,8 @@ import {
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
 import {
-  buildDiscordInboundAccessContext,
   buildDiscordGroupSystemPrompt,
+  buildDiscordInboundAccessContext,
 } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
@@ -100,6 +104,10 @@ async function loadComponentsRuntime() {
   return await componentsRuntimePromise;
 }
 
+async function loadReplyRuntime() {
+  replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
+  return await replyRuntimePromise;
+}
 async function loadReplyPipelineRuntime() {
   replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline");
   return await replyPipelineRuntimePromise;

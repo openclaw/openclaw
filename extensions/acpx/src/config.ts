@@ -176,7 +176,7 @@ function resolveConfiguredMcpServers(params: {
   pluginToolsMcpBridge: boolean;
   moduleUrl?: string;
 }): Record<string, McpServerConfig> {
-  const resolved = { ...(params.mcpServers ?? {}) };
+  const resolved = { ...params.mcpServers };
   if (!params.pluginToolsMcpBridge) {
     return resolved;
   }

@@ -40,7 +40,7 @@ const validBody = makeFormBody({
 });
 
 async function runDangerousNameMatchReply(
-  log: { info: any; warn: any; error: any },
+  log: { info: unknown; warn: unknown; error: unknown },
   options: {
     resolvedChatUserId?: number;
     accountIdSuffix: string;
@@ -73,7 +73,7 @@ async function runDangerousNameMatchReply(
 }
 
 describe("createWebhookHandler", () => {
-  let log: { info: any; warn: any; error: any };
+  let log: { info: unknown; warn: unknown; error: unknown };
 
   beforeEach(() => {
     clearSynologyWebhookRateLimiterStateForTest();

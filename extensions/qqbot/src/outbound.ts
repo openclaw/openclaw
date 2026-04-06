@@ -1,46 +1,44 @@
 import * as path from "path";
 import {
   getAccessToken,
+  sendC2CFileMessage,
+  sendC2CImageMessage,
   sendC2CMessage,
+  sendC2CVideoMessage,
+  sendC2CVoiceMessage,
   sendChannelMessage,
   sendDmMessage,
+  sendGroupFileMessage,
+  sendGroupImageMessage,
   sendGroupMessage,
+  sendGroupVideoMessage,
+  sendGroupVoiceMessage,
   sendProactiveC2CMessage,
   sendProactiveGroupMessage,
-  sendC2CImageMessage,
-  sendGroupImageMessage,
-  sendC2CVoiceMessage,
-  sendGroupVoiceMessage,
-  sendC2CVideoMessage,
-  sendGroupVideoMessage,
-  sendC2CFileMessage,
-  sendGroupFileMessage,
 } from "./api.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 import {
-  isAudioFile,
   audioFileToSilkBase64,
-  waitForFile,
+  isAudioFile,
   shouldTranscodeVoice,
+  waitForFile,
 } from "./utils/audio-convert.js";
-import { debugLog, debugError, debugWarn } from "./utils/debug-log.js";
-import { downloadFile } from "./utils/file-utils.js";
+import { debugError, debugLog, debugWarn } from "./utils/debug-log.js";
 import {
   checkFileSize,
-  readFileAsync,
+  downloadFile,
   fileExistsAsync,
-  isLargeFile,
   formatFileSize,
+  readFileAsync,
 } from "./utils/file-utils.js";
 import { normalizeMediaTags } from "./utils/media-tags.js";
 import { decodeCronPayload } from "./utils/payload.js";
 import {
+  getQQBotMediaDir,
   isLocalPath as isLocalFilePath,
   normalizePath,
   resolveQQBotLocalMediaPath,
   sanitizeFileName,
-  getQQBotDataDir,
-  getQQBotMediaDir,
 } from "./utils/platform.js";
 
 // Limit passive replies per message_id within the QQ Bot reply window.
@@ -355,7 +353,9 @@ export async function sendPhoto(
         `${prefix} sendPhoto: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
       const retryResult = await downloadAndRetrySendPhoto(ctx, mediaPath, prefix);
-      if (retryResult) return retryResult;
+      if (retryResult) {
+        return retryResult;
+      }
     }
 
     debugError(`${prefix} sendPhoto failed: ${msg}`);
@@ -875,7 +875,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         sendQueue.push({ type: "text", content: textBefore });
       }
 
-      const tagName = match[1]!.toLowerCase();
+      const tagName = match[1].toLowerCase();
 
       let mediaPath = match[2]?.trim() ?? "";
       if (mediaPath.startsWith("MEDIA:")) {
@@ -921,7 +921,11 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           }
         }
       } catch (decodeErr) {
-        debugError(`[qqbot] sendText: Path decode error: ${decodeErr}`);
+        debugError(
+          `[qqbot] sendText: Path decode error: ${
+            decodeErr instanceof Error ? decodeErr.message : JSON.stringify(decodeErr)
+          }`,
+        );
       }
 
       if (mediaPath) {
@@ -1008,7 +1012,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: (result as { ext_info?: { ref_idx?: string } }).ext_info?.ref_idx,
               };
             }
           } else {
@@ -1283,7 +1287,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
     const result = await sendVoice(target, mediaUrl, formats, transcodeEnabled);
     if (!result.error) {
-      if (text?.trim()) await sendTextAfterMedia(target, text);
+      if (text?.trim()) {
+        await sendTextAfterMedia(target, text);
+      }
       return result;
     }
     // Preserve the voice error and fall back to file send.
@@ -1291,7 +1297,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     debugWarn(`[qqbot] sendMedia: sendVoice failed (${voiceError}), falling back to sendDocument`);
     const fallback = await sendDocument(target, mediaUrl);
     if (!fallback.error) {
-      if (text?.trim()) await sendTextAfterMedia(target, text);
+      if (text?.trim()) {
+        await sendTextAfterMedia(target, text);
+      }
       return fallback;
     }
     return { channel: "qqbot", error: `voice: ${voiceError} | fallback file: ${fallback.error}` };
@@ -1299,7 +1307,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
 
   if (isVideoFile(mediaUrl, mimeType)) {
     const result = await sendVideoMsg(target, mediaUrl);
-    if (!result.error && text?.trim()) await sendTextAfterMedia(target, text);
+    if (!result.error && text?.trim()) {
+      await sendTextAfterMedia(target, text);
+    }
     return result;
   }
 
@@ -1310,13 +1320,17 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     !isVideoFile(mediaUrl, mimeType)
   ) {
     const result = await sendDocument(target, mediaUrl);
-    if (!result.error && text?.trim()) await sendTextAfterMedia(target, text);
+    if (!result.error && text?.trim()) {
+      await sendTextAfterMedia(target, text);
+    }
     return result;
   }
 
   // Default to image handling. sendPhoto already contains URL fallback logic.
   const result = await sendPhoto(target, mediaUrl);
-  if (!result.error && text?.trim()) await sendTextAfterMedia(target, text);
+  if (!result.error && text?.trim()) {
+    await sendTextAfterMedia(target, text);
+  }
   return result;
 }
 
@@ -1334,20 +1348,24 @@ async function sendTextAfterMedia(ctx: MediaTargetContext, text: string): Promis
       await sendDmMessage(token, ctx.targetId, text, ctx.replyToId);
     }
   } catch (err) {
-    debugError(`[qqbot] sendTextAfterMedia failed: ${err}`);
+    debugError(
+      `[qqbot] sendTextAfterMedia failed: ${err instanceof Error ? err.message : JSON.stringify(err)}`,
+    );
   }
 }
 
 /** Extract a lowercase extension from a path or URL, ignoring query and hash segments. */
 function getCleanExt(filePath: string): string {
-  const cleanPath = filePath.split("?")[0]!.split("#")[0]!;
+  const cleanPath = filePath.split("?")[0].split("#")[0];
   return path.extname(cleanPath).toLowerCase();
 }
 
 /** Check whether a file is an image using MIME first and extension as fallback. */
 function isImageFile(filePath: string, mimeType?: string): boolean {
   if (mimeType) {
-    if (mimeType.startsWith("image/")) return true;
+    if (mimeType.startsWith("image/")) {
+      return true;
+    }
   }
   const ext = getCleanExt(filePath);
   return [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"].includes(ext);
@@ -1356,7 +1374,9 @@ function isImageFile(filePath: string, mimeType?: string): boolean {
 /** Check whether a file or URL is a video using MIME first and extension as fallback. */
 function isVideoFile(filePath: string, mimeType?: string): boolean {
   if (mimeType) {
-    if (mimeType.startsWith("video/")) return true;
+    if (mimeType.startsWith("video/")) {
+      return true;
+    }
   }
   const ext = getCleanExt(filePath);
   return [".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv"].includes(ext);
