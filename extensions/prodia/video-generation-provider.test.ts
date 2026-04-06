@@ -124,6 +124,61 @@ describe("prodia video generation provider", () => {
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 
+  it("parses multipart/form-data responses with job and output parts", async () => {
+    const boundary = "----ProdiaBoundary";
+    const jobJson = JSON.stringify({ id: "job-42", state: { current: "completed" } });
+    const videoBytes = Buffer.from("fake-multipart-video");
+    const body = [
+      `------ProdiaBoundary\r\n`,
+      `Content-Disposition: form-data; name="job"\r\n`,
+      `Content-Type: application/json\r\n\r\n`,
+      `${jobJson}\r\n`,
+      `------ProdiaBoundary\r\n`,
+      `Content-Disposition: form-data; name="output"\r\n`,
+      `Content-Type: video/mp4\r\n\r\n`,
+    ].join("");
+    const bodyBuffer = Buffer.concat([
+      Buffer.from(body),
+      videoBytes,
+      Buffer.from("\r\n------ProdiaBoundary--"),
+    ]);
+
+    fetchWithTimeoutMock.mockResolvedValue(
+      new Response(bodyBuffer, {
+        status: 200,
+        headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      }),
+    );
+
+    const provider = buildProdiaVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "prodia",
+      model: "veo-fast",
+      prompt: "multipart test",
+      cfg: {},
+    });
+
+    expect(result.videos).toHaveLength(1);
+    expect(result.videos[0].buffer.toString()).toBe("fake-multipart-video");
+    expect(result.metadata).toEqual(
+      expect.objectContaining({ jobId: "job-42", state: "completed" }),
+    );
+  });
+
+  it("rejects URL-only image input", async () => {
+    const provider = buildProdiaVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "prodia",
+        model: "veo-fast",
+        prompt: "animate this",
+        cfg: {},
+        inputImages: [{ url: "https://example.com/img.png" }],
+      }),
+    ).rejects.toThrow("Prodia image-to-video requires a local image buffer");
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
   it("throws when API key is missing", async () => {
     resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "" });
     const provider = buildProdiaVideoGenerationProvider();

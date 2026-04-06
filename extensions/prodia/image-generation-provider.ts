@@ -141,7 +141,7 @@ async function parseProdiaImageResponse(
     if (idx === -1) {
       break;
     }
-    if (parts.length > 0) {
+    if (start > 0) {
       parts.push(raw.subarray(start, idx));
     }
     start = idx + boundaryBytes.length;

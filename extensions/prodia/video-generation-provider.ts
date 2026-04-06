@@ -135,7 +135,7 @@ async function parseMultipartJobResponse(
     if (idx === -1) {
       break;
     }
-    if (parts.length > 0) {
+    if (start > 0) {
       // Capture from previous boundary end to this boundary start.
       parts.push(raw.subarray(start, idx));
     }
@@ -244,25 +244,22 @@ export function buildProdiaVideoGenerationProvider(): VideoGenerationProvider {
       // For text-to-video, we use application/json.
       if (hasImage) {
         const image = req.inputImages![0];
-        const imageBuffer = image.buffer;
-        const imageUrl = image.url?.trim();
-
-        if (!imageBuffer && !imageUrl) {
-          throw new Error("Prodia image-to-video input is missing image data.");
+        if (!image.buffer) {
+          throw new Error(
+            "Prodia image-to-video requires a local image buffer; URL-only input is not supported.",
+          );
         }
 
         const jobPayload = JSON.stringify({ type: jobType, config });
         const formData = new FormData();
         formData.append("job", new Blob([jobPayload], { type: "application/json" }));
 
-        if (imageBuffer) {
-          const mimeType = image.mimeType?.trim() || "image/png";
-          formData.append(
-            "input",
-            new Blob([new Uint8Array(imageBuffer)], { type: mimeType }),
-            image.fileName || "input.png",
-          );
-        }
+        const mimeType = image.mimeType?.trim() || "image/png";
+        formData.append(
+          "input",
+          new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+          image.fileName || "input.png",
+        );
 
         const { baseUrl: resolvedBaseUrl, headers } = resolveProviderHttpRequestConfig({
           baseUrl,

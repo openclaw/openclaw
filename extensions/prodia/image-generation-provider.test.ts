@@ -134,6 +134,47 @@ describe("prodia image generation provider", () => {
     expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   });
 
+  it("parses multipart/form-data responses with job and output parts", async () => {
+    const boundary = "----ProdiaBoundary";
+    const jobJson = JSON.stringify({ id: "job-99", state: { current: "completed" } });
+    const imageBytes = Buffer.from("fake-multipart-png");
+    const body = [
+      `------ProdiaBoundary\r\n`,
+      `Content-Disposition: form-data; name="job"\r\n`,
+      `Content-Type: application/json\r\n\r\n`,
+      `${jobJson}\r\n`,
+      `------ProdiaBoundary\r\n`,
+      `Content-Disposition: form-data; name="output"\r\n`,
+      `Content-Type: image/png\r\n\r\n`,
+    ].join("");
+    const bodyBuffer = Buffer.concat([
+      Buffer.from(body),
+      imageBytes,
+      Buffer.from("\r\n------ProdiaBoundary--"),
+    ]);
+
+    fetchWithTimeoutMock.mockResolvedValue(
+      new Response(bodyBuffer, {
+        status: 200,
+        headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      }),
+    );
+
+    const provider = buildProdiaImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "prodia",
+      model: "flux-fast-schnell",
+      prompt: "multipart test",
+      cfg: {},
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0].buffer.toString()).toBe("fake-multipart-png");
+    expect(result.metadata).toEqual(
+      expect.objectContaining({ jobId: "job-99", state: "completed" }),
+    );
+  });
+
   it("throws when API key is missing", async () => {
     resolveApiKeyForProviderMock.mockResolvedValueOnce({ apiKey: "" });
     const provider = buildProdiaImageGenerationProvider();
