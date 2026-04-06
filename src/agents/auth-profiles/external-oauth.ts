@@ -1,12 +1,12 @@
-import { resolveExternalOAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
-import type { ProviderExternalOAuthProfile } from "../../plugins/types.js";
+import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
+import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-type ExternalOAuthProfileMap = Map<string, ProviderExternalOAuthProfile>;
+type ExternalOAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 
 function normalizeExternalOAuthProfile(
-  profile: ProviderExternalOAuthProfile,
-): ProviderExternalOAuthProfile | null {
+  profile: ProviderExternalAuthProfile,
+): ProviderExternalAuthProfile | null {
   if (!profile?.profileId || !profile.credential) {
     return null;
   }
@@ -22,7 +22,7 @@ function resolveExternalOAuthProfileMap(params: {
   env?: NodeJS.ProcessEnv;
 }): ExternalOAuthProfileMap {
   const env = params.env ?? process.env;
-  const profiles = resolveExternalOAuthProfilesWithPlugins({
+  const profiles = resolveExternalAuthProfilesWithPlugins({
     env,
     context: {
       config: undefined,
@@ -56,8 +56,7 @@ function oauthCredentialMatches(a: OAuthCredential, b: OAuthCredential): boolean
     a.displayName === b.displayName &&
     a.enterpriseUrl === b.enterpriseUrl &&
     a.projectId === b.projectId &&
-    a.accountId === b.accountId &&
-    a.managedBy === b.managedBy
+    a.accountId === b.accountId
   );
 }
 

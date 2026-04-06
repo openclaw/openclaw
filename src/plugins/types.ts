@@ -1051,12 +1051,15 @@ export type ProviderResolveExternalOAuthProfilesContext = {
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
 };
+export type ProviderResolveExternalAuthProfilesContext =
+  ProviderResolveExternalOAuthProfilesContext;
 
 export type ProviderExternalOAuthProfile = {
   profileId: string;
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
+export type ProviderExternalAuthProfile = ProviderExternalOAuthProfile;
 
 export type ProviderDeferSyntheticProfileAuthContext = {
   config?: OpenClawConfig;
@@ -1536,11 +1539,23 @@ export type ProviderPlugin = {
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
   /**
-   * Provider-owned external OAuth profile discovery.
+   * Provider-owned external auth profile discovery.
    *
-   * Use this when credentials are managed by an external tool and should be
-   * visible to runtime auth resolution without being written back into
-   * `auth-profiles.json` by core.
+   * Use this when credentials are managed by an external tool and should be visible
+   * to runtime auth resolution without being written back into `auth-profiles.json`
+   * by core.
+   */
+  resolveExternalAuthProfiles?: (
+    ctx: ProviderResolveExternalAuthProfilesContext,
+  ) =>
+    | Array<ProviderExternalAuthProfile>
+    | ReadonlyArray<ProviderExternalAuthProfile>
+    | null
+    | undefined;
+  /**
+   * @deprecated Use `resolveExternalAuthProfiles`.
+   *
+   * Kept for compatibility with existing provider plugins.
    */
   resolveExternalOAuthProfiles?: (
     ctx: ProviderResolveExternalOAuthProfilesContext,

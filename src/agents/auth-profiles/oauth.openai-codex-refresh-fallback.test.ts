@@ -214,7 +214,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
             access: "expired-access-token",
             refresh: "expired-refresh-token",
             expires: Date.now() - 60_000,
-            managedBy: "codex-cli",
           },
         },
       },
@@ -253,7 +252,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
             access: "expired-access-token",
             refresh: "expired-refresh-token",
             expires: Date.now() - 60_000,
-            managedBy: "codex-cli",
           },
         },
       },
@@ -296,7 +294,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       access: "rotated-cli-access-token",
       refresh: "rotated-cli-refresh-token",
       accountId: "acct-rotated",
-      managedBy: "codex-cli",
     });
     expect(persisted.profiles[profileId]).not.toEqual(
       expect.objectContaining({

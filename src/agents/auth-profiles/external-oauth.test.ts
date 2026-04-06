@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderExternalOAuthProfile } from "../../plugins/types.js";
+import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-const resolveExternalOAuthProfilesWithPluginsMock = vi.fn<
-  (params: unknown) => ProviderExternalOAuthProfile[]
+const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
+  (params: unknown) => ProviderExternalAuthProfile[]
 >(() => []);
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
-  resolveExternalOAuthProfilesWithPlugins: (params: unknown) =>
-    resolveExternalOAuthProfilesWithPluginsMock(params),
+  resolveExternalAuthProfilesWithPlugins: (params: unknown) =>
+    resolveExternalAuthProfilesWithPluginsMock(params),
 }));
 
 function createStore(profiles: AuthProfileStore["profiles"] = {}): AuthProfileStore {
@@ -22,18 +22,17 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
     access: "access-token",
     refresh: "refresh-token",
     expires: 123,
-    managedBy: "codex-cli",
     ...overrides,
   };
 }
 
 describe("auth external oauth helpers", () => {
   beforeEach(() => {
-    resolveExternalOAuthProfilesWithPluginsMock.mockReset();
+    resolveExternalAuthProfilesWithPluginsMock.mockReset();
   });
 
   it("overlays provider-managed runtime oauth profiles onto the store", async () => {
-    resolveExternalOAuthProfilesWithPluginsMock.mockReturnValueOnce([
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
       {
         profileId: "openai-codex:default",
         credential: createCredential(),
@@ -52,7 +51,7 @@ describe("auth external oauth helpers", () => {
 
   it("omits exact runtime-only overlays from persisted store writes", async () => {
     const credential = createCredential();
-    resolveExternalOAuthProfilesWithPluginsMock.mockReturnValueOnce([
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
       {
         profileId: "openai-codex:default",
         credential,
@@ -71,7 +70,7 @@ describe("auth external oauth helpers", () => {
 
   it("keeps persisted copies when the external overlay is marked persisted", async () => {
     const credential = createCredential();
-    resolveExternalOAuthProfilesWithPluginsMock.mockReturnValueOnce([
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
       {
         profileId: "openai-codex:default",
         credential,
@@ -91,7 +90,7 @@ describe("auth external oauth helpers", () => {
 
   it("keeps stale local copies when runtime overlay no longer matches", async () => {
     const credential = createCredential();
-    resolveExternalOAuthProfilesWithPluginsMock.mockReturnValueOnce([
+    resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([
       {
         profileId: "openai-codex:default",
         credential: createCredential({ access: "fresh-access-token" }),

@@ -49,7 +49,7 @@ let resolveProviderDefaultThinkingLevel: typeof import("./provider-runtime.js").
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderReplayPolicyWithPlugin: typeof import("./provider-runtime.js").resolveProviderReplayPolicyWithPlugin;
-let resolveExternalOAuthProfilesWithPlugins: typeof import("./provider-runtime.js").resolveExternalOAuthProfilesWithPlugins;
+let resolveExternalAuthProfilesWithPlugins: typeof import("./provider-runtime.js").resolveExternalAuthProfilesWithPlugins;
 let resolveProviderSyntheticAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderSyntheticAuthWithPlugin;
 let shouldDeferProviderSyntheticProfileAuthWithPlugin: typeof import("./provider-runtime.js").shouldDeferProviderSyntheticProfileAuthWithPlugin;
 let sanitizeProviderReplayHistoryWithPlugin: typeof import("./provider-runtime.js").sanitizeProviderReplayHistoryWithPlugin;
@@ -257,7 +257,7 @@ describe("provider-runtime", () => {
       resolveProviderModernModelRef,
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderReplayPolicyWithPlugin,
-      resolveExternalOAuthProfilesWithPlugins,
+      resolveExternalAuthProfilesWithPlugins,
       resolveProviderSyntheticAuthWithPlugin,
       shouldDeferProviderSyntheticProfileAuthWithPlugin,
       sanitizeProviderReplayHistoryWithPlugin,
@@ -646,7 +646,7 @@ describe("provider-runtime", () => {
           },
           createEmbeddingProvider,
           resolveSyntheticAuth,
-          resolveExternalOAuthProfiles: ({ store }) =>
+          resolveExternalAuthProfiles: ({ store }) =>
             store.profiles["demo:managed"]
               ? []
               : [
@@ -659,7 +659,6 @@ describe("provider-runtime", () => {
                       access: "external-access",
                       refresh: "external-refresh",
                       expires: Date.now() + 60_000,
-                      managedBy: "demo-cli",
                     },
                   },
                 ],
@@ -1056,7 +1055,7 @@ describe("provider-runtime", () => {
       },
       {
         actual: () =>
-          resolveExternalOAuthProfilesWithPlugins({
+          resolveExternalAuthProfilesWithPlugins({
             env: process.env,
             context: {
               env: process.env,
@@ -1073,7 +1072,6 @@ describe("provider-runtime", () => {
               access: "external-access",
               refresh: "external-refresh",
               expires: expect.any(Number),
-              managedBy: "demo-cli",
             },
           },
         ],

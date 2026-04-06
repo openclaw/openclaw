@@ -4,7 +4,8 @@ import { confirm, select, text } from "@clack/prompts";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import { resolveAuthStatePath, resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import { coerceAuthProfileState, mergeAuthProfileState } from "../agents/auth-profiles/state.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
@@ -289,11 +290,7 @@ function normalizeAuthStoreForConfigure(
   return {
     version,
     profiles: raw.profiles as AuthProfileStore["profiles"],
-    ...(isRecord(raw.order) ? { order: raw.order as AuthProfileStore["order"] } : {}),
-    ...(isRecord(raw.lastGood) ? { lastGood: raw.lastGood as AuthProfileStore["lastGood"] } : {}),
-    ...(isRecord(raw.usageStats)
-      ? { usageStats: raw.usageStats as AuthProfileStore["usageStats"] }
-      : {}),
+    ...coerceAuthProfileState(raw),
   };
 }
 
@@ -309,7 +306,18 @@ function loadAuthProfileStoreForConfigure(params: {
       `Cannot run interactive secrets configure because ${storePath} could not be read: ${parsed.error}`,
     );
   }
-  return normalizeAuthStoreForConfigure(parsed.value, storePath);
+  const store = normalizeAuthStoreForConfigure(parsed.value, storePath);
+  const statePath = resolveAuthStatePath(agentDir);
+  const parsedState = readJsonObjectIfExists(statePath);
+  if (parsedState.error) {
+    throw new Error(
+      `Cannot run interactive secrets configure because ${statePath} could not be read: ${parsedState.error}`,
+    );
+  }
+  return {
+    ...store,
+    ...mergeAuthProfileState(store, coerceAuthProfileState(parsedState.value)),
+  };
 }
 
 async function promptNewAuthProfileCandidate(agentId: string): Promise<ConfigureCandidate> {

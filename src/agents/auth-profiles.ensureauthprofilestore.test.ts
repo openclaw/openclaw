@@ -380,7 +380,6 @@ describe("ensureAuthProfileStore", () => {
         provider: "openai-codex",
         access: "codex-access-token",
         refresh: "codex-refresh-token",
-        managedBy: "codex-cli",
       });
 
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
