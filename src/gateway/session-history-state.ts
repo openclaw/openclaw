@@ -97,12 +97,13 @@ export class SessionHistorySseState {
     maxChars?: number;
     limit?: number;
     cursor?: string;
+    initialRawMessages?: unknown[];
   }) {
     this.target = params.target;
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
     this.cursor = params.cursor;
-    const rawMessages = this.readRawMessages();
+    const rawMessages = params.initialRawMessages ?? this.readRawMessages();
     this.sentHistory = sanitizeRawTranscriptMessages({
       rawMessages,
       maxChars: this.maxChars,
