@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -796,6 +797,18 @@ export async function recordShortTermRecalls(params: {
 
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.recorded",
+      timestamp: nowIso,
+      query,
+      resultCount: relevant.length,
+      results: relevant.map((result) => ({
+        path: normalizeMemoryPath(result.path),
+        startLine: Math.max(1, Math.floor(result.startLine)),
+        endLine: Math.max(1, Math.floor(result.endLine)),
+        score: clampScore(result.score),
+      })),
+    });
   });
 }
 
@@ -1297,6 +1310,20 @@ export async function applyShortTermPromotions(
     }
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.promotion.applied",
+      timestamp: nowIso,
+      memoryPath,
+      applied: rehydratedSelected.length,
+      candidates: rehydratedSelected.map((candidate) => ({
+        key: candidate.key,
+        path: candidate.path,
+        startLine: candidate.startLine,
+        endLine: candidate.endLine,
+        score: candidate.score,
+        recallCount: candidate.recallCount,
+      })),
+    });
 
     return {
       memoryPath,

@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "../../../src/plugins/memory-state.js";
+import {
   getMemorySearchManagerMockCalls,
   getReadAgentMemoryFileMockCalls,
   resetMemoryToolMockState,
@@ -41,6 +45,7 @@ async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Pro
 }
 
 beforeEach(() => {
+  clearMemoryPluginState();
   resetMemoryToolMockState({
     backend: "builtin",
     searchImpl: async () => [
@@ -207,5 +212,100 @@ describe("memory tools", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("searches registered wiki corpus supplements without calling memory search", async () => {
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "entities/alpha.md",
+          title: "Alpha",
+          kind: "entity",
+          score: 4,
+          snippet: "Alpha wiki entry",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_wiki_only", { query: "alpha", corpus: "wiki" });
+
+    expect(result.details).toMatchObject({
+      results: [
+        {
+          corpus: "wiki",
+          path: "entities/alpha.md",
+          title: "Alpha",
+          kind: "entity",
+          score: 4,
+          snippet: "Alpha wiki entry",
+        },
+      ],
+    });
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("merges memory and wiki corpus search results for corpus=all", async () => {
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [
+        {
+          corpus: "wiki",
+          path: "entities/alpha.md",
+          title: "Alpha",
+          kind: "entity",
+          score: 1.1,
+          snippet: "Alpha wiki entry",
+        },
+      ],
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("call_all_corpus", { query: "alpha", corpus: "all" });
+    const details = result.details as { results: Array<{ corpus: string; path: string }> };
+
+    expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
+      ["wiki", "entities/alpha.md"],
+      ["memory", "MEMORY.md"],
+    ]);
+    expect(getMemorySearchManagerMockCalls()).toBe(1);
+  });
+
+  it("falls back to a wiki corpus supplement for memory_get corpus=all", async () => {
+    setMemoryReadFileImpl(async () => {
+      throw new Error("path required");
+    });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => ({
+        corpus: "wiki",
+        path: "entities/alpha.md",
+        title: "Alpha",
+        kind: "entity",
+        content: "Alpha wiki entry",
+        fromLine: 3,
+        lineCount: 5,
+      }),
+    });
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_get_all_fallback", {
+      path: "entities/alpha.md",
+      from: 3,
+      lines: 5,
+      corpus: "all",
+    });
+
+    expect(result.details).toEqual({
+      corpus: "wiki",
+      path: "entities/alpha.md",
+      title: "Alpha",
+      kind: "entity",
+      text: "Alpha wiki entry",
+      fromLine: 3,
+      lineCount: 5,
+    });
   });
 });
