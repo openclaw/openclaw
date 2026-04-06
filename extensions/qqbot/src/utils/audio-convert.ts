@@ -207,26 +207,6 @@ type QQBotTtsBlock = QQBotTtsProviderConfig & {
   speed?: number;
 };
 
-type QQBotMessagesTtsConfig = {
-  auto?: string;
-  enabled?: boolean;
-  provider?: string;
-} & Record<string, unknown>;
-
-type QQBotTtsConfigRoot = {
-  channels?: {
-    qqbot?: {
-      tts?: QQBotTtsBlock & { enabled?: boolean; provider?: string };
-    };
-  };
-  models?: {
-    providers?: Record<string, QQBotTtsProviderConfig>;
-  };
-  messages?: {
-    tts?: QQBotMessagesTtsConfig;
-  };
-};
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
     ? (value as Record<string, unknown>)
