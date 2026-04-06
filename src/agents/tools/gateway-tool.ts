@@ -96,6 +96,32 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
   return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
+function isPluginEntryDangerousFlag(
+  flag: string,
+): flag is `plugins.entries.${string}.config.${string}` {
+  return /^plugins\.entries\.[^.]+\.config\./.test(flag);
+}
+
+function getPluginIdFromDangerousFlag(flag: `plugins.entries.${string}.config.${string}`): string {
+  return flag.split(".")[2] ?? "";
+}
+
+function isPluginDangerousFlagActive(
+  config: Record<string, unknown>,
+  flag: `plugins.entries.${string}.config.${string}`,
+): boolean {
+  if ((config.plugins as { enabled?: unknown } | undefined)?.enabled === false) {
+    return false;
+  }
+  const pluginId = getPluginIdFromDangerousFlag(flag);
+  const pluginEntry = (config.plugins as { entries?: Record<string, unknown> } | undefined)
+    ?.entries?.[pluginId];
+  if (!pluginEntry || typeof pluginEntry !== "object" || Array.isArray(pluginEntry)) {
+    return false;
+  }
+  return (pluginEntry as { enabled?: unknown }).enabled !== false;
+}
+
 type DangerousFlagToken = {
   fingerprintIdentity?: string;
   legacyMappingIdentity?: string;
@@ -200,6 +226,7 @@ function collectNewlyEnabledDangerousConfigFlags(
   currentConfig: Record<string, unknown>,
   nextConfig: Record<string, unknown>,
 ): string[] {
+  const currentFlags = collectEnabledInsecureOrDangerousFlags(currentConfig as OpenClawConfig);
   const remainingCurrentTokens = collectEnabledInsecureOrDangerousFlags(
     currentConfig as OpenClawConfig,
   ).map((flag) => createDangerousConfigFlagToken(flag, currentConfig));
@@ -216,21 +243,37 @@ function collectNewlyEnabledDangerousConfigFlags(
       remainingCurrentTokens.push(createDangerousConfigFlagToken(key, currentConfig));
     }
   }
-  const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig).filter(
+  const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig);
+  const newlyEnabledFlags = nextFlags.filter(
     (flag) =>
       !takeMatchingDangerousFlag(
         remainingCurrentTokens,
         createDangerousConfigFlagToken(flag, nextConfig),
       ),
   );
+  const currentActivePluginFlags = new Set(
+    currentFlags.filter(
+      (flag): flag is `plugins.entries.${string}.config.${string}` =>
+        isPluginEntryDangerousFlag(flag) && isPluginDangerousFlagActive(currentConfig, flag),
+    ),
+  );
+  for (const flag of nextFlags) {
+    if (!isPluginEntryDangerousFlag(flag) || !isPluginDangerousFlagActive(nextConfig, flag)) {
+      continue;
+    }
+    if (currentActivePluginFlags.has(flag) || newlyEnabledFlags.includes(flag)) {
+      continue;
+    }
+    newlyEnabledFlags.push(flag);
+  }
   if (
     getValueAtPath(currentConfig, "tools.exec.applyPatch.workspaceOnly") !== false &&
     getValueAtPath(nextConfig, "tools.exec.applyPatch.workspaceOnly") === false &&
-    !nextFlags.includes("tools.exec.applyPatch.workspaceOnly=false")
+    !newlyEnabledFlags.includes("tools.exec.applyPatch.workspaceOnly=false")
   ) {
-    nextFlags.push("tools.exec.applyPatch.workspaceOnly=false");
+    newlyEnabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
   }
-  return nextFlags;
+  return newlyEnabledFlags;
 }
 
 function assertGatewayConfigMutationAllowed(params: {
