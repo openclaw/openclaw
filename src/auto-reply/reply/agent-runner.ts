@@ -18,8 +18,8 @@ import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { TurnSummaryBuilder } from "../../infra/turn-summary.js";
+import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -1090,6 +1090,44 @@ export async function runReplyAgent(params: {
   let runFollowupTurn = queuedRunFollowupTurn;
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied = false;
+  let turnId: string | undefined;
+  let turnBuilder: TurnSummaryBuilder | undefined;
+  let didEmitTurnCompleted = false;
+  const emitTurnCompleted = (params?: {
+    provider?: string;
+    model?: string;
+    usage?: NormalizedUsage;
+    outcome?: "success" | "error" | "aborted" | "compaction";
+    error?: string;
+  }) => {
+    if (!isDiagnosticsEnabled(cfg) || didEmitTurnCompleted || !turnId || !turnBuilder) {
+      return;
+    }
+    if (params?.usage) {
+      turnBuilder.setUsage(params.usage);
+    }
+    if (params?.outcome || params?.error) {
+      turnBuilder.setOutcome(params.outcome ?? "error", params.error);
+    }
+    const summary = turnBuilder.freeze();
+    didEmitTurnCompleted = true;
+    emitDiagnosticEvent({
+      type: "turn.completed",
+      turnId,
+      runId: opts?.runId ?? "unknown",
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      provider: params?.provider ?? followupRun.run.provider,
+      model: params?.model ?? followupRun.run.model,
+      durationMs: summary.durationMs ?? 0,
+      iterations: summary.iterations,
+      toolCallCount: summary.toolCalls.length,
+      toolErrors: summary.toolCalls.filter((t) => !t.success).length,
+      outcome: summary.outcome,
+      usage: summary.usage,
+      error: summary.error,
+    });
+  };
 
   try {
     await typingSignals.signalRunStart();
@@ -1187,8 +1225,8 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
-    const turnId = crypto.randomUUID();
-    const turnBuilder = new TurnSummaryBuilder({
+    turnId = crypto.randomUUID();
+    turnBuilder = new TurnSummaryBuilder({
       turnId,
       runId: opts?.runId ?? "unknown",
       sessionKey,
@@ -1208,43 +1246,6 @@ export async function runReplyAgent(params: {
         model: followupRun.run.model,
       });
     }
-
-    let didEmitTurnCompleted = false;
-    const emitTurnCompleted = (params?: {
-      provider?: string;
-      model?: string;
-      usage?: NormalizedUsage;
-      outcome?: "success" | "error" | "aborted" | "compaction";
-      error?: string;
-    }) => {
-      if (!isDiagnosticsEnabled(cfg) || didEmitTurnCompleted) {
-        return;
-      }
-      if (params?.usage) {
-        turnBuilder.setUsage(params.usage);
-      }
-      if (params?.outcome || params?.error) {
-        turnBuilder.setOutcome(params.outcome ?? "error", params.error);
-      }
-      const summary = turnBuilder.freeze();
-      didEmitTurnCompleted = true;
-      emitDiagnosticEvent({
-        type: "turn.completed",
-        turnId,
-        runId: opts?.runId ?? "unknown",
-        sessionKey,
-        sessionId: followupRun.run.sessionId,
-        provider: params?.provider ?? followupRun.run.provider,
-        model: params?.model ?? followupRun.run.model,
-        durationMs: summary.durationMs ?? 0,
-        iterations: summary.iterations,
-        toolCallCount: summary.toolCalls.length,
-        toolErrors: summary.toolCalls.filter((t) => !t.success).length,
-        outcome: summary.outcome,
-        usage: summary.usage,
-        error: summary.error,
-      });
-    };
 
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
