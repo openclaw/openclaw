@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
+} from "../../agents/agent-scope.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
   resolveAgentAvatar,
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -44,6 +49,10 @@ import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import {
+  loadVoiceWakeRoutingConfig,
+  resolveVoiceWakeRouteByTrigger,
+} from "../../infra/voicewake-routing.js";
 import {
   classifySessionKeyShape,
   isAcpSessionKey,
@@ -104,7 +113,6 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
 
@@ -426,6 +434,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       cleanupBundleMcpOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
+      workspaceDir?: string;
+      voiceWakeTrigger?: string;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
@@ -540,21 +550,19 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
+    const knownAgents = listAgentIds(cfg);
     const agentIdRaw = normalizeOptionalString(request.agentId) ?? "";
-    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
-    if (agentId) {
-      const knownAgents = listAgentIds(cfg);
-      if (!knownAgents.includes(agentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid agent params: unknown agent id "${request.agentId}"`,
-          ),
-        );
-        return;
-      }
+    let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
+    if (agentId && !knownAgents.includes(agentId)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent params: unknown agent id "${request.agentId}"`,
+        ),
+      );
+      return;
     }
 
     const requestedSessionKeyRaw = normalizeOptionalString(request.sessionKey);
@@ -593,6 +601,76 @@ export const agentHandlers: GatewayRequestHandlers = {
           ),
         );
         return;
+      }
+    }
+    const voiceWakeTrigger = normalizeOptionalString(request.voiceWakeTrigger) ?? "";
+    const replyTo = normalizeOptionalString(request.replyTo) ?? "";
+    const to = normalizeOptionalString(request.to) ?? "";
+    const explicitVoiceWakeSessionTarget =
+      !agentId && requestedSessionKeyRaw
+        ? (() => {
+            const { cfg: sessionCfg, canonicalKey } = loadSessionEntry(requestedSessionKeyRaw);
+            const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
+            const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(sessionCfg));
+            if (routedAgentId !== defaultAgentId) {
+              return true;
+            }
+            const mainSessionKey = resolveAgentMainSessionKey({
+              cfg: sessionCfg,
+              agentId: routedAgentId,
+            });
+            return canonicalKey !== mainSessionKey;
+          })()
+        : false;
+    const canAutoRouteVoiceWake =
+      !agentId &&
+      !explicitVoiceWakeSessionTarget &&
+      !requestedSessionId &&
+      !replyTo &&
+      !to;
+    const hasVoiceWakeTriggerField = Object.prototype.hasOwnProperty.call(
+      request,
+      "voiceWakeTrigger",
+    );
+    if (hasVoiceWakeTriggerField && canAutoRouteVoiceWake) {
+      try {
+        const routingConfig = await loadVoiceWakeRoutingConfig();
+        const route = resolveVoiceWakeRouteByTrigger({
+          trigger: voiceWakeTrigger || undefined,
+          config: routingConfig,
+        });
+        if ("agentId" in route) {
+          if (knownAgents.includes(route.agentId)) {
+            agentId = route.agentId;
+            requestedSessionKey = resolveExplicitAgentSessionKey({
+              cfg,
+              agentId,
+            });
+          } else {
+            context.logGateway.warn(
+              `voicewake routing ignored unknown agentId="${route.agentId}" trigger="${voiceWakeTrigger}"`,
+            );
+          }
+        } else if ("sessionKey" in route) {
+          if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
+            const canonicalRouteSession = loadSessionEntry(route.sessionKey).canonicalKey;
+            const routedAgentId = resolveAgentIdFromSessionKey(canonicalRouteSession);
+            if (knownAgents.includes(routedAgentId)) {
+              requestedSessionKey = canonicalRouteSession;
+              agentId = routedAgentId;
+            } else {
+              context.logGateway.warn(
+                `voicewake routing ignored unknown session agent="${routedAgentId}" sessionKey="${canonicalRouteSession}" trigger="${voiceWakeTrigger}"`,
+              );
+            }
+          } else {
+            context.logGateway.warn(
+              `voicewake routing ignored malformed sessionKey="${route.sessionKey}" trigger="${voiceWakeTrigger}"`,
+            );
+          }
+        }
+      } catch (err) {
+        context.logGateway.warn(`voicewake routing load failed: ${formatForLog(err)}`);
       }
     }
     let resolvedSessionId = requestedSessionId;

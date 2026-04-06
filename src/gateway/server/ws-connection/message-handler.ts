@@ -1,6 +1,10 @@
 import type { IncomingMessage } from "node:http";
-import os from "node:os";
 import type { WebSocket } from "ws";
+import os from "node:os";
+import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { GatewayWsClient } from "../ws-types.js";
 import { loadConfig } from "../../../config/config.js";
 import {
   getBoundDeviceBootstrapProfile,
@@ -33,10 +37,10 @@ import {
 } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
+import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
-import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
@@ -50,8 +54,6 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "../../auth.js";
-import type { GatewayAuthResult } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import {
   buildCanvasScopedHostUrl,
@@ -100,7 +102,6 @@ import {
   TICK_INTERVAL_MS,
 } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -1411,6 +1412,17 @@ export function attachGatewayWsMessageHandler(params: {
             .catch((err) =>
               logGateway.warn(
                 `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+              ),
+            );
+          void loadVoiceWakeRoutingConfig()
+            .then((routing) => {
+              context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
+                config: routing,
+              });
+            })
+            .catch((err) =>
+              logGateway.warn(
+                `voicewake routing snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
             );
         }

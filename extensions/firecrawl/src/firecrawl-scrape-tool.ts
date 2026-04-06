@@ -7,9 +7,9 @@ import {
 import { Type } from "typebox";
 import { runFirecrawlScrape } from "./firecrawl-client.js";
 
-function optionalStringEnum<const T extends readonly string[]>(
+function optionalStringEnum<T extends readonly string[]>(
   values: T,
-  options: { description?: string } = {},
+  options: { description?: string; title?: string; default?: T[number] } = {},
 ) {
   return Type.Optional(
     Type.Unsafe<T[number]>({
