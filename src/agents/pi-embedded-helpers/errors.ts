@@ -564,6 +564,9 @@ function classifyFailoverClassificationFromHttpStatus(
   if (status === 408) {
     return toReasonClassification("timeout");
   }
+  if (status === 404) {
+    return messageReason === "model_not_found" ? messageClassification : null;
+  }
   if (status === 410) {
     // HTTP 410 is only a true session-expiry signal when the payload says the
     // remote session/conversation is gone. Generic 410/no-body responses from
@@ -1205,6 +1208,7 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     lower.includes("unknown model") ||
     lower.includes("model not found") ||
     lower.includes("model_not_found") ||
+    lower.includes("no endpoints found") ||
     lower.includes("not_found_error") ||
     (lower.includes("does not exist") && lower.includes("model")) ||
     (lower.includes("invalid model") && !lower.includes("invalid model reference"))

@@ -595,6 +595,15 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("overloaded");
   });
 
+  it("treats OpenRouter 404 no-endpoints responses as model_not_found", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        404,
+        "404 No endpoints found for deepseek/deepseek-r1:free.",
+      ),
+    ).toBe("model_not_found");
+  });
+
   it("treats generic HTTP 410 responses as retryable timeouts", () => {
     expect(classifyFailoverReasonFromHttpStatus(410)).toBe("timeout");
     expect(classifyFailoverReasonFromHttpStatus(410, "")).toBe("timeout");
