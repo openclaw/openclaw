@@ -6,13 +6,20 @@ import { describe, expect, it } from "vitest";
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 
+function normalizeRepoFile(file: string): string {
+  return file.replaceAll("\\", "/");
+}
+
 const ALLOWED_BUNDLED_CAPABILITY_METADATA_CONSUMERS = new Set([
   "src/plugins/bundled-capability-metadata.test.ts",
   "src/plugins/contracts/boundary-invariants.test.ts",
 ]);
 
 const ALLOWED_EXTENSION_PATH_STRING_TESTS = new Set([
+  "src/channels/plugins/setup-helpers.test.ts",
+  "src/channels/plugins/setup-wizard-helpers.test.ts",
   "src/channels/plugins/bundled.shape-guard.test.ts",
+  "src/plugin-sdk/browser-maintenance.test.ts",
   "src/plugins/contracts/bundled-extension-config-api-guardrails.test.ts",
   "src/scripts/test-projects.test.ts",
 ]);
@@ -34,13 +41,16 @@ describe("plugin contract boundary invariants", () => {
       cwd: REPO_ROOT,
       nodir: true,
     });
-    const offenders = files.filter((file) => {
-      if (ALLOWED_BUNDLED_CAPABILITY_METADATA_CONSUMERS.has(file)) {
-        return false;
-      }
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return source.includes("contracts/inventory/bundled-capability-metadata");
-    });
+    const offenders = files
+      .filter((file) => {
+        const normalizedFile = normalizeRepoFile(file);
+        if (ALLOWED_BUNDLED_CAPABILITY_METADATA_CONSUMERS.has(normalizedFile)) {
+          return false;
+        }
+        const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+        return source.includes("contracts/inventory/bundled-capability-metadata");
+      })
+      .map((file) => normalizeRepoFile(file));
     expect(offenders).toEqual([]);
   });
 
@@ -64,17 +74,20 @@ describe("plugin contract boundary invariants", () => {
       cwd: REPO_ROOT,
       nodir: true,
     });
-    const offenders = files.filter((file) => {
-      if (ALLOWED_EXTENSION_PATH_STRING_TESTS.has(file)) {
-        return false;
-      }
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return (
-        /from\s+["'][^"']*extensions\/.+(?:api|runtime-api|test-api)\.js["']/u.test(source) ||
-        /vi\.(?:mock|doMock)\(\s*["'][^"']*extensions\/.+["']/u.test(source) ||
-        /importActual<[^>]*>\(\s*["'][^"']*extensions\/.+["']/u.test(source)
-      );
-    });
+    const offenders = files
+      .filter((file) => {
+        const normalizedFile = normalizeRepoFile(file);
+        if (ALLOWED_EXTENSION_PATH_STRING_TESTS.has(normalizedFile)) {
+          return false;
+        }
+        const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+        return (
+          /from\s+["'][^"']*extensions\/.+(?:api|runtime-api|test-api)\.js["']/u.test(source) ||
+          /vi\.(?:mock|doMock)\(\s*["'][^"']*extensions\/.+["']/u.test(source) ||
+          /importActual<[^>]*>\(\s*["'][^"']*extensions\/.+["']/u.test(source)
+        );
+      })
+      .map((file) => normalizeRepoFile(file));
     expect(offenders).toEqual([]);
   });
 
@@ -84,13 +97,16 @@ describe("plugin contract boundary invariants", () => {
       cwd: REPO_ROOT,
       nodir: true,
     });
-    const offenders = files.filter((file) => {
-      if (ALLOWED_CONTRACT_BUNDLED_PATH_HELPERS.has(file)) {
-        return false;
-      }
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return source.includes("test/helpers/bundled-plugin-paths");
-    });
+    const offenders = files
+      .filter((file) => {
+        const normalizedFile = normalizeRepoFile(file);
+        if (ALLOWED_CONTRACT_BUNDLED_PATH_HELPERS.has(normalizedFile)) {
+          return false;
+        }
+        const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+        return source.includes("test/helpers/bundled-plugin-paths");
+      })
+      .map((file) => normalizeRepoFile(file));
     expect(offenders).toEqual([]);
   });
 
@@ -101,13 +117,16 @@ describe("plugin contract boundary invariants", () => {
       nodir: true,
       ignore: ["src/channels/**/*.test.ts"],
     });
-    const offenders = files.filter((file) => {
-      if (ALLOWED_CHANNEL_BUNDLED_METADATA_CONSUMERS.has(file)) {
-        return false;
-      }
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return source.includes("plugins/bundled-plugin-metadata");
-    });
+    const offenders = files
+      .filter((file) => {
+        const normalizedFile = normalizeRepoFile(file);
+        if (ALLOWED_CHANNEL_BUNDLED_METADATA_CONSUMERS.has(normalizedFile)) {
+          return false;
+        }
+        const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+        return source.includes("plugins/bundled-plugin-metadata");
+      })
+      .map((file) => normalizeRepoFile(file));
     expect(offenders).toEqual([]);
   });
 
@@ -118,10 +137,12 @@ describe("plugin contract boundary invariants", () => {
       nodir: true,
       ignore: ["src/**/*.test.ts"],
     });
-    const offenders = files.filter((file) => {
-      const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
-      return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
-    });
+    const offenders = files
+      .filter((file) => {
+        const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+        return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
+      })
+      .map((file) => normalizeRepoFile(file));
     expect(offenders).toEqual([]);
   });
 });

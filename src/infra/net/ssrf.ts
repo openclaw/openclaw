@@ -200,6 +200,19 @@ function assertAllowedResolvedAddressesOrThrow(
   }
 }
 
+function coerceLookupResults(result: Awaited<ReturnType<LookupFn>>): readonly LookupAddress[] {
+  if (Array.isArray(result)) {
+    return result;
+  }
+  if (typeof result === "string") {
+    return [{ address: result, family: result.includes(":") ? 6 : 4 }];
+  }
+  if (result && typeof result === "object" && "address" in result && "family" in result) {
+    return [result];
+  }
+  return [];
+}
+
 export function createPinnedLookup(params: {
   hostname: string;
   addresses: string[];
@@ -331,7 +344,7 @@ export async function resolvePinnedHostnameWithPolicy(
   }
 
   const lookupFn = params.lookupFn ?? dnsLookup;
-  const results = await lookupFn(normalized, { all: true });
+  const results = coerceLookupResults(await lookupFn(normalized, { all: true }));
   if (results.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }

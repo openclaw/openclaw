@@ -73,7 +73,7 @@ Claw full access for filesystem tools means:
 - There is no workspace-only mutation boundary after mission approval.
 - Mission roots are tracking and organization constructs, not write guards.
 
-### Required implementation consequences
+### Filesystem implementation consequences
 
 - Claw must not rely on workspace root guards as a product boundary.
 - Mission files still declare primary and secondary roots for context assembly and artifact placement.
@@ -89,7 +89,7 @@ Claw full access for runtime tools means:
 - Security policy is effectively "full" unless a later Claw config explicitly narrows it.
 - Background execution and process management are part of the expected autonomy surface.
 
-### Required implementation consequences
+### Runtime implementation consequences
 
 - Claw must treat host runtime capability as part of its baseline.
 - Missing shell availability, missing binaries, or OS-level restrictions are preflight issues or blockers.
@@ -130,7 +130,7 @@ Claw full access for orchestration means:
 - Claw may run coordinator, planner, executor, verifier, and research roles as distinct sessions.
 - Claw may delegate, reassign, and retry work without operator approval after unattended continuation is approved.
 
-### Required implementation consequences
+### Session implementation consequences
 
 - Session tools must be available to Claw even when they are not central to standard chat flows.
 - Governance must enforce fanout and spawn depth limits.
