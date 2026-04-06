@@ -1,12 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
+import { createFakeTaskFlow } from "./taskflow-test-helpers.js";
 
 let createLobsterTool: typeof import("./lobster-tool.js").createLobsterTool;
-
-type BoundTaskFlow = ReturnType<
-  NonNullable<OpenClawPluginApi["runtime"]>["taskFlow"]["bindSession"]
->;
 
 function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
   return createTestPluginApi({
@@ -30,48 +27,6 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
     messageChannel: undefined,
     agentAccountId: undefined,
     sandboxed: false,
-    ...overrides,
-  };
-}
-
-function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>): BoundTaskFlow {
-  const baseFlow = {
-    flowId: "flow-1",
-    revision: 1,
-    syncMode: "managed" as const,
-    controllerId: "tests/lobster",
-    ownerKey: "agent:main:main",
-    status: "running" as const,
-    goal: "Run Lobster workflow",
-  };
-
-  return {
-    sessionKey: "agent:main:main",
-    createManaged: vi.fn().mockReturnValue(baseFlow),
-    get: vi.fn(),
-    list: vi.fn().mockReturnValue([]),
-    findLatest: vi.fn(),
-    resolve: vi.fn(),
-    getTaskSummary: vi.fn(),
-    setWaiting: vi.fn().mockImplementation((input) => ({
-      applied: true,
-      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "waiting" as const },
-    })),
-    resume: vi.fn().mockImplementation((input) => ({
-      applied: true,
-      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "running" as const },
-    })),
-    finish: vi.fn().mockImplementation((input) => ({
-      applied: true,
-      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "completed" as const },
-    })),
-    fail: vi.fn().mockImplementation((input) => ({
-      applied: true,
-      flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "failed" as const },
-    })),
-    requestCancel: vi.fn(),
-    cancel: vi.fn(),
-    runTask: vi.fn(),
     ...overrides,
   };
 }
@@ -271,6 +226,42 @@ describe("lobster plugin tool", () => {
         flowStateJson: "{bad",
       }),
     ).rejects.toThrow(/flowStateJson must be valid JSON/);
+  });
+
+  it("rejects managed TaskFlow resume mode without a token", async () => {
+    ({ createLobsterTool } = await import("./lobster-tool.js"));
+
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(
+      tool.execute("call-missing-resume-token", {
+        action: "resume",
+        flowId: "flow-1",
+        flowExpectedRevision: 1,
+        approve: true,
+      }),
+    ).rejects.toThrow(/token required when using managed TaskFlow resume mode/);
+  });
+
+  it("rejects managed TaskFlow resume mode without approve", async () => {
+    ({ createLobsterTool } = await import("./lobster-tool.js"));
+
+    const tool = createLobsterTool(fakeApi(), {
+      runner: { run: vi.fn() },
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(
+      tool.execute("call-missing-resume-approve", {
+        action: "resume",
+        token: "resume-token",
+        flowId: "flow-1",
+        flowExpectedRevision: 1,
+      }),
+    ).rejects.toThrow(/approve required when using managed TaskFlow resume mode/);
   });
 
   it("requires action", async () => {
