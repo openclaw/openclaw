@@ -197,15 +197,6 @@ type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLi
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
-function buildDefaultLineMessageContext() {
-  return {
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  };
-}
 function createReplayMessageEvent(params: {
   messageId: string;
   groupId: string;

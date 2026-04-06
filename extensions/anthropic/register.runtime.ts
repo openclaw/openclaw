@@ -366,7 +366,6 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
 }
 
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
-  const claudeCliProfileId = "anthropic:claude-cli";
   const providerId = "anthropic";
   const defaultAnthropicModel = "anthropic/claude-sonnet-4-6";
   const _anthropicOauthAllowlist = [

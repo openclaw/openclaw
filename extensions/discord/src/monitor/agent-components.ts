@@ -63,9 +63,6 @@ import {
   resolveInteractionCustomId,
   resolveModalFieldValues,
   resolvePinnedMainDmOwnerFromAllowlist,
-  type AgentComponentContext,
-  type AgentComponentInteraction,
-  type AgentComponentMessageInteraction,
   type ComponentInteractionContext,
   type DiscordChannelContext,
 } from "./agent-components-helpers.js";
@@ -104,7 +101,7 @@ async function loadComponentsRuntime() {
   return await componentsRuntimePromise;
 }
 
-async function loadReplyRuntime() {
+async function _loadReplyRuntime() {
   replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
   return await replyRuntimePromise;
 }
