@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Agents/exec: preserve explicit `host=node` routing under elevated defaults when `tools.exec.host=auto`, and fail loud on invalid elevated cross-host overrides. (#61739) Thanks @obviyus.
 - Agents/history: suppress commentary-only visible-text leaks in streaming and chat history views, and keep sanitized SSE history sequence numbers monotonic after transcript-only refreshes. (#61829) Thanks @100yenadmin.
 - Plugins/Windows: load plugin entrypoints through `file://` import specifiers on Windows without breaking plugin SDK alias resolution, fixing `ERR_UNSUPPORTED_ESM_URL_SCHEME` for absolute plugin paths. (#61832) Thanks @Zeesejo.
+- Discord/forwarding: recover forwarded referenced message text and attachments when Discord omits snapshot payloads, so forwarded-message relays keep the original content. (#61670) Thanks @artwalker.
 - Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
 - Agents/heartbeat: stop truncating live session transcripts after no-op heartbeat acks, move heartbeat cleanup to prompt assembly and compaction, and keep post-filter context-engine ingestion aligned with the real session baseline. (#60998) Thanks @nxmxbbd.
 
