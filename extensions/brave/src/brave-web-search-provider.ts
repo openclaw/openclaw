@@ -457,7 +457,7 @@ function createBraveToolDefinition(
         return missingBraveKeyPayload();
       }
 
-      const params = args as Record<string, unknown>;
+      const params = args;
       const query = readStringParam(params, "query", { required: true });
       const count =
         readNumberParam(params, "count", { integer: true }) ??

@@ -166,3 +166,32 @@ export function parseFeishuConversationId(params: {
     scope: "group",
   };
 }
+
+export function buildFeishuModelOverrideParentCandidates(
+  parentConversationId?: string | null,
+): string[] {
+  const rawId = normalizeText(parentConversationId);
+  if (!rawId) {
+    return [];
+  }
+  const topicSenderMatch = rawId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  if (topicSenderMatch) {
+    const chatId = topicSenderMatch[1]?.trim().toLowerCase();
+    const topicId = topicSenderMatch[2]?.trim().toLowerCase();
+    if (chatId && topicId) {
+      return [`${chatId}:topic:${topicId}`, chatId];
+    }
+    return [];
+  }
+  const topicMatch = rawId.match(/^(.+):topic:([^:]+)$/i);
+  if (topicMatch) {
+    const chatId = topicMatch[1]?.trim().toLowerCase();
+    return chatId ? [chatId] : [];
+  }
+  const senderMatch = rawId.match(/^(.+):sender:([^:]+)$/i);
+  if (senderMatch) {
+    const chatId = senderMatch[1]?.trim().toLowerCase();
+    return chatId ? [chatId] : [];
+  }
+  return [];
+}

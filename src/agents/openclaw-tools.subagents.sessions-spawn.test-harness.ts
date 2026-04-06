@@ -259,8 +259,8 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => hoisted.state.configOverride,
@@ -269,8 +269,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 // Same module, different specifier (used by tools under src/agents/tools/*).
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => hoisted.state.configOverride,

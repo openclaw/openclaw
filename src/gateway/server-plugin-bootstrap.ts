@@ -1,6 +1,6 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { resolvePluginActivationSnapshot } from "../plugins/activation-context.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
@@ -20,6 +20,7 @@ type GatewayPluginBootstrapLog = {
 
 type GatewayPluginBootstrapParams = {
   cfg: ReturnType<typeof loadConfig>;
+  activationSourceConfig?: ReturnType<typeof loadConfig>;
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
@@ -58,16 +59,17 @@ function logGatewayPluginDiagnostics(params: {
 }
 
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
-  const autoEnabled = applyPluginAutoEnable({
-    config: params.cfg,
+  const activation = resolvePluginActivationSnapshot({
+    rawConfig: params.activationSourceConfig ?? params.cfg,
     env: process.env,
+    applyAutoEnable: true,
   });
-  const resolvedConfig = autoEnabled.config;
+  const resolvedConfig = activation.config ?? params.cfg;
   installGatewayPluginRuntimeEnvironment(resolvedConfig);
   const loaded = loadGatewayPlugins({
     cfg: resolvedConfig,
-    activationSourceConfig: params.cfg,
-    autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    activationSourceConfig: params.activationSourceConfig ?? params.cfg,
+    autoEnabledReasons: activation.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     log: params.log,
     coreGatewayHandlers: params.coreGatewayHandlers,
@@ -89,7 +91,10 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
 export function loadGatewayStartupPlugins(
   params: Omit<GatewayPluginBootstrapParams, "beforePrimeRegistry">,
 ) {
-  return prepareGatewayPluginLoad(params);
+  return prepareGatewayPluginLoad({
+    ...params,
+    beforePrimeRegistry: pinActivePluginChannelRegistry,
+  });
 }
 
 export function reloadDeferredGatewayPlugins(

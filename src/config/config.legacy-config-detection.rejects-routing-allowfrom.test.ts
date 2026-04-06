@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { migrateLegacyConfig } from "./legacy-migrate.js";
-import type { OpenClawConfig } from "./types.js";
+import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
+import type { OpenClawConfig } from "./config.js";
 import { validateConfigObject } from "./validation.js";
 
 function getChannelConfig(config: unknown, provider: string) {
@@ -35,173 +35,6 @@ describe("legacy config detection", () => {
     },
   );
 
-  it("does not rewrite removed routing.allowFrom migrations", async () => {
-    const res = migrateLegacyConfig({
-      routing: { allowFrom: ["+15555550123"] },
-      channels: { whatsapp: {} },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-
-  it("does not rewrite removed routing.groupChat.requireMention migrations", async () => {
-    const res = migrateLegacyConfig({
-      routing: { groupChat: { requireMention: false } },
-      channels: { whatsapp: {} },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-  it("does not rewrite removed routing.groupChat.mentionPatterns migrations", async () => {
-    const res = migrateLegacyConfig({
-      routing: { groupChat: { mentionPatterns: ["@openclaw"] } },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-  it("does not rewrite removed routing agentToAgent/queue/transcribeAudio migrations", async () => {
-    const res = migrateLegacyConfig({
-      routing: {
-        agentToAgent: { enabled: true, allow: ["main"] },
-        queue: { mode: "queue", cap: 3 },
-        transcribeAudio: {
-          command: ["whisper", "--model", "base"],
-          timeoutSeconds: 2,
-        },
-      },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-  it("migrates audio.transcription with custom script names", async () => {
-    const res = migrateLegacyConfig({
-      audio: {
-        transcription: {
-          command: ["/home/user/.scripts/whisperx-transcribe.sh"],
-          timeoutSeconds: 120,
-        },
-      },
-    });
-    expect(res.changes).toContain("Moved audio.transcription → tools.media.audio.models.");
-    expect(res.config?.tools?.media?.audio).toEqual({
-      enabled: true,
-      models: [
-        {
-          command: "/home/user/.scripts/whisperx-transcribe.sh",
-          type: "cli",
-          timeoutSeconds: 120,
-        },
-      ],
-    });
-    expect(res.config?.audio).toBeUndefined();
-  });
-  it("rejects audio.transcription when command contains non-string parts", async () => {
-    const res = migrateLegacyConfig({
-      audio: {
-        transcription: {
-          command: [{}],
-          timeoutSeconds: 120,
-        },
-      },
-    });
-    expect(res.changes).toContain("Removed audio.transcription (invalid or empty command).");
-    expect(res.config?.tools?.media?.audio).toBeUndefined();
-    expect(res.config?.audio).toBeUndefined();
-  });
-  it("does not rewrite removed agent config migrations", async () => {
-    const res = migrateLegacyConfig({
-      agent: {
-        model: "openai/gpt-5.2",
-        tools: { allow: ["sessions.list"], deny: ["danger"] },
-        elevated: { enabled: true, allowFrom: { discord: ["user:1"] } },
-        bash: { timeoutSec: 12 },
-        sandbox: { tools: { allow: ["browser.open"] } },
-        subagents: { tools: { deny: ["sandbox"] } },
-      },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-  it("migrates top-level memorySearch to agents.defaults.memorySearch", async () => {
-    const res = migrateLegacyConfig({
-      memorySearch: {
-        provider: "local",
-        fallback: "none",
-        query: { maxResults: 7 },
-      },
-    });
-    expect(res.changes).toContain("Moved memorySearch → agents.defaults.memorySearch.");
-    expect(res.config?.agents?.defaults?.memorySearch).toMatchObject({
-      provider: "local",
-      fallback: "none",
-      query: { maxResults: 7 },
-    });
-    expect((res.config as { memorySearch?: unknown }).memorySearch).toBeUndefined();
-  });
-  it("merges top-level memorySearch into agents.defaults.memorySearch", async () => {
-    const res = migrateLegacyConfig({
-      memorySearch: {
-        provider: "local",
-        fallback: "none",
-        query: { maxResults: 7 },
-      },
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "openai",
-            model: "text-embedding-3-small",
-          },
-        },
-      },
-    });
-    expect(res.changes).toContain(
-      "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-    );
-    expect(res.config?.agents?.defaults?.memorySearch).toMatchObject({
-      provider: "openai",
-      model: "text-embedding-3-small",
-      fallback: "none",
-      query: { maxResults: 7 },
-    });
-  });
-  it("keeps nested agents.defaults.memorySearch values when merging legacy defaults", async () => {
-    const res = migrateLegacyConfig({
-      memorySearch: {
-        query: {
-          maxResults: 7,
-          minScore: 0.25,
-          hybrid: { enabled: true, textWeight: 0.8, vectorWeight: 0.2 },
-        },
-      },
-      agents: {
-        defaults: {
-          memorySearch: {
-            query: {
-              maxResults: 3,
-              hybrid: { enabled: false },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.config?.agents?.defaults?.memorySearch).toMatchObject({
-      query: {
-        maxResults: 3,
-        minScore: 0.25,
-        hybrid: { enabled: false, textWeight: 0.8, vectorWeight: 0.2 },
-      },
-    });
-  });
-  it("does not rewrite removed tools.bash migrations", async () => {
-    const res = migrateLegacyConfig({
-      tools: {
-        bash: { timeoutSec: 12 },
-      },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
   it("accepts per-agent tools.elevated overrides", async () => {
     const res = validateConfigObject({
       tools: {
@@ -262,49 +95,6 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.path).toBe("gateway");
     }
   });
-  it("does not rewrite removed gateway.token migrations", async () => {
-    const res = migrateLegacyConfig({
-      gateway: { token: "legacy-token" },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-  it("keeps gateway.bind tailnet", async () => {
-    const res = migrateLegacyConfig({
-      gateway: { bind: "tailnet" as const },
-    });
-    expect(res.changes).not.toContain("Migrated gateway.bind from 'tailnet' to 'auto'.");
-    expect(res.config?.gateway?.bind).toBe("tailnet");
-    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:18789",
-      "http://127.0.0.1:18789",
-    ]);
-
-    const validated = validateConfigObject({ gateway: { bind: "tailnet" as const } });
-    expect(validated.ok).toBe(true);
-    if (validated.ok) {
-      expect(validated.config.gateway?.bind).toBe("tailnet");
-    }
-  });
-  it.each([
-    { input: "0.0.0.0", expected: "lan" },
-    { input: "::", expected: "lan" },
-    { input: "127.0.0.1", expected: "loopback" },
-    { input: "localhost", expected: "loopback" },
-    { input: "::1", expected: "loopback" },
-  ] as const)("normalizes gateway.bind host alias $input", ({ input, expected }) => {
-    const res = migrateLegacyConfig({
-      gateway: { bind: input },
-    });
-    expect(res.changes).toContain(`Normalized gateway.bind "${input}" → "${expected}".`);
-    expect(res.config?.gateway?.bind).toBe(expected);
-
-    const validated = validateConfigObject(res.config);
-    expect(validated.ok).toBe(true);
-    if (validated.ok) {
-      expect(validated.config.gateway?.bind).toBe(expected);
-    }
-  });
   it.each(["0.0.0.0", "::", "127.0.0.1", "localhost", "::1"] as const)(
     "flags gateway.bind host alias as legacy: %s",
     (bind) => {
@@ -318,12 +108,6 @@ describe("legacy config detection", () => {
       }
     },
   );
-  it("escapes control characters in gateway.bind migration change text", async () => {
-    const res = migrateLegacyConfig({
-      gateway: { bind: "\r\n0.0.0.0\r\n" },
-    });
-    expect(res.changes).toContain('Normalized gateway.bind "\\r\\n0.0.0.0\\r\\n" → "lan".');
-  });
   it.each([
     {
       provider: "telegram",
@@ -384,10 +168,6 @@ describe("legacy config detection", () => {
         const channel = getChannelConfig(res.config, provider);
         expect(channel?.dmPolicy, provider).toBe("pairing");
         expect(channel?.groupPolicy, provider).toBe("allowlist");
-        if (provider === "telegram") {
-          expect(channel?.streaming, provider).toBe("partial");
-          expect(channel?.streamMode, provider).toBeUndefined();
-        }
       }
     },
   );
@@ -396,16 +176,20 @@ describe("legacy config detection", () => {
       name: "top-level off",
       input: { channels: { telegram: { streamMode: "off" } } },
       assert: (config: NonNullable<OpenClawConfig>) => {
-        expect(config.channels?.telegram?.streaming).toBe("off");
-        expect(config.channels?.telegram?.streamMode).toBeUndefined();
+        expect(config.channels?.telegram?.streaming?.mode).toBe("off");
+        expect(
+          (config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
       },
     },
     {
       name: "top-level block",
       input: { channels: { telegram: { streamMode: "block" } } },
       assert: (config: NonNullable<OpenClawConfig>) => {
-        expect(config.channels?.telegram?.streaming).toBe("block");
-        expect(config.channels?.telegram?.streamMode).toBeUndefined();
+        expect(config.channels?.telegram?.streaming?.mode).toBe("block");
+        expect(
+          (config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
       },
     },
     {
@@ -422,31 +206,38 @@ describe("legacy config detection", () => {
         },
       },
       assert: (config: NonNullable<OpenClawConfig>) => {
-        expect(config.channels?.telegram?.accounts?.ops?.streaming).toBe("off");
-        expect(config.channels?.telegram?.accounts?.ops?.streamMode).toBeUndefined();
+        expect(config.channels?.telegram?.accounts?.ops?.streaming?.mode).toBe("off");
+        expect(
+          (config.channels?.telegram?.accounts?.ops as Record<string, unknown> | undefined)
+            ?.streamMode,
+        ).toBeUndefined();
       },
     },
-  ] as const)("normalizes telegram legacy streamMode alias: $name", ({ input, assert, name }) => {
-    const res = validateConfigObject(input);
-    expect(res.ok, name).toBe(true);
-    if (res.ok) {
-      assert(res.config);
-    }
-  });
+  ] as const)(
+    "normalizes telegram legacy streamMode alias during migration: $name",
+    ({ input, assert, name }) => {
+      const res = migrateLegacyConfig(input);
+      expect(res.config, name).not.toBeNull();
+      if (res.config) {
+        assert(res.config);
+      }
+    },
+  );
 
   it.each([
     {
       name: "boolean streaming=true",
       input: { channels: { discord: { streaming: true } } },
-      expectedChanges: ["Normalized channels.discord.streaming boolean → enum (partial)."],
+      expectedChanges: [
+        "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
+      ],
       expectedStreaming: "partial",
     },
     {
       name: "streamMode with streaming boolean",
       input: { channels: { discord: { streaming: false, streamMode: "block" } } },
       expectedChanges: [
-        "Moved channels.discord.streamMode → channels.discord.streaming (block).",
-        "Normalized channels.discord.streaming boolean → enum (block).",
+        "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
       ],
       expectedStreaming: "block",
     },
@@ -457,8 +248,11 @@ describe("legacy config detection", () => {
       for (const expectedChange of expectedChanges) {
         expect(res.changes, name).toContain(expectedChange);
       }
-      expect(res.config?.channels?.discord?.streaming, name).toBe(expectedStreaming);
-      expect(res.config?.channels?.discord?.streamMode, name).toBeUndefined();
+      expect(res.config?.channels?.discord?.streaming?.mode, name).toBe(expectedStreaming);
+      expect(
+        (res.config?.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
+        name,
+      ).toBeUndefined();
     },
   );
 
@@ -479,16 +273,19 @@ describe("legacy config detection", () => {
       expectedStreaming: "block",
     },
   ] as const)(
-    "normalizes discord streaming fields during validation: $name",
-    ({ input, expectedStreaming, name }) => {
+    "rejects legacy discord streaming fields during validation: $name",
+    ({ input, name }) => {
       const res = validateConfigObject(input);
-      expect(res.ok, name).toBe(true);
-      if (res.ok) {
-        expect(res.config.channels?.discord?.streaming, name).toBe(expectedStreaming);
-        expect(res.config.channels?.discord?.streamMode, name).toBeUndefined();
+      expect(res.ok, name).toBe(false);
+      if (!res.ok) {
+        expect(res.issues[0]?.path, name).toBe("channels.discord");
+        expect(res.issues[0]?.message, name).toContain(
+          "channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy",
+        );
       }
     },
   );
+
   it.each([
     {
       name: "discord account streaming boolean",
@@ -504,8 +301,11 @@ describe("legacy config detection", () => {
         },
       },
       assert: (config: NonNullable<OpenClawConfig>) => {
-        expect(config.channels?.discord?.accounts?.work?.streaming).toBe("partial");
-        expect(config.channels?.discord?.accounts?.work?.streamMode).toBeUndefined();
+        expect(config.channels?.discord?.accounts?.work?.streaming?.mode).toBe("partial");
+        expect(
+          (config.channels?.discord?.accounts?.work as Record<string, unknown> | undefined)
+            ?.streamMode,
+        ).toBeUndefined();
       },
     },
     {
@@ -518,9 +318,11 @@ describe("legacy config detection", () => {
         },
       },
       assert: (config: NonNullable<OpenClawConfig>) => {
-        expect(config.channels?.slack?.streaming).toBe("progress");
-        expect(config.channels?.slack?.streamMode).toBeUndefined();
-        expect(config.channels?.slack?.nativeStreaming).toBe(true);
+        expect(config.channels?.slack?.streaming?.mode).toBe("progress");
+        expect(
+          (config.channels?.slack as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
+        expect(config.channels?.slack?.streaming?.nativeTransport).toBe(true);
       },
     },
     {
@@ -533,20 +335,21 @@ describe("legacy config detection", () => {
         },
       },
       assert: (config: NonNullable<OpenClawConfig>) => {
-        expect(config.channels?.slack?.streaming).toBe("off");
-        expect(config.channels?.slack?.nativeStreaming).toBe(false);
+        expect(config.channels?.slack?.streaming?.mode).toBe("off");
+        expect(config.channels?.slack?.streaming?.nativeTransport).toBe(false);
       },
     },
   ] as const)(
-    "normalizes account-level discord/slack streaming alias: $name",
+    "normalizes account-level discord/slack streaming alias during migration: $name",
     ({ input, assert, name }) => {
-      const res = validateConfigObject(input);
-      expect(res.ok, name).toBe(true);
-      if (res.ok) {
+      const res = migrateLegacyConfig(input);
+      expect(res.config, name).not.toBeNull();
+      if (res.config) {
         assert(res.config);
       }
     },
   );
+
   it("accepts historyLimit overrides per provider and account", async () => {
     const res = validateConfigObject({
       messages: { groupChat: { historyLimit: 12 } },

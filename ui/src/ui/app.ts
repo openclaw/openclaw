@@ -1,6 +1,5 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -61,11 +60,17 @@ import {
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
+import type { DreamingStatus } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { SkillMessage } from "./controllers/skills.ts";
+import type {
+  ClawHubSearchResult,
+  ClawHubSkillDetail,
+  SkillMessage,
+} from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
@@ -216,6 +221,14 @@ export class OpenClawApp extends LitElement {
   @state() configUiHints: ConfigUiHints = {};
   @state() configForm: Record<string, unknown> | null = null;
   @state() configFormOriginal: Record<string, unknown> | null = null;
+  @state() dreamingStatusLoading = false;
+  @state() dreamingStatusError: string | null = null;
+  @state() dreamingStatus: DreamingStatus | null = null;
+  @state() dreamingModeSaving = false;
+  @state() dreamDiaryLoading = false;
+  @state() dreamDiaryError: string | null = null;
+  @state() dreamDiaryPath: string | null = null;
+  @state() dreamDiaryContent: string | null = null;
   @state() configFormDirty = false;
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";
@@ -413,6 +426,16 @@ export class OpenClawApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
   @state() skillsDetailKey: string | null = null;
+  @state() clawhubSearchQuery = "";
+  @state() clawhubSearchResults: ClawHubSearchResult[] | null = null;
+  @state() clawhubSearchLoading = false;
+  @state() clawhubSearchError: string | null = null;
+  @state() clawhubDetail: ClawHubSkillDetail | null = null;
+  @state() clawhubDetailSlug: string | null = null;
+  @state() clawhubDetailLoading = false;
+  @state() clawhubDetailError: string | null = null;
+  @state() clawhubInstallSlug: string | null = null;
+  @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;

@@ -3,7 +3,6 @@ import {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   OPENAI_BATCH_ENDPOINT,
@@ -11,11 +10,10 @@ import {
   createGeminiEmbeddingProvider,
   createLocalEmbeddingProvider,
   createMistralEmbeddingProvider,
-  createOllamaEmbeddingProvider,
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
-  listMemoryEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviderAdapters,
   runGeminiEmbeddingBatches,
   runOpenAiEmbeddingBatches,
   runVoyageEmbeddingBatches,
@@ -289,29 +287,6 @@ const mistralAdapter: MemoryEmbeddingProviderAdapter = {
   },
 };
 
-const ollamaAdapter: MemoryEmbeddingProviderAdapter = {
-  id: "ollama",
-  defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
-  transport: "remote",
-  create: async (options) => {
-    const { provider, client } = await createOllamaEmbeddingProvider({
-      ...options,
-      provider: "ollama",
-      fallback: "none",
-    });
-    return {
-      provider,
-      runtime: {
-        id: "ollama",
-        cacheKeyData: {
-          provider: "ollama",
-          model: client.model,
-        },
-      },
-    };
-  },
-};
-
 const localAdapter: MemoryEmbeddingProviderAdapter = {
   id: "local",
   defaultModel: DEFAULT_LOCAL_MODEL,
@@ -344,7 +319,6 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   geminiAdapter,
   voyageAdapter,
   mistralAdapter,
-  ollamaAdapter,
 ] as const;
 
 const builtinMemoryEmbeddingProviderAdapterById = new Map(
@@ -360,7 +334,12 @@ export function getBuiltinMemoryEmbeddingProviderAdapter(
 export function registerBuiltInMemoryEmbeddingProviders(register: {
   registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
 }): void {
-  const existingIds = new Set(listMemoryEmbeddingProviders().map((adapter) => adapter.id));
+  // Only inspect providers already registered in the current load. Falling back
+  // to capability discovery here can recursively trigger plugin loading while
+  // memory-core itself is still registering.
+  const existingIds = new Set(
+    listRegisteredMemoryEmbeddingProviderAdapters().map((adapter) => adapter.id),
+  );
   for (const adapter of builtinMemoryEmbeddingProviderAdapters) {
     if (existingIds.has(adapter.id)) {
       continue;
@@ -403,7 +382,6 @@ export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OPENAI_EMBEDDING_MODEL,
   DEFAULT_VOYAGE_EMBEDDING_MODEL,
   canAutoSelectLocal,

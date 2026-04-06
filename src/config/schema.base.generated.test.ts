@@ -20,4 +20,45 @@ describe("generated base config schema", () => {
       SENSITIVE_URL_HINT_TAG,
     );
   });
+
+  it("omits legacy hooks.internal.handlers from the public schema payload", () => {
+    const hooksInternalProperties = (
+      GENERATED_BASE_CONFIG_SCHEMA.schema as {
+        properties?: {
+          hooks?: {
+            properties?: {
+              internal?: {
+                properties?: Record<string, unknown>;
+              };
+            };
+          };
+        };
+      }
+    ).properties?.hooks?.properties?.internal?.properties;
+    const uiHints = GENERATED_BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
+
+    expect(hooksInternalProperties?.handlers).toBeUndefined();
+    expect(uiHints["hooks.internal.handlers"]).toBeUndefined();
+  });
+
+  it("includes videoGenerationModel in the public schema payload", () => {
+    const agentDefaultsProperties = (
+      GENERATED_BASE_CONFIG_SCHEMA.schema as {
+        properties?: {
+          agents?: {
+            properties?: {
+              defaults?: {
+                properties?: Record<string, unknown>;
+              };
+            };
+          };
+        };
+      }
+    ).properties?.agents?.properties?.defaults?.properties;
+    const uiHints = GENERATED_BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
+
+    expect(agentDefaultsProperties?.videoGenerationModel).toBeDefined();
+    expect(uiHints["agents.defaults.videoGenerationModel.primary"]).toBeDefined();
+    expect(uiHints["agents.defaults.videoGenerationModel.fallbacks"]).toBeDefined();
+  });
 });

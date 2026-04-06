@@ -11,6 +11,7 @@ import {
   normalizeModelRef,
   normalizeProviderId,
   resolveModelRefFromString,
+  resolvePersistedOverrideModelRef,
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
@@ -40,6 +41,23 @@ type ModelSelectionState = {
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
   needsModelCatalog: boolean;
 };
+
+export function createFastTestModelSelectionState(params: {
+  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  provider: string;
+  model: string;
+}): ModelSelectionState {
+  return {
+    provider: params.provider,
+    model: params.model,
+    allowedModelKeys: new Set<string>(),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
+    resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
+    resolveDefaultReasoningLevel: async () => "off",
+    needsModelCatalog: false,
+  };
+}
 
 function shouldLogModelSelectionTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
@@ -126,18 +144,6 @@ export type StoredModelOverride = {
   source: "session" | "parent";
 };
 
-function resolveModelOverrideFromEntry(entry?: SessionEntry): {
-  provider?: string;
-  model: string;
-} | null {
-  const model = entry?.modelOverride?.trim();
-  if (!model) {
-    return null;
-  }
-  const provider = entry?.providerOverride?.trim() || undefined;
-  return { provider, model };
-}
-
 function resolveParentSessionKeyCandidate(params: {
   sessionKey?: string;
   parentSessionKey?: string;
@@ -158,8 +164,13 @@ export function resolveStoredModelOverride(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   parentSessionKey?: string;
+  defaultProvider: string;
 }): StoredModelOverride | null {
-  const direct = resolveModelOverrideFromEntry(params.sessionEntry);
+  const direct = resolvePersistedOverrideModelRef({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.sessionEntry?.providerOverride,
+    overrideModel: params.sessionEntry?.modelOverride,
+  });
   if (direct) {
     return { ...direct, source: "session" };
   }
@@ -171,7 +182,11 @@ export function resolveStoredModelOverride(params: {
     return null;
   }
   const parentEntry = params.sessionStore[parentKey];
-  const parentOverride = resolveModelOverrideFromEntry(parentEntry);
+  const parentOverride = resolvePersistedOverrideModelRef({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: parentEntry?.providerOverride,
+    overrideModel: parentEntry?.modelOverride,
+  });
   if (!parentOverride) {
     return null;
   }
@@ -330,13 +345,6 @@ export async function createModelSelectionState(params: {
   let model = params.model;
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
-  const initialStoredOverride = resolveStoredModelOverride({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    parentSessionKey,
-  });
-  const hasStoredOverride = Boolean(initialStoredOverride);
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
   const needsModelCatalog = params.hasModelDirective;
 
@@ -345,6 +353,11 @@ export async function createModelSelectionState(params: {
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
+  const directStoredOverride = resolvePersistedOverrideModelRef({
+    defaultProvider,
+    overrideProvider: sessionEntry?.providerOverride,
+    overrideModel: sessionEntry?.modelOverride,
+  });
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -380,29 +393,28 @@ export async function createModelSelectionState(params: {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
 
-  if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
-    const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
-    const overrideModel = sessionEntry.modelOverride?.trim();
-    if (overrideModel) {
-      const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
-      const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
-        const { updated } = applyModelOverrideToSessionEntry({
-          entry: sessionEntry,
-          selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
-        });
-        if (updated) {
-          sessionStore[sessionKey] = sessionEntry;
-          if (storePath) {
-            await (
-              await loadSessionStoreRuntime()
-            ).updateSessionStore(storePath, (store) => {
-              store[sessionKey] = sessionEntry;
-            });
-          }
+  if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
+    const normalizedOverride = normalizeModelRef(
+      directStoredOverride.provider,
+      directStoredOverride.model,
+    );
+    const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
+    if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+      const { updated } = applyModelOverrideToSessionEntry({
+        entry: sessionEntry,
+        selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+      });
+      if (updated) {
+        sessionStore[sessionKey] = sessionEntry;
+        if (storePath) {
+          await (
+            await loadSessionStoreRuntime()
+          ).updateSessionStore(storePath, (store) => {
+            store[sessionKey] = sessionEntry;
+          });
         }
-        resetModelOverride = updated;
       }
+      resetModelOverride = updated;
     }
   }
 
@@ -411,6 +423,7 @@ export async function createModelSelectionState(params: {
     sessionStore,
     sessionKey,
     parentSessionKey,
+    defaultProvider,
   });
   // Skip stored session model override only when an explicit heartbeat.model
   // was resolved. Heartbeat runs without heartbeat.model should still inherit

@@ -142,7 +142,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(2);
     expect(mocks.loadOpenClawPlugins).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ onlyPluginIds: [], throwOnLoadError: true }),
+      expect.objectContaining({ throwOnLoadError: true }),
     );
     expect(mocks.loadOpenClawPlugins).toHaveBeenNthCalledWith(
       2,

@@ -88,6 +88,24 @@ describe("model-pricing-cache", () => {
     expect(new Set(refs).size).toBe(refs.length);
   });
 
+  it("collects manifest-owned web search plugin model refs without a hardcoded plugin list", () => {
+    const refs = collectConfiguredModelPricingRefs({
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                model: "tavily/search-preview",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig).map((ref) => modelKey(ref.provider, ref.model));
+
+    expect(refs).toContain("tavily/search-preview");
+  });
+
   it("loads openrouter pricing and maps provider aliases, wrappers, and anthropic dotted ids", async () => {
     const config = {
       agents: {

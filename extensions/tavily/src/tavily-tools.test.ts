@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "../index.js";
 import {
   DEFAULT_TAVILY_BASE_URL,
   DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS,

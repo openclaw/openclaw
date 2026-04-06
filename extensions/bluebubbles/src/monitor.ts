@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
 import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
@@ -15,6 +16,7 @@ import {
   type WebhookTarget,
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
+import { getBlueBubblesRuntime } from "./runtime.js";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createFixedWindowRateLimiter,
@@ -24,8 +26,7 @@ import {
   resolveRequestClientIp,
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
-} from "./runtime-api.js";
-import { getBlueBubblesRuntime } from "./runtime.js";
+} from "./webhook-ingress.js";
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 const webhookRateLimiter = createFixedWindowRateLimiter({
@@ -327,7 +328,7 @@ export async function monitorBlueBubblesProvider(
     password: account.config.password,
     accountId: account.accountId,
     timeoutMs: 5000,
-    allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
   }).catch(() => null);
   if (serverInfo?.os_version) {
     runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);

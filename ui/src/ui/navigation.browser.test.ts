@@ -84,6 +84,14 @@ describe("control UI routing", () => {
     expect(window.location.pathname).toBe("/channels");
   });
 
+  it("keeps dreams navigation visible even when dreaming is disabled", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreaming"]');
+    expect(dreamsLink).not.toBeNull();
+  });
+
   it("renders the refreshed top navigation shell", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;

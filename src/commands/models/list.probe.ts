@@ -19,7 +19,6 @@ import {
   normalizeProviderId,
   parseModelRef,
 } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -32,6 +31,13 @@ import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
+
+let embeddedRunnerModulePromise: Promise<typeof import("../../agents/pi-embedded.js")> | undefined;
+
+function loadEmbeddedRunnerModule() {
+  embeddedRunnerModulePromise ??= import("../../agents/pi-embedded.js");
+  return embeddedRunnerModulePromise;
+}
 
 export type AuthProbeStatus =
   | "ok"
@@ -450,6 +456,7 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
+    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
     await runEmbeddedPiAgent({
       sessionId,
       sessionFile,

@@ -6,6 +6,7 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as undici from "undici";
 import * as ws from "ws";
+import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
@@ -269,11 +270,22 @@ function createGatewayPlugin(params: {
     }
 
     override createWebSocket(url: string) {
-      if (!params.wsAgent) {
-        return super.createWebSocket(url);
+      if (!url) {
+        throw new Error("Gateway URL is required");
       }
+      // Avoid Node's undici-backed global WebSocket here. We have seen late
+      // close-path crashes during Discord gateway teardown; the ws transport is
+      // already our proxy path and behaves predictably for lifecycle cleanup.
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
-      return new WebSocketCtor(url, { agent: params.wsAgent });
+      const socket = new WebSocketCtor(url, params.wsAgent ? { agent: params.wsAgent } : undefined);
+      if ("binaryType" in socket) {
+        try {
+          socket.binaryType = "arraybuffer";
+        } catch {
+          // Ignore runtimes that expose a readonly binaryType.
+        }
+      }
+      return socket;
     }
   }
 
@@ -317,6 +329,7 @@ export function createDiscordGatewayPlugin(params: {
   }
 
   try {
+    validateDiscordProxyUrl(proxy);
     const HttpsProxyAgentCtor =
       params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
     const ProxyAgentCtor = params.__testing?.ProxyAgentCtor ?? undici.ProxyAgent;

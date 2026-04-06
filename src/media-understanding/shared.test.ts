@@ -4,8 +4,10 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+vi.mock("../infra/net/fetch-guard.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
+  );
   return {
     ...actual,
     fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -14,6 +16,8 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
 
 import {
   fetchWithTimeoutGuarded,
+  postJsonRequest,
+  postTranscriptionRequest,
   readErrorResponse,
   resolveProviderHttpRequestConfig,
 } from "./shared.js";
@@ -189,6 +193,78 @@ describe("fetchWithTimeoutGuarded", () => {
       expect.objectContaining({
         auditContext: "provider-http fal image test",
         timeoutMs: 5000,
+      }),
+    );
+  });
+
+  it("passes configured explicit proxy policy through the SSRF guard", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://api.deepgram.com/v1/listen",
+      headers: new Headers({ authorization: "Token test-key" }),
+      body: { hello: "world" },
+      fetchFn: fetch,
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://169.254.169.254:8080",
+      },
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://169.254.169.254:8080",
+        },
+      }),
+    );
+  });
+
+  it("forwards explicit pinDns overrides to JSON requests", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://api.example.com/v1/test",
+      headers: new Headers(),
+      body: { ok: true },
+      fetchFn: fetch,
+      pinDns: false,
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pinDns: false,
+      }),
+    );
+  });
+
+  it("forwards explicit pinDns overrides to transcription requests", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await postTranscriptionRequest({
+      url: "https://api.example.com/v1/transcriptions",
+      headers: new Headers(),
+      body: "audio-bytes",
+      fetchFn: fetch,
+      pinDns: false,
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pinDns: false,
       }),
     );
   });

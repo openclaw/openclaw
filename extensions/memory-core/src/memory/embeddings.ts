@@ -12,10 +12,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  canAutoSelectLocal,
-  getBuiltinMemoryEmbeddingProviderAdapter,
-} from "./provider-adapters.js";
+import { canAutoSelectLocal } from "./provider-adapters.js";
 
 export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
@@ -61,8 +58,11 @@ function shouldContinueAutoSelection(
   return adapter.shouldContinueAutoSelection?.(err) ?? false;
 }
 
-function getAdapter(id: string): MemoryEmbeddingProviderAdapter {
-  const adapter = getMemoryEmbeddingProvider(id);
+function getAdapter(
+  id: string,
+  config?: MemoryEmbeddingProviderCreateOptions["config"],
+): MemoryEmbeddingProviderAdapter {
+  const adapter = getMemoryEmbeddingProvider(id, config);
   if (!adapter) {
     throw new Error(`Unknown memory embedding provider: ${id}`);
   }
@@ -72,7 +72,7 @@ function getAdapter(id: string): MemoryEmbeddingProviderAdapter {
 function listAutoSelectAdapters(
   options: CreateEmbeddingProviderOptions,
 ): MemoryEmbeddingProviderAdapter[] {
-  return listMemoryEmbeddingProviders()
+  return listMemoryEmbeddingProviders(options.config)
     .filter((adapter) => typeof adapter.autoSelectPriority === "number")
     .filter((adapter) =>
       adapter.id === "local" ? canAutoSelectLocal(options.local?.modelPath) : true,
@@ -98,9 +98,9 @@ function resolveProviderModel(
 export function resolveEmbeddingProviderFallbackModel(
   providerId: string,
   fallbackSourceModel: string,
+  config?: MemoryEmbeddingProviderCreateOptions["config"],
 ): string {
-  const adapter =
-    getMemoryEmbeddingProvider(providerId) ?? getBuiltinMemoryEmbeddingProviderAdapter(providerId);
+  const adapter = getMemoryEmbeddingProvider(providerId, config);
   return adapter?.defaultModel ?? fallbackSourceModel;
 }
 
@@ -153,13 +153,13 @@ export async function createEmbeddingProvider(
     };
   }
 
-  const primaryAdapter = getAdapter(options.provider);
+  const primaryAdapter = getAdapter(options.provider, options.config);
   try {
     return await createWithAdapter(primaryAdapter, options);
   } catch (primaryErr) {
     const reason = formatProviderError(primaryAdapter, primaryErr);
     if (options.fallback && options.fallback !== "none" && options.fallback !== options.provider) {
-      const fallbackAdapter = getAdapter(options.fallback);
+      const fallbackAdapter = getAdapter(options.fallback, options.config);
       try {
         const fallbackResult = await createWithAdapter(fallbackAdapter, {
           ...options,

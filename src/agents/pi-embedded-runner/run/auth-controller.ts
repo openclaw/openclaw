@@ -273,7 +273,9 @@ export function createEmbeddedRunAuthController(params: {
         }) ?? "unknown"
       );
     }
-    const classified = classifyFailoverReason(failoverParams.message);
+    const classified = classifyFailoverReason(failoverParams.message, {
+      provider: params.getProvider(),
+    });
     return classified ?? "auth";
   };
 
@@ -475,10 +477,10 @@ export function createEmbeddedRunAuthController(params: {
     if (!params.getRuntimeAuthState() || retried) {
       return false;
     }
-    if (!isFailoverErrorMessage(errorText)) {
+    if (!isFailoverErrorMessage(errorText, { provider: params.getProvider() })) {
       return false;
     }
-    if (classifyFailoverReason(errorText) !== "auth") {
+    if (classifyFailoverReason(errorText, { provider: params.getProvider() }) !== "auth") {
       return false;
     }
     try {

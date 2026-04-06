@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "openclaw/extension-api": ["../src/extensionAPI.ts"],
+      "openclaw/plugin-sdk": ["../src/plugin-sdk/index.ts"],
+      "openclaw/plugin-sdk/*": ["../src/plugin-sdk/*.ts"],
+      "openclaw/plugin-sdk/account-id": ["../src/plugin-sdk/account-id.ts"],
+      "@openclaw/*": ["../extensions/*"],
+      "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"]
+    }
+  }
+}

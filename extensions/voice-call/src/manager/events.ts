@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
-import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
+import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";

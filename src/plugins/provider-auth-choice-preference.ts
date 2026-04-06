@@ -11,6 +11,7 @@ export async function resolvePreferredProviderForAuthChoice(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  includeUntrustedWorkspacePlugins?: boolean;
 }): Promise<string | undefined> {
   const choice = normalizeLegacyAuthChoice(params.choice, params.env) ?? params.choice;
   const manifestResolved = resolveManifestProviderAuthChoice(choice, params);
@@ -24,8 +25,7 @@ export async function resolvePreferredProviderForAuthChoice(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   const pluginResolved = resolveProviderPluginChoice({
     providers,

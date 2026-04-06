@@ -423,12 +423,13 @@ export function loadGatewayPlugins(params: {
     params.pluginIds ??
     resolveGatewayStartupPluginIds({
       config: resolvedConfig,
+      activationSourceConfig: params.activationSourceConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
     });
   if (pluginIds.length === 0) {
     const pluginRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable");
+    setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
     return {
       pluginRegistry,
       gatewayMethods: [...params.baseMethods],

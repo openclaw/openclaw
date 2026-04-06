@@ -1,5 +1,5 @@
+import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/plugins/fetch-mock.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { jsonResponse, urlToString } from "./test-http-helpers.js";
 
