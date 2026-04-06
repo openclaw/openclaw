@@ -1,5 +1,5 @@
 ---
-title: refactor: Make plugin-sdk a real workspace package incrementally
+title: "refactor: Make plugin-sdk a real workspace package incrementally"
 type: refactor
 status: active
 date: 2026-04-05
