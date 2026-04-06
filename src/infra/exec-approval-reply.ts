@@ -89,6 +89,17 @@ function buildGenericNativeExecApprovalFallbackText(params?: { excludeChannel?: 
     : "Approve it from the Web UI or terminal UI.";
 }
 
+function isExecPreflightObfuscationWarning(text: string | undefined): boolean {
+  const normalized = text?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("obfuscated command detected") ||
+    normalized.includes("potential obfuscation")
+  );
+}
+
 function resolveAllowedDecisions(params: {
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
@@ -363,6 +374,16 @@ export function buildExecApprovalUnavailableReplyPayload(
   const warningText = params.warningText?.trim();
   if (warningText) {
     lines.push(warningText);
+  }
+
+  if (isExecPreflightObfuscationWarning(warningText)) {
+    lines.push("Exec preflight blocked this command before any approval flow was started.");
+    lines.push(
+      "If this command is expected, raise `tools.exec.maxCommandChars` or disable the heuristic with `tools.exec.obfuscationCheck: false`, then retry.",
+    );
+    return {
+      text: lines.join("\n\n"),
+    };
   }
 
   if (params.sentApproverDms) {

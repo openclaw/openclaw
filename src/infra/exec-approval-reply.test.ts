@@ -492,4 +492,21 @@ describe("exec approval reply helpers", () => {
       ).toContain(expected);
     },
   );
+
+  it("uses preflight guidance instead of approval guidance for obfuscation warnings", () => {
+    const payload = buildExecApprovalUnavailableReplyPayload({
+      warningText: "⚠️ Obfuscated command detected: Command too long; potential obfuscation",
+      reason: "initiating-platform-disabled",
+      channel: "discord",
+      channelLabel: "Discord",
+    });
+
+    expect(payload.text).toContain(
+      "Exec preflight blocked this command before any approval flow was started.",
+    );
+    expect(payload.text).toContain("`tools.exec.maxCommandChars`");
+    expect(payload.text).toContain("`tools.exec.obfuscationCheck: false`");
+    expect(payload.text).not.toContain("native chat exec approvals are not configured");
+    expect(payload.text).not.toContain("Approve it from the Web UI or terminal UI");
+  });
 });
