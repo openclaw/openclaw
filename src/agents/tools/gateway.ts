@@ -181,9 +181,26 @@ export function isRemoteGatewayTargetForAgentTools(params: {
     const hostname = new URL(override).hostname.toLowerCase().replace(/^\[|\]$/g, "");
     return hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1";
   }
-  return isRemoteAgentToolGatewayUrlSource(
-    buildGatewayConnectionDetails({ config: cfg }).urlSource,
-  );
+  const connectionDetails = buildGatewayConnectionDetails({ config: cfg });
+  // OPENCLAW_GATEWAY_URL may point to a loopback address for local dev setups. Only classify as
+  // remote when the resolved host is non-loopback, or when gateway.mode=remote is set (which
+  // means even loopback URLs may be SSH tunnels into a remote gateway — see tunneled-remote guard).
+  if (
+    connectionDetails.urlSource === "env OPENCLAW_GATEWAY_URL" &&
+    cfg.gateway?.mode !== "remote"
+  ) {
+    try {
+      const hostname = new URL(connectionDetails.url).hostname
+        .toLowerCase()
+        .replace(/^\[|\]$/g, "");
+      if (hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1") {
+        return false;
+      }
+    } catch {
+      // Malformed URL — fall through and treat as remote (conservative).
+    }
+  }
+  return isRemoteAgentToolGatewayUrlSource(connectionDetails.urlSource);
 }
 
 export async function callGatewayTool<T = Record<string, unknown>>(

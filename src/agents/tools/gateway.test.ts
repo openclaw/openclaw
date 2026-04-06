@@ -221,6 +221,19 @@ describe("gateway tool defaults", () => {
     expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
   });
 
+  it("treats OPENCLAW_GATEWAY_URL pointing to loopback as local when mode is not remote", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+
+    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(false);
+  });
+
+  it("treats OPENCLAW_GATEWAY_URL pointing to loopback as remote when mode=remote (tunneled gateway)", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://127.0.0.1:18789";
+    configState.value = { gateway: { mode: "remote" } };
+
+    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+  });
+
   it("treats config-selected remote targets as remote when no config is passed (live config fallback)", () => {
     configState.value = {
       gateway: {
