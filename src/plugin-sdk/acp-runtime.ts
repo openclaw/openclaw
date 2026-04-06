@@ -42,9 +42,22 @@ function loadDispatchAcpRuntime() {
 }
 
 function hasExplicitCommandCandidate(ctx: PluginHookReplyDispatchEvent["ctx"]): boolean {
-  return [ctx.CommandBody, ctx.BodyForCommands].some(
-    (value) => typeof value === "string" && value.trim().length > 0,
-  );
+  const commandBody = ctx.CommandBody;
+  if (typeof commandBody === "string" && commandBody.trim().length > 0) {
+    return true;
+  }
+
+  const bodyForCommands = ctx.BodyForCommands;
+  if (typeof bodyForCommands !== "string") {
+    return false;
+  }
+
+  const normalized = bodyForCommands.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return normalized.startsWith("!") || normalized.startsWith("/");
 }
 
 export async function tryDispatchAcpReplyHook(
