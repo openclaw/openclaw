@@ -4,19 +4,58 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Providers/Anthropic: restore Claude CLI as the preferred local Anthropic path in onboarding, model-auth guidance, and doctor flows again, and keep the Docker Claude CLI live lane aligned with the restored guidance.
+- Plugins/webhooks: add a bundled webhook ingress plugin so external automation can create and drive bound TaskFlows through per-route shared-secret endpoints. (#61892) Thanks @mbelinky.
+- Tools/media: document per-provider music and video generation capabilities, and add shared live video-to-video sweep coverage for providers that support local reference clips.
+
 ### Fixes
 
+- Channels/secrets: keep bundled channel artifact and secret-contract loading stable under lazy loading so bundled channel secrets continue to appear in `openclaw secret`, status, and security-audit surfaces.
+- Providers/xAI: recognize `api.grok.x.ai` as an xAI-native endpoint again so native xAI web-search attribution keeps working on Grok-hosted base URLs. (#61377) Thanks @jjjojoj.
+- Providers/Anthropic/cache: preserve thinking blocks for Claude Opus 4.5+, Sonnet 4.5+, and newer Claude 4-family models so Anthropic prompt-cache prefixes keep matching after thinking turns. (#61793)
+- Providers/Ollama: honor the selected provider's `baseUrl` during streaming so multi-Ollama setups stop routing every stream to the first configured Ollama endpoint. (#61678)
+- Browser/remote CDP: retry the DevTools websocket once after remote browser restarts so healthy remote browser profiles do not fail availability checks during CDP warm-up. (#57397) Thanks @ThanhNguyxn07.
+- Memory/vector recall: surface explicit warnings when `sqlite-vec` is unavailable or vector writes are degraded so memory indexing no longer reports false-success while semantic recall is impaired.
+- MS Teams/security: validate file-consent upload URLs against HTTPS, Microsoft/SharePoint host allowlists, and private-IP DNS checks before uploading attachments, blocking SSRF-style consent-upload abuse. (#23596)
+- Discord/gateway monitor: use `ws://` again for gateway monitor sockets so Discord monitor connections recover reliably after recent gateway socket changes.
+- Control UI/auth URLs: detect mistaken `?token=` links, show the correct `#token=` fragment hint only on real auth failures, and stop masking the real problem behind a generic device-identity error. (#54842)
+- Control UI/chat layout: keep Copy and Canvas actions plus mobile exec-approval overlays from covering chat text or command previews on narrow screens. (#61514)
+- Matrix/formatting: preserve multi-paragraph and loose-list rendering in Element so numbered and bulleted Markdown keeps its content attached to the correct list item. (#60997) Thanks @gucasbrg.
+- Sessions/model selection: resolve the explicitly selected session model separately from runtime fallback resolution so session status and live model switching stay aligned with the chosen model.
+- Secrets/x_search: keep legacy `x_search` auth resolution working so older xAI web-search configs continue to load after the plugin-owned auth move.
+- iOS/Watch exec approvals: keep Apple Watch review and approval recovery working while the iPhone is locked or backgrounded, including background-safe reconnects, persisted pending approvals, notification cleanup, and APNs-backed watch refresh recovery. (#61757) Thanks @ngutman.
+- Discord/forwarding: recover forwarded referenced message text and attachments when Discord omits snapshot payloads, so forwarded-message relays keep the original content. (#61670) Thanks @artwalker.
+- TUI/status: route `/status` through the shared session-status command and move the old gateway-wide diagnostic summary to `/gateway-status` (`/gwstatus`). Thanks @vincentkoc.
+- TUI/history and heartbeat: keep assistant commentary hidden on both streamed and reloaded TUI history views, preserve the phase-sanitized REST history contract, and stop forced heartbeat runs from targeting subagent sessions. (#61463) Thanks @100yenadmin.
+- TUI/command messages: strip inbound envelope metadata before rendering command/system messages so async completion notices stop leaking raw wrappers into the operator terminal. (#59985) Thanks @MoerAI.
+- TUI/terminal: restore Kitty keyboard protocol and `modifyOtherKeys` state on TUI exit and fatal CLI crashes so parent shells stop inheriting broken keyboard input after `openclaw tui` exits. (#49130) Thanks @biefan.
+- Plugins/Windows: load plugin entrypoints through `file://` import specifiers on Windows without breaking plugin SDK alias resolution, fixing `ERR_UNSUPPORTED_ESM_URL_SCHEME` for absolute plugin paths. (#61832) Thanks @Zeesejo.
+- Plugins/Windows: disable native Jiti loading for setup and doctor contract registries on Windows so onboarding and config-doctor plugin probes stop crashing with `ERR_UNSUPPORTED_ESM_URL_SCHEME`. (#61836, #61853)
+- Plugins/install: preserve plugin-schema defaults during fresh-install raw config validation so bundled plugin installs stop failing when required fields rely on schema defaults. (#61856) Thanks @SuperMarioYL.
+- macOS/gateway version: strip trailing commit metadata from CLI version output before semver parsing so the Mac app recognizes installed gateway versions like `OpenClaw 2026.4.2 (d74a122)` again. (#61111) Thanks @oliviareid-svg.
+- Gateway/containers: auto-bind to `0.0.0.0` during container startup for Docker and Podman compatibility, while keeping host-side status and doctor checks on the hardened loopback default when `gateway.bind` is unset. (#61818) Thanks @openperf.
+- Gateway/status: probe local TLS gateways over `wss://`, forward the local cert fingerprint for self-signed loopback probes, and warn when the local TLS runtime cannot load the configured cert. (#61935) Thanks @ThanhNguyxn07.
+- Slack/threading: keep legacy thread stickiness for real replies when older callers omit `isThreadReply`, while still honoring `replyToMode` for Slack's auto-created top-level `thread_ts`. (#61835) Thanks @kaonash.
 - Providers/Google: recognize Gemma model ids in native Google forward-compat resolution, keep the requested provider when cloning fallback templates, and force Gemma reasoning off so Gemma 4 routes stop failing through the Google catalog fallback. (#61507) Thanks @eyjohn.
 - Providers/Anthropic: skip `service_tier` injection for OAuth-authenticated stream wrapper requests so Claude OAuth requests stop failing with HTTP 401. (#60356) thanks @openperf.
+- Providers/OpenAI: keep WebSocket text buffered until a real assistant phase arrives, even when text deltas land before a phaseless `output_item.added` announcement. (#61954) Thanks @100yenadmin.
+- Discord/thread titles: stop forcing a hardcoded temperature for generated auto-thread names so Codex-backed thread title generation works on `openai-codex/*` models again. (#59525)
+- Agents/message tool: add a `read` plus `threadId` discoverability hint when the configured channel actions support threaded message reads.
+- Agents/context overflow: combine oversized and aggregate tool-result recovery in one repair pass, and restore a total-context overflow backstop during tool loops so recoverable sessions retry instead of failing early. (#61651) Thanks @Takhoffman.
 - Agents/exec: preserve explicit `host=node` routing under elevated defaults when `tools.exec.host=auto`, and fail loud on invalid elevated cross-host overrides. (#61739) Thanks @obviyus.
-- Agents/history: suppress commentary-only visible-text leaks in streaming and chat history views, and keep sanitized SSE history sequence numbers monotonic after transcript-only refreshes. (#61829) Thanks @100yenadmin.
-- Plugins/Windows: load plugin entrypoints through `file://` import specifiers on Windows without breaking plugin SDK alias resolution, fixing `ERR_UNSUPPORTED_ESM_URL_SCHEME` for absolute plugin paths. (#61832) Thanks @Zeesejo.
-- Discord/forwarding: recover forwarded referenced message text and attachments when Discord omits snapshot payloads, so forwarded-message relays keep the original content. (#61670) Thanks @artwalker.
-- Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
 - Agents/heartbeat: stop truncating live session transcripts after no-op heartbeat acks, move heartbeat cleanup to prompt assembly and compaction, and keep post-filter context-engine ingestion aligned with the real session baseline. (#60998) Thanks @nxmxbbd.
-- macOS/gateway version: strip trailing commit metadata from CLI version output before semver parsing so the Mac app recognizes installed gateway versions like `OpenClaw 2026.4.2 (d74a122)` again. (#61111) Thanks @oliviareid-svg.
+- Gateway/TUI: defer terminal chat finalization for per-attempt lifecycle errors so fallback retries keep streaming before the run is marked failed. (#60043) Thanks @jwchmodx.
+- Gateway/history: seed SSE startup history and raw transcript sequence tracking from one initial transcript snapshot so first history events cannot diverge from subsequent message sequence numbering. (#61855) Thanks @100yenadmin.
+- Agents/history: keep history-based reply reads and subagent completion summaries on `final_answer` text only so internal commentary stops leaking into user-visible follow-up replies. (#61747) Thanks @afurm.
+- Agents/history: suppress commentary-only visible-text leaks in streaming and chat history views, and keep sanitized SSE history sequence numbers monotonic after transcript-only refreshes. (#61829) Thanks @100yenadmin.
+- Agents/history: use one shared assistant-visible sanitizer across embedded delivery and chat-history extraction so leaked `<tool_call>` and `<tool_result>` XML blocks stay hidden from user-facing replies. (#61729) Thanks @openperf.
+- Agents/history: keep truly legacy unsigned replay text unphased when mixed with phased OpenAI WS assistant blocks, while still inheriting message phase for id-only replay signatures. (#61529) Thanks @100yenadmin.
 - Memory/dreaming: strip managed Light Sleep and REM blocks before daily-note ingestion so dreaming summaries stop re-ingesting their own staged output into new candidates. (#61720) Thanks @MonkeyLeeT.
-
+- Docs/i18n: relocalize final localized-page links after translation so generated locale pages stop keeping stale English-root links when targets appear later in the same run. (#61796) thanks @hxy91819.
+- Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
+- Tools/web_fetch and web_search: fix `TypeError: fetch failed` caused by undici 8.0 enabling HTTP/2 by default; pinned SSRF-guard dispatchers now explicitly set `allowH2: false` to restore HTTP/1.1 behavior and keep the custom DNS-pinning lookup compatible. (#61738, #61777) Thanks @zozo123.
 ## 2026.4.5
 
 ### Breaking
@@ -56,8 +95,9 @@ Docs: https://docs.openclaw.ai
 - Agents/cache: stabilize cache-relevant system prompt fingerprints by normalizing equivalent structured prompt whitespace, line endings, hook-added system context, and runtime capability ordering so semantically unchanged prompts reuse KV/cache more reliably. Thanks @vincentkoc.
 - Agents/tool prompts: remove the duplicate in-band tool inventory from agent system prompts so tool-calling models rely on the structured tool definitions as the single source of truth, improving prompt stability and reducing stale tool guidance.
 - Config/schema: enrich the exported `openclaw config schema` JSON Schema with field titles and descriptions so editors, agents, and other schema consumers receive the same config help metadata. (#60067) Thanks @solavrc.
-- Providers/CLI: remove bundled CLI text-provider backends and the `agents.defaults.cliBackends` surface, while keeping ACP harness sessions and Gemini media understanding on the native bundled providers.
 - Matrix/exec approvals: clarify unavailable-approval replies so Matrix no longer claims chat approvals are unsupported when native exec approvals are merely unconfigured. (#61424) Thanks @gumadeiras.
+- Providers/OpenAI Codex: add forward-compat `openai-codex/gpt-5.4-mini` synthesis across provider runtime, model catalog, and model listing so Codex mini works before bundled Pi catalog updates land.
+- Providers/OpenAI: add an opt-in GPT personality and move GPT-5 prompt tuning onto provider-owned system-prompt contributions so cache-stable guidance stays above the prompt cache boundary and embedded runner paths reuse the same provider-specific prompt behavior.
 - Docs/IRC: replace public IRC hostname examples with `irc.example.com` and recommend private servers for bot coordination while listing common public networks for intentional use.
 - Memory/dreaming: group nearby daily-note lines into short coherent chunks before staging them for dreaming, so one-off context from recent notes reaches REM/deep with better evidence and less line-level noise.
 - Memory/dreaming: drop generic date/day headings from daily-note chunk prefixes while keeping meaningful section labels, so staged snippets stay cleaner and more reusable. (#61597) Thanks @mbelinky.

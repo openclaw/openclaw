@@ -52,3 +52,8 @@ export function collectRuntimeConfigAssignments(params: {
     accountInactiveReason: "BlueBubbles account is disabled.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

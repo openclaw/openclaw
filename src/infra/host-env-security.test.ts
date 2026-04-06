@@ -469,7 +469,6 @@ describe("sanitizeHostExecEnv", () => {
       baseEnv: {
         PATH: "/usr/bin:/bin",
         GOOD: "1",
-        // oxlint-disable-next-line typescript/no-explicit-any
         BAD_NUMBER: 1 as any,
         "NOT-PORTABLE": "x",
         "ProgramFiles(x86)": "C:\\Program Files (x86)",

@@ -28,6 +28,7 @@ export type BuildPluginApiParams = {
       | "registerNodeHostCommand"
       | "registerSecurityAuditCollector"
       | "registerService"
+      | "registerCliBackend"
       | "registerConfigMigration"
       | "registerAutoEnableProbe"
       | "registerProvider"
@@ -66,6 +67,7 @@ const noopRegisterNodeHostCommand: OpenClawPluginApi["registerNodeHostCommand"] 
 const noopRegisterSecurityAuditCollector: OpenClawPluginApi["registerSecurityAuditCollector"] =
   () => {};
 const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
+const noopRegisterCliBackend: OpenClawPluginApi["registerCliBackend"] = () => {};
 const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] = () => {};
 const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] = () => {};
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
@@ -125,6 +127,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerSecurityAuditCollector:
       handlers.registerSecurityAuditCollector ?? noopRegisterSecurityAuditCollector,
     registerService: handlers.registerService ?? noopRegisterService,
+    registerCliBackend: handlers.registerCliBackend ?? noopRegisterCliBackend,
     registerConfigMigration: handlers.registerConfigMigration ?? noopRegisterConfigMigration,
     registerAutoEnableProbe: handlers.registerAutoEnableProbe ?? noopRegisterAutoEnableProbe,
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,

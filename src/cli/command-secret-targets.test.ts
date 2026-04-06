@@ -53,11 +53,25 @@ vi.mock("../secrets/target-registry.js", () => ({
 
 import {
   getAgentRuntimeCommandSecretTargetIds,
+  getModelsCommandSecretTargetIds,
+  getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
 describe("command secret target ids", () => {
+  it("keeps static qr remote targets out of the registry path", () => {
+    const ids = getQrRemoteCommandSecretTargetIds();
+    expect(ids).toEqual(new Set(["gateway.remote.token", "gateway.remote.password"]));
+  });
+
+  it("keeps static model targets out of the registry path", () => {
+    const ids = getModelsCommandSecretTargetIds();
+    expect(ids.has("models.providers.*.apiKey")).toBe(true);
+    expect(ids.has("models.providers.*.request.tls.key")).toBe(true);
+    expect(ids.has("channels.discord.token")).toBe(false);
+  });
+
   it("includes memorySearch remote targets for agent runtime commands", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);

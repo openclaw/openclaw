@@ -3280,6 +3280,256 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              cliBackends: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    command: {
+                      type: "string",
+                    },
+                    args: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    output: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "json",
+                        },
+                        {
+                          type: "string",
+                          const: "text",
+                        },
+                        {
+                          type: "string",
+                          const: "jsonl",
+                        },
+                      ],
+                    },
+                    resumeOutput: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "json",
+                        },
+                        {
+                          type: "string",
+                          const: "text",
+                        },
+                        {
+                          type: "string",
+                          const: "jsonl",
+                        },
+                      ],
+                    },
+                    input: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "arg",
+                        },
+                        {
+                          type: "string",
+                          const: "stdin",
+                        },
+                      ],
+                    },
+                    maxPromptArgChars: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    env: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "string",
+                      },
+                    },
+                    clearEnv: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    modelArg: {
+                      type: "string",
+                    },
+                    modelAliases: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "string",
+                      },
+                    },
+                    sessionArg: {
+                      type: "string",
+                    },
+                    sessionArgs: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    resumeArgs: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    sessionMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "always",
+                        },
+                        {
+                          type: "string",
+                          const: "existing",
+                        },
+                        {
+                          type: "string",
+                          const: "none",
+                        },
+                      ],
+                    },
+                    sessionIdFields: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    systemPromptArg: {
+                      type: "string",
+                    },
+                    systemPromptMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "append",
+                        },
+                        {
+                          type: "string",
+                          const: "replace",
+                        },
+                      ],
+                    },
+                    systemPromptWhen: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "first",
+                        },
+                        {
+                          type: "string",
+                          const: "always",
+                        },
+                        {
+                          type: "string",
+                          const: "never",
+                        },
+                      ],
+                    },
+                    imageArg: {
+                      type: "string",
+                    },
+                    imageMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "repeat",
+                        },
+                        {
+                          type: "string",
+                          const: "list",
+                        },
+                      ],
+                    },
+                    serialize: {
+                      type: "boolean",
+                    },
+                    reliability: {
+                      type: "object",
+                      properties: {
+                        watchdog: {
+                          type: "object",
+                          properties: {
+                            fresh: {
+                              type: "object",
+                              properties: {
+                                noOutputTimeoutMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                noOutputTimeoutRatio: {
+                                  type: "number",
+                                  minimum: 0.05,
+                                  maximum: 0.95,
+                                },
+                                minMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                maxMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                            resume: {
+                              type: "object",
+                              properties: {
+                                noOutputTimeoutMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                noOutputTimeoutRatio: {
+                                  type: "number",
+                                  minimum: 0.05,
+                                  maximum: 0.95,
+                                },
+                                minMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                maxMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["command"],
+                  additionalProperties: false,
+                },
+                title: "CLI Backends",
+                description: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+              },
               memorySearch: {
                 type: "object",
                 properties: {
@@ -24785,6 +25035,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum delay in ms for custom humanDelay (default: 2500).",
       tags: ["performance"],
     },
+    "agents.defaults.cliBackends": {
+      label: "CLI Backends",
+      help: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+      tags: ["advanced"],
+    },
     "agents.defaults.compaction": {
       label: "Compaction",
       help: "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
@@ -26584,6 +26839,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.5",
+  version: "2026.4.6",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

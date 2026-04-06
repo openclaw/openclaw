@@ -274,7 +274,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     const payload: PersistedMatrixSyncStore = {
       version: STORE_VERSION,
       savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
-      cleanShutdown: this.cleanShutdown === true,
+      cleanShutdown: this.cleanShutdown,
       ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
     };
     try {

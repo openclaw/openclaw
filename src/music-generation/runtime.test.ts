@@ -136,7 +136,9 @@ describe("music-generation runtime", () => {
         defaultModel: "track-v1",
         models: ["track-v1"],
         capabilities: {
-          supportsDuration: true,
+          generate: {
+            supportsDuration: true,
+          },
         },
         generateMusic: async () => ({
           tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
@@ -164,11 +166,13 @@ describe("music-generation runtime", () => {
     mocks.getMusicGenerationProvider.mockReturnValue({
       id: "google",
       capabilities: {
-        supportsLyrics: true,
-        supportsInstrumental: true,
-        supportsFormat: true,
-        supportedFormatsByModel: {
-          "lyria-3-clip-preview": ["mp3"],
+        generate: {
+          supportsLyrics: true,
+          supportsInstrumental: true,
+          supportsFormat: true,
+          supportedFormatsByModel: {
+            "lyria-3-clip-preview": ["mp3"],
+          },
         },
       },
       generateMusic: async (req) => {
@@ -209,6 +213,76 @@ describe("music-generation runtime", () => {
     expect(result.ignoredOverrides).toEqual([
       { key: "durationSeconds", value: 30 },
       { key: "format", value: "wav" },
+    ]);
+  });
+
+  it("uses mode-specific capabilities for edit requests", async () => {
+    let seenRequest:
+      | {
+          lyrics?: string;
+          instrumental?: boolean;
+          durationSeconds?: number;
+          format?: string;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("google/lyria-3-pro-preview");
+    mocks.getMusicGenerationProvider.mockReturnValue({
+      id: "google",
+      capabilities: {
+        generate: {
+          supportsLyrics: false,
+          supportsInstrumental: false,
+          supportsFormat: true,
+          supportedFormats: ["mp3"],
+        },
+        edit: {
+          enabled: true,
+          maxInputImages: 1,
+          supportsLyrics: true,
+          supportsInstrumental: true,
+          supportsDuration: false,
+          supportsFormat: false,
+        },
+      },
+      generateMusic: async (req) => {
+        seenRequest = {
+          lyrics: req.lyrics,
+          instrumental: req.instrumental,
+          durationSeconds: req.durationSeconds,
+          format: req.format,
+        };
+        return {
+          tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
+          model: "lyria-3-pro-preview",
+        };
+      },
+    });
+
+    const result = await generateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "google/lyria-3-pro-preview" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "turn this cover image into a trailer cue",
+      lyrics: "rise up",
+      instrumental: true,
+      durationSeconds: 30,
+      format: "mp3",
+      inputImages: [{ buffer: Buffer.from("png"), mimeType: "image/png" }],
+    });
+
+    expect(seenRequest).toEqual({
+      lyrics: "rise up",
+      instrumental: true,
+      durationSeconds: undefined,
+      format: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "durationSeconds", value: 30 },
+      { key: "format", value: "mp3" },
     ]);
   });
 });

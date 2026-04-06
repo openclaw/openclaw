@@ -253,7 +253,7 @@ describe("legacy config detection", () => {
       expectSnapshotInvalidRootKey(ctx, "whatsapp");
     });
   });
-  it("does not auto-migrate removed cli auth profile modes on load", async () => {
+  it("does not auto-migrate claude-cli auth profile mode on load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -263,7 +263,7 @@ describe("legacy config detection", () => {
           {
             auth: {
               profiles: {
-                "anthropic:removed-cli": { provider: "anthropic", mode: "token" },
+                "anthropic:claude-cli": { provider: "anthropic", mode: "token" },
               },
             },
           },
@@ -274,13 +274,13 @@ describe("legacy config detection", () => {
       );
 
       const cfg = loadConfig();
-      expect(cfg.auth?.profiles?.["anthropic:removed-cli"]?.mode).toBe("token");
+      expect(cfg.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
 
       const raw = await fs.readFile(configPath, "utf-8");
       const parsed = JSON.parse(raw) as {
         auth?: { profiles?: Record<string, { mode?: string }> };
       };
-      expect(parsed.auth?.profiles?.["anthropic:removed-cli"]?.mode).toBe("token");
+      expect(parsed.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
     });
   });
   it("still flags memorySearch in snapshot under the shorter support window", async () => {

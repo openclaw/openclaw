@@ -15,6 +15,12 @@ vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
             },
           }
         : undefined,
+    getBootstrapChannelSecrets: (id: string) =>
+      id === "discord"
+        ? {
+            collectRuntimeConfigAssignments: discordSecrets.collectRuntimeConfigAssignments,
+          }
+        : undefined,
   };
 });
 

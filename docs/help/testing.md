@@ -24,7 +24,7 @@ Most days:
 
 - Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
 - Faster local full-suite run on a roomy machine: `pnpm test:max`
-- Direct Vitest watch loop (modern projects config): `pnpm test:watch`
+- Direct Vitest watch loop: `pnpm test:watch`
 - Direct file targeting now routes extension/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
 
 When you touch tests or want extra confidence:
@@ -57,8 +57,11 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
 - Projects note:
-  - `pnpm test`, `pnpm test:watch`, and `pnpm test:changed` all use the same native Vitest root `projects` config now.
-  - Direct file filters route natively through the root project graph, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` works without a custom wrapper.
+  - Untargeted `pnpm test` still uses the native Vitest root `projects` config.
+  - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax.
+  - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun.
+  - Selected `plugin-sdk` and `commands` tests also route through dedicated light lanes that skip `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
+  - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.
@@ -77,14 +80,16 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test` inherits the same `threads` + `isolate: false` defaults from the root `vitest.config.ts` projects config.
   - The shared `scripts/run-vitest.mjs` launcher now also adds `--no-maglev` for Vitest child Node processes by default to reduce V8 compile churn during big local runs. Set `OPENCLAW_VITEST_ENABLE_MAGLEV=1` if you need to compare against stock V8 behavior.
 - Fast-local iteration note:
-  - `pnpm test:changed` runs the native projects config with `--changed origin/main`.
-  - `pnpm test:max` and `pnpm test:changed:max` keep the same native projects config, just with a higher worker cap.
+  - `pnpm test:changed` routes through scoped lanes when the changed paths map cleanly to a smaller suite.
+  - `pnpm test:max` and `pnpm test:changed:max` keep the same routing behavior, just with a higher worker cap.
   - Local worker auto-scaling is intentionally conservative now and also backs off when the host load average is already high, so multiple concurrent Vitest runs do less damage by default.
   - The base Vitest config marks the projects/config files as `forceRerunTriggers` so changed-mode reruns stay correct when test wiring changes.
   - The config keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on supported hosts; set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path` if you want one explicit cache location for direct profiling.
 - Perf-debug note:
   - `pnpm test:perf:imports` enables Vitest import-duration reporting plus import-breakdown output.
   - `pnpm test:perf:imports:changed` scopes the same profiling view to files changed since `origin/main`.
+- `pnpm test:perf:changed:bench -- --ref <git-ref>` compares routed `test:changed` against the native root-project path for that committed diff and prints wall time plus macOS max RSS.
+- `pnpm test:perf:changed:bench -- --worktree` benchmarks the current dirty tree by routing the changed file list through `scripts/test-projects.mjs` and the root Vitest config.
   - `pnpm test:perf:profile:main` writes a main-thread CPU profile for Vitest/Vite startup and transform overhead.
   - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for the unit suite with file parallelism disabled.
 
@@ -196,7 +201,7 @@ Live tests are split into two layers so we can isolate failures:
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
   - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.4,anthropic/claude-opus-4-6,..."` (comma allowlist)
 - How to select providers:
-  - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity"` (comma allowlist)
+  - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
 - Where keys come from:
   - By default: profile store and env fallbacks
   - Set `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to enforce **profile store** only
@@ -227,7 +232,7 @@ Live tests are split into two layers so we can isolate failures:
   - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
 - How to select providers (avoid “OpenRouter everything”):
-  - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,openai,anthropic,zai,minimax"` (comma allowlist)
+  - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
 - Tool + image probes are always on in this live test:
   - `read` probe + `exec+read` probe (tool stress)
   - image probe runs when the model advertises image input support
@@ -244,6 +249,46 @@ Tip: to see what you can test on your machine (and the exact `provider/model` id
 openclaw models list
 openclaw models list --json
 ```
+
+## Live: CLI backend smoke (Codex CLI or other local CLIs)
+
+- Test: `src/gateway/gateway-cli-backend.live.test.ts`
+- Goal: validate the Gateway + agent pipeline using a local CLI backend, without touching your default config.
+- Enable:
+  - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
+  - `OPENCLAW_LIVE_CLI_BACKEND=1`
+- Defaults:
+  - Model: `codex-cli/gpt-5.4`
+  - Command: `codex`
+  - Args: `["exec","--json","--color","never","--sandbox","read-only","--skip-git-repo-check"]`
+- Overrides (optional):
+  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.4"`
+  - `OPENCLAW_LIVE_CLI_BACKEND_COMMAND="/full/path/to/codex"`
+  - `OPENCLAW_LIVE_CLI_BACKEND_ARGS='["exec","--json","--color","never","--sandbox","read-only","--skip-git-repo-check"]'`
+  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (paths are injected into the prompt).
+  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
+  - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
+  - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
+
+Example:
+
+```bash
+OPENCLAW_LIVE_CLI_BACKEND=1 \
+  OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.4" \
+  pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
+```
+
+Docker recipe:
+
+```bash
+pnpm test:docker:live-cli-backend
+```
+
+Notes:
+
+- The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
+- It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user.
+- For `codex-cli`, it installs the Linux `@openai/codex` package into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 
 ## Live: ACP bind smoke (`/acp spawn ... --bind here`)
 
@@ -309,6 +354,10 @@ Notes:
 
 - `google/...` uses the Gemini API (API key).
 - `google-antigravity/...` uses the Antigravity OAuth bridge (Cloud Code Assist-style agent endpoint).
+- `google-gemini-cli/...` uses the local Gemini CLI on your machine (separate auth + tooling quirks).
+- Gemini API vs Gemini CLI:
+  - API: OpenClaw calls Google’s hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by “Gemini”.
+  - CLI: OpenClaw shells out to a local `gemini` binary; it has its own auth and can behave differently (streaming/tool support/version skew).
 
 ## Live: model matrix (what we cover)
 
@@ -359,7 +408,7 @@ If you have keys enabled, we also support testing via:
 
 More providers you can include in the live matrix (if you have creds/config):
 
-- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
+- Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 Tip: don’t try to hardcode “all models” in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine + whatever keys are available.
@@ -430,10 +479,45 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - Exercises the shared bundled music-generation provider path
   - Currently covers Google and MiniMax
   - Loads provider env vars from your login shell (`~/.profile`) before probing
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
+  - Runs both declared runtime modes when available:
+    - `generate` with prompt-only input
+    - `edit` when the provider declares `capabilities.edit.enabled`
+  - Current shared-lane coverage:
+    - `google`: `generate`, `edit`
+    - `minimax`: `generate`
+    - `comfy`: separate Comfy live file, not this shared sweep
 - Optional narrowing:
   - `OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS="google,minimax"`
   - `OPENCLAW_LIVE_MUSIC_GENERATION_MODELS="google/lyria-3-clip-preview,minimax/music-2.5+"`
+- Optional auth behavior:
+  - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
+## Video generation live
+
+- Test: `extensions/video-generation-providers.live.test.ts`
+- Enable: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/video-generation-providers.live.test.ts`
+- Scope:
+  - Exercises the shared bundled video-generation provider path
+  - Loads provider env vars from your login shell (`~/.profile`) before probing
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Skips providers with no usable auth/profile/model
+  - Runs both declared runtime modes when available:
+    - `generate` with prompt-only input
+    - `imageToVideo` when the provider declares `capabilities.imageToVideo.enabled`
+    - `videoToVideo` when the provider declares `capabilities.videoToVideo.enabled` and the selected provider/model accepts buffer-backed local video input in the shared sweep
+  - Current `videoToVideo` live coverage:
+    - `google`
+    - `openai`
+    - `runway` only when the selected model is `runway/gen4_aleph`
+  - Current declared-but-skipped `videoToVideo` providers in the shared sweep:
+    - `alibaba`, `qwen`, `xai` because those paths currently require remote `http(s)` / MP4 reference URLs
+- Optional narrowing:
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="google,openai,runway"`
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="google/veo-3.1-fast-generate-preview,openai/sora-2,runway/gen4_aleph"`
+- Optional auth behavior:
+  - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 
 ## Docker runners (optional "works in Linux" checks)
 
@@ -454,6 +538,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
 - ACP bind smoke: `pnpm test:docker:live-acp-bind` (script: `scripts/test-live-acp-bind-docker.sh`)
+- CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)

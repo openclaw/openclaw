@@ -261,11 +261,24 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 1,
-      maxDurationSeconds: MAX_DURATION_SECONDS,
-      supportsAspectRatio: true,
+      generate: {
+        maxVideos: 1,
+        maxDurationSeconds: MAX_DURATION_SECONDS,
+        supportsAspectRatio: true,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        maxDurationSeconds: MAX_DURATION_SECONDS,
+        supportsAspectRatio: true,
+      },
+      videoToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputVideos: 1,
+        supportsAspectRatio: true,
+      },
     },
     async generateVideo(req): Promise<VideoGenerationResult> {
       const auth = await resolveApiKeyForProvider({

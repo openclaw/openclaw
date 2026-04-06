@@ -154,3 +154,8 @@ export function collectRuntimeConfigAssignments(params: {
     });
   }
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

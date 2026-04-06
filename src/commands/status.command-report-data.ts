@@ -5,13 +5,13 @@ import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
 import type { RenderTableOptions, TableColumn } from "../terminal/table.js";
 import type { HealthSummary } from "./health.js";
-import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusChannelsTableRows,
   statusChannelsTableColumns,
 } from "./status-all/channels-table.js";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
+import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,

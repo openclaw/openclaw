@@ -202,7 +202,7 @@ export function createIMessageConversationBindingManager(params: {
     },
     unbindBySessionKey: (targetSessionKey) => {
       const removed: IMessageConversationBindingRecord[] = [];
-      for (const record of [...getState().bindingsByAccountConversation.values()]) {
+      for (const record of getState().bindingsByAccountConversation.values()) {
         if (record.accountId !== accountId || record.targetSessionKey !== targetSessionKey) {
           continue;
         }
@@ -214,7 +214,7 @@ export function createIMessageConversationBindingManager(params: {
       return removed;
     },
     stop: () => {
-      for (const key of [...getState().bindingsByAccountConversation.keys()]) {
+      for (const key of getState().bindingsByAccountConversation.keys()) {
         if (key.startsWith(`${accountId}:`)) {
           getState().bindingsByAccountConversation.delete(key);
         }

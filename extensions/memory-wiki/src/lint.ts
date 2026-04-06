@@ -7,7 +7,7 @@ import {
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderWikiMarkdown, toWikiPageSummary, type WikiPageSummary } from "./markdown.js";
+import { renderWikiMarkdown, type WikiPageSummary } from "./markdown.js";
 
 export type MemoryWikiLintIssue = {
   severity: "error" | "warning";

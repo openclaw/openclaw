@@ -96,3 +96,8 @@ export function collectRuntimeConfigAssignments(params: {
     accountInactiveReason: "IRC account is disabled or NickServ is disabled for this account.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

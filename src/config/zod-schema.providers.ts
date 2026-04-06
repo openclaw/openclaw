@@ -100,7 +100,7 @@ function normalizeBundledChannelConfigs(
       continue;
     }
     next ??= { ...value };
-    next[channelId] = parsed.data as ChannelsConfig[string];
+    next[channelId] = parsed.data;
   }
 
   return next ?? value;

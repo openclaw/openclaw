@@ -50,6 +50,5 @@ export interface ChannelsConfig {
   /** Map provider -> channel id -> model override. */
   modelByChannel?: ChannelModelByChannelConfig;
   /** Channel sections are plugin-owned; concrete channel files augment this interface. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any;
+  [key: string]: unknown;
 }

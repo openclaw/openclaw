@@ -3,13 +3,12 @@ import {
   createDelegatedSetupWizardProxy,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
-  type ChannelSetupWizard,
-  type ChannelSetupDmPolicy,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 const channel = "zalo" as const;
 
@@ -40,10 +39,10 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
   policyKey: "channels.zalo.dmPolicy",
   allowFromKey: "channels.zalo.allowFrom",
   resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)) !== DEFAULT_ACCOUNT_ID
+    (accountId ?? resolveDefaultZaloAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)}.dmPolicy`,
-          allowFromKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig)}.allowFrom`,
+          policyKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg)}.dmPolicy`,
+          allowFromKey: `channels.zalo.accounts.${accountId ?? resolveDefaultZaloAccountId(cfg)}.allowFrom`,
         }
       : {
           policyKey: "channels.zalo.dmPolicy",
@@ -51,16 +50,16 @@ export const zaloDmPolicy: ChannelSetupDmPolicy = {
         },
   getCurrent: (cfg, accountId) =>
     resolveZaloAccount({
-      cfg: cfg as OpenClawConfig,
-      accountId: accountId ?? resolveDefaultZaloAccountId(cfg as OpenClawConfig),
+      cfg: cfg,
+      accountId: accountId ?? resolveDefaultZaloAccountId(cfg),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
     const resolvedAccountId =
       accountId && normalizeAccountId(accountId)
         ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZaloAccountId(cfg as OpenClawConfig);
+        : resolveDefaultZaloAccountId(cfg);
     const resolved = resolveZaloAccount({
-      cfg: cfg as OpenClawConfig,
+      cfg: cfg,
       accountId: resolvedAccountId,
     });
     if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {

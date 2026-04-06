@@ -26,6 +26,12 @@ vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
             },
           }
         : undefined,
+    getBootstrapChannelSecrets: (id: string) =>
+      id === "matrix"
+        ? {
+            collectRuntimeConfigAssignments: matrixSecrets.collectRuntimeConfigAssignments,
+          }
+        : undefined,
   };
 });
 

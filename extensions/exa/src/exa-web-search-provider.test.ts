@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import plugin from "../index.js";
 import { __testing, createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
 describe("exa web search provider", () => {

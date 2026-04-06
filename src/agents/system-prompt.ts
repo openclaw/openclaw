@@ -479,11 +479,11 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return "You are a personal assistant operating inside OpenClaw.";
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    "You are a personal assistant operating inside OpenClaw.",
     "",
     "## Tooling",
     "Structured tool definitions are the source of truth for tool names, descriptions, and parameters.",

@@ -1,6 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { getRuntimeConfigSnapshot, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiCodeExecutionPayload,
@@ -10,7 +9,7 @@ import {
 } from "./src/code-execution-shared.js";
 import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
 
-type XaiPluginConfig = NonNullable<
+type _XaiPluginConfig = NonNullable<
   NonNullable<OpenClawConfig["plugins"]>["entries"]
 >["xai"] extends {
   config?: infer Config;

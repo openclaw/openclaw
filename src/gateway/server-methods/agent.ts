@@ -583,6 +583,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
         space: resolvedGroupSpace ?? entry?.space,
+        cliSessionIds: entry?.cliSessionIds,
+        claudeCliSessionId: entry?.claudeCliSessionId,
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
       const sendPolicy = resolveSendPolicy({

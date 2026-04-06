@@ -42,6 +42,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -199,33 +200,36 @@ function resolveHeartbeatSession(
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
   }
 
+  // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
-  if (forced) {
+  if (forced && !isSubagentSessionKey(forced)) {
     const forcedCandidate = toAgentStoreSessionKey({
       agentId: resolvedAgentId,
       requestKey: forced,
       mainKey: cfg.session?.mainKey,
     });
-    const forcedCanonical = canonicalizeMainSessionAlias({
-      cfg,
-      agentId: resolvedAgentId,
-      sessionKey: forcedCandidate,
-    });
-    if (forcedCanonical !== "global") {
-      const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
-      if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-        return {
-          sessionKey: forcedCanonical,
-          storePath,
-          store,
-          entry: store[forcedCanonical],
-        };
+    if (!isSubagentSessionKey(forcedCandidate)) {
+      const forcedCanonical = canonicalizeMainSessionAlias({
+        cfg,
+        agentId: resolvedAgentId,
+        sessionKey: forcedCandidate,
+      });
+      if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
+        const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
+        if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+          return {
+            sessionKey: forcedCanonical,
+            storePath,
+            store,
+            entry: store[forcedCanonical],
+          };
+        }
       }
     }
   }
 
   const trimmed = heartbeat?.session?.trim() ?? "";
-  if (!trimmed) {
+  if (!trimmed || isSubagentSessionKey(trimmed)) {
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
   }
 
@@ -239,12 +243,15 @@ function resolveHeartbeatSession(
     requestKey: trimmed,
     mainKey: cfg.session?.mainKey,
   });
+  if (isSubagentSessionKey(candidate)) {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
   const canonical = canonicalizeMainSessionAlias({
     cfg,
     agentId: resolvedAgentId,
     sessionKey: candidate,
   });
-  if (canonical !== "global") {
+  if (canonical !== "global" && !isSubagentSessionKey(canonical)) {
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
       return {

@@ -47,7 +47,6 @@ describe("readOpenAICodexCliOAuthProfile", () => {
         refresh: "refresh-token",
         accountId: "acct_123",
         email: "codex@example.com",
-        managedBy: "codex-cli",
       },
     });
     expect(parsed?.credential.expires).toBeGreaterThan(Date.now());

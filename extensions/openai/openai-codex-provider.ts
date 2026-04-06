@@ -269,7 +269,6 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     id: PROVIDER_ID,
     label: "OpenAI Codex",
     docsPath: "/providers/models",
-    deprecatedProfileIds: [CODEX_CLI_PROFILE_ID],
     auth: [
       {
         id: "oauth",
@@ -303,7 +302,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveExternalOAuthProfiles: (ctx) => {
+    resolveExternalAuthProfiles: (ctx) => {
       const profile = readOpenAICodexCliOAuthProfile({
         env: ctx.env,
         store: ctx.store,

@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
@@ -200,7 +200,7 @@ export default defineSingleProviderPluginEntry({
         return extraParams;
       }
       return {
-        ...(extraParams ?? {}),
+        ...extraParams,
         tool_stream: true,
       };
     },
@@ -210,7 +210,7 @@ export default defineSingleProviderPluginEntry({
     // private config layout. Callers may receive a real key from the active
     // runtime snapshot or a non-secret SecretRef marker from source config.
     resolveSyntheticAuth: ({ config }) => {
-      const fallbackAuth = resolveFallbackXaiAuth(config as OpenClawConfig | undefined);
+      const fallbackAuth = resolveFallbackXaiAuth(config);
       if (!fallbackAuth) {
         return undefined;
       }

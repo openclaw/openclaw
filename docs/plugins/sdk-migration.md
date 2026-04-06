@@ -276,7 +276,7 @@ Current bundled provider examples:
   | `plugin-sdk/allowlist-config-edit` | Allowlist config helpers | Allowlist config edit/read helpers |
   | `plugin-sdk/group-access` | Group access helpers | Shared group-access decision helpers |
   | `plugin-sdk/direct-dm` | Direct-DM helpers | Shared direct-DM auth/guard helpers |
-  | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status helper primitives |
+  | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status and ambient proxy helper primitives |
   | `plugin-sdk/webhook-targets` | Webhook target helpers | Webhook target registry and route-install helpers |
   | `plugin-sdk/webhook-path` | Webhook path helpers | Webhook path normalization helpers |
   | `plugin-sdk/web-media` | Shared web media helpers | Remote/local media loading helpers |

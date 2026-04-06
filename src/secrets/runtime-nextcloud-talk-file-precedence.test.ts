@@ -16,6 +16,12 @@ vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
             },
           }
         : undefined,
+    getBootstrapChannelSecrets: (id: string) =>
+      id === "nextcloud-talk"
+        ? {
+            collectRuntimeConfigAssignments: nextcloudTalkSecrets.collectRuntimeConfigAssignments,
+          }
+        : undefined,
   };
 });
 

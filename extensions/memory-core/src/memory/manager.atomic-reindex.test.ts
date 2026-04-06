@@ -23,16 +23,16 @@ describe("memory manager atomic reindex", () => {
   let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
-  });
-
-  beforeEach(async () => {
     vi.resetModules();
     const embeddingMocks = await import("./embedding.test-mocks.js");
     embedBatch = embeddingMocks.getEmbedBatchMock();
     resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
     ({ getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js"));
     ({ closeAllMemorySearchManagers } = await import("./index.js"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
+  });
+
+  beforeEach(async () => {
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     resetEmbeddingMocks();
     shouldFail = false;
@@ -60,9 +60,11 @@ describe("memory manager atomic reindex", () => {
 
   afterAll(async () => {
     if (!fixtureRoot) {
+      vi.resetModules();
       return;
     }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+    vi.resetModules();
   });
 
   it("keeps the prior index when a full reindex fails", async () => {

@@ -11,7 +11,7 @@ import {
   normalizeModelRef,
   normalizeProviderId,
   resolveModelRefFromString,
-  resolvePersistedModelRef,
+  resolvePersistedOverrideModelRef,
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
@@ -149,7 +149,7 @@ export function resolveStoredModelOverride(params: {
   parentSessionKey?: string;
   defaultProvider: string;
 }): StoredModelOverride | null {
-  const direct = resolvePersistedModelRef({
+  const direct = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: params.sessionEntry?.providerOverride,
     overrideModel: params.sessionEntry?.modelOverride,
@@ -165,7 +165,7 @@ export function resolveStoredModelOverride(params: {
     return null;
   }
   const parentEntry = params.sessionStore[parentKey];
-  const parentOverride = resolvePersistedModelRef({
+  const parentOverride = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: parentEntry?.providerOverride,
     overrideModel: parentEntry?.modelOverride,
@@ -336,7 +336,7 @@ export async function createModelSelectionState(params: {
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
-  const directStoredOverride = resolvePersistedModelRef({
+  const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
     overrideProvider: sessionEntry?.providerOverride,
     overrideModel: sessionEntry?.modelOverride,

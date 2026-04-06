@@ -150,7 +150,7 @@ export function createWebOnMessageHandler(params: {
       if (!msg.sender?.e164 && !msg.senderE164 && peerId && peerId.startsWith("+")) {
         const normalized = normalizeE164(peerId);
         if (normalized) {
-          msg.sender = { ...(msg.sender ?? {}), e164: normalized };
+          msg.sender = { ...msg.sender, e164: normalized };
           msg.senderE164 = normalized;
         }
       }

@@ -6,227 +6,19 @@ import {
   parseAssistantTextSignature,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
+import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
+export {
+  stripDowngradedToolCallText,
+  stripMinimaxToolCallXml,
+} from "../shared/text/assistant-visible-text.js";
+export { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js";
+
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
-}
-
-/**
- * Strip malformed Minimax tool invocations that leak into text content.
- * Minimax sometimes embeds tool calls as XML in text blocks instead of
- * proper structured tool calls. This removes:
- * - <invoke name="...">...</invoke> blocks
- * - </minimax:tool_call> closing tags
- */
-export function stripMinimaxToolCallXml(text: string): string {
-  if (!text) {
-    return text;
-  }
-  if (!/minimax:tool_call/i.test(text)) {
-    return text;
-  }
-
-  // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
-  let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
-
-  // Remove stray minimax tool tags.
-  cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
-
-  return cleaned;
-}
-
-/**
- * Strip model control tokens leaked into assistant text output.
- *
- * Models like GLM-5 and DeepSeek sometimes emit internal delimiter tokens
- * (e.g. `<|assistant|>`, `<|tool_call_result_begin|>`, `<｜begin▁of▁sentence｜>`)
- * in their responses. These use the universal `<|...|>` convention (ASCII or
- * full-width pipe variants) and should never reach end users.
- *
- * This is a provider bug — no upstream fix tracked yet.
- * Remove this function when upstream providers stop leaking tokens.
- * @see https://github.com/openclaw/openclaw/issues/40020
- */
-// Match both ASCII pipe <|...|> and full-width pipe <｜...｜> (U+FF5C) variants.
-const MODEL_SPECIAL_TOKEN_RE = /<[|｜][^|｜]*[|｜]>/g;
-
-export function stripModelSpecialTokens(text: string): string {
-  if (!text) {
-    return text;
-  }
-  if (!MODEL_SPECIAL_TOKEN_RE.test(text)) {
-    return text;
-  }
-  MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
-  return text.replace(MODEL_SPECIAL_TOKEN_RE, " ").replace(/  +/g, " ").trim();
-}
-
-/**
- * Strip downgraded tool call text representations that leak into text content.
- * When replaying history to Gemini, tool calls without `thought_signature` are
- * downgraded to text blocks like `[Tool Call: name (ID: ...)]`. These should
- * not be shown to users.
- */
-export function stripDowngradedToolCallText(text: string): string {
-  if (!text) {
-    return text;
-  }
-  if (!/\[Tool (?:Call|Result)/i.test(text) && !/\[Historical context/i.test(text)) {
-    return text;
-  }
-
-  const consumeJsonish = (
-    input: string,
-    start: number,
-    options?: { allowLeadingNewlines?: boolean },
-  ): number | null => {
-    const { allowLeadingNewlines = false } = options ?? {};
-    let index = start;
-    while (index < input.length) {
-      const ch = input[index];
-      if (ch === " " || ch === "\t") {
-        index += 1;
-        continue;
-      }
-      if (allowLeadingNewlines && (ch === "\n" || ch === "\r")) {
-        index += 1;
-        continue;
-      }
-      break;
-    }
-    if (index >= input.length) {
-      return null;
-    }
-
-    const startChar = input[index];
-    if (startChar === "{" || startChar === "[") {
-      let depth = 0;
-      let inString = false;
-      let escape = false;
-      for (let i = index; i < input.length; i += 1) {
-        const ch = input[i];
-        if (inString) {
-          if (escape) {
-            escape = false;
-          } else if (ch === "\\") {
-            escape = true;
-          } else if (ch === '"') {
-            inString = false;
-          }
-          continue;
-        }
-        if (ch === '"') {
-          inString = true;
-          continue;
-        }
-        if (ch === "{" || ch === "[") {
-          depth += 1;
-          continue;
-        }
-        if (ch === "}" || ch === "]") {
-          depth -= 1;
-          if (depth === 0) {
-            return i + 1;
-          }
-        }
-      }
-      return null;
-    }
-
-    if (startChar === '"') {
-      let escape = false;
-      for (let i = index + 1; i < input.length; i += 1) {
-        const ch = input[i];
-        if (escape) {
-          escape = false;
-          continue;
-        }
-        if (ch === "\\") {
-          escape = true;
-          continue;
-        }
-        if (ch === '"') {
-          return i + 1;
-        }
-      }
-      return null;
-    }
-
-    let end = index;
-    while (end < input.length && input[end] !== "\n" && input[end] !== "\r") {
-      end += 1;
-    }
-    return end;
-  };
-
-  const stripToolCalls = (input: string): string => {
-    const markerRe = /\[Tool Call:[^\]]*\]/gi;
-    let result = "";
-    let cursor = 0;
-    for (const match of input.matchAll(markerRe)) {
-      const start = match.index ?? 0;
-      if (start < cursor) {
-        continue;
-      }
-      result += input.slice(cursor, start);
-      let index = start + match[0].length;
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
-        index += 1;
-      }
-      if (input[index] === "\r") {
-        index += 1;
-        if (input[index] === "\n") {
-          index += 1;
-        }
-      } else if (input[index] === "\n") {
-        index += 1;
-      }
-      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
-        index += 1;
-      }
-      if (input.slice(index, index + 9).toLowerCase() === "arguments") {
-        index += 9;
-        if (input[index] === ":") {
-          index += 1;
-        }
-        if (input[index] === " ") {
-          index += 1;
-        }
-        const end = consumeJsonish(input, index, { allowLeadingNewlines: true });
-        if (end !== null) {
-          index = end;
-        }
-      }
-      if (
-        (input[index] === "\n" || input[index] === "\r") &&
-        (result.endsWith("\n") || result.endsWith("\r") || result.length === 0)
-      ) {
-        if (input[index] === "\r") {
-          index += 1;
-        }
-        if (input[index] === "\n") {
-          index += 1;
-        }
-      }
-      cursor = index;
-    }
-    result += input.slice(cursor);
-    return result;
-  };
-
-  // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
-  let cleaned = stripToolCalls(text);
-
-  // Remove [Tool Result for ID ...] blocks and their content.
-  cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
-
-  // Remove [Historical context: ...] markers (self-contained within brackets).
-  cleaned = cleaned.replace(/\[Historical context:[^\]]*\]\n?/gi, "");
-
-  return cleaned.trim();
 }
 
 /**
@@ -239,9 +31,7 @@ export function stripThinkingTagsFromText(text: string): string {
 }
 
 function sanitizeAssistantText(text: string): string {
-  return stripThinkingTagsFromText(
-    stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
-  ).trim();
+  return sanitizeAssistantVisibleText(text);
 }
 
 function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {

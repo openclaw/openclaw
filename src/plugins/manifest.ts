@@ -85,6 +85,8 @@ export type PluginManifest = {
    * Use this for shorthand model refs that omit an explicit provider prefix.
    */
   modelSupport?: PluginManifestModelSupport;
+  /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
+  cliBackends?: string[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
   providerAuthEnvVars?: Record<string, string[]>;
   /**
@@ -496,6 +498,7 @@ export function loadPluginManifest(
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
+  const cliBackends = normalizeStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
@@ -522,6 +525,7 @@ export function loadPluginManifest(
       channels,
       providers,
       modelSupport,
+      cliBackends,
       providerAuthEnvVars,
       providerAuthChoices,
       skills,

@@ -1,10 +1,9 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { VERSION } from "../version.js";
 import type { HealthSummary } from "./health.js";
-import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusOverviewRowsFromSurface,
   type StatusOverviewSurface,
@@ -17,6 +16,7 @@ import {
   buildStatusSecretsValue,
   buildStatusSessionsOverviewValue,
 } from "./status-overview-values.ts";
+import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusAgentsValue,
   buildStatusHeartbeatValue,

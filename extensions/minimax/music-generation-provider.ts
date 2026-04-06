@@ -118,12 +118,17 @@ export function buildMinimaxMusicGenerationProvider(): MusicGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxTracks: 1,
-      supportsLyrics: true,
-      supportsInstrumental: true,
-      supportsDuration: true,
-      supportsFormat: true,
-      supportedFormats: ["mp3"],
+      generate: {
+        maxTracks: 1,
+        supportsLyrics: true,
+        supportsInstrumental: true,
+        supportsDuration: true,
+        supportsFormat: true,
+        supportedFormats: ["mp3"],
+      },
+      edit: {
+        enabled: false,
+      },
     },
     async generateMusic(req) {
       if ((req.inputImages?.length ?? 0) > 0) {

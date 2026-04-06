@@ -5,10 +5,12 @@ import { createJiti } from "jiti";
 import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { configMayNeedPluginAutoEnable } from "../config/plugin-auto-enable.shared.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -42,7 +44,17 @@ const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
+const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
 let cachedBoundaryRawConfig: OpenClawConfig | undefined;
+let cachedBoundaryResolvedConfigKey: string | undefined;
+let cachedBoundaryConfigFileState:
+  | {
+      configPath: string;
+      mtimeMs: number;
+      size: number;
+      rawConfig: OpenClawConfig;
+    }
+  | undefined;
 let cachedBoundaryResolvedConfig:
   | {
       rawConfig: OpenClawConfig;
@@ -52,6 +64,40 @@ let cachedBoundaryResolvedConfig:
       autoEnabledReasons: Record<string, string[]>;
     }
   | undefined;
+let cachedManifestRegistry: readonly PluginManifestRecord[] | undefined;
+const cachedFacadeModuleLocationsByKey = new Map<
+  string,
+  {
+    modulePath: string;
+    boundaryRoot: string;
+  } | null
+>();
+const cachedFacadeManifestRecordsByKey = new Map<string, FacadePluginManifestLike | null>();
+const cachedFacadePublicSurfaceAccessByKey = new Map<
+  string,
+  { allowed: boolean; pluginId?: string; reason?: string }
+>();
+
+type FacadePluginManifestLike = Pick<
+  PluginManifestRecord,
+  "id" | "origin" | "enabledByDefault" | "rootDir" | "channels"
+>;
+
+function createFacadeResolutionKey(params: { dirName: string; artifactBasename: string }): string {
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
+}
+
+function getFacadeManifestRegistry(): readonly PluginManifestRecord[] {
+  if (cachedManifestRegistry) {
+    return cachedManifestRegistry;
+  }
+  cachedManifestRegistry = loadPluginManifestRegistry({
+    config: getFacadeBoundaryResolvedConfig().config,
+    cache: true,
+  }).plugins;
+  return cachedManifestRegistry;
+}
 
 function resolveSourceFirstPublicSurfacePath(params: {
   bundledPluginsDir?: string;
@@ -73,8 +119,7 @@ function resolveRegistryPluginModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const { config } = getFacadeBoundaryResolvedConfig();
-  const registry = loadPluginManifestRegistry({ config, cache: true }).plugins;
+  const registry = getFacadeManifestRegistry();
   const tiers: Array<(plugin: (typeof registry)[number]) => boolean> = [
     (plugin) => plugin.id === params.dirName,
     (plugin) => path.basename(plugin.rootDir) === params.dirName,
@@ -100,7 +145,7 @@ function resolveRegistryPluginModuleLocation(params: {
   return null;
 }
 
-function resolveFacadeModuleLocation(params: {
+function resolveFacadeModuleLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
 }): { modulePath: string; boundaryRoot: string } | null {
@@ -148,6 +193,19 @@ function resolveFacadeModuleLocation(params: {
   return resolveRegistryPluginModuleLocation(params);
 }
 
+function resolveFacadeModuleLocation(params: {
+  dirName: string;
+  artifactBasename: string;
+}): { modulePath: string; boundaryRoot: string } | null {
+  const key = createFacadeResolutionKey(params);
+  if (cachedFacadeModuleLocationsByKey.has(key)) {
+    return cachedFacadeModuleLocationsByKey.get(key) ?? null;
+  }
+  const resolved = resolveFacadeModuleLocationUncached(params);
+  cachedFacadeModuleLocationsByKey.set(key, resolved);
+  return resolved;
+}
+
 function getJiti(modulePath: string) {
   const tryNative =
     shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
@@ -168,36 +226,72 @@ function getJiti(modulePath: string) {
   return loader;
 }
 
-function readFacadeBoundaryConfigSafely(): OpenClawConfig {
+function readFacadeBoundaryConfigSafely(): {
+  rawConfig: OpenClawConfig;
+  cacheKey?: string;
+} {
   try {
     const runtimeSnapshot = getRuntimeConfigSnapshot();
     if (runtimeSnapshot) {
-      return runtimeSnapshot;
+      return { rawConfig: runtimeSnapshot };
     }
     const configPath = resolveConfigPath();
     if (!fs.existsSync(configPath)) {
-      return EMPTY_FACADE_BOUNDARY_CONFIG;
+      return { rawConfig: EMPTY_FACADE_BOUNDARY_CONFIG, cacheKey: `missing:${configPath}` };
+    }
+    const stat = fs.statSync(configPath);
+    if (
+      cachedBoundaryConfigFileState &&
+      cachedBoundaryConfigFileState.configPath === configPath &&
+      cachedBoundaryConfigFileState.mtimeMs === stat.mtimeMs &&
+      cachedBoundaryConfigFileState.size === stat.size
+    ) {
+      return {
+        rawConfig: cachedBoundaryConfigFileState.rawConfig,
+        cacheKey: `file:${configPath}:${stat.mtimeMs}:${stat.size}`,
+      };
     }
     const raw = fs.readFileSync(configPath, "utf8");
     const parsed = JSON5.parse(raw);
-    return parsed && typeof parsed === "object"
-      ? (parsed as OpenClawConfig)
-      : EMPTY_FACADE_BOUNDARY_CONFIG;
+    const rawConfig =
+      parsed && typeof parsed === "object"
+        ? (parsed as OpenClawConfig)
+        : EMPTY_FACADE_BOUNDARY_CONFIG;
+    cachedBoundaryConfigFileState = {
+      configPath,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      rawConfig,
+    };
+    return {
+      rawConfig,
+      cacheKey: `file:${configPath}:${stat.mtimeMs}:${stat.size}`,
+    };
   } catch {
-    return EMPTY_FACADE_BOUNDARY_CONFIG;
+    return { rawConfig: EMPTY_FACADE_BOUNDARY_CONFIG };
   }
 }
 
 function getFacadeBoundaryResolvedConfig() {
-  const rawConfig = readFacadeBoundaryConfigSafely();
-  if (cachedBoundaryResolvedConfig && cachedBoundaryRawConfig === rawConfig) {
+  const readResult = readFacadeBoundaryConfigSafely();
+  const { rawConfig } = readResult;
+  if (
+    cachedBoundaryResolvedConfig &&
+    ((readResult.cacheKey && cachedBoundaryResolvedConfigKey === readResult.cacheKey) ||
+      (!readResult.cacheKey && cachedBoundaryRawConfig === rawConfig))
+  ) {
     return cachedBoundaryResolvedConfig;
   }
 
-  const autoEnabled = applyPluginAutoEnable({
-    config: rawConfig,
-    env: process.env,
-  });
+  const autoEnabled = configMayNeedPluginAutoEnable(rawConfig, process.env)
+    ? applyPluginAutoEnable({
+        config: rawConfig,
+        env: process.env,
+      })
+    : {
+        config: rawConfig,
+        autoEnabledReasons: {} as Record<string, string[]>,
+      };
   const config = autoEnabled.config;
   const resolved = {
     rawConfig,
@@ -207,40 +301,85 @@ function getFacadeBoundaryResolvedConfig() {
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
   };
   cachedBoundaryRawConfig = rawConfig;
+  cachedBoundaryResolvedConfigKey = readResult.cacheKey;
   cachedBoundaryResolvedConfig = resolved;
   return resolved;
+}
+
+function resolveBundledMetadataManifestRecord(params: {
+  dirName: string;
+  artifactBasename: string;
+}): FacadePluginManifestLike | null {
+  if (resolveBundledPluginsDir()) {
+    return null;
+  }
+  const location = resolveFacadeModuleLocation(params);
+  if (!location) {
+    return null;
+  }
+  if (!location.modulePath.startsWith(`${OPENCLAW_SOURCE_EXTENSIONS_ROOT}${path.sep}`)) {
+    return null;
+  }
+  const relativeToExtensions = path.relative(OPENCLAW_SOURCE_EXTENSIONS_ROOT, location.modulePath);
+  const resolvedDirName = relativeToExtensions.split(path.sep)[0];
+  if (!resolvedDirName) {
+    return null;
+  }
+  const metadata = listBundledPluginMetadata({
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  }).find(
+    (entry) =>
+      entry.dirName === resolvedDirName ||
+      entry.manifest.id === params.dirName ||
+      entry.manifest.channels?.includes(params.dirName),
+  );
+  if (!metadata) {
+    return null;
+  }
+  return {
+    id: metadata.manifest.id,
+    origin: "bundled",
+    enabledByDefault: metadata.manifest.enabledByDefault,
+    rootDir: path.resolve(OPENCLAW_SOURCE_EXTENSIONS_ROOT, metadata.dirName),
+    channels: [...(metadata.manifest.channels ?? [])],
+  };
 }
 
 function resolveBundledPluginManifestRecord(params: {
   dirName: string;
   artifactBasename: string;
-}): PluginManifestRecord | null {
-  const { config } = getFacadeBoundaryResolvedConfig();
-  const registry = loadPluginManifestRegistry({
-    config,
-    cache: true,
-  }).plugins;
-  const location = resolveFacadeModuleLocation(params);
-  if (location) {
-    const normalizedModulePath = path.resolve(location.modulePath);
-    const matchedRecord = registry.find((plugin) => {
-      const normalizedRootDir = path.resolve(plugin.rootDir);
-      return (
-        normalizedModulePath === normalizedRootDir ||
-        normalizedModulePath.startsWith(`${normalizedRootDir}${path.sep}`)
-      );
-    });
-    if (matchedRecord) {
-      return matchedRecord;
-    }
+}): FacadePluginManifestLike | null {
+  const key = createFacadeResolutionKey(params);
+  if (cachedFacadeManifestRecordsByKey.has(key)) {
+    return cachedFacadeManifestRecordsByKey.get(key) ?? null;
   }
 
-  return (
+  const metadataRecord = resolveBundledMetadataManifestRecord(params);
+  if (metadataRecord) {
+    cachedFacadeManifestRecordsByKey.set(key, metadataRecord);
+    return metadataRecord;
+  }
+
+  const registry = getFacadeManifestRegistry();
+  const location = resolveFacadeModuleLocation(params);
+  const resolved =
+    (location
+      ? registry.find((plugin) => {
+          const normalizedRootDir = path.resolve(plugin.rootDir);
+          const normalizedModulePath = path.resolve(location.modulePath);
+          return (
+            normalizedModulePath === normalizedRootDir ||
+            normalizedModulePath.startsWith(`${normalizedRootDir}${path.sep}`)
+          );
+        })
+      : null) ??
     registry.find((plugin) => plugin.id === params.dirName) ??
     registry.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ??
     registry.find((plugin) => plugin.channels.includes(params.dirName)) ??
-    null
-  );
+    null;
+  cachedFacadeManifestRecordsByKey.set(key, resolved);
+  return resolved;
 }
 
 function resolveTrackedFacadePluginId(params: {
@@ -254,22 +393,32 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
   dirName: string;
   artifactBasename: string;
 }): { allowed: boolean; pluginId?: string; reason?: string } {
+  const key = createFacadeResolutionKey(params);
+  const cached = cachedFacadePublicSurfaceAccessByKey.get(key);
+  if (cached) {
+    return cached;
+  }
+
   if (
     params.artifactBasename === "runtime-api.js" &&
     ALWAYS_ALLOWED_RUNTIME_DIR_NAMES.has(params.dirName)
   ) {
-    return {
+    const resolved = {
       allowed: true,
       pluginId: params.dirName,
     };
+    cachedFacadePublicSurfaceAccessByKey.set(key, resolved);
+    return resolved;
   }
 
   const manifestRecord = resolveBundledPluginManifestRecord(params);
   if (!manifestRecord) {
-    return {
+    const resolved = {
       allowed: false,
       reason: `no bundled plugin manifest found for ${params.dirName}`,
     };
+    cachedFacadePublicSurfaceAccessByKey.set(key, resolved);
+    return resolved;
   }
   const { config, normalizedPluginsConfig, activationSource, autoEnabledReasons } =
     getFacadeBoundaryResolvedConfig();
@@ -283,17 +432,21 @@ function resolveBundledPluginPublicSurfaceAccess(params: {
     autoEnabledReason: autoEnabledReasons[manifestRecord.id]?.[0],
   });
   if (activationState.enabled) {
-    return {
+    const resolved = {
       allowed: true,
       pluginId: manifestRecord.id,
     };
+    cachedFacadePublicSurfaceAccessByKey.set(key, resolved);
+    return resolved;
   }
 
-  return {
+  const resolved = {
     allowed: false,
     pluginId: manifestRecord.id,
     reason: activationState.reason ?? "plugin runtime is not activated",
   };
+  cachedFacadePublicSurfaceAccessByKey.set(key, resolved);
+  return resolved;
 }
 
 function createLazyFacadeValueLoader<T>(load: () => T): () => T {
@@ -463,5 +616,11 @@ export function resetFacadeRuntimeStateForTest(): void {
   loadedFacadePluginIds.clear();
   jitiLoaders.clear();
   cachedBoundaryRawConfig = undefined;
+  cachedBoundaryResolvedConfigKey = undefined;
+  cachedBoundaryConfigFileState = undefined;
   cachedBoundaryResolvedConfig = undefined;
+  cachedManifestRegistry = undefined;
+  cachedFacadeModuleLocationsByKey.clear();
+  cachedFacadeManifestRecordsByKey.clear();
+  cachedFacadePublicSurfaceAccessByKey.clear();
 }
