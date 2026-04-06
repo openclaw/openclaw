@@ -87,8 +87,11 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
         transcript = result.transcript;
         if (params.abortSignal?.aborted) {
           transcript = undefined;
-        } else {
-          transcribedAttachmentIndex = result.attachmentIndex;
+        } else if (typeof result.attachmentIndex === "number") {
+          // Map the candidate-local index back to the original Discord
+          // attachment position so downstream pruning targets the right item.
+          const candidate = transcriptionCandidates[result.attachmentIndex];
+          transcribedAttachmentIndex = candidate?.attachmentIndex;
         }
       }
     } catch (err) {

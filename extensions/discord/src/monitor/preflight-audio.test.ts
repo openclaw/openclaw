@@ -113,6 +113,34 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     expect(result.transcribedAttachmentIndex).toBe(1);
   });
 
+  it("maps candidate-local index back to original attachment position", async () => {
+    transcribeFirstAudioResultMock.mockResolvedValueOnce({
+      transcript: "voice after image",
+      // Core returns 0 because it only sees the single audio URL.
+      attachmentIndex: 0,
+    });
+
+    const result = await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          // Non-audio attachment at original index 0
+          { content_type: "image/png", url: "https://cdn.discordapp.com/attachments/photo.png" },
+          // Audio attachment at original index 1
+          createAudioAttachment("https://cdn.discordapp.com/attachments/voice.ogg"),
+        ],
+        content: "",
+      },
+      chatType: "direct",
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg: baseCfg,
+    });
+
+    expect(result.transcript).toBe("voice after image");
+    // Must be 1 (original position), not 0 (candidate-local).
+    expect(result.transcribedAttachmentIndex).toBe(1);
+  });
+
   it("transcribes guild voice notes when mention is required and regexes are present", async () => {
     transcribeFirstAudioResultMock.mockResolvedValueOnce({
       transcript: "guild voice",
