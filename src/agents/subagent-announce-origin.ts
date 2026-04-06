@@ -1,5 +1,3 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
-
 export type DeliveryContext = {
   channel?: string;
   to?: string;
@@ -148,13 +146,7 @@ function shouldStripThreadFromAnnounceEntry(
       return requesterTarget !== entryTarget;
     }
   }
-  const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
-  return Boolean(
-    plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
-      requester: normalizedRequester,
-      entry: normalizedEntry,
-    }),
-  );
+  return false;
 }
 
 export function resolveAnnounceOrigin(
