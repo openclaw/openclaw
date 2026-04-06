@@ -333,6 +333,30 @@ function buildAggregateToolResultReplacements(params: {
   return replacements;
 }
 
+function applyToolResultReplacementsToBranch(params: {
+  branch: Array<{ id: string; type: string; message?: AgentMessage }>;
+  replacements: Array<{ entryId: string; message: AgentMessage }>;
+}): Array<{ id: string; type: string; message?: AgentMessage }> {
+  if (params.replacements.length === 0) {
+    return params.branch;
+  }
+
+  const replacementsById = new Map(
+    params.replacements.map((replacement) => [replacement.entryId, replacement.message]),
+  );
+
+  return params.branch.map((entry) => {
+    if (entry.type !== "message") {
+      return entry;
+    }
+    const replacement = replacementsById.get(entry.id);
+    if (!replacement) {
+      return entry;
+    }
+    return { ...entry, message: replacement };
+  });
+}
+
 export function estimateToolResultReductionPotential(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
@@ -392,7 +416,7 @@ export function estimateToolResultReductionPotential(params: {
     const newLength = getToolResultTextLength(replacement.message);
     return sum + Math.max(0, originalLength - newLength);
   }, 0);
-  const maxReducibleChars = oversizedCount > 0 ? oversizedReducibleChars : aggregateReducibleChars;
+  const maxReducibleChars = oversizedReducibleChars + aggregateReducibleChars;
 
   return {
     maxChars,
@@ -437,42 +461,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     }
   }
 
-  if (oversizedIndices.length === 0) {
-    const replacements = buildAggregateToolResultReplacements({
-      branch: branch as Array<{ id: string; type: string; message?: AgentMessage }>,
-      aggregateBudgetChars,
-      minKeepChars: RECOVERY_MIN_KEEP_CHARS,
-    });
-    if (replacements.length === 0) {
-      return {
-        truncated: false,
-        truncatedCount: 0,
-        reason: "no oversized or aggregate tool results",
-      };
-    }
-
-    const rewriteResult = rewriteTranscriptEntriesInSessionManager({
-      sessionManager,
-      replacements,
-    });
-    if (rewriteResult.changed && params.sessionFile) {
-      emitSessionTranscriptUpdate(params.sessionFile);
-    }
-
-    log.info(
-      `[tool-result-truncation] Aggregate-truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
-        `(contextWindow=${contextWindowTokens} aggregateBudgetChars=${aggregateBudgetChars}) ` +
-        `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-    );
-
-    return {
-      truncated: rewriteResult.changed,
-      truncatedCount: rewriteResult.rewrittenEntries,
-      reason: rewriteResult.reason,
-    };
-  }
-
-  const replacements = oversizedIndices.flatMap((index) => {
+  const oversizedReplacements = oversizedIndices.flatMap((index) => {
     const entry = branch[index];
     if (!entry || entry.type !== "message") {
       return [];
@@ -487,17 +476,48 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     ];
   });
 
+  const oversizedTrimmedBranch = applyToolResultReplacementsToBranch({
+    branch: branch as Array<{ id: string; type: string; message?: AgentMessage }>,
+    replacements: oversizedReplacements,
+  });
+  const aggregateReplacements = buildAggregateToolResultReplacements({
+    branch: oversizedTrimmedBranch,
+    aggregateBudgetChars,
+    minKeepChars: RECOVERY_MIN_KEEP_CHARS,
+  });
+  const replacements = [...oversizedReplacements];
+  const replacementIndexById = new Map(replacements.map((replacement) => [replacement.entryId, replacement]));
+  for (const replacement of aggregateReplacements) {
+    replacementIndexById.set(replacement.entryId, replacement);
+  }
+  const mergedReplacements = Array.from(replacementIndexById.values());
+
+  if (mergedReplacements.length === 0) {
+    return {
+      truncated: false,
+      truncatedCount: 0,
+      reason: "no oversized or aggregate tool results",
+    };
+  }
+
   const rewriteResult = rewriteTranscriptEntriesInSessionManager({
     sessionManager,
-    replacements,
+    replacements: mergedReplacements,
   });
   if (rewriteResult.changed && params.sessionFile) {
     emitSessionTranscriptUpdate(params.sessionFile);
   }
 
+  const truncatedKinds = [
+    oversizedReplacements.length > 0 ? "oversized" : "",
+    aggregateReplacements.length > 0 ? "aggregate" : "",
+  ]
+    .filter(Boolean)
+    .join("+");
+
   log.info(
-    `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
-      `(contextWindow=${contextWindowTokens} maxChars=${maxChars}) ` +
+    `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} ${truncatedKinds || "tool"} tool result(s) in session ` +
+      `(contextWindow=${contextWindowTokens} maxChars=${maxChars} aggregateBudgetChars=${aggregateBudgetChars}) ` +
       `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
   );
 
