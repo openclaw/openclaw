@@ -373,8 +373,6 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-    const requesterIsInternalSession = () =>
-      requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
     let childCompletionFindings: string | undefined;
     let subagentRegistryRuntime:
