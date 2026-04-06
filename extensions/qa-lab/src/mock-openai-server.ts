@@ -279,6 +279,11 @@ function extractOrbitCode(text: string) {
   return /\b(?:ORBIT-9|orbit-9)\b/.exec(text)?.[0]?.toUpperCase() ?? null;
 }
 
+function extractExactReplyDirective(text: string) {
+  const match = /reply with exactly:\s*([^\n]+)/i.exec(text);
+  return match?.[1]?.trim() || null;
+}
+
 function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
@@ -295,6 +300,7 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
         : toolOutput;
   const orbitCode = extractOrbitCode(memorySnippet);
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
+  const exactReplyDirective = extractExactReplyDirective(allInputText);
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
@@ -304,6 +310,9 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   }
   if (/memory unavailable check/i.test(prompt)) {
     return "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess.";
+  }
+  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
+    return exactReplyDirective;
   }
   if (/visible skill marker/i.test(prompt)) {
     return "VISIBLE-SKILL-OK";
@@ -491,6 +500,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   const host = params?.host ?? "127.0.0.1";
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
+  const imageGenerationRequests: Array<Record<string, unknown>> = [];
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
@@ -515,7 +525,17 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       writeJson(res, 200, requests);
       return;
     }
+    if (req.method === "GET" && url.pathname === "/debug/image-generations") {
+      writeJson(res, 200, imageGenerationRequests);
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/v1/images/generations") {
+      const raw = await readBody(req);
+      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      imageGenerationRequests.push(body);
+      if (imageGenerationRequests.length > 20) {
+        imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
+      }
       writeJson(res, 200, {
         data: [
           {
