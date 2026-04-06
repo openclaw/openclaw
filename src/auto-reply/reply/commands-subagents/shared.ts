@@ -38,6 +38,7 @@ import {
 
 export { extractAssistantText, stripToolMessages };
 export { resolveCommandSurfaceChannel, resolveChannelAccountId };
+export type { ChatMessage };
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
