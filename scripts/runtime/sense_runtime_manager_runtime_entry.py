@@ -5,7 +5,10 @@ import argparse
 import json
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +37,11 @@ def build_runtime_args(args: argparse.Namespace) -> list[str]:
     if args.input:
         runtime_args.extend(['--input', args.input])
     return runtime_args
+
+
+def build_decision_trace_id() -> str:
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    return f'rtx-{timestamp}-{uuid4().hex[:6]}'
 
 
 def run_entry(script_dir: Path, args: argparse.Namespace, runtime_args: list[str]) -> dict:
@@ -107,6 +115,8 @@ def build_path_summary(args: argparse.Namespace, entry_result: dict, bridge_resu
     used_bridge = bridge_result.get('bridge_used') is True
     used_shortcut = used_bridge or dispatch_result.get('shortcut_used') is True
     used_full_evaluator = str(dispatch_result.get('dispatch_mode') or '') == 'full_evaluator'
+    if not used_full_evaluator and (not used_handoff or entry_decision in {'hint_only', 'rerun_full_evaluator'}):
+        used_full_evaluator = True
 
     if not used_handoff:
         path_taken = 'no_handoff -> full_evaluator'
@@ -128,6 +138,55 @@ def build_path_summary(args: argparse.Namespace, entry_result: dict, bridge_resu
         'used_bridge': used_bridge,
         'used_full_evaluator': used_full_evaluator,
     }
+
+
+def build_path_tags(
+    args: argparse.Namespace,
+    entry_result: dict | None,
+    bridge_result: dict | None,
+    dispatch_result: dict | None,
+    runtime_entry_state: str,
+) -> list[str]:
+    tags: list[str] = []
+    used_handoff = bool(args.handoff_json)
+    if used_handoff:
+        tags.append('handoff')
+    else:
+        tags.append('no_handoff')
+
+    if used_handoff and isinstance(entry_result, dict):
+        entry_decision = entry_result.get('entry_decision')
+        if isinstance(entry_decision, str) and entry_decision.strip():
+            tags.append(f'triage:{entry_decision}')
+
+    if isinstance(bridge_result, dict) and bridge_result.get('bridge_used') is True:
+        tags.append('shortcut')
+        tags.append('bridge')
+
+    if isinstance(dispatch_result, dict):
+        dispatch_mode = dispatch_result.get('dispatch_mode')
+        if dispatch_mode == 'full_evaluator':
+            tags.append('full_evaluator')
+        if isinstance(dispatch_result.get('dispatch_result'), dict):
+            tags.append('executor')
+    elif not used_handoff or (
+        isinstance(entry_result, dict)
+        and entry_result.get('entry_decision') in {'hint_only', 'rerun_full_evaluator'}
+    ):
+        tags.append('full_evaluator')
+
+    if runtime_entry_state == 'failed':
+        tags.append('failed')
+    elif runtime_entry_state == 'stopped':
+        tags.append('stopped')
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        if tag not in seen:
+            deduped.append(tag)
+            seen.add(tag)
+    return deduped
 
 
 def extract_loop_convergence(dispatch_result: dict) -> dict | None:
@@ -222,41 +281,98 @@ def main() -> int:
     args = build_parser().parse_args()
     script_dir = Path(__file__).resolve().parent
     runtime_args = build_runtime_args(args)
-    entry_result = run_entry(script_dir, args, runtime_args)
-    bridge_result = run_bridge(script_dir, entry_result, args.handoff_json)
-    if bridge_result.get('bridge_used') is True:
-        manager_policy_outcome = bridge_result.get('manager_policy_outcome') or {}
-        dispatch_result = {
-            'dispatch_mode': 'shortcut_executor',
-            'shortcut_used': True,
-            'dispatch_reason': 'lightweight policy bridge promoted the handoff shortcut into a direct executor path',
-            'dispatch_result': run_executor(script_dir, manager_policy_outcome, runtime_args),
+    decision_trace_id = build_decision_trace_id()
+    entry_result: dict | None = None
+    bridge_result: dict | None = None
+    dispatch_result: dict | None = None
+    entry_duration_sec: float | None = None
+    dispatch_duration_sec: float | None = None
+    executor_duration_sec: float | None = None
+
+    try:
+        started = time.perf_counter()
+        entry_result = run_entry(script_dir, args, runtime_args)
+        entry_duration_sec = round(time.perf_counter() - started, 6)
+
+        started = time.perf_counter()
+        bridge_result = run_bridge(script_dir, entry_result, args.handoff_json)
+        dispatch_duration_sec = round(time.perf_counter() - started, 6)
+
+        if bridge_result.get('bridge_used') is True:
+            manager_policy_outcome = bridge_result.get('manager_policy_outcome') or {}
+            started = time.perf_counter()
+            executor_result = run_executor(script_dir, manager_policy_outcome, runtime_args)
+            executor_duration_sec = round(time.perf_counter() - started, 6)
+            dispatch_result = {
+                'dispatch_mode': 'shortcut_executor',
+                'shortcut_used': True,
+                'dispatch_reason': 'lightweight policy bridge promoted the handoff shortcut into a direct executor path',
+                'dispatch_result': executor_result,
+            }
+        else:
+            started = time.perf_counter()
+            dispatch_result = run_dispatch(script_dir, entry_result, runtime_args)
+            dispatch_duration_sec = round(time.perf_counter() - started, 6)
+
+        runtime_entry_state = infer_runtime_entry_state(dispatch_result)
+        feedback_summary = build_feedback_summary(entry_result, dispatch_result)
+        feedback_memory = build_feedback_memory(entry_result, dispatch_result, feedback_summary)
+        path_summary = build_path_summary(args, entry_result, bridge_result or {}, dispatch_result)
+        output = {
+            'decision_trace_id': decision_trace_id,
+            'entry_decision': entry_result.get('entry_decision'),
+            'dispatch_mode': dispatch_result.get('dispatch_mode'),
+            'runtime_entry_state': runtime_entry_state,
+            'path_taken': path_summary.get('path_taken'),
+            'path_tags': build_path_tags(args, entry_result, bridge_result, dispatch_result, runtime_entry_state),
+            'used_handoff': path_summary.get('used_handoff'),
+            'used_shortcut': path_summary.get('used_shortcut'),
+            'used_bridge': path_summary.get('used_bridge'),
+            'used_full_evaluator': path_summary.get('used_full_evaluator'),
+            'entry_duration_sec': entry_duration_sec,
+            'dispatch_duration_sec': dispatch_duration_sec,
+            'executor_duration_sec': executor_duration_sec,
+            'bridge_used': bridge_result.get('bridge_used') is True,
+            'bridge_mode': bridge_result.get('bridge_mode'),
+            'feedback_summary': feedback_summary,
+            'feedback_memory': feedback_memory,
+            'result': {
+                'bridge': bridge_result,
+                'dispatch': dispatch_result,
+            },
         }
-    else:
-        dispatch_result = run_dispatch(script_dir, entry_result, runtime_args)
-    feedback_summary = build_feedback_summary(entry_result, dispatch_result)
-    feedback_memory = build_feedback_memory(entry_result, dispatch_result, feedback_summary)
-    path_summary = build_path_summary(args, entry_result, bridge_result, dispatch_result)
-    output = {
-        'entry_decision': entry_result.get('entry_decision'),
-        'dispatch_mode': dispatch_result.get('dispatch_mode'),
-        'runtime_entry_state': infer_runtime_entry_state(dispatch_result),
-        'path_taken': path_summary.get('path_taken'),
-        'used_handoff': path_summary.get('used_handoff'),
-        'used_shortcut': path_summary.get('used_shortcut'),
-        'used_bridge': path_summary.get('used_bridge'),
-        'used_full_evaluator': path_summary.get('used_full_evaluator'),
-        'bridge_used': bridge_result.get('bridge_used') is True,
-        'bridge_mode': bridge_result.get('bridge_mode'),
-        'feedback_summary': feedback_summary,
-        'feedback_memory': feedback_memory,
-        'result': {
-            'bridge': bridge_result,
-            'dispatch': dispatch_result,
-        },
-    }
-    print(json.dumps(output, ensure_ascii=False, indent=2))
-    return 0
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+    except Exception as exc:
+        entry_decision = entry_result.get('entry_decision') if isinstance(entry_result, dict) else ('rerun_full_evaluator' if not args.handoff_json else None)
+        runtime_entry_state = 'failed'
+        path_summary = build_path_summary(args, entry_result or {}, bridge_result or {}, dispatch_result or {})
+        output = {
+            'decision_trace_id': decision_trace_id,
+            'entry_decision': entry_decision,
+            'dispatch_mode': dispatch_result.get('dispatch_mode') if isinstance(dispatch_result, dict) else None,
+            'runtime_entry_state': runtime_entry_state,
+            'path_taken': path_summary.get('path_taken'),
+            'path_tags': build_path_tags(args, entry_result, bridge_result, dispatch_result, runtime_entry_state),
+            'used_handoff': path_summary.get('used_handoff'),
+            'used_shortcut': path_summary.get('used_shortcut'),
+            'used_bridge': path_summary.get('used_bridge'),
+            'used_full_evaluator': path_summary.get('used_full_evaluator'),
+            'entry_duration_sec': entry_duration_sec,
+            'dispatch_duration_sec': dispatch_duration_sec,
+            'executor_duration_sec': executor_duration_sec,
+            'bridge_used': isinstance(bridge_result, dict) and bridge_result.get('bridge_used') is True,
+            'bridge_mode': bridge_result.get('bridge_mode') if isinstance(bridge_result, dict) else None,
+            'feedback_summary': None,
+            'feedback_memory': None,
+            'result': {
+                'bridge': bridge_result,
+                'dispatch': dispatch_result,
+                'error': str(exc),
+            },
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 1
 
 
 if __name__ == '__main__':

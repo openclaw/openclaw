@@ -826,6 +826,21 @@ The unified runtime entrypoint now also emits a top-level path summary:
 
 This is observability only. It does not add retries or another runtime loop.
 
+Additional top-level observability fields are also included:
+
+- `decision_trace_id`
+  - short per-run trace identifier for joining entry, dispatch, and executor logs
+- `entry_duration_sec`
+  - time spent in manager entry
+- `dispatch_duration_sec`
+  - time spent in dispatch or bridge routing
+- `executor_duration_sec`
+  - time spent in the direct executor call when the shortcut path is used
+- `path_tags`
+  - short machine-friendly tags such as `handoff`, `triage:use_handoff`, `shortcut`, `bridge`, `executor`, `full_evaluator`, `failed`, or `stopped`
+
+These fields are for observability and aggregation only. They do not change runtime behavior.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`
