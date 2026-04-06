@@ -6,6 +6,7 @@ import {
   parseAssistantTextSignature,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
+import { stripToolCallXmlTags } from "../shared/text/assistant-visible-text.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
@@ -240,7 +241,9 @@ export function stripThinkingTagsFromText(text: string): string {
 
 function sanitizeAssistantText(text: string): string {
   return stripThinkingTagsFromText(
-    stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+    stripToolCallXmlTags(
+      stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
+    ),
   ).trim();
 }
 
