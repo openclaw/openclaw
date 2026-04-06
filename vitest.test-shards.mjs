@@ -18,6 +18,11 @@ export const fullSuiteVitestShards = [
     projects: ["vitest.unit-security.config.ts"],
   },
   {
+    config: "vitest.full-core-unit-ui.config.ts",
+    name: "core-unit-ui",
+    projects: ["vitest.unit-ui.config.ts"],
+  },
+  {
     config: "vitest.full-core-unit-support.config.ts",
     name: "core-unit-support",
     projects: [
@@ -29,7 +34,12 @@ export const fullSuiteVitestShards = [
   {
     config: "vitest.full-core-contracts.config.ts",
     name: "core-contracts",
-    projects: ["vitest.contracts.config.ts", "vitest.bundled.config.ts"],
+    projects: ["vitest.contracts.config.ts"],
+  },
+  {
+    config: "vitest.full-core-bundled.config.ts",
+    name: "core-bundled",
+    projects: ["vitest.bundled.config.ts"],
   },
   {
     config: "vitest.full-core-runtime.config.ts",
