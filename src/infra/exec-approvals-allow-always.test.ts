@@ -411,6 +411,91 @@ describe("resolveAllowAlwaysPatterns", () => {
     });
   });
 
+  it("persists python script paths instead of interpreter paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const python = makeExecutable(dir, "python3");
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const script = path.join(scriptsDir, "render_asset.py");
+    fs.writeFileSync(script, "print('ok')\n");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: "python3 scripts/render_asset.py --asset cube",
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([script]);
+
+    const allowed = evaluateShellAllowlist({
+      command: "python3 scripts/render_asset.py --asset cube",
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(allowed.allowlistSatisfied).toBe(true);
+
+    const denied = evaluateShellAllowlist({
+      command: "python3 scripts/other_asset.py --asset cube",
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(denied.allowlistSatisfied).toBe(false);
+    expect(persisted).not.toContain(python);
+  });
+
+  it("persists blender --python script paths instead of broad blender scripting access", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "blender");
+    const scriptsDir = path.join(dir, "scripts");
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    const script = path.join(scriptsDir, "export_asset.py");
+    fs.writeFileSync(script, "print('blend')\n");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const { persisted } = resolvePersistedPatterns({
+      command: "blender --background asset.blend --python scripts/export_asset.py -- --format glb",
+      dir,
+      env,
+      safeBins,
+    });
+    expect(persisted).toEqual([script]);
+
+    const allowed = evaluateShellAllowlist({
+      command: "blender --background asset.blend --python scripts/export_asset.py -- --format glb",
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(allowed.allowlistSatisfied).toBe(true);
+
+    const denied = evaluateShellAllowlist({
+      command: "blender --background asset.blend --python scripts/other_export.py -- --format glb",
+      allowlist: [{ pattern: script }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(denied.allowlistSatisfied).toBe(false);
+  });
+
   it("rejects shell rc and init-file options as persisted or allowlisted script paths", () => {
     if (process.platform === "win32") {
       return;

@@ -15,7 +15,10 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
-import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import {
+  classifyRiskyExplicitSafeBinTrustedDir,
+  normalizeTrustedSafeBinDirs,
+} from "../infra/exec-safe-bin-trust.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
@@ -986,8 +989,9 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
     if (!raw) {
       return null;
     }
-    if (!path.isAbsolute(raw)) {
-      return "relative path (trust boundary depends on process cwd)";
+    const explicitRisk = classifyRiskyExplicitSafeBinTrustedDir(raw);
+    if (explicitRisk) {
+      return explicitRisk;
     }
     const normalized = path.resolve(raw).replace(/\\/g, "/").toLowerCase();
     if (
@@ -1001,19 +1005,11 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
       return "temporary directory is mutable and easy to poison";
     }
     if (
-      normalized === "/usr/local/bin" ||
       normalized === "/opt/homebrew/bin" ||
       normalized === "/opt/local/bin" ||
       normalized === "/home/linuxbrew/.linuxbrew/bin"
     ) {
       return "package-manager bin directory (often user-writable)";
-    }
-    if (
-      normalized.startsWith("/users/") ||
-      normalized.startsWith("/home/") ||
-      normalized.includes("/.local/bin")
-    ) {
-      return "home-scoped bin directory (typically user-writable)";
     }
     if (/^[a-z]:\/users\//.test(normalized)) {
       return "home-scoped bin directory (typically user-writable)";
