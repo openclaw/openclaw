@@ -4,6 +4,10 @@ import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
+import {
+  overlayExternalOAuthProfiles,
+  shouldPersistExternalOAuthProfile,
+} from "./external-oauth.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
 import type {
   AuthProfileCredential,
@@ -348,9 +352,24 @@ function mergeAuthProfileStores(
   };
 }
 
-function buildPersistedAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
+function buildPersistedAuthProfileStore(
+  store: AuthProfileStore,
+  params?: { agentDir?: string },
+): AuthProfileStore {
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).flatMap(([profileId, credential]) => {
+      if (
+        credential.type === "oauth" &&
+        !shouldPersistExternalOAuthProfile({
+          store,
+          profileId,
+          credential,
+          agentDir: params?.agentDir,
+        })
+      ) {
+        // Provider-managed external OAuth profiles are runtime-only overlays.
+        return [];
+      }
       if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
         const sanitized = { ...credential } as Record<string, unknown>;
         delete sanitized.key;
@@ -445,7 +464,7 @@ export function loadAuthProfileStore(): AuthProfileStore {
   const authPath = resolveAuthStorePath();
   const asStore = loadCoercedStore(authPath);
   if (asStore) {
-    return asStore;
+    return overlayExternalOAuthProfiles(asStore);
   }
   const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath());
   const legacy = coerceLegacyStore(legacyRaw);
@@ -455,10 +474,10 @@ export function loadAuthProfileStore(): AuthProfileStore {
       profiles: {},
     };
     applyLegacyStore(store, legacy);
-    return store;
+    return overlayExternalOAuthProfiles(store);
   }
 
-  return { version: AUTH_STORE_VERSION, profiles: {} };
+  return overlayExternalOAuthProfiles({ version: AUTH_STORE_VERSION, profiles: {} });
 }
 
 function loadAuthProfileStoreForAgent(
@@ -543,11 +562,13 @@ export function loadAuthProfileStoreForRuntime(
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
-    return store;
+    return overlayExternalOAuthProfiles(store, { agentDir });
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  return mergeAuthProfileStores(mainStore, store);
+  return overlayExternalOAuthProfiles(mergeAuthProfileStores(mainStore, store), {
+    agentDir,
+  });
 }
 
 export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
@@ -560,26 +581,26 @@ export function ensureAuthProfileStore(
 ): AuthProfileStore {
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
   if (runtimeStore) {
-    return runtimeStore;
+    return overlayExternalOAuthProfiles(runtimeStore, { agentDir });
   }
 
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
-    return store;
+    return overlayExternalOAuthProfiles(store, { agentDir });
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
   const merged = mergeAuthProfileStores(mainStore, store);
 
-  return merged;
+  return overlayExternalOAuthProfiles(merged, { agentDir });
 }
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
   const authPath = resolveAuthStorePath(agentDir);
   const runtimeKey = resolveRuntimeStoreKey(agentDir);
-  const payload = buildPersistedAuthProfileStore(store);
+  const payload = buildPersistedAuthProfileStore(store, { agentDir });
   saveJsonFile(authPath, payload);
   const runtimeStore = cloneAuthProfileStore(store);
   writeCachedAuthProfileStore(authPath, readAuthStoreMtimeMs(authPath), runtimeStore);
