@@ -98,14 +98,15 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
 
 type DangerousFlagToken = {
   fingerprintIdentity?: string;
+  legacyMappingIdentity?: string;
   idIdentity?: string;
   identities: string[];
   renderedFlag: string;
 };
 
-function toStableJsonWithoutMappingId(value: unknown): unknown {
+function toStableJsonWithoutKeys(value: unknown, keysToOmit: ReadonlySet<string>): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => toStableJsonWithoutMappingId(entry));
+    return value.map((entry) => toStableJsonWithoutKeys(entry, keysToOmit));
   }
   if (!value || typeof value !== "object") {
     return value;
@@ -113,11 +114,22 @@ function toStableJsonWithoutMappingId(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   return Object.fromEntries(
     Object.keys(record)
-      .filter((key) => key !== "id")
+      .filter((key) => !keysToOmit.has(key))
       .toSorted()
-      .map((key) => [key, toStableJsonWithoutMappingId(record[key])]),
+      .map((key) => [key, toStableJsonWithoutKeys(record[key], keysToOmit)]),
   );
 }
+
+const HOOK_MAPPING_FINGERPRINT_OMIT_KEYS = new Set<string>(["id"]);
+const HOOK_MAPPING_LEGACY_IDENTITY_OMIT_KEYS = new Set<string>([
+  "allowUnsafeExternalContent",
+  "deliver",
+  "messageTemplate",
+  "name",
+  "textTemplate",
+  "thinking",
+  "timeoutSeconds",
+]);
 
 function createDangerousConfigFlagToken(
   flag: string,
@@ -142,14 +154,18 @@ function createDangerousConfigFlagToken(
   }
 
   let idIdentity: string | undefined;
+  let legacyMappingIdentity: string | undefined;
   const id = (mapping as Record<string, unknown>).id;
   if (typeof id === "string" && id.trim()) {
     idIdentity = `hooks.mappings[id=${id}].${suffix}`;
     identities.unshift(idIdentity);
+  } else {
+    legacyMappingIdentity = `hooks.mappings[legacy=${JSON.stringify(toStableJsonWithoutKeys(mapping, HOOK_MAPPING_LEGACY_IDENTITY_OMIT_KEYS))}].${suffix}`;
+    identities.unshift(legacyMappingIdentity);
   }
-  const fingerprintIdentity = `hooks.mappings[fingerprint=${JSON.stringify(toStableJsonWithoutMappingId(mapping))}].${suffix}`;
+  const fingerprintIdentity = `hooks.mappings[fingerprint=${JSON.stringify(toStableJsonWithoutKeys(mapping, HOOK_MAPPING_FINGERPRINT_OMIT_KEYS))}].${suffix}`;
   identities.unshift(fingerprintIdentity);
-  return { fingerprintIdentity, idIdentity, identities, renderedFlag: flag };
+  return { fingerprintIdentity, legacyMappingIdentity, idIdentity, identities, renderedFlag: flag };
 }
 
 function takeMatchingDangerousFlag(
@@ -159,6 +175,9 @@ function takeMatchingDangerousFlag(
   const matchIndex = remainingCurrentTokens.findIndex((currentToken) => {
     if (currentToken.idIdentity && nextToken.idIdentity) {
       return currentToken.idIdentity === nextToken.idIdentity;
+    }
+    if (currentToken.legacyMappingIdentity && nextToken.legacyMappingIdentity) {
+      return currentToken.legacyMappingIdentity === nextToken.legacyMappingIdentity;
     }
     // When both tokens have a fingerprint (the mapping object existed in the config at tokenization
     // time), match by fingerprint only — not by index. This prevents a swap of one dangerous
