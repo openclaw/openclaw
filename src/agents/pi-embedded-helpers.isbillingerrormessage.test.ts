@@ -127,6 +127,10 @@ describe("isBillingErrorMessage", () => {
         "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
         "This model requires more credits to use",
         "This endpoint require more credits",
+        // Anthropic "out of extra usage" HTTP 400 error (#61743)
+        "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+        '{"type":"error","error":{"type":"invalid_request_error","message":"You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}',
+        "out of usage",
       ],
       expected: true,
     },
@@ -867,6 +871,17 @@ describe("classifyFailoverReason", () => {
     ).toBe("billing");
     // OpenRouter "requires more credits" billing text
     expect(classifyFailoverReason("This model requires more credits to use")).toBe("billing");
+    // Anthropic "out of extra usage" HTTP 400 error (#61743)
+    expect(
+      classifyFailoverReason(
+        "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+      ),
+    ).toBe("billing");
+    expect(
+      classifyFailoverReason(
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}',
+      ),
+    ).toBe("billing");
   });
 
   it("classifies internal and compatibility error messages", () => {
