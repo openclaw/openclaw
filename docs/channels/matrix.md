@@ -103,6 +103,7 @@ Password-based setup (token is cached after login):
 
 Matrix stores cached credentials in `~/.openclaw/credentials/matrix/`.
 The default account uses `credentials.json`; named accounts use `credentials-<account>.json`.
+When cached credentials exist there, OpenClaw treats Matrix as configured for setup, doctor, and channel-status discovery even if current auth is not set directly in config.
 
 Environment variable equivalents (used when the config key is not set):
 
