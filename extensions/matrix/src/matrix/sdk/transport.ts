@@ -123,6 +123,9 @@ async function fetchWithPinnedDispatcherCompatibilityRetry(params: {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   dispatcher: ReturnType<typeof createPinnedDispatcher> | undefined;
 }): Promise<Response> {
+  // Keep this compatibility fallback local to Matrix transport. Shared SSRF
+  // fetches must stay fail-closed unless a retry path can preserve the
+  // validated pinned-address binding.
   try {
     return await fetch(params.url, params.init);
   } catch (error) {
