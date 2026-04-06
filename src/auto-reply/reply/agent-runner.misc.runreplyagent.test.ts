@@ -681,6 +681,93 @@ describe("runReplyAgent block streaming", () => {
     expect(result).toBeUndefined();
   });
 
+  it("discards buffered block replies when run ends with error payload", async () => {
+    const onBlockReply = vi.fn();
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
+      const block = params.onBlockReply as ((payload: { text?: string }) => void) | undefined;
+      block?.({ text: "Now I'll execute Tasks 1-3:" });
+      block?.({ text: "TA was rate-limited, let me retry:" });
+      return {
+        payloads: [{ text: "LLM error api_error: Network connection lost.", isError: true }],
+        meta: {},
+      };
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat:123",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "analyze token",
+      summaryLine: "analyze token",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {
+          agents: {
+            defaults: {
+              blockStreamingCoalesce: {
+                minChars: 1,
+                maxChars: 4000,
+                idleMs: 0,
+              },
+            },
+          },
+        },
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    await runReplyAgent({
+      commandBody: "analyze token",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      opts: { onBlockReply },
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude-opus-4-5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: true,
+      blockReplyChunking: {
+        minChars: 1,
+        maxChars: 4000,
+        breakPreference: "paragraph",
+      },
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    // Intermediate text blocks should NOT have been flushed to the channel
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("returns the final payload when onBlockReply times out", async () => {
     vi.useFakeTimers();
     let sawAbort = false;
