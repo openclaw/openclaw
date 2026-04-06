@@ -438,9 +438,13 @@ export function shouldPreferNativeJiti(modulePath: string): boolean {
   if (typeof versions.bun === "string") {
     return false;
   }
-  if (process.platform === "win32") {
-    return false;
-  }
+  // Windows previously disabled native Jiti unconditionally but this causes
+  // dual module instances: jiti evaluates dist chunks in its own cache while
+  // dynamic `import()` inside those chunks loads the same file through Node's
+  // native ESM loader, creating a second runtime-store closure.  The actual
+  // Windows issue was backslash alias paths, which is handled by
+  // `normalizeJitiAliasTargetPath`.  Re-enable native loading for compiled
+  // JavaScript so the dist chunk graph stays on a single module identity.
   switch (path.extname(modulePath).toLowerCase()) {
     case ".js":
     case ".mjs":

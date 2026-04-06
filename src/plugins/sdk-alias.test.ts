@@ -662,7 +662,7 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
-  it("disables native Jiti loads on Windows even for built JavaScript entries", () => {
+  it("enables native Jiti loads on Windows for built JavaScript entries to prevent dual module instances", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", {
       configurable: true,
@@ -670,10 +670,14 @@ describe("plugin sdk alias helpers", () => {
     });
 
     try {
-      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
       expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
-        false,
+        true,
       );
+      // TypeScript source entries still use jiti transpilation on Windows
+      expect(
+        shouldPreferNativeJiti(`/repo/${bundledPluginFile("discord", "src/channel.runtime.ts")}`),
+      ).toBe(false);
     } finally {
       Object.defineProperty(process, "platform", {
         configurable: true,
