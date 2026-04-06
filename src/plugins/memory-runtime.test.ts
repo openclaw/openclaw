@@ -3,9 +3,16 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const resolveRuntimePluginRegistryMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const getMemoryRuntimeMock = vi.fn();
+const resolveAgentWorkspaceDirMock = vi.fn();
+const resolveDefaultAgentIdMock = vi.fn(() => "default");
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
+}));
+
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveDefaultAgentId: (...args: unknown[]) => resolveDefaultAgentIdMock(...args),
 }));
 
 vi.mock("./loader.js", () => ({
@@ -116,11 +123,14 @@ describe("memory runtime auto-enable loading", () => {
     resolveRuntimePluginRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     getMemoryRuntimeMock.mockReset();
+    resolveAgentWorkspaceDirMock.mockReset();
+    resolveDefaultAgentIdMock.mockClear();
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
       changes: [],
       autoEnabledReasons: {},
     }));
+    resolveAgentWorkspaceDirMock.mockReturnValue(undefined);
   });
 
   it.each([

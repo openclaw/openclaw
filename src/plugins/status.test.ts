@@ -674,7 +674,7 @@ describe("plugin status reports", () => {
     expectCapabilityKinds(inspect[1], ["text-inference", "web-search"]);
   });
 
-  it("treats a CLI-command-only plugin as a non-capability", () => {
+  it("treats a CLI-command-only plugin as a plain capability", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
         id: "anthropic",
@@ -686,9 +686,9 @@ describe("plugin status reports", () => {
     const inspect = expectInspectReport("anthropic");
 
     expectInspectShape(inspect, {
-      shape: "non-capability",
-      capabilityMode: "none",
-      capabilityKinds: [],
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["cli-backend"],
     });
     expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
   });

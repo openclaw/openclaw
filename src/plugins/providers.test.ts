@@ -63,6 +63,7 @@ function setOwningProviderManifestPlugins() {
     createManifestProviderPlugin({
       id: "openai",
       providerIds: ["openai", "openai-codex"],
+      cliBackends: ["codex-cli"],
       modelSupport: {
         modelPrefixes: ["gpt-", "o1", "o3", "o4"],
       },
@@ -87,6 +88,7 @@ function setOwningProviderManifestPluginsWithWorkspace() {
     createManifestProviderPlugin({
       id: "openai",
       providerIds: ["openai", "openai-codex"],
+      cliBackends: ["codex-cli"],
       modelSupport: {
         modelPrefixes: ["gpt-", "o1", "o3", "o4"],
       },
@@ -255,6 +257,10 @@ function expectProviderRuntimeRegistryLoad(params?: { config?: unknown; env?: No
 describe("resolvePluginProviders", () => {
   beforeAll(async () => {
     vi.resetModules();
+    loadPluginManifestRegistryMock.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
     vi.doMock("./loader.js", () => ({
       loadOpenClawPlugins: (...args: Parameters<LoadOpenClawPlugins>) =>
         loadOpenClawPluginsMock(...args),
