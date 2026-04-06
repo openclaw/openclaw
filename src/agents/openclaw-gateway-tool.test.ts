@@ -7,10 +7,19 @@ import "./test-helpers/fast-core-tools.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-const { callGatewayToolMock, readGatewayCallOptionsMock } = vi.hoisted(() => ({
+const { callGatewayToolMock, readGatewayCallOptionsMock, configState } = vi.hoisted(() => ({
   callGatewayToolMock: vi.fn(),
   readGatewayCallOptionsMock: vi.fn(() => ({})),
+  configState: { value: {} as Record<string, unknown> },
 }));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => configState.value as ReturnType<typeof actual.loadConfig>,
+  };
+});
 
 vi.mock("./tools/gateway.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./tools/gateway.js")>();
@@ -21,20 +30,10 @@ vi.mock("./tools/gateway.js", async (importOriginal) => {
   };
 });
 
-function requireGatewayTool(agentSessionKey?: string, config?: Record<string, unknown>) {
+function requireGatewayTool(agentSessionKey?: string) {
   return createGatewayTool({
     ...(agentSessionKey ? { agentSessionKey } : {}),
-    config: { commands: { restart: true }, ...config },
-  });
-}
-
-function requireGatewayToolWithConfig(config: Record<string, unknown>, agentSessionKey?: string) {
-  return createGatewayTool({
-    ...(agentSessionKey ? { agentSessionKey } : {}),
-    config: {
-      commands: { restart: true },
-      ...config,
-    },
+    config: { commands: { restart: true } },
   });
 }
 
@@ -64,6 +63,7 @@ describe("gateway tool", () => {
   beforeEach(() => {
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
+    configState.value = {};
     callGatewayToolMock.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         return {
@@ -445,12 +445,9 @@ describe("gateway tool", () => {
   });
 
   it("rejects plugin config writes when remote mode uses a loopback tunnel", async () => {
-    const tool = requireGatewayTool(undefined, {
-      gateway: {
-        mode: "remote",
-        remote: { url: "ws://127.0.0.1:18789" },
-      },
-    });
+    // Guard reads live config at assertion time, not captured opts — set configState instead.
+    configState.value = { gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } } };
+    const tool = requireGatewayTool();
 
     await expect(
       tool.execute("call-remote-tunnel-plugin-config", {
@@ -470,12 +467,8 @@ describe("gateway tool", () => {
 
   it("rejects plugin config writes when remote mode uses a loopback gatewayUrl override", async () => {
     readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "ws://127.0.0.1:18789" });
-    const tool = requireGatewayTool(undefined, {
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://gateway.example" },
-      },
-    });
+    configState.value = { gateway: { mode: "remote", remote: { url: "wss://gateway.example" } } };
+    const tool = requireGatewayTool();
 
     await expect(
       tool.execute("call-remote-loopback-override-plugin-config", {
@@ -496,12 +489,8 @@ describe("gateway tool", () => {
 
   it("rejects tunneled remote config.patch when it changes plugin config", async () => {
     readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "ws://127.0.0.1:18789" });
-    const tool = requireGatewayToolWithConfig({
-      gateway: {
-        mode: "remote",
-        remote: { url: "ws://127.0.0.1:18789" },
-      },
-    });
+    configState.value = { gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } } };
+    const tool = requireGatewayTool();
 
     await expect(
       tool.execute("call-tunneled-remote-plugin-config", {
@@ -521,12 +510,8 @@ describe("gateway tool", () => {
   });
 
   it("rejects remote-mode config.patch when it changes plugin config without a gatewayUrl override", async () => {
-    const tool = requireGatewayToolWithConfig({
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://gateway.example" },
-      },
-    });
+    configState.value = { gateway: { mode: "remote", remote: { url: "wss://gateway.example" } } };
+    const tool = requireGatewayTool();
 
     await expect(
       tool.execute("call-configured-remote-plugin-config", {
