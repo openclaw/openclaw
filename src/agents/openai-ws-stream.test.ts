@@ -31,7 +31,6 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js"
 
 // We mock the entire openai-ws-connection module so no real WebSocket is opened.
 const { MockManager } = vi.hoisted(() => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter } = require("node:events") as typeof import("node:events");
   type AnyFn = (...args: unknown[]) => void;
 
