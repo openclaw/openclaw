@@ -204,11 +204,7 @@ async function downloadGoogleVideoUri(params: {
 
 function shouldFallbackToGoogleRest(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return (
-    message.includes('"code":404') ||
-    message.includes('"code": 404') ||
-    message.includes("Google video generation response missing generated videos")
-  );
+  return message.includes('"code":404') || message.includes('"code": 404');
 }
 
 async function generateGoogleVideoViaRest(params: {
@@ -220,6 +216,7 @@ async function generateGoogleVideoViaRest(params: {
   durationSeconds?: number;
   aspectRatio?: string;
   resolution?: string;
+  generateAudio?: boolean;
 }): Promise<unknown> {
   const submitBody = {
     instances: [{ prompt: params.prompt }],
@@ -229,6 +226,7 @@ async function generateGoogleVideoViaRest(params: {
         : {}),
       ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
       ...(params.resolution ? { resolution: params.resolution } : {}),
+      ...(params.generateAudio === true ? { generateAudio: true } : {}),
     },
   };
 
@@ -245,8 +243,12 @@ async function generateGoogleVideoViaRest(params: {
       throw new Error("Google video generation did not finish in time");
     }
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    const opName = (operation as Record<string, unknown>).name;
+    if (typeof opName !== "string" || !opName) {
+      throw new Error("Google video operation response missing name for polling");
+    }
     operation = await requestGoogleVideoJson({
-      url: `${params.baseUrl}/${(operation as Record<string, unknown>).name}`,
+      url: `${params.baseUrl}/${opName}`,
       method: "GET",
       apiKey: params.apiKey,
       timeoutMs: params.timeoutMs,
@@ -463,6 +465,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             durationSeconds,
             aspectRatio,
             resolution,
+            generateAudio: req.audio === true ? true : undefined,
           });
           return await toGoogleVideoResult({
             operation,
