@@ -45,6 +45,7 @@ import {
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
+import { promptCodexNativeWebSearchSetup } from "./web-search-codex-setup.js";
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 
@@ -164,9 +165,7 @@ async function promptWebToolsConfig(
   type WebSearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
-  const { describeCodexNativeWebSearch, isCodexNativeWebSearchRelevant } =
-    await import("../agents/codex-native-web-search.js");
+  const { resolveSearchProviderOptions, setupManagedSearch } = await import("./onboard-search.js");
   const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
 
   note(
@@ -193,75 +192,15 @@ async function promptWebToolsConfig(
   let workingConfig = nextConfig;
 
   if (enableSearch) {
-    const codexRelevant = isCodexNativeWebSearchRelevant({ config: nextConfig });
-    let configureManagedProvider = true;
-
-    if (codexRelevant) {
-      note(
-        [
-          "Codex-capable models can optionally use native Codex web search.",
-          "Managed web_search still controls non-Codex models.",
-          "If no managed provider is configured, non-Codex models still rely on provider auto-detect and may have no search available.",
-          ...(describeCodexNativeWebSearch(nextConfig)
-            ? [describeCodexNativeWebSearch(nextConfig)!]
-            : ["Recommended mode: cached."]),
-        ].join("\n"),
-        "Codex native search",
-      );
-
-      const enableCodexNative = guardCancel(
-        await confirm({
-          message: "Enable native Codex web search for Codex-capable models?",
-          initialValue: existingSearch?.openaiCodex?.enabled === true,
-        }),
-        runtime,
-      );
-
-      if (enableCodexNative) {
-        const codexMode = guardCancel(
-          await select({
-            message: "Codex native web search mode",
-            options: [
-              {
-                value: "cached",
-                label: "cached (recommended)",
-                hint: "Uses cached web content",
-              },
-              {
-                value: "live",
-                label: "live",
-                hint: "Allows live external web access",
-              },
-            ],
-            initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
-          }),
-          runtime,
-        );
-        nextSearch = {
-          ...nextSearch,
-          openaiCodex: {
-            ...existingSearch?.openaiCodex,
-            enabled: true,
-            mode: codexMode,
-          },
-        };
-        configureManagedProvider = guardCancel(
-          await confirm({
-            message: "Configure or change a managed web search provider now?",
-            initialValue: Boolean(existingSearch?.provider),
-          }),
-          runtime,
-        );
-      } else {
-        nextSearch = {
-          ...nextSearch,
-          openaiCodex: {
-            ...existingSearch?.openaiCodex,
-            enabled: false,
-          },
-        };
-      }
-    }
+    const codexSetup = await promptCodexNativeWebSearchSetup({
+      config: workingConfig,
+      prompter,
+    });
+    workingConfig = codexSetup.config;
+    nextSearch = {
+      ...workingConfig.tools?.web?.search,
+    };
+    const { configureManagedProvider } = codexSetup;
 
     if (searchProviderOptions.length === 0) {
       if (configureManagedProvider) {
@@ -276,19 +215,18 @@ async function promptWebToolsConfig(
       }
       if (nextSearch.openaiCodex?.enabled !== true) {
         nextSearch = {
-          ...existingSearch,
+          ...workingConfig.tools?.web?.search,
           enabled: false,
         };
       }
     } else if (configureManagedProvider) {
-      workingConfig = await setupSearch(workingConfig, runtime, prompter);
+      const codexSearch = workingConfig.tools?.web?.search?.openaiCodex;
+      const searchEnabled = workingConfig.tools?.web?.search?.enabled;
+      workingConfig = await setupManagedSearch(workingConfig, runtime, prompter);
       nextSearch = {
         ...workingConfig.tools?.web?.search,
-        enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
-        openaiCodex: {
-          ...existingSearch?.openaiCodex,
-          ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
-        },
+        enabled: workingConfig.tools?.web?.search?.provider ? true : searchEnabled,
+        ...(codexSearch ? { openaiCodex: codexSearch } : {}),
       };
     }
   }

@@ -106,7 +106,7 @@ vi.mock("./onboard-channels.js", () => ({
 
 vi.mock("./onboard-search.js", () => ({
   resolveSearchProviderOptions: mocks.resolveSearchProviderOptions,
-  setupSearch: mocks.setupSearch,
+  setupManagedSearch: mocks.setupSearch,
 }));
 
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -167,10 +167,10 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),
     note: vi.fn(async () => {}),
-    select: vi.fn(async () => "firecrawl"),
+    select: vi.fn(async (params: unknown) => mocks.clackSelect(params)),
     multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => ""),
-    confirm: vi.fn(async () => true),
+    text: vi.fn(async (params: unknown) => mocks.clackText(params)),
+    confirm: vi.fn(async (params: unknown) => mocks.clackConfirm(params)),
     progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
   });
 }
