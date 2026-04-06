@@ -88,9 +88,17 @@ async function ensureAcpTargetSession(params: {
 async function resetAcpTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  bindingTarget: StatefulBindingTargetDescriptor;
   reason: "new" | "reset";
 }): Promise<StatefulBindingTargetResetResult> {
-  return await resetAcpSessionInPlace(params);
+  return await resetAcpSessionInPlace({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    reason: params.reason,
+    // Bound ACP targets must drop their ACP metadata fully so the next turn
+    // recreates a fresh runtime session instead of reviving stale identity.
+    clearMeta: true,
+  });
 }
 
 export const acpStatefulBindingTargetDriver: StatefulBindingTargetDriver = {

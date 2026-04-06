@@ -30,6 +30,7 @@ import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { createDiscordRestClient } from "../client.js";
 import {
   parseDiscordComponentCustomIdForCarbon,
   parseDiscordModalCustomIdForCarbon,
@@ -512,6 +513,11 @@ async function dispatchDiscordComponentEvent(params: {
     fallbackLimit: 2000,
   });
   const token = ctx.token ?? "";
+  const feedbackRest = createDiscordRestClient({
+    cfg: ctx.cfg,
+    token,
+    accountId,
+  }).rest;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(ctx.cfg, agentId);
   const replyToMode =
     ctx.discordConfig?.replyToMode ?? ctx.cfg.channels?.discord?.replyToMode ?? "off";
@@ -554,7 +560,7 @@ async function dispatchDiscordComponentEvent(params: {
       onReplyStart: async () => {
         try {
           const { sendTyping } = await loadTypingRuntime();
-          await sendTyping({ client: interaction.client, channelId: typingChannelId });
+          await sendTyping({ rest: feedbackRest, channelId: typingChannelId });
         } catch (err) {
           logVerbose(`discord: typing failed for component reply: ${String(err)}`);
         }
