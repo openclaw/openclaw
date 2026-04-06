@@ -6,6 +6,10 @@ import { extractSections } from "../../auto-reply/reply/post-compaction-context.
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  ANALYSIS_SCRATCHPAD_INSTRUCTIONS,
+  stripAnalysisBlock,
+} from "../compaction-analysis-strip.js";
+import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
@@ -22,6 +26,7 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { microCompactMessages } from "../micro-compact.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
@@ -680,10 +685,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
-      const structuredInstructions = buildCompactionStructureInstructions(
+      const baseStructuredInstructions = buildCompactionStructureInstructions(
         customInstructions,
         summarizationInstructions,
       );
+      // Append analysis-scratchpad instructions so the model reasons
+      // chronologically before producing the final summary. The analysis
+      // block is stripped from the result before it enters context.
+      const structuredInstructions = `${baseStructuredInstructions}${ANALYSIS_SCRATCHPAD_INSTRUCTIONS}`;
 
       const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
 
@@ -730,19 +739,21 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
-                droppedSummary = await compactionSafeguardDeps.summarizeInStages({
-                  messages: pruned.droppedMessagesList,
-                  model,
-                  apiKey: apiKey ?? "",
-                  headers,
-                  signal,
-                  reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
-                  maxChunkTokens: droppedMaxChunkTokens,
-                  contextWindow: contextWindowTokens,
-                  customInstructions: structuredInstructions,
-                  summarizationInstructions,
-                  previousSummary: preparation.previousSummary,
-                });
+                droppedSummary = stripAnalysisBlock(
+                  await compactionSafeguardDeps.summarizeInStages({
+                    messages: pruned.droppedMessagesList,
+                    model,
+                    apiKey: apiKey ?? "",
+                    headers,
+                    signal,
+                    reserveTokens: Math.max(1, Math.floor(preparation.settings.reserveTokens)),
+                    maxChunkTokens: droppedMaxChunkTokens,
+                    contextWindow: contextWindowTokens,
+                    customInstructions: structuredInstructions,
+                    summarizationInstructions,
+                    previousSummary: preparation.previousSummary,
+                  }),
+                );
               } catch (droppedError) {
                 log.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
@@ -762,7 +773,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         recentTurnsPreserve,
       });
-      messagesToSummarize = summaryTargetMessages;
+      // microCompact pre-pass: clear old bulky tool results before LLM
+      // summarization. Applied after split so preserved turns keep verbatim
+      // tool results. Zero LLM cost — just string replacement.
+      messagesToSummarize = microCompactMessages(summaryTargetMessages);
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
       const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
@@ -802,39 +816,43 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           historySummary =
             messagesToSummarize.length > 0
-              ? await compactionSafeguardDeps.summarizeInStages({
-                  messages: messagesToSummarize,
-                  model,
-                  apiKey: apiKey ?? "",
-                  headers,
-                  signal,
-                  reserveTokens,
-                  maxChunkTokens,
-                  contextWindow: contextWindowTokens,
-                  customInstructions: currentInstructions,
-                  summarizationInstructions,
-                  previousSummary: effectivePreviousSummary,
-                })
+              ? stripAnalysisBlock(
+                  await compactionSafeguardDeps.summarizeInStages({
+                    messages: messagesToSummarize,
+                    model,
+                    apiKey: apiKey ?? "",
+                    headers,
+                    signal,
+                    reserveTokens,
+                    maxChunkTokens,
+                    contextWindow: contextWindowTokens,
+                    customInstructions: currentInstructions,
+                    summarizationInstructions,
+                    previousSummary: effectivePreviousSummary,
+                  }),
+                )
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-            const prefixSummary = await compactionSafeguardDeps.summarizeInStages({
-              messages: turnPrefixMessages,
-              model,
-              apiKey: apiKey ?? "",
-              headers,
-              signal,
-              reserveTokens,
-              maxChunkTokens,
-              contextWindow: contextWindowTokens,
-              customInstructions: composeSplitTurnInstructions(
-                TURN_PREFIX_INSTRUCTIONS,
-                currentInstructions,
-              ),
-              summarizationInstructions,
-              previousSummary: undefined,
-            });
+            const prefixSummary = stripAnalysisBlock(
+              await compactionSafeguardDeps.summarizeInStages({
+                messages: turnPrefixMessages,
+                model,
+                apiKey: apiKey ?? "",
+                headers,
+                signal,
+                reserveTokens,
+                maxChunkTokens,
+                contextWindow: contextWindowTokens,
+                customInstructions: composeSplitTurnInstructions(
+                  TURN_PREFIX_INSTRUCTIONS,
+                  currentInstructions,
+                ),
+                summarizationInstructions,
+                previousSummary: undefined,
+              }),
+            );
             splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()
               ? `${historySummary}\n\n---\n\n${splitTurnSection}`
@@ -908,7 +926,27 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fileOpsSummary,
       );
       const workspaceContext = await readWorkspaceContextForSummary();
-      const fullReservedSuffix = appendSummarySection(reservedSuffix, workspaceContext);
+      // Post-compact transcript reference so the model can self-serve if it
+      // needs details lost in summarization.
+      // Prefer getSessionFile() which handles forked-session filename patterns;
+      // fall back to manual dir/id construction for older session managers.
+      const sessionFile = (
+        ctx.sessionManager as { getSessionFile?: () => string | null }
+      ).getSessionFile?.();
+      const transcriptPath =
+        sessionFile ??
+        (() => {
+          const dir = ctx.sessionManager.getSessionDir?.();
+          const id = ctx.sessionManager.getSessionId?.();
+          return dir && id ? `${dir}/${id}.jsonl` : null;
+        })();
+      const transcriptRef = transcriptPath
+        ? `\n\n---\n_Full session transcript: \`${transcriptPath}\`_`
+        : "";
+      const fullReservedSuffix = appendSummarySection(
+        appendSummarySection(reservedSuffix, workspaceContext),
+        transcriptRef,
+      );
       // Ensure leading separator so suffix does not merge with body (e.g. when body
       // ends without newline from buildStructuredFallbackSummary: "...## Exact identifiers## Tool Failures").
       const normalizedSuffix =
@@ -963,6 +1001,8 @@ export const __testing = {
   readWorkspaceContextForSummary,
   hasMeaningfulConversationContent,
   isRealConversationMessage,
+  microCompactMessages,
+  stripAnalysisBlock,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
