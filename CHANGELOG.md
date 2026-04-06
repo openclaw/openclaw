@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/TUI: defer terminal chat finalization for per-attempt lifecycle errors so fallback retries keep streaming before the run is marked failed. (#60043) Thanks @jwchmodx.
 - TUI/command messages: strip inbound envelope metadata before rendering command/system messages so async completion notices stop leaking raw wrappers into the operator terminal. (#59985) Thanks @MoerAI.
 - TUI/terminal: restore Kitty keyboard protocol and `modifyOtherKeys` state on TUI exit and fatal CLI crashes so parent shells stop inheriting broken keyboard input after `openclaw tui` exits. (#49130) Thanks @biefan.
+- Docs/i18n: relocalize final localized-page links after translation so generated locale pages stop keeping stale English-root links when targets appear later in the same run. (#61796) thanks @hxy91819.
 
 ## 2026.4.5
 
