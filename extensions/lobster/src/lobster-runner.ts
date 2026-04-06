@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -597,7 +598,19 @@ async function importInstalledLobsterModule<T>(
 function resolveInstalledLobsterRoot() {
   const require = createRequire(import.meta.url);
   const sdkEntry = require.resolve("@clawdbot/lobster");
-  return path.resolve(path.dirname(sdkEntry), "../../..");
+  let currentDir = path.dirname(sdkEntry);
+
+  while (true) {
+    const packageJsonPath = path.join(currentDir, "package.json");
+    if (existsSync(packageJsonPath)) {
+      return currentDir;
+    }
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      throw new Error("Unable to resolve the installed @clawdbot/lobster package root");
+    }
+    currentDir = parentDir;
+  }
 }
 
 async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime> {
@@ -672,9 +685,19 @@ export function createEmbeddedLobsterRunner(options?: {
   loadRuntime?: LoadEmbeddedToolRuntime;
 }): LobsterRunner {
   const loadRuntime = options?.loadRuntime ?? loadEmbeddedToolRuntimeFromPackage;
+  let runtimePromise: Promise<EmbeddedToolRuntime> | undefined;
+
+  const getRuntime = () => {
+    runtimePromise ??= loadRuntime().catch((error) => {
+      runtimePromise = undefined;
+      throw error;
+    });
+    return runtimePromise;
+  };
+
   return {
     async run(params) {
-      const runtime = await loadRuntime();
+      const runtime = await getRuntime();
       return await withTimeout(params.timeoutMs, async (signal) => {
         const ctx = createEmbeddedToolContext(params, signal);
 
