@@ -53,6 +53,17 @@ type ActiveTaskWaiter = {
   timeout?: ReturnType<typeof setTimeout>;
 };
 
+type QueueState = {
+  gatewayDraining: boolean;
+  lanes: Map<string, LaneState>;
+  activeTaskWaiters: Set<ActiveTaskWaiter>;
+  nextTaskId: number;
+};
+
+type LegacyQueueState = Omit<QueueState, "activeTaskWaiters"> & {
+  activeTaskWaiters?: Set<ActiveTaskWaiter>;
+};
+
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
 }
@@ -64,7 +75,7 @@ function isExpectedNonErrorLaneFailure(err: unknown): boolean {
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
 function getQueueState() {
-  const state = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+  const state = resolveGlobalSingleton<LegacyQueueState>(COMMAND_QUEUE_STATE_KEY, () => ({
     gatewayDraining: false,
     lanes: new Map<string, LaneState>(),
     activeTaskWaiters: new Set<ActiveTaskWaiter>(),
@@ -76,10 +87,10 @@ function getQueueState() {
   // `resolveGlobalSingleton` because the Symbol key already exists on
   // globalThis.  Patch the missing field so all downstream consumers see a
   // valid Set instead of `undefined`.
-  if (!state.activeTaskWaiters) {
+  if (!("activeTaskWaiters" in state)) {
     state.activeTaskWaiters = new Set<ActiveTaskWaiter>();
   }
-  return state;
+  return state as QueueState;
 }
 
 function normalizeLane(lane: string): string {

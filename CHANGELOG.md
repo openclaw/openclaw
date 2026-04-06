@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - TUI/command messages: strip inbound envelope metadata before rendering command/system messages so async completion notices stop leaking raw wrappers into the operator terminal. (#59985) Thanks @MoerAI.
 - TUI/terminal: restore Kitty keyboard protocol and `modifyOtherKeys` state on TUI exit and fatal CLI crashes so parent shells stop inheriting broken keyboard input after `openclaw tui` exits. (#49130) Thanks @biefan.
 - Docs/i18n: relocalize final localized-page links after translation so generated locale pages stop keeping stale English-root links when targets appear later in the same run. (#61796) thanks @hxy91819.
+- Gateway/command queue: migrate legacy global queue state after in-process SIGUSR1 restarts so pre-4.5 hot-upgrade singletons missing `activeTaskWaiters` stop crashing restart recovery. (#61933) Thanks @openperf.
 
 ## 2026.4.5
 
