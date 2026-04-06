@@ -21,6 +21,13 @@ const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   }),
 }));
 
+function createPinnedDispatcherCompatibilityError(): Error {
+  const cause = Object.assign(new Error("invalid onRequestStart method"), {
+    code: "UND_ERR_INVALID_ARG",
+  });
+  return Object.assign(new TypeError("fetch failed"), { cause });
+}
+
 function redirectResponse(location: string): Response {
   return new Response(null, {
     status: 302,
@@ -308,6 +315,56 @@ describe("fetchWithSsrFGuard hardening", () => {
     } finally {
       (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
     }
+  });
+
+  it("retries without the direct pinned dispatcher when the runtime rejects that dispatcher shape", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      if (requestInit.dispatcher) {
+        throw createPinnedDispatcherCompatibilityError();
+      }
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(
+      (fetchImpl.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
+    ).toBeDefined();
+    expect(
+      (fetchImpl.mock.calls[1]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
+    ).toBeUndefined();
+    await result.release();
+  });
+
+  it("does not bypass proxy routing when proxy dispatchers fail the same way", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw createPinnedDispatcherCompatibilityError();
+    });
+    const lookupFn = vi.fn(async (hostname: string) => [
+      {
+        address: hostname === "proxy.example" ? "93.184.216.35" : "93.184.216.34",
+        family: 4,
+      },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn,
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://proxy.example:7890",
+        },
+      }),
+    ).rejects.toThrow("fetch failed");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("ignores dispatcher support markers on ambient global fetch", async () => {

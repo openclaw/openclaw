@@ -1,8 +1,10 @@
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildTimeoutAbortSignal,
+  canBypassPinnedDispatcherForCompatibility,
   closeDispatcher,
   createPinnedDispatcher,
+  isPinnedDispatcherRuntimeCompatibilityError,
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
 } from "../../runtime-api.js";
@@ -84,6 +86,28 @@ function buildBufferedResponse(params: {
   return response;
 }
 
+async function fetchWithPinnedDispatcherCompatibilityRetry(params: {
+  url: string;
+  init: RequestInit & { dispatcher?: unknown };
+  canBypassPinnedDispatcher: boolean;
+  dispatcher: ReturnType<typeof createPinnedDispatcher> | undefined;
+}): Promise<Response> {
+  try {
+    return await fetch(params.url, params.init);
+  } catch (error) {
+    if (
+      !params.dispatcher ||
+      !params.canBypassPinnedDispatcher ||
+      !isPinnedDispatcherRuntimeCompatibilityError(error)
+    ) {
+      throw error;
+    }
+    await closeDispatcher(params.dispatcher);
+    const { dispatcher: _dispatcher, ...retryInit } = params.init;
+    return await fetch(params.url, retryInit);
+  }
+}
+
 async function fetchWithMatrixGuardedRedirects(params: {
   url: string;
   init?: RequestInit;
@@ -110,15 +134,22 @@ async function fetchWithMatrixGuardedRedirects(params: {
         policy: params.ssrfPolicy,
       });
       dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.ssrfPolicy);
-      const response = await fetch(currentUrl.toString(), {
-        ...params.init,
-        method,
-        body,
-        headers,
-        redirect: "manual",
-        signal,
+      const response = await fetchWithPinnedDispatcherCompatibilityRetry({
+        url: currentUrl.toString(),
+        canBypassPinnedDispatcher: canBypassPinnedDispatcherForCompatibility(
+          params.dispatcherPolicy,
+        ),
         dispatcher,
-      } as RequestInit & { dispatcher: unknown });
+        init: {
+          ...params.init,
+          method,
+          body,
+          headers,
+          redirect: "manual",
+          signal,
+          dispatcher,
+        } as RequestInit & { dispatcher: unknown },
+      });
 
       if (!isRedirectStatus(response.status)) {
         return {
