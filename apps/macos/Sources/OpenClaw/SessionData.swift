@@ -289,16 +289,15 @@ enum SessionLoader {
             throw SessionLoadError.decodeFailed(error.localizedDescription)
         }
 
-        if decoded.unchanged == true && decoded.sessions == nil && allowUnchangedFallback {
+        if decoded.unchanged == true, decoded.sessions == nil, allowUnchangedFallback {
             // Some gateway clients can send `{ unchanged: true }` responses without
             // row material. Retry without accepting unchanged shape to keep list updates safe.
-            return try await loadSnapshot(
+            return try await Self.loadSnapshot(
                 activeMinutes: activeMinutes,
                 limit: limit,
                 includeGlobal: includeGlobal,
                 includeUnknown: includeUnknown,
-                allowUnchangedFallback: false,
-            )
+                allowUnchangedFallback: false)
         }
 
         guard let decodedSessions = decoded.sessions else {
