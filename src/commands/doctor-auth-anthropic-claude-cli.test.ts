@@ -111,6 +111,10 @@ describe("maybeRepairRemovedAnthropicClaudeCliState", () => {
             models: {
               "claude-cli/claude-sonnet-4-6": { alias: "Claude" },
             },
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+              "codex-cli": { command: "codex" },
+            },
           },
         },
       } as OpenClawConfig,
@@ -133,6 +137,8 @@ describe("maybeRepairRemovedAnthropicClaudeCliState", () => {
     expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]).toEqual({
       alias: "Claude",
     });
+    expect(next.agents?.defaults?.cliBackends?.["claude-cli"]).toBeUndefined();
+    expect(next.agents?.defaults?.cliBackends?.["codex-cli"]).toEqual({ command: "codex" });
 
     const raw = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
       profiles?: Record<string, unknown>;
@@ -206,6 +212,9 @@ describe("maybeRepairRemovedAnthropicClaudeCliState", () => {
             models: {
               "claude-cli/claude-sonnet-4-6": {},
             },
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
           },
         },
       } as OpenClawConfig,
@@ -221,6 +230,7 @@ describe("maybeRepairRemovedAnthropicClaudeCliState", () => {
     expect(next.agents?.defaults?.model).toBe("anthropic/claude-sonnet-4-6");
     expect(next.agents?.defaults?.models?.["claude-cli/claude-sonnet-4-6"]).toBeUndefined();
     expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]).toEqual({});
+    expect(next.agents?.defaults?.cliBackends?.["claude-cli"]).toBeUndefined();
 
     const raw = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
       profiles?: Record<string, unknown>;

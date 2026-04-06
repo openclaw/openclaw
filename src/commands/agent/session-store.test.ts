@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveSession } from "../../agents/command/session.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import { updateSessionStoreAfterAgentRun } from "./session-store.js";
@@ -123,5 +124,63 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(sessionStore[sessionKey]?.systemPromptReport?.bootstrapTruncation?.warningMode).toBe(
       "once",
     );
+  });
+
+  it("stores and reloads the runtime model for explicit session-id-only runs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const cfg = {
+      session: {
+        store: storePath,
+        mainKey: "main",
+      },
+      agents: {
+        defaults: {
+          cliBackends: {
+            "codex-cli": {},
+          },
+        },
+      },
+    } as never;
+
+    const first = resolveSession({
+      cfg,
+      sessionId: "explicit-session-123",
+    });
+
+    expect(first.sessionKey).toBe("agent:main:explicit:explicit-session-123");
+
+    await updateSessionStoreAfterAgentRun({
+      cfg,
+      sessionId: first.sessionId,
+      sessionKey: first.sessionKey!,
+      storePath: first.storePath,
+      sessionStore: first.sessionStore!,
+      defaultProvider: "codex-cli",
+      defaultModel: "gpt-5.4",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "codex-cli",
+            model: "gpt-5.4",
+            sessionId: "codex-cli-session-1",
+          },
+        },
+      } as never,
+    });
+
+    const second = resolveSession({
+      cfg,
+      sessionId: "explicit-session-123",
+    });
+
+    expect(second.sessionKey).toBe(first.sessionKey);
+    expect(second.sessionEntry?.modelProvider).toBe("codex-cli");
+    expect(second.sessionEntry?.model).toBe("gpt-5.4");
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[first.sessionKey!];
+    expect(persisted?.modelProvider).toBe("codex-cli");
+    expect(persisted?.model).toBe("gpt-5.4");
   });
 });

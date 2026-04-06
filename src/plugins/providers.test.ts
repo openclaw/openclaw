@@ -35,6 +35,7 @@ function createManifestProviderPlugin(params: {
     enabledByDefault: params.enabledByDefault,
     channels: [],
     providers: params.providerIds,
+    cliBackends: [],
     modelSupport: params.modelSupport,
     skills: [],
     hooks: [],
@@ -272,6 +273,12 @@ describe("resolvePluginProviders", () => {
     } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
     ({ setActivePluginRegistry } = await import("./runtime.js"));
+  });
+
+  it("maps cli backend ids to owning plugin ids via manifests", () => {
+    setOwningProviderManifestPlugins();
+
+    expectOwningPluginIds("codex-cli", ["openai"]);
   });
 
   beforeEach(() => {

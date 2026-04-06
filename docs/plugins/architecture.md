@@ -30,6 +30,7 @@ native OpenClaw plugin registers against one or more capability types:
 | Capability             | Registration method                              | Example plugins                      |
 | ---------------------- | ------------------------------------------------ | ------------------------------------ |
 | Text inference         | `api.registerProvider(...)`                      | `openai`, `anthropic`                |
+| CLI inference backend  | `api.registerCliBackend(...)`                    | `openai`, `anthropic`                |
 | Speech                 | `api.registerSpeechProvider(...)`                | `elevenlabs`, `microsoft`            |
 | Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                             |
 | Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `openai`                             |

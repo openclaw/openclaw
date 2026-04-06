@@ -692,6 +692,7 @@ describe("plugin status reports", () => {
     });
     expect(inspect.capabilities).toEqual([]);
   });
+
   it("builds compatibility warnings for legacy compatibility paths", () => {
     setPluginLoadResult({
       plugins: [

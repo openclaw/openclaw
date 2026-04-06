@@ -6,6 +6,8 @@ import {
 } from "./run.suite-helpers.js";
 import {
   buildWorkspaceSkillSnapshotMock,
+  getCliSessionIdMock,
+  isCliProviderMock,
   lookupContextTokensMock,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
@@ -15,6 +17,7 @@ import {
   resolveAgentSkillsFilterMock,
   resolveAllowedModelRefMock,
   resolveCronSessionMock,
+  runCliAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -39,6 +42,15 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     const model = callCfg?.agents?.defaults?.model as { primary?: string; fallbacks?: string[] };
     expect(model?.primary).toBe(params.primary);
     expect(model?.fallbacks).toEqual(params.fallbacks);
+  }
+
+  function mockCliFallbackInvocation() {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        const result = await params.run("codex-cli", "gpt-5.4");
+        return { result, provider: "codex-cli", model: "gpt-5.4", attempts: [] };
+      },
+    );
   }
 
   it("passes agent-level skillFilter to buildWorkspaceSkillSnapshot", async () => {
@@ -146,7 +158,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   describe("model fallbacks", () => {
     const defaultFallbacks = [
       "anthropic/claude-opus-4-6",
-      "google/gemini-3-pro-preview",
+      "google-gemini-cli/gemini-3-pro-preview",
       "nvidia/deepseek-ai/deepseek-v3.2",
     ];
 
@@ -241,6 +253,74 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(result.error).toBe("invalid model: openai/");
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("CLI session handoff (issue #29774)", () => {
+    it("does not pass stored cliSessionId on fresh isolated runs (isNewSession=true)", async () => {
+      // Simulate a persisted CLI session ID from a previous run.
+      getCliSessionIdMock.mockReturnValue("prev-cli-session-abc");
+      isCliProviderMock.mockReturnValue(true);
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "output" }],
+        meta: { agentMeta: { sessionId: "new-cli-session-xyz", usage: { input: 5, output: 10 } } },
+      });
+      // Make runWithModelFallback invoke the run callback so the CLI path executes.
+      mockCliFallbackInvocation();
+      resolveCronSessionMock.mockReturnValue({
+        storePath: "/tmp/store.json",
+        store: {},
+        sessionEntry: {
+          sessionId: "test-session-fresh",
+          updatedAt: 0,
+          systemSent: false,
+          skillsSnapshot: undefined,
+          // A stored CLI session ID that should NOT be reused on fresh runs.
+          cliSessionIds: { "codex-cli": "prev-cli-session-abc" },
+        },
+        systemSent: false,
+        isNewSession: true,
+      });
+
+      await runCronIsolatedAgentTurn(makeSkillParams());
+
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      // Fresh session: cliSessionId must be undefined, not the stored value.
+      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty("cliSessionId", undefined);
+    });
+
+    it("reuses stored cliSessionId on continuation runs (isNewSession=false)", async () => {
+      getCliSessionIdMock.mockReturnValue("existing-cli-session-def");
+      isCliProviderMock.mockReturnValue(true);
+      runCliAgentMock.mockResolvedValue({
+        payloads: [{ text: "output" }],
+        meta: {
+          agentMeta: { sessionId: "existing-cli-session-def", usage: { input: 5, output: 10 } },
+        },
+      });
+      mockCliFallbackInvocation();
+      resolveCronSessionMock.mockReturnValue({
+        storePath: "/tmp/store.json",
+        store: {},
+        sessionEntry: {
+          sessionId: "test-session-continuation",
+          updatedAt: 0,
+          systemSent: false,
+          skillsSnapshot: undefined,
+          cliSessionIds: { "codex-cli": "existing-cli-session-def" },
+        },
+        systemSent: false,
+        isNewSession: false,
+      });
+
+      await runCronIsolatedAgentTurn(makeSkillParams());
+
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      // Continuation: cliSessionId should be passed through for session resume.
+      expect(runCliAgentMock.mock.calls[0][0]).toHaveProperty(
+        "cliSessionId",
+        "existing-cli-session-def",
+      );
     });
   });
 

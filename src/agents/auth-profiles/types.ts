@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 
 export type OAuthProvider = string;
+export type ExternalOAuthManager = "codex-cli" | "minimax-cli";
 
 export type OAuthCredentials = {
   access: string;
@@ -47,9 +48,11 @@ export type OAuthCredential = OAuthCredentials & {
   email?: string;
   displayName?: string;
   /**
-   * Legacy metadata preserved for backwards compatibility with older stores.
+   * When set, another CLI owns refresh-token rotation for this credential.
+   * OpenClaw should prefer that external source as canonical storage and avoid
+   * persisting copied secrets into auth-profiles.json.
    */
-  managedBy?: string;
+  managedBy?: ExternalOAuthManager;
 };
 
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;

@@ -22,7 +22,11 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import type {
+  CliBackendConfig,
+  ModelProviderAuthMode,
+  ModelProviderConfig,
+} from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
@@ -1998,6 +2002,28 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
+/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
+export type CliBackendPlugin = {
+  /** Provider id used in model refs, for example `codex-cli/gpt-5`. */
+  id: string;
+  /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
+  config: CliBackendConfig;
+  /**
+   * Whether OpenClaw should inject bundle MCP config for this backend.
+   *
+   * Keep this opt-in. Only backends that explicitly consume an MCP config file
+   * should enable it.
+   */
+  bundleMcp?: boolean;
+  /**
+   * Optional config normalizer applied after user overrides merge.
+   *
+   * Use this for backend-specific compatibility rewrites when old config
+   * shapes need to stay working.
+   */
+  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+};
+
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };
@@ -2102,6 +2128,8 @@ export type OpenClawPluginApi = {
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a text-only CLI backend used by the local CLI runner. */
+  registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
   /** Register a lightweight config probe that can auto-enable this plugin generically. */

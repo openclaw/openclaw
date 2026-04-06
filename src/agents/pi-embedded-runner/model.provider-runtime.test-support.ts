@@ -363,14 +363,14 @@ function buildDynamicModel(
         modelId,
         {
           provider: "google-antigravity",
-          api: "google-generative-ai",
+          api: "google-gemini-cli",
           baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
           reasoning: true,
           input: ["text", "image"],
         },
         {
           provider: "google-antigravity",
-          api: "google-generative-ai",
+          api: "google-gemini-cli",
           baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
           reasoning: true,
           input: ["text", "image"],

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   clearMemoryPluginState,
@@ -24,7 +26,12 @@ import { createMockTypingController } from "./test-helpers.js";
 function createCliBackendTestConfig() {
   return {
     agents: {
-      defaults: {},
+      defaults: {
+        cliBackends: {
+          "codex-cli": {},
+          "google-gemini-cli": {},
+        },
+      },
     },
   };
 }
@@ -246,6 +253,8 @@ describe("runReplyAgent onAgentRunStart", () => {
     const onAgentRunStart = vi.fn();
 
     const result = await createRun({
+      provider: "codex-cli",
+      model: "gpt-5.4",
       opts: { runId: "run-started", onAgentRunStart },
     });
 
@@ -1507,6 +1516,100 @@ describe("runReplyAgent block streaming", () => {
   });
 });
 
+describe("runReplyAgent cli routing", () => {
+  function createRun() {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: { agents: { defaults: { cliBackends: { "codex-cli": {} } } } },
+        skillsSnapshot: {},
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "codex-cli/gpt-5.4",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("uses the embedded runner for codex-cli providers", async () => {
+    const runId = "00000000-0000-0000-0000-000000000001";
+    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
+    const lifecyclePhases: string[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId !== runId) {
+        return;
+      }
+      if (evt.stream !== "lifecycle") {
+        return;
+      }
+      const phase = evt.data?.phase;
+      if (typeof phase === "string") {
+        lifecyclePhases.push(phase);
+      }
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "codex-cli",
+          model: "gpt-5.4",
+        },
+      },
+    });
+
+    const result = await createRun();
+    unsubscribe();
+    randomSpy.mockRestore();
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(lifecyclePhases).toEqual(["start", "end"]);
+    expect(result).toMatchObject({ text: "ok" });
+  });
+});
+
 describe("runReplyAgent messaging tool suppression", () => {
   function createRun(
     messageProvider = "slack",
@@ -2051,8 +2154,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
       return { payloads: [{ text: "ok" }], meta: {} };
     });
     runWithModelFallbackMock.mockImplementation(async ({ run }: RunWithModelFallbackParams) => ({
-      result: await run("google", "gemini-3"),
-      provider: "google",
+      result: await run("google-gemini-cli", "gemini-3"),
+      provider: "google-gemini-cli",
       model: "gemini-3",
     }));
 

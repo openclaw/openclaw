@@ -18,7 +18,7 @@ case "$ACP_AGENT" in
     CLI_BIN="claude"
     ;;
   codex)
-    AUTH_PROVIDER="openai-codex"
+    AUTH_PROVIDER="codex-cli"
     CLI_PACKAGE="@openai/codex"
     CLI_BIN="codex"
     ;;
