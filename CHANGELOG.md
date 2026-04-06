@@ -4,7 +4,7 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
-## 2026.4.6-beta.1
+## 2026.4.5
 
 ### Breaking
 
