@@ -55,7 +55,31 @@ function shouldContinueAutoSelection(
   adapter: MemoryEmbeddingProviderAdapter,
   err: unknown,
 ): boolean {
-  return adapter.shouldContinueAutoSelection?.(err) ?? false;
+  // If the adapter doesn't provide guidance, be conservative-but-helpful:
+  // when auto-selecting providers, auth/config errors for a remote provider
+  // should not abort the entire memory search feature. Instead, try the next
+  // provider (e.g. local embeddings or another remote provider).
+  const explicit = adapter.shouldContinueAutoSelection?.(err);
+  if (typeof explicit === "boolean") {
+    return explicit;
+  }
+
+  const message = formatErrorMessage(err).toLowerCase();
+
+  // Heuristic: missing/invalid credentials or configuration for a remote
+  // provider should be treated as a soft-failure during auto selection.
+  // This avoids surfacing a generic "embedding/provider error" warning when
+  // the system can still provide FTS-only memory search results.
+  const looksLikeAuthOrConfigIssue =
+    /api[_ -]?key|missing .*key|no .*key|not configured|unauthori[sz]ed|forbidden|\b401\b|\b403\b/.test(
+      message,
+    );
+
+  if (adapter.id !== "local" && looksLikeAuthOrConfigIssue) {
+    return true;
+  }
+
+  return false;
 }
 
 function getAdapter(
