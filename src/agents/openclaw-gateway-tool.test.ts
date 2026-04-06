@@ -691,6 +691,42 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.apply when an id-less dangerous hook mapping is swapped for a different mapping at the same index", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            hooks: {
+              // No `id` field — index-only legacy mapping
+              mappings: [{ channel: "original-channel", allowUnsafeExternalContent: true }],
+            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-swap-idless-dangerous-mapping", {
+        action: "config.apply",
+        raw: `{
+          hooks: { mappings: [{ channel: "different-channel", allowUnsafeExternalContent: true }] },
+          tools: { exec: { ask: "on-miss", security: "allowlist" } }
+        }`,
+      }),
+    ).rejects.toThrow(
+      "gateway config.apply cannot enable dangerous config flags: hooks.mappings[0].allowUnsafeExternalContent=true",
+    );
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.apply",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("allows config.apply when the legacy tools.bash alias is canonicalized to tools.exec", async () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {

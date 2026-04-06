@@ -160,6 +160,14 @@ function takeMatchingDangerousFlag(
     if (currentToken.idIdentity && nextToken.idIdentity) {
       return currentToken.idIdentity === nextToken.idIdentity;
     }
+    // When both tokens have a fingerprint (the mapping object existed in the config at tokenization
+    // time), match by fingerprint only — not by index. This prevents a swap of one dangerous
+    // mapping for a *different* dangerous mapping at the same array index from being treated as
+    // "already present" just because the index-based identity strings overlap.
+    if (currentToken.fingerprintIdentity && nextToken.fingerprintIdentity) {
+      return currentToken.fingerprintIdentity === nextToken.fingerprintIdentity;
+    }
+    // Fallback for index-only tokens (mapping object was absent from config at tokenization time).
     return currentToken.identities.some((identity) => nextToken.identities.includes(identity));
   });
   if (matchIndex < 0) {
