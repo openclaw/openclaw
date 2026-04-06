@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { validateConfigObject } from "./validation.js";
 
 describe("gateway.connectChallengeTimeoutMs", () => {
@@ -10,5 +9,15 @@ describe("gateway.connectChallengeTimeoutMs", () => {
       },
     });
     expect(result.ok).toBe(true);
+  });
+
+  it("rejects values above the runtime max", () => {
+    const result = validateConfigObject({
+      gateway: {
+        connectChallengeTimeoutMs: 300_001,
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues.join("\n")).toContain("connectChallengeTimeoutMs");
   });
 });
