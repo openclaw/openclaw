@@ -17,7 +17,6 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * output chunk, so any module-level const/let would be uninitialized when
  * first accessed during plugin registration.
  */
-// eslint-disable-next-line no-var -- var avoids TDZ when bundler reorders module bodies in a chunk
 var reservedCommands: Set<string> | undefined;
 
 export type CommandRegistrationResult = {
@@ -112,6 +111,14 @@ export function validatePluginCommandDefinition(
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
   }
+  for (const [label, message] of Object.entries(command.nativeProgressMessages ?? {})) {
+    if (typeof message !== "string") {
+      return `Native progress message "${label}" must be a string`;
+    }
+    if (!message.trim()) {
+      return `Native progress message "${label}" cannot be empty`;
+    }
+  }
   return null;
 }
 
@@ -126,9 +133,11 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
   };
 
   push(command.name);
-  push(command.nativeNames?.default);
-  push(command.nativeNames?.telegram);
-  push(command.nativeNames?.discord);
+  for (const alias of Object.values(command.nativeNames ?? {})) {
+    if (typeof alias === "string") {
+      push(alias);
+    }
+  }
 
   return [...keys];
 }

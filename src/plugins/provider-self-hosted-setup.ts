@@ -8,7 +8,6 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isReasoningModelHeuristic } from "../plugin-sdk/provider-reasoning.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
@@ -32,6 +31,10 @@ type OpenAICompatModelsResponse = {
     id?: string;
   }>;
 };
+
+function isReasoningModelHeuristic(modelId: string): boolean {
+  return /r1|reasoning|think|reason/i.test(modelId);
+}
 
 export async function discoverOpenAICompatibleLocalModels(params: {
   baseUrl: string;

@@ -1,17 +1,10 @@
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
-import {
-  buildBroadcastSessionKey,
-  buildFeishuAgentBody,
-  handleFeishuMessage,
-  resolveBroadcastAgents,
-  toMessageResourceType,
-} from "./bot.js";
+import { handleFeishuMessage } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
 
 type ConfiguredBindingRoute = ReturnType<typeof ConversationRuntime.resolveConfiguredBindingRoute>;
@@ -24,6 +17,15 @@ type BindingReadiness = Awaited<
 type ReplyDispatcher = Parameters<
   PluginRuntime["channel"]["reply"]["withReplyDispatcher"]
 >[0]["dispatcher"];
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends (...args: never[]) => unknown
+    ? T[K]
+    : T[K] extends ReadonlyArray<unknown>
+      ? T[K]
+      : T[K] extends object
+        ? DeepPartial<T[K]>
+        : T[K];
+};
 
 function createReplyDispatcher(): ReplyDispatcher {
   return {
@@ -158,10 +160,47 @@ function buildDefaultResolveRoute(): ResolvedAgentRoute {
   };
 }
 
-function createUnboundConfiguredRoute(
+function _createUnboundConfiguredRoute(
   route: NonNullable<ConfiguredBindingRoute>["route"],
 ): ConfiguredBindingRoute {
   return { bindingResolution: null, route };
+}
+
+function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
+  return {
+    channel: {
+      routing: {
+        resolveAgentRoute: resolveAgentRouteMock,
+      },
+      session: {
+        readSessionUpdatedAt: readSessionUpdatedAtMock,
+        resolveStorePath: resolveStorePathMock,
+      },
+      reply: {
+        resolveEnvelopeFormatOptions:
+          resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+        formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+        finalizeInboundContext: finalizeInboundContextMock as never,
+        dispatchReplyFromConfig: vi.fn().mockResolvedValue({
+          queuedFinal: false,
+          counts: { final: 1 },
+        }),
+        withReplyDispatcher: withReplyDispatcherMock as never,
+      },
+      commands: {
+        shouldComputeCommandAuthorized: vi.fn(() => false),
+        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+      },
+      pairing: {
+        readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
+        upsertPairingRequest: vi.fn(),
+        buildPairingReply: vi.fn(),
+      },
+      ...overrides.channel,
+    },
+    ...(overrides.system ? { system: overrides.system as PluginRuntime["system"] } : {}),
+    ...(overrides.media ? { media: overrides.media as PluginRuntime["media"] } : {}),
+  } as unknown as PluginRuntime;
 }
 
 const resolveAgentRouteMock: PluginRuntime["channel"]["routing"]["resolveAgentRoute"] = (params) =>
@@ -191,6 +230,7 @@ const {
   mockEnsureConfiguredBindingRouteReady,
   mockResolveBoundConversation,
   mockTouchBinding,
+  mockResolveFeishuReasoningPreviewEnabled,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: createReplyDispatcher(),
@@ -224,10 +264,15 @@ const {
   ),
   mockResolveBoundConversation: vi.fn(() => null as BoundConversation),
   mockTouchBinding: vi.fn(),
+  mockResolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
   createFeishuReplyDispatcher: mockCreateFeishuReplyDispatcher,
+}));
+
+vi.mock("./reasoning-preview.js", () => ({
+  resolveFeishuReasoningPreviewEnabled: mockResolveFeishuReasoningPreviewEnabled,
 }));
 
 vi.mock("./send.js", () => ({
@@ -244,8 +289,10 @@ vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
   return {
     ...actual,
     resolveConfiguredBindingRoute: (params: unknown) =>
@@ -285,6 +332,7 @@ describe("handleFeishuMessage ACP routing", () => {
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
+    mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
     mockResolveAgentRoute.mockReset().mockReturnValue({
       ...buildDefaultResolveRoute(),
       sessionKey: "agent:main:feishu:direct:ou_sender_1",
@@ -298,39 +346,7 @@ describe("handleFeishuMessage ACP routing", () => {
       markDispatchIdle: vi.fn(),
     });
 
-    setFeishuRuntime(
-      createPluginRuntimeMock({
-        channel: {
-          routing: {
-            resolveAgentRoute: resolveAgentRouteMock,
-          },
-          session: {
-            readSessionUpdatedAt: readSessionUpdatedAtMock,
-            resolveStorePath: resolveStorePathMock,
-          },
-          reply: {
-            resolveEnvelopeFormatOptions:
-              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
-            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext: finalizeInboundContextMock as never,
-            dispatchReplyFromConfig: vi.fn().mockResolvedValue({
-              queuedFinal: false,
-              counts: { final: 1 },
-            }),
-            withReplyDispatcher: withReplyDispatcherMock as never,
-          },
-          commands: {
-            shouldComputeCommandAuthorized: vi.fn(() => false),
-            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
-          },
-          pairing: {
-            readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
-            upsertPairingRequest: vi.fn(),
-            buildPairingReply: vi.fn(),
-          },
-        },
-      }),
-    );
+    setFeishuRuntime(createFeishuBotRuntime());
   });
 
   it("ensures configured ACP routes for Feishu DMs", async () => {
@@ -429,6 +445,31 @@ describe("handleFeishuMessage ACP routing", () => {
     );
     expect(mockTouchBinding).toHaveBeenCalledWith("default:oc_group_chat:topic:om_topic_root");
   });
+
+  it("passes reasoning preview permission from session state into the dispatcher", async () => {
+    mockResolveFeishuReasoningPreviewEnabled.mockReturnValue(true);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-reasoning",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({ allowReasoningPreview: true }),
+    );
+  });
 });
 
 describe("handleFeishuMessage command authorization", () => {
@@ -500,18 +541,11 @@ describe("handleFeishuMessage command authorization", () => {
     });
     mockEnqueueSystemEvent.mockReset();
     setFeishuRuntime(
-      createPluginRuntimeMock({
+      createFeishuBotRuntime({
         system: {
           enqueueSystemEvent: mockEnqueueSystemEvent,
         },
         channel: {
-          routing: {
-            resolveAgentRoute: resolveAgentRouteMock,
-          },
-          session: {
-            readSessionUpdatedAt: readSessionUpdatedAtMock,
-            resolveStorePath: resolveStorePathMock,
-          },
           reply: {
             resolveEnvelopeFormatOptions:
               resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
@@ -524,13 +558,13 @@ describe("handleFeishuMessage command authorization", () => {
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
             resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
           },
-          media: {
-            saveMediaBuffer: mockSaveMediaBuffer,
-          },
           pairing: {
             readAllowFromStore: mockReadAllowFromStore,
             upsertPairingRequest: mockUpsertPairingRequest,
             buildPairingReply: mockBuildPairingReply,
+          },
+          media: {
+            saveMediaBuffer: mockSaveMediaBuffer,
           },
         },
         media: {
@@ -1148,7 +1182,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
-  it("drops quoted group context from senders outside the group sender allowlist", async () => {
+  it("drops quoted group context from senders outside the group sender allowlist in allowlist mode", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockGetMessageFeishu.mockResolvedValueOnce({
       messageId: "om_parent_blocked",
@@ -1164,6 +1198,7 @@ describe("handleFeishuMessage command authorization", () => {
         feishu: {
           groupPolicy: "open",
           groupSenderAllowFrom: ["ou-allowed"],
+          contextVisibility: "allowlist",
           groups: {
             "oc-group": {
               requireMention: false,
@@ -1195,6 +1230,57 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ReplyToId: "om_parent_blocked",
         ReplyToBody: undefined,
+      }),
+    );
+  });
+
+  it("keeps quoted group context from non-allowlisted senders in default all mode", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_visible",
+      chatId: "oc-group",
+      senderId: "ou-blocked",
+      senderType: "user",
+      content: "visible quoted content",
+      contentType: "text",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSenderAllowFrom: ["ou-allowed"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-allowed",
+        },
+      },
+      message: {
+        message_id: "msg-group-quoted-visible",
+        parent_id: "om_parent_visible",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ReplyToId: "om_parent_visible",
+        ReplyToBody: "visible quoted content",
       }),
     );
   });
@@ -1597,7 +1683,7 @@ describe("handleFeishuMessage command authorization", () => {
           get: mockGetMerged,
         },
       },
-    });
+    } as unknown as PluginRuntime);
 
     const cfg: ClawdbotConfig = {
       channels: {
@@ -2552,6 +2638,7 @@ describe("handleFeishuMessage command authorization", () => {
         feishu: {
           groupPolicy: "open",
           groupSenderAllowFrom: ["ou-allowed"],
+          contextVisibility: "allowlist",
           groups: {
             "oc-group": {
               requireMention: false,

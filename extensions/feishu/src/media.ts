@@ -3,7 +3,8 @@ import path from "path";
 import { Readable } from "stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { withTempDownloadPath, type ClawdbotConfig } from "../runtime-api.js";
+import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -356,7 +357,7 @@ export async function uploadImageFeishu(params: {
  * in chat (regression in v2026.3.2).
  */
 export function sanitizeFileNameForUpload(fileName: string): string {
-  return fileName.replace(/[\x00-\x1F\x7F\r\n"\\]/g, "_");
+  return fileName.replace(/[\p{Cc}"\\]/gu, "_");
 }
 
 /**

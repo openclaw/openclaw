@@ -1,15 +1,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
-import { setDefaultChannelPluginRegistryForTests } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "../../../test/helpers/plugins/plugin-registry.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
 import { linePlugin } from "./channel.js";
 import type { ResolvedLineAccount } from "./types.js";
+
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
 
 type AgentBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 
@@ -59,7 +65,15 @@ describe("buildLineMessageContext", () => {
     }) as PostbackEvent;
 
   beforeEach(async () => {
-    setDefaultChannelPluginRegistryForTests();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: linePlugin.id,
+          plugin: linePlugin,
+          source: "test",
+        },
+      ]),
+    );
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-context-"));
     storePath = path.join(tmpDir, "sessions.json");

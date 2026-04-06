@@ -22,6 +22,10 @@ import {
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+    provider: string;
+    context: { resolvedApiKey?: string };
+  }) => params.provider === "ollama" && params.context.resolvedApiKey?.trim() === "ollama-local",
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
     config?: {
@@ -73,6 +77,13 @@ vi.mock("../plugins/provider-runtime.js", () => ({
         };
       }
       return undefined;
+    }
+    if (params.provider === "claude-cli") {
+      return {
+        apiKey: "claude-cli-access-token",
+        source: "Claude CLI native auth",
+        mode: "oauth" as const,
+      };
     }
     if (params.provider !== "ollama") {
       return undefined;
@@ -480,6 +491,63 @@ describe("resolveApiKeyForProvider", () => {
         }),
       ),
     ).rejects.toThrow('No API key found for provider "xai"');
+  });
+
+  it("reuses native Claude CLI auth for the claude-cli provider", async () => {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "claude-cli",
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "claude-cli/claude-sonnet-4-6",
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(resolved).toEqual({
+      apiKey: "claude-cli-access-token",
+      source: "Claude CLI native auth",
+      mode: "oauth",
+    });
+  });
+
+  it("prefers explicit api-key provider config over ambient auth profiles", async () => {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "openai",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              auth: "api-key",
+              apiKey: "sk-config-live", // pragma: allowlist secret
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-profile-stale", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      apiKey: "sk-config-live",
+      source: "models.json",
+      mode: "api-key",
+    });
   });
 });
 

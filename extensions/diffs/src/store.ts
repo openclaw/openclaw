@@ -298,7 +298,7 @@ export class DiffArtifactStore {
     id: string,
     fileName: ArtifactMetaFileName,
     context: string,
-  ): Promise<unknown | null> {
+  ): Promise<unknown> {
     try {
       const raw = await fs.readFile(this.metaFilePath(id, fileName), "utf8");
       return JSON.parse(raw) as unknown;

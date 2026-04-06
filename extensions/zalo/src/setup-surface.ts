@@ -1,12 +1,10 @@
 import {
   buildSingleChannelSecretPromptState,
-  createTopLevelChannelDmPolicy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
-  normalizeAccountId,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
   type ChannelSetupDmPolicy,
@@ -14,8 +12,8 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
-import { zaloSetupAdapter } from "./setup-core.js";
+import { resolveZaloAccount } from "./accounts.js";
+import { zaloDmPolicy } from "./setup-core.js";
 
 const channel = "zalo" as const;
 
@@ -173,25 +171,6 @@ async function promptZaloAllowFrom(params: {
   } as OpenClawConfig;
 }
 
-const zaloDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
-  label: "Zalo",
-  channel,
-  policyKey: "channels.zalo.dmPolicy",
-  allowFromKey: "channels.zalo.allowFrom",
-  getCurrent: (cfg) => (cfg.channels?.zalo?.dmPolicy ?? "pairing") as "pairing",
-  promptAllowFrom: async ({ cfg, prompter, accountId }) => {
-    const id =
-      accountId && normalizeAccountId(accountId)
-        ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZaloAccountId(cfg as OpenClawConfig);
-    return await promptZaloAllowFrom({
-      cfg: cfg as OpenClawConfig,
-      prompter,
-      accountId: id,
-    });
-  },
-});
-
 export { zaloSetupAdapter } from "./setup-core.js";
 
 export const zaloSetupWizard: ChannelSetupWizard = {
@@ -205,19 +184,18 @@ export const zaloSetupWizard: ChannelSetupWizard = {
     configuredScore: 1,
     unconfiguredScore: 10,
     includeStatusLine: true,
-    resolveConfigured: ({ cfg }) =>
-      listZaloAccountIds(cfg).some((accountId) => {
-        const account = resolveZaloAccount({
-          cfg,
-          accountId,
-          allowUnresolvedSecretRef: true,
-        });
-        return (
-          Boolean(account.token) ||
-          hasConfiguredSecretInput(account.config.botToken) ||
-          Boolean(account.config.tokenFile?.trim())
-        );
-      }),
+    resolveConfigured: ({ cfg, accountId }) => {
+      const account = resolveZaloAccount({
+        cfg,
+        accountId,
+        allowUnresolvedSecretRef: true,
+      });
+      return (
+        Boolean(account.token) ||
+        hasConfiguredSecretInput(account.config.botToken) ||
+        Boolean(account.config.tokenFile?.trim())
+      );
+    },
   }),
   credentials: [],
   finalize: async ({ cfg, accountId, forceAllowFrom, options, prompter }) => {

@@ -27,9 +27,7 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
           ? (lineConfig.accounts?.[accountId] ?? {})
           : lineConfig;
       const hasToken =
-        // oxlint-disable-next-line typescript/no-explicit-any
         Boolean((entry as any).channelAccessToken) || Boolean((entry as any).tokenFile);
-      // oxlint-disable-next-line typescript/no-explicit-any
       const hasSecret = Boolean((entry as any).channelSecret) || Boolean((entry as any).secretFile);
       return { tokenSource: hasToken && hasSecret ? "config" : "none" };
     },
@@ -37,7 +35,6 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
 
   const runtime = {
     config: { writeConfigFile },
-    channel: { line: { resolveLineAccount } },
   } as unknown as PluginRuntime;
 
   return { runtime, mocks: { writeConfigFile, resolveLineAccount } };

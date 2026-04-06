@@ -1,4 +1,5 @@
 type CodexJwtPayload = {
+  exp?: unknown;
   iss?: unknown;
   sub?: unknown;
   "https://api.openai.com/profile"?: {
@@ -17,6 +18,16 @@ function normalizeNonEmptyString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function normalizeFutureEpochSeconds(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return Number.parseInt(value.trim(), 10);
+  }
+  return undefined;
 }
 
 export function decodeCodexJwtPayload(accessToken: string): CodexJwtPayload | null {
@@ -53,6 +64,12 @@ export function resolveCodexStableSubject(payload: CodexJwtPayload | null): stri
     return `${iss}|${sub}`;
   }
   return sub;
+}
+
+export function resolveCodexAccessTokenExpiry(accessToken: string): number | undefined {
+  const payload = decodeCodexJwtPayload(accessToken);
+  const exp = normalizeFutureEpochSeconds(payload?.exp);
+  return exp ? exp * 1000 : undefined;
 }
 
 export function resolveCodexAuthIdentity(params: { accessToken: string; email?: string | null }): {

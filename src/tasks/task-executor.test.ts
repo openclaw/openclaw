@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   cancelFlowById,
   cancelFlowByIdForOwner,
@@ -25,6 +25,7 @@ import {
   resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
 import {
+  setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
   findLatestTaskForFlowId,
   findTaskByRunId,
@@ -44,10 +45,6 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("./task-registry-delivery-runtime.js", () => ({
-  sendMessage: hoisted.sendMessageMock,
-}));
-
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: hoisted.cancelSessionMock,
@@ -58,24 +55,28 @@ vi.mock("../agents/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
 
-async function withTaskExecutorStateDir(run: (root: string) => Promise<void>): Promise<void> {
-  await withTempDir({ prefix: "openclaw-task-executor-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
+async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>): Promise<void> {
+  await withStateDirEnv("openclaw-task-executor-", async ({ stateDir }) => {
+    setTaskRegistryDeliveryRuntimeForTests({
+      sendMessage: hoisted.sendMessageMock,
+    });
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetAgentRunContextForTest();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     try {
-      await run(root);
+      await run(stateDir);
     } finally {
       resetSystemEventsForTest();
       resetHeartbeatWakeStateForTests();
       resetAgentEventsForTest();
       resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetAgentRunContextForTest();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }
@@ -91,8 +92,9 @@ describe("task-executor", () => {
     resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetAgentRunContextForTest();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
@@ -172,6 +174,33 @@ describe("task-executor", () => {
         progressSummary: "Collecting results",
         error: "tool failed",
         deliveryStatus: "failed",
+      });
+    });
+  });
+
+  it("persists explicit task kind metadata on created runs", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const created = createRunningTaskRun({
+        runtime: "cli",
+        taskKind: "video_generation",
+        sourceId: "video_generate:openai",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-executor-kind",
+        task: "Generate lobster video",
+        startedAt: 10,
+        deliveryStatus: "not_applicable",
+      });
+
+      expect(getTaskById(created.taskId)).toMatchObject({
+        taskId: created.taskId,
+        taskKind: "video_generation",
+        sourceId: "video_generate:openai",
+      });
+      expect(findTaskByRunId("run-executor-kind")).toMatchObject({
+        taskId: created.taskId,
+        taskKind: "video_generation",
       });
     });
   });
@@ -315,6 +344,10 @@ describe("task-executor", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Inspect PR batch",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
       });
       const child = createRunningTaskRun({
         runtime: "acp",

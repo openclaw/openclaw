@@ -219,6 +219,43 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[1].replyToId).toBeUndefined();
   });
 
+  it("threads only first payload when mode is 'batched' and the turn is batched", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "A" }, { text: "B" }],
+      replyToMode: "batched",
+      currentMessageId: "42",
+      replyThreading: { implicitCurrentMessage: "allow" },
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0].replyToId).toBe("42");
+    expect(result[1].replyToId).toBeUndefined();
+  });
+
+  it("can disable implicit reply threading for the current turn", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "Hello" }],
+      replyToMode: "batched",
+      currentMessageId: "42",
+      replyThreading: { implicitCurrentMessage: "deny" },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBeUndefined();
+  });
+
+  it("still honors explicit reply tags when implicit reply threading is disabled", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "Hello [[reply_to_current]]" }],
+      replyToMode: "batched",
+      currentMessageId: "42",
+      replyThreading: { implicitCurrentMessage: "deny" },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("42");
+  });
+
   it("threads all payloads when mode is 'all'", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "A" }, { text: "B" }],
@@ -263,7 +300,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBeUndefined();
+    expect(result[0].replyToId).toBe("42");
     expect(result[0].replyToTag).toBe(true);
   });
 
@@ -276,7 +313,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBeUndefined();
+    expect(result[0].replyToId).toBe("42");
     expect(result[0].replyToTag).toBe(true);
   });
 

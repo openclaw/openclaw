@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import "./monitor.send-mocks.js";
-import "./zalo-js.test-mocks.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { __testing } from "./monitor.js";
+import "./monitor.send-mocks.js";
 import { sendMessageZalouserMock } from "./monitor.send-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import "./zalo-js.test-mocks.js";
 
 describe("zalouser monitor pairing account scoping", () => {
   it("scopes DM pairing-store reads and pairing requests to accountId", async () => {

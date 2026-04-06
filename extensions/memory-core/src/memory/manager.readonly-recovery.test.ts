@@ -36,7 +36,7 @@ describe("memory manager readonly recovery", () => {
   let workspaceDir = "";
   let indexPath = "";
 
-  function createMemoryConfig(): OpenClawConfig {
+  function _createMemoryConfig(): OpenClawConfig {
     return {
       agents: {
         defaults: {

@@ -46,7 +46,6 @@ function appendToolCallAndResult(sm: ReturnType<typeof SessionManager.inMemory>)
     isError: false,
     content: [{ type: "text", text: "ok" }],
     details: { big: "x".repeat(10_000) },
-    // oxlint-disable-next-line typescript/no-explicit-any
   } as any);
 }
 
@@ -56,7 +55,6 @@ function getPersistedToolResult(sm: ReturnType<typeof SessionManager.inMemory>) 
     .filter((e) => e.type === "message")
     .map((e) => (e as { message: AgentMessage }).message);
 
-  // oxlint-disable-next-line typescript/no-explicit-any
   return messages.find((m) => (m as any).role === "toolResult") as any;
 }
 

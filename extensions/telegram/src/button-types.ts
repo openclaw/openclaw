@@ -4,6 +4,7 @@ import {
   type InteractiveReply,
   type InteractiveReplyButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { sanitizeTelegramCallbackData } from "./approval-callback-data.js";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 
@@ -16,11 +17,6 @@ export type TelegramInlineButton = {
 export type TelegramInlineButtons = ReadonlyArray<ReadonlyArray<TelegramInlineButton>>;
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
-const MAX_CALLBACK_DATA_BYTES = 64;
-
-function fitsTelegramCallbackData(value: string): boolean {
-  return Buffer.byteLength(value, "utf8") <= MAX_CALLBACK_DATA_BYTES;
-}
 
 function toTelegramButtonStyle(
   style?: InteractiveReplyButton["style"],
@@ -28,36 +24,24 @@ function toTelegramButtonStyle(
   return style === "danger" || style === "success" || style === "primary" ? style : undefined;
 }
 
-function rewriteTelegramApprovalAlias(value: string): string {
-  if (!value.endsWith(" allow-always")) {
-    return value;
-  }
-  const approvePrefixMatch = value.match(
-    /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+allow-always$/i,
-  );
-  if (!approvePrefixMatch) {
-    return value;
-  }
-  return value.slice(0, -"allow-always".length) + "always";
-}
-
 function chunkInteractiveButtons(
   buttons: readonly InteractiveReplyButton[],
   rows: TelegramInlineButton[][],
 ) {
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
-    const row = buttons
-      .slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE)
-      .map((button) => ({
-        ...button,
-        value: rewriteTelegramApprovalAlias(button.value),
-      }))
-      .filter((button) => fitsTelegramCallbackData(button.value))
-      .map((button) => ({
-        text: button.label,
-        callback_data: button.value,
-        style: toTelegramButtonStyle(button.style),
-      }));
+    const row = buttons.slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE).flatMap((button) => {
+      const callbackData = sanitizeTelegramCallbackData(button.value);
+      if (!callbackData) {
+        return [];
+      }
+      return [
+        {
+          text: button.label,
+          callback_data: callbackData,
+          style: toTelegramButtonStyle(button.style),
+        },
+      ];
+    });
     if (row.length > 0) {
       rows.push(row);
     }

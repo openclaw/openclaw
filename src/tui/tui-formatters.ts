@@ -325,7 +325,7 @@ export function extractTextFromMessage(
   }
   const text = extractTextBlocks(record.content, opts);
   if (text) {
-    if (record.role === "user") {
+    if (record.role === "user" || record.command === true) {
       return stripLeadingInboundMetadata(text);
     }
     return text;

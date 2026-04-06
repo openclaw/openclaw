@@ -4,7 +4,6 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
   type OAuthCredential,
@@ -17,22 +16,31 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
+import { CODEX_CLI_PROFILE_ID, readOpenAICodexCliOAuthProfile } from "./openai-codex-cli-auth.js";
+import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
   isOpenAIApiBaseUrl,
   matchesExactOrPrefix,
 } from "./shared.js";
+import {
+  resolveOpenAITransportTurnState,
+  resolveOpenAIWebSocketSessionPolicy,
+} from "./transport-policy.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
-const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = 272_000;
+const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
+const OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS = 272_000;
+const OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_COST = {
   input: 2.5,
@@ -40,7 +48,18 @@ const OPENAI_CODEX_GPT_54_COST = {
   cacheRead: 0.25,
   cacheWrite: 0,
 } as const;
+const OPENAI_CODEX_GPT_54_MINI_COST = {
+  input: 0.75,
+  output: 4.5,
+  cacheRead: 0.075,
+  cacheWrite: 0,
+} as const;
 const OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.3-codex", "gpt-5.2-codex"] as const;
+const OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS = [
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+  "gpt-5.1-codex-mini",
+  ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
+] as const;
 const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
@@ -48,6 +67,7 @@ const OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const OPENAI_CODEX_XHIGH_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
   OPENAI_CODEX_GPT_53_MODEL_ID,
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
   "gpt-5.2-codex",
@@ -55,11 +75,13 @@ const OPENAI_CODEX_XHIGH_MODEL_IDS = [
 ] as const;
 const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
   "gpt-5.2",
   "gpt-5.2-codex",
   OPENAI_CODEX_GPT_53_MODEL_ID,
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
+const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks("openai-responses-defaults");
 
 function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -99,9 +121,17 @@ function resolveCodexForwardCompatModel(
   if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     patch = {
-      contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_TOKENS,
+      contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
+      contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_COST,
+    };
+  } else if (lower === OPENAI_CODEX_GPT_54_MINI_MODEL_ID) {
+    templateIds = OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS;
+    patch = {
+      contextWindow: OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS,
+      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
+      cost: OPENAI_CODEX_GPT_54_MINI_COST,
     };
   } else if (lower === OPENAI_CODEX_GPT_53_SPARK_MODEL_ID) {
     templateIds = [OPENAI_CODEX_GPT_53_MODEL_ID, ...OPENAI_CODEX_TEMPLATE_MODEL_IDS];
@@ -139,6 +169,7 @@ function resolveCodexForwardCompatModel(
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+      contextTokens: patch?.contextTokens,
       maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     } as ProviderRuntimeModel)
   );
@@ -216,6 +247,7 @@ function buildSyntheticCatalogEntry(
     reasoning: boolean;
     input: readonly ("text" | "image")[];
     contextWindow: number;
+    contextTokens?: number;
   },
 ) {
   if (!template) {
@@ -228,6 +260,7 @@ function buildSyntheticCatalogEntry(
     reasoning: entry.reasoning,
     input: [...entry.input],
     contextWindow: entry.contextWindow,
+    ...(entry.contextTokens === undefined ? {} : { contextTokens: entry.contextTokens }),
   };
 }
 
@@ -236,7 +269,6 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     id: PROVIDER_ID,
     label: "OpenAI Codex",
     docsPath: "/providers/models",
-    deprecatedProfileIds: [CODEX_CLI_PROFILE_ID],
     auth: [
       {
         id: "oauth",
@@ -270,12 +302,17 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    capabilities: {
-      providerFamily: "openai",
+    resolveExternalAuthProfiles: (ctx) => {
+      const profile = readOpenAICodexCliOAuthProfile({
+        env: ctx.env,
+        store: ctx.store,
+      });
+      return profile ? [{ ...profile, persistence: "runtime-only" }] : undefined;
     },
     supportsXHighThinking: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
+    buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => {
       const transport = ctx.extraParams?.transport;
       if (transport === "auto" || transport === "sse" || transport === "websocket") {
@@ -286,7 +323,10 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         transport: "auto",
       };
     },
-    wrapStreamFn: (ctx) => createOpenAIAttributionHeadersWrapper(ctx.streamFn),
+    ...OPENAI_RESPONSES_STREAM_HOOKS,
+    resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
+    resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
+    resolveReasoningOutputMode: () => "native",
     normalizeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return undefined;
@@ -303,6 +343,11 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         providerId: PROVIDER_ID,
         templateIds: OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
       });
+      const gpt54MiniTemplate = findCatalogTemplate({
+        entries: ctx.entries,
+        providerId: PROVIDER_ID,
+        templateIds: OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS,
+      });
       const sparkTemplate = findCatalogTemplate({
         entries: ctx.entries,
         providerId: PROVIDER_ID,
@@ -313,7 +358,14 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           id: OPENAI_CODEX_GPT_54_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
-          contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_TOKENS,
+          contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
+          contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
+        }),
+        buildSyntheticCatalogEntry(gpt54MiniTemplate, {
+          id: OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS,
         }),
         buildSyntheticCatalogEntry(sparkTemplate, {
           id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,

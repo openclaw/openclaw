@@ -44,7 +44,22 @@ let _log:
   | { info: (msg: string) => void; error: (msg: string) => void; debug?: (msg: string) => void }
   | undefined;
 
-function fetchJson(url: string, timeoutMs: number): Promise<any> {
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function fetchJson(url: string, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const req = https.get(
       url,
@@ -80,10 +95,16 @@ async function fetchDistTags(): Promise<Record<string, string>> {
   for (const url of REGISTRIES) {
     try {
       const json = await fetchJson(url, 10_000);
-      const tags = json["dist-tags"];
-      if (tags && typeof tags === "object") return tags;
-    } catch (e: any) {
-      _log?.debug?.(`[qqbot:update-checker] ${url} failed: ${e.message}`);
+      const tags = asRecord(asRecord(json)?.["dist-tags"]);
+      if (tags) {
+        return Object.fromEntries(
+          Object.entries(tags).flatMap(([key, value]) =>
+            typeof value === "string" ? [[key, value]] : [],
+          ),
+        );
+      }
+    } catch (e: unknown) {
+      _log?.debug?.(`[qqbot:update-checker] ${url} failed: ${getErrorMessage(e)}`);
     }
   }
   throw new Error("all registries failed");
@@ -118,7 +139,9 @@ export function triggerUpdateCheck(log?: {
   error: (msg: string) => void;
   debug?: (msg: string) => void;
 }): void {
-  if (log) _log = log;
+  if (log) {
+    _log = log;
+  }
   // Warm the cache without blocking startup.
   getUpdateInfo()
     .then((info) => {
@@ -136,8 +159,9 @@ export async function getUpdateInfo(): Promise<UpdateInfo> {
   try {
     const tags = await fetchDistTags();
     return buildUpdateInfo(tags);
-  } catch (err: any) {
-    _log?.debug?.(`[qqbot:update-checker] check failed: ${err.message}`);
+  } catch (err: unknown) {
+    const errorMessage = getErrorMessage(err);
+    _log?.debug?.(`[qqbot:update-checker] check failed: ${errorMessage}`);
     return {
       current: CURRENT_VERSION,
       latest: null,
@@ -145,7 +169,7 @@ export async function getUpdateInfo(): Promise<UpdateInfo> {
       alpha: null,
       hasUpdate: false,
       checkedAt: Date.now(),
-      error: err.message,
+      error: errorMessage,
     };
   }
 }
@@ -158,7 +182,9 @@ export async function checkVersionExists(version: string): Promise<boolean> {
     try {
       const url = `${baseUrl}/${version}`;
       const json = await fetchJson(url, 10_000);
-      if (json && json.version === version) return true;
+      if (readString(asRecord(json), "version") === version) {
+        return true;
+      }
     } catch {
       // try next registry
     }
@@ -177,12 +203,20 @@ function compareVersions(a: string, b: string): number {
   // Compare the numeric core version first.
   for (let i = 0; i < 3; i++) {
     const diff = (pa.parts[i] || 0) - (pb.parts[i] || 0);
-    if (diff !== 0) return diff;
+    if (diff !== 0) {
+      return diff;
+    }
   }
   // For equal core versions, stable beats prerelease.
-  if (!pa.pre && pb.pre) return 1;
-  if (pa.pre && !pb.pre) return -1;
-  if (!pa.pre && !pb.pre) return 0;
+  if (!pa.pre && pb.pre) {
+    return 1;
+  }
+  if (pa.pre && !pb.pre) {
+    return -1;
+  }
+  if (!pa.pre && !pb.pre) {
+    return 0;
+  }
   // When both are prereleases, compare each prerelease segment in order.
   const aParts = pa.pre!.split(".");
   const bParts = pb.pre!.split(".");
@@ -193,11 +227,17 @@ function compareVersions(a: string, b: string): number {
     const bNum = Number(bP);
     // Compare numerically when both segments are numbers.
     if (!isNaN(aNum) && !isNaN(bNum)) {
-      if (aNum !== bNum) return aNum - bNum;
+      if (aNum !== bNum) {
+        return aNum - bNum;
+      }
     } else {
       // Fall back to lexical comparison for string segments.
-      if (aP < bP) return -1;
-      if (aP > bP) return 1;
+      if (aP < bP) {
+        return -1;
+      }
+      if (aP > bP) {
+        return 1;
+      }
     }
   }
   return 0;

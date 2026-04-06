@@ -1,6 +1,7 @@
 import type { EventEmitter } from "node:events";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 
 export type DiscordGatewayEventType =
@@ -15,6 +16,18 @@ export type DiscordGatewayEvent = {
   message: string;
   shouldStopLifecycle: boolean;
 };
+
+export class DiscordGatewayLifecycleError extends Error {
+  readonly eventType: DiscordGatewayEventType;
+
+  constructor(event: Pick<DiscordGatewayEvent, "type" | "message" | "err">) {
+    super(`discord gateway ${event.type}: ${event.message}`, {
+      cause: event.err instanceof Error ? event.err : undefined,
+    });
+    this.name = "DiscordGatewayLifecycleError";
+    this.eventType = event.type;
+  }
+}
 
 export type DiscordGatewaySupervisor = {
   emitter?: EventEmitter;
@@ -32,7 +45,12 @@ export function classifyDiscordGatewayEvent(params: {
   err: unknown;
   isDisallowedIntentsError: (err: unknown) => boolean;
 }): DiscordGatewayEvent {
-  const message = String(params.err);
+  const message =
+    params.err instanceof Error
+      ? params.err.message
+        ? `${params.err.name}: ${params.err.message}`
+        : params.err.name || "Error"
+      : formatErrorMessage(params.err);
   if (params.isDisallowedIntentsError(params.err)) {
     return {
       type: "disallowed-intents",
@@ -49,7 +67,14 @@ export function classifyDiscordGatewayEvent(params: {
       shouldStopLifecycle: true,
     };
   }
-  if (message.includes("Fatal Gateway error")) {
+  if (
+    params.err instanceof TypeError ||
+    message.includes("Fatal Gateway error") ||
+    message.includes("Fatal gateway close code") ||
+    message.includes("Gateway HELLO missing heartbeat") ||
+    message.includes("Invalid gateway payload") ||
+    message.includes("Gateway socket emitted an unknown error")
+  ) {
     return {
       type: "fatal",
       err: params.err,
@@ -84,9 +109,15 @@ export function createDiscordGatewaySupervisor(params: {
 
   let lifecycleHandler: ((event: DiscordGatewayEvent) => void) | undefined;
   let phase: GatewaySupervisorPhase = "buffering";
+  const seenLateEventKeys = new Set<string>();
   const logLateEvent =
     (state: Extract<GatewaySupervisorPhase, "disposed" | "teardown">) =>
     (event: DiscordGatewayEvent) => {
+      const key = `${state}:${event.type}:${event.message}`;
+      if (seenLateEventKeys.has(key)) {
+        return;
+      }
+      seenLateEventKeys.add(key);
       params.runtime.error?.(
         danger(
           `discord: suppressed late gateway ${event.type} error ${

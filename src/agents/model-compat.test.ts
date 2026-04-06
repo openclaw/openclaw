@@ -10,7 +10,11 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
-import { isHighSignalLiveModelRef, isModernModelRef } from "./live-model-filter.js";
+import {
+  isHighSignalLiveModelRef,
+  isModernModelRef,
+  selectHighSignalLiveItems,
+} from "./live-model-filter.js";
 
 const baseModel = (): Model<Api> =>
   ({
@@ -155,6 +159,45 @@ describe("normalizeModelCompat", () => {
       provider: "custom-qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     });
+  });
+
+  it("keeps supportsUsageInStreaming on for native Qwen endpoints", () => {
+    const model = {
+      ...baseModel(),
+      provider: "qwen",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("keeps supportsUsageInStreaming on for DashScope-compatible endpoints regardless of provider id", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-qwen",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("keeps supportsUsageInStreaming on for Moonshot-native endpoints regardless of provider id", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-kimi",
+      baseUrl: "https://api.moonshot.ai/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
   });
 
   it("leaves native api.openai.com model untouched", () => {
@@ -350,7 +393,7 @@ describe("isModernModelRef", () => {
       provider === "openai" &&
       ["gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-5.4-nano"].includes(context.modelId)
         ? true
-        : provider === "openai-codex" && context.modelId === "gpt-5.4"
+        : provider === "openai-codex" && ["gpt-5.4", "gpt-5.4-mini"].includes(context.modelId)
           ? true
           : provider === "opencode" && ["claude-opus-4-6", "gemini-3-pro"].includes(context.modelId)
             ? true
@@ -364,6 +407,7 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-mini" })).toBe(true);
     expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-nano" })).toBe(true);
     expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4" })).toBe(true);
+    expect(isModernModelRef({ provider: "openai-codex", id: "gpt-5.4-mini" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
     expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
@@ -411,5 +455,31 @@ describe("isHighSignalLiveModelRef", () => {
     expect(
       isHighSignalLiveModelRef({ provider: "opencode", id: "claude-3-5-haiku-20241022" }),
     ).toBe(false);
+  });
+});
+
+describe("selectHighSignalLiveItems", () => {
+  it("prefers curated Google replacements before fallback provider spread", () => {
+    const items = [
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-2.5-flash" },
+      { provider: "openai", id: "gpt-5.2" },
+      { provider: "opencode", id: "big-pickle" },
+    ];
+
+    expect(
+      selectHighSignalLiveItems(
+        items,
+        4,
+        (item) => item,
+        (item) => item.provider,
+      ),
+    ).toEqual([
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-2.5-flash" },
+      { provider: "openai", id: "gpt-5.2" },
+    ]);
   });
 });

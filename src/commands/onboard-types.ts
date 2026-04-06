@@ -3,6 +3,10 @@ import type { SecretInputMode } from "../plugins/provider-auth-types.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
+/**
+ * Auth choices are plugin-owned contract ids plus a few legacy aliases that
+ * are normalized elsewhere (for example `oauth` -> `setup-token`).
+ */
 export type BuiltInAuthChoice =
   // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
   | "oauth"
@@ -46,6 +50,10 @@ export type BuiltInAuthChoice =
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "qwen-standard-api-key-cn"
+  | "qwen-standard-api-key"
+  | "qwen-api-key-cn"
+  | "qwen-api-key"
   | "modelstudio-standard-api-key-cn"
   | "modelstudio-standard-api-key"
   | "modelstudio-api-key-cn"
@@ -77,6 +85,7 @@ export type BuiltInAuthChoiceGroupId =
   | "together"
   | "huggingface"
   | "qianfan"
+  | "qwen"
   | "modelstudio"
   | "xai"
   | "volcengine"
@@ -93,7 +102,15 @@ export type ChannelChoice = ChannelId;
 export type ProviderChoice = ChannelChoice;
 export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 
-export type OnboardOptions = {
+type OnboardDynamicProviderOptions = {
+  /**
+   * Provider-specific non-interactive auth flags are plugin-owned and keyed by
+   * manifest `providerAuthChoices[].optionKey` values.
+   */
+  [optionKey: string]: unknown;
+};
+
+export type OnboardOptions = OnboardDynamicProviderOptions & {
   mode?: OnboardMode;
   /** "manual" is an alias for "advanced". */
   flow?: "quickstart" | "advanced" | "manual";
@@ -114,37 +131,8 @@ export type OnboardOptions = {
   tokenExpiresIn?: string;
   /** API key persistence mode for setup flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
-  anthropicApiKey?: string;
-  deepseekApiKey?: string;
-  openaiApiKey?: string;
-  mistralApiKey?: string;
-  openrouterApiKey?: string;
-  kilocodeApiKey?: string;
-  litellmApiKey?: string;
-  aiGatewayApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;
-  cloudflareAiGatewayApiKey?: string;
-  moonshotApiKey?: string;
-  kimiCodeApiKey?: string;
-  geminiApiKey?: string;
-  zaiApiKey?: string;
-  xiaomiApiKey?: string;
-  minimaxApiKey?: string;
-  syntheticApiKey?: string;
-  veniceApiKey?: string;
-  togetherApiKey?: string;
-  huggingfaceApiKey?: string;
-  opencodeZenApiKey?: string;
-  opencodeGoApiKey?: string;
-  xaiApiKey?: string;
-  volcengineApiKey?: string;
-  byteplusApiKey?: string;
-  qianfanApiKey?: string;
-  modelstudioStandardApiKeyCn?: string;
-  modelstudioStandardApiKey?: string;
-  modelstudioApiKeyCn?: string;
-  modelstudioApiKey?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;

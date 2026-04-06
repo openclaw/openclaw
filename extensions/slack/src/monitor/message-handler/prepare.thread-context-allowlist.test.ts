@@ -3,29 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import type { App } from "@slack/bolt";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 
-type PrepareSlackMessage = typeof import("./prepare.js").prepareSlackMessage;
-type CreateInboundSlackTestContext =
-  typeof import("./prepare.test-helpers.js").createInboundSlackTestContext;
-type CreateSlackTestAccount = typeof import("./prepare.test-helpers.js").createSlackTestAccount;
-
-let prepareSlackMessage: PrepareSlackMessage;
-let createInboundSlackTestContext: CreateInboundSlackTestContext;
-let createSlackTestAccount: CreateSlackTestAccount;
-let fixtureRoot = "";
+const [{ prepareSlackMessage }, helpers] = await Promise.all([
+  import("./prepare.js"),
+  import("./prepare.test-helpers.js"),
+]);
+const { createInboundSlackTestContext, createSlackTestAccount } = helpers;
+let fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-room-thread-context-"));
 let caseId = 0;
-
-async function loadSlackPrepareModules() {
-  const [{ prepareSlackMessage: loadedPrepareSlackMessage }, helpers] = await Promise.all([
-    import("./prepare.js"),
-    import("./prepare.test-helpers.js"),
-  ]);
-  prepareSlackMessage = loadedPrepareSlackMessage;
-  createInboundSlackTestContext = helpers.createInboundSlackTestContext;
-  createSlackTestAccount = helpers.createSlackTestAccount;
-}
 
 function makeTmpStorePath() {
   if (!fixtureRoot) {
@@ -37,11 +24,6 @@ function makeTmpStorePath() {
 }
 
 describe("prepareSlackMessage thread context allowlists", () => {
-  beforeAll(async () => {
-    await loadSlackPrepareModules();
-    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-room-thread-context-"));
-  });
-
   afterAll(() => {
     if (fixtureRoot) {
       fs.rmSync(fixtureRoot, { recursive: true, force: true });
@@ -68,7 +50,14 @@ describe("prepareSlackMessage thread context allowlists", () => {
     const ctx = createInboundSlackTestContext({
       cfg: {
         session: { store: storePath },
-        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            groupPolicy: "open",
+            contextVisibility: "allowlist",
+          },
+        },
       } as OpenClawConfig,
       appClient: { conversations: { replies } } as unknown as App["client"],
       defaultRequireMention: false,
@@ -131,7 +120,14 @@ describe("prepareSlackMessage thread context allowlists", () => {
     const ctx = createInboundSlackTestContext({
       cfg: {
         session: { store: storePath },
-        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            groupPolicy: "open",
+            contextVisibility: "allowlist",
+          },
+        },
       } as OpenClawConfig,
       appClient: { conversations: { replies } } as unknown as App["client"],
       defaultRequireMention: false,
@@ -193,7 +189,14 @@ describe("prepareSlackMessage thread context allowlists", () => {
     const ctx = createInboundSlackTestContext({
       cfg: {
         session: { store: storePath },
-        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            groupPolicy: "open",
+            contextVisibility: "allowlist",
+          },
+        },
       } as OpenClawConfig,
       appClient: { conversations: { replies } } as unknown as App["client"],
       defaultRequireMention: false,
@@ -249,7 +252,14 @@ describe("prepareSlackMessage thread context allowlists", () => {
     const ctx = createInboundSlackTestContext({
       cfg: {
         session: { store: storePath },
-        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            groupPolicy: "open",
+            contextVisibility: "allowlist",
+          },
+        },
       } as OpenClawConfig,
       appClient: { conversations: { replies } } as unknown as App["client"],
       defaultRequireMention: false,

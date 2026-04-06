@@ -103,6 +103,28 @@ export function buildApiKeyCredential(
   };
 }
 
+export function upsertApiKeyProfile(params: {
+  provider: string;
+  input: SecretInput;
+  agentDir?: string;
+  options?: ApiKeyStorageOptions;
+  profileId?: string;
+  metadata?: Record<string, string>;
+}): string {
+  const profileId = params.profileId ?? buildAuthProfileId({ providerId: params.provider });
+  upsertAuthProfile({
+    profileId,
+    credential: buildApiKeyCredential(
+      params.provider,
+      params.input,
+      params.metadata,
+      params.options,
+    ),
+    agentDir: resolveAuthAgentDir(params.agentDir),
+  });
+  return profileId;
+}
+
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {

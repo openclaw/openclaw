@@ -3,13 +3,16 @@ import {
   ensureControlUiAllowedOriginsForNonLoopbackBind,
   type GatewayNonLoopbackBindMode,
 } from "../config/gateway-control-ui-origins.js";
+import { isContainerEnvironment } from "./net.js";
 
 export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   config: OpenClawConfig;
   writeConfig: (config: OpenClawConfig) => Promise<void>;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<{ config: OpenClawConfig; persistedAllowedOriginsSeed: boolean }> {
-  const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config);
+  const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config, {
+    isContainerEnvironment,
+  });
   if (!seeded.seededOrigins || !seeded.bind) {
     return { config: params.config, persistedAllowedOriginsSeed: false };
   }

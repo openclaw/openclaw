@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin from "./index.js";
 
@@ -18,15 +18,38 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
   })),
 );
 const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
+const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
+const createConfiguredOllamaStreamFnMock = vi.hoisted(() =>
+  vi.fn((_params: { model: unknown; providerBaseUrl?: string }) => ({}) as never),
+);
 
 vi.mock("./api.js", () => ({
   promptAndConfigureOllama: promptAndConfigureOllamaMock,
   ensureOllamaModelPulled: ensureOllamaModelPulledMock,
   configureOllamaNonInteractive: vi.fn(),
-  buildOllamaProvider: vi.fn(),
+  buildOllamaProvider: buildOllamaProviderMock,
 }));
 
+vi.mock("./src/stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./src/stream.js")>();
+  return {
+    ...actual,
+    createConfiguredOllamaStreamFn: createConfiguredOllamaStreamFnMock,
+  };
+});
+
+beforeEach(() => {
+  promptAndConfigureOllamaMock.mockClear();
+  ensureOllamaModelPulledMock.mockClear();
+  buildOllamaProviderMock.mockReset();
+  createConfiguredOllamaStreamFnMock.mockClear();
+});
+
 function registerProvider() {
+  return registerProviderWithPluginConfig({});
+}
+
+function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
   const registerProviderMock = vi.fn();
 
   plugin.register(
@@ -35,6 +58,7 @@ function registerProvider() {
       name: "Ollama",
       source: "test",
       config: {},
+      pluginConfig,
       runtime: {} as never,
       registerProvider: registerProviderMock,
     }),
@@ -102,6 +126,19 @@ describe("ollama plugin", () => {
     });
   });
 
+  it("skips ambient discovery when plugin discovery is disabled", async () => {
+    const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
+
+    const result = await provider.discovery.run({
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: "", discoveryApiKey: "" }),
+    } as never);
+
+    expect(result).toBeNull();
+    expect(buildOllamaProviderMock).not.toHaveBeenCalled();
+  });
+
   it("wraps OpenAI-compatible payloads with num_ctx for Ollama compat routes", () => {
     const provider = registerProvider();
     let payloadSeen: Record<string, unknown> | undefined;
@@ -140,6 +177,100 @@ describe("ollama plugin", () => {
     void wrapped?.({} as never, {} as never, {});
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
+  });
+
+  it("owns replay policy for OpenAI-compatible Ollama routes only", () => {
+    const provider = registerProvider();
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "ollama",
+        modelApi: "openai-completions",
+        modelId: "qwen3:32b",
+      } as never),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "ollama",
+        modelApi: "openai-responses",
+        modelId: "qwen3:32b",
+      } as never),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+    });
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "ollama",
+        modelApi: "ollama",
+        modelId: "qwen3.5:9b",
+      } as never),
+    ).toBeUndefined();
+  });
+
+  it("routes createStreamFn to the correct provider baseUrl for ollama2", () => {
+    const provider = registerProvider();
+    const config = {
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            models: [],
+          },
+          ollama2: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11435",
+            models: [],
+          },
+        },
+      },
+    };
+    const model = { id: "llama3.2", provider: "ollama2", baseUrl: undefined };
+
+    provider.createStreamFn?.({ config, model, provider: "ollama2" } as never);
+
+    expect(createConfiguredOllamaStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerBaseUrl: "http://127.0.0.1:11435" }),
+    );
+  });
+
+  it("uses ollama provider baseUrl when provider is ollama (backward compat)", () => {
+    const provider = registerProvider();
+    const config = {
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            models: [],
+          },
+          ollama2: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11435",
+            models: [],
+          },
+        },
+      },
+    };
+    const model = { id: "llama3.2", provider: "ollama", baseUrl: undefined };
+
+    provider.createStreamFn?.({ config, model, provider: "ollama" } as never);
+
+    expect(createConfiguredOllamaStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerBaseUrl: "http://127.0.0.1:11434" }),
+    );
   });
 
   it("wraps native Ollama payloads with top-level think=false when thinking is off", () => {

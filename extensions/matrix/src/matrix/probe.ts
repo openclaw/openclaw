@@ -3,13 +3,13 @@ import type { SsrFPolicy } from "../runtime-api.js";
 import type { BaseProbeResult } from "../runtime-api.js";
 import { isBunRuntime } from "./client/runtime.js";
 
-type MatrixProbeRuntimeDeps = Pick<typeof import("./client.js"), "createMatrixClient">;
+type MatrixProbeRuntimeDeps = Pick<typeof import("./probe.runtime.js"), "createMatrixClient">;
 
 let matrixProbeRuntimeDepsPromise: Promise<MatrixProbeRuntimeDeps> | undefined;
 
 async function loadMatrixProbeRuntimeDeps(): Promise<MatrixProbeRuntimeDeps> {
-  matrixProbeRuntimeDepsPromise ??= import("./client.js").then((clientModule) => ({
-    createMatrixClient: clientModule.createMatrixClient,
+  matrixProbeRuntimeDepsPromise ??= import("./probe.runtime.js").then((runtimeModule) => ({
+    createMatrixClient: runtimeModule.createMatrixClient,
   }));
   return await matrixProbeRuntimeDepsPromise;
 }
@@ -24,6 +24,7 @@ export async function probeMatrix(params: {
   homeserver: string;
   accessToken: string;
   userId?: string;
+  deviceId?: string;
   timeoutMs: number;
   accountId?: string | null;
   allowPrivateNetwork?: boolean;
@@ -65,6 +66,8 @@ export async function probeMatrix(params: {
       homeserver: params.homeserver,
       userId: inputUserId,
       accessToken: params.accessToken,
+      deviceId: params.deviceId,
+      persistStorage: false,
       localTimeoutMs: params.timeoutMs,
       accountId: params.accountId,
       allowPrivateNetwork: params.allowPrivateNetwork,

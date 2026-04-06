@@ -726,47 +726,71 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
-    const thisManager = this;
+    const getClosed = () => this.closed;
+    const getDb = () => this.db;
+    const setDb = (value: DatabaseSync) => {
+      this.db = value;
+    };
+    const getVectorReady = () => this.vectorReady;
+    const setVectorReady = (value: Promise<boolean> | null) => {
+      this.vectorReady = value;
+    };
+    const getReadonlyRecoveryAttempts = () => this.readonlyRecoveryAttempts;
+    const setReadonlyRecoveryAttempts = (value: number) => {
+      this.readonlyRecoveryAttempts = value;
+    };
+    const getReadonlyRecoverySuccesses = () => this.readonlyRecoverySuccesses;
+    const setReadonlyRecoverySuccesses = (value: number) => {
+      this.readonlyRecoverySuccesses = value;
+    };
+    const getReadonlyRecoveryFailures = () => this.readonlyRecoveryFailures;
+    const setReadonlyRecoveryFailures = (value: number) => {
+      this.readonlyRecoveryFailures = value;
+    };
+    const getReadonlyRecoveryLastError = () => this.readonlyRecoveryLastError;
+    const setReadonlyRecoveryLastError = (value: string | undefined) => {
+      this.readonlyRecoveryLastError = value;
+    };
     const state: MemoryReadonlyRecoveryState = {
       get closed() {
-        return thisManager.closed;
+        return getClosed();
       },
       get db() {
-        return thisManager.db;
+        return getDb();
       },
       set db(value) {
-        thisManager.db = value;
+        setDb(value);
       },
       get vectorReady() {
-        return thisManager.vectorReady;
+        return getVectorReady();
       },
       set vectorReady(value) {
-        thisManager.vectorReady = value;
+        setVectorReady(value);
       },
       vector: this.vector,
       get readonlyRecoveryAttempts() {
-        return thisManager.readonlyRecoveryAttempts;
+        return getReadonlyRecoveryAttempts();
       },
       set readonlyRecoveryAttempts(value) {
-        thisManager.readonlyRecoveryAttempts = value;
+        setReadonlyRecoveryAttempts(value);
       },
       get readonlyRecoverySuccesses() {
-        return thisManager.readonlyRecoverySuccesses;
+        return getReadonlyRecoverySuccesses();
       },
       set readonlyRecoverySuccesses(value) {
-        thisManager.readonlyRecoverySuccesses = value;
+        setReadonlyRecoverySuccesses(value);
       },
       get readonlyRecoveryFailures() {
-        return thisManager.readonlyRecoveryFailures;
+        return getReadonlyRecoveryFailures();
       },
       set readonlyRecoveryFailures(value) {
-        thisManager.readonlyRecoveryFailures = value;
+        setReadonlyRecoveryFailures(value);
       },
       get readonlyRecoveryLastError() {
-        return thisManager.readonlyRecoveryLastError;
+        return getReadonlyRecoveryLastError();
       },
       set readonlyRecoveryLastError(value) {
-        thisManager.readonlyRecoveryLastError = value;
+        setReadonlyRecoveryLastError(value);
       },
       runSync: (nextParams) => this.runSync(nextParams),
       openDatabase: () => this.openDatabase(),

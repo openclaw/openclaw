@@ -1,10 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  namedAccountPromotionKeys as matrixNamedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget as resolveMatrixSingleAccountPromotionTarget,
+  singleAccountKeysToMove as matrixSingleAccountKeysToMove,
+} from "../../plugin-sdk/matrix.js";
+import { singleAccountKeysToMove as telegramSingleAccountKeysToMove } from "../../plugin-sdk/telegram.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   applySingleTokenPromptResult,
   buildSingleChannelSecretPromptState,
@@ -60,6 +71,39 @@ import {
   splitSetupEntries,
 } from "./setup-wizard-helpers.js";
 
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          setup: {
+            singleAccountKeysToMove: matrixSingleAccountKeysToMove,
+            namedAccountPromotionKeys: matrixNamedAccountPromotionKeys,
+            resolveSingleAccountPromotionTarget: resolveMatrixSingleAccountPromotionTarget,
+          },
+        },
+      },
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          setup: {
+            singleAccountKeysToMove: telegramSingleAccountKeysToMove,
+          },
+        },
+      },
+    ]),
+  );
+});
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
+
 function createPrompter(inputs: string[]) {
   return {
     text: vi.fn(async () => inputs.shift() ?? ""),
@@ -97,7 +141,6 @@ async function runPromptResolvedAllowFromWithToken(params: {
   resolveEntries: AllowFromResolver;
 }) {
   return await promptResolvedAllowFrom({
-    // oxlint-disable-next-line typescript/no-explicit-any
     prompter: params.prompter as any,
     existing: [],
     token: "xoxb-test",
@@ -155,7 +198,6 @@ async function runPromptSingleChannelSecretInput(params: {
 }) {
   return await promptSingleChannelSecretInput({
     cfg: {},
-    // oxlint-disable-next-line typescript/no-explicit-any
     prompter: params.prompter as any,
     providerHint: params.providerHint,
     credentialLabel: params.credentialLabel,
@@ -218,7 +260,6 @@ async function runPromptLegacyAllowFrom(params: {
   return await promptLegacyChannelAllowFrom({
     cfg: params.cfg ?? {},
     channel: params.channel,
-    // oxlint-disable-next-line typescript/no-explicit-any
     prompter: params.prompter as any,
     existing: params.existing,
     token: params.token,
@@ -238,7 +279,6 @@ describe("promptResolvedAllowFrom", () => {
     const resolveEntries = vi.fn();
 
     const result = await promptResolvedAllowFrom({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       existing: ["111"],
       token: "",
@@ -248,7 +288,6 @@ describe("promptResolvedAllowFrom", () => {
       parseInputs: parseCsvInputs,
       parseId: (value) => (/^\d+$/.test(value.trim()) ? value.trim() : null),
       invalidWithoutTokenNote: "ids only",
-      // oxlint-disable-next-line typescript/no-explicit-any
       resolveEntries: resolveEntries as any,
     });
 
@@ -353,7 +392,6 @@ describe("promptLegacyChannelAllowFromForAccount", () => {
         },
       } as OpenClawConfig,
       channel: "slack",
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       defaultAccountId: DEFAULT_ACCOUNT_ID,
       resolveAccount: () => ({
@@ -730,7 +768,6 @@ describe("createPromptParsedAllowFromForAccount", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
     });
 
@@ -754,7 +791,6 @@ describe("parsed allowFrom prompt builders", () => {
     const prompter = createPrompter(["npub1"]);
     const next = await promptAllowFrom({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
     });
 
@@ -775,7 +811,6 @@ describe("parsed allowFrom prompt builders", () => {
 
     const next = await promptAllowFrom({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: createPrompter(["users/123"]) as any,
     });
 
@@ -937,7 +972,7 @@ describe("patchChannelConfigForAccount", () => {
           botToken: "legacy-token",
           allowFrom: ["100"],
           groupPolicy: "allowlist",
-          streaming: "partial",
+          streaming: { mode: "partial" },
         },
       },
     };
@@ -953,7 +988,7 @@ describe("patchChannelConfigForAccount", () => {
       botToken: "legacy-token",
       allowFrom: ["100"],
       groupPolicy: "allowlist",
-      streaming: "partial",
+      streaming: { mode: "partial" },
     });
     expect(next.channels?.telegram?.botToken).toBeUndefined();
     expect(next.channels?.telegram?.allowFrom).toBeUndefined();
@@ -1509,6 +1544,55 @@ describe("createLegacyCompatChannelDmPolicy", () => {
     expect(next.channels?.slack?.dmPolicy).toBe("open");
     expect(next.channels?.slack?.allowFrom).toEqual(["U123", "*"]);
   });
+
+  it("honors named-account dm policy state and paths", () => {
+    const dmPolicy = createLegacyCompatChannelDmPolicy({
+      label: "Slack",
+      channel: "slack",
+    });
+
+    expect(
+      dmPolicy.getCurrent(
+        {
+          channels: {
+            slack: {
+              dmPolicy: "disabled",
+              accounts: {
+                alerts: {
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "alerts",
+      ),
+    ).toBe("allowlist");
+
+    expect(dmPolicy.resolveConfigKeys?.({}, "alerts")).toEqual({
+      policyKey: "channels.slack.accounts.alerts.dmPolicy",
+      allowFromKey: "channels.slack.accounts.alerts.allowFrom",
+    });
+
+    const next = dmPolicy.setPolicy(
+      {
+        channels: {
+          slack: {
+            allowFrom: ["U123"],
+            accounts: {
+              alerts: {},
+            },
+          },
+        },
+      },
+      "open",
+      "alerts",
+    );
+
+    expect(next.channels?.slack?.dmPolicy).toBeUndefined();
+    expect(next.channels?.slack?.accounts?.alerts?.dmPolicy).toBe("open");
+    expect(next.channels?.slack?.accounts?.alerts?.allowFrom).toEqual(["U123", "*"]);
+  });
 });
 
 describe("createTopLevelChannelGroupPolicySetter", () => {
@@ -1917,7 +2001,6 @@ describe("resolveAccountIdForConfigure", () => {
   it("uses normalized override without prompting", async () => {
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: {} as any,
       label: "Signal",
       accountOverride: " Team Primary ",
@@ -1931,7 +2014,6 @@ describe("resolveAccountIdForConfigure", () => {
   it("uses default account when override is missing and prompting disabled", async () => {
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: {} as any,
       label: "Signal",
       shouldPromptAccountIds: false,
@@ -1950,7 +2032,6 @@ describe("resolveAccountIdForConfigure", () => {
 
     const accountId = await resolveAccountIdForConfigure({
       cfg: {},
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Signal",
       shouldPromptAccountIds: true,

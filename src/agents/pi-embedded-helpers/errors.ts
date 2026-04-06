@@ -14,10 +14,8 @@ export {
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
-} from "../internal-events.js";
+import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
+import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
 import {
@@ -169,7 +167,25 @@ function formatTransportErrorCopy(raw: string): string | undefined {
   return undefined;
 }
 
-function isReasoningConstraintErrorMessage(raw: string): boolean {
+function formatDiskSpaceErrorCopy(raw: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const lower = raw.toLowerCase();
+  if (
+    /\benospc\b/i.test(raw) ||
+    lower.includes("no space left on device") ||
+    lower.includes("disk full")
+  ) {
+    return (
+      "OpenClaw could not write local session data because the disk is full. " +
+      "Free some disk space and try again."
+    );
+  }
+  return undefined;
+}
+
+export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
@@ -221,6 +237,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("maximum context length");
   return (
     lower.includes("request_too_large") ||
+    (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
     lower.includes("maximum context length") ||
@@ -228,6 +245,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("prompt too long") ||
     lower.includes("exceeds model context window") ||
     lower.includes("model token limit") ||
+    (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||
     lower.includes("exceed context limit") ||
@@ -372,6 +390,7 @@ export type FailoverSignal = {
   status?: number;
   code?: string;
   message?: string;
+  provider?: string;
 };
 
 export type FailoverClassification =
@@ -524,8 +543,11 @@ export function isTransientHttpError(raw: string): boolean {
 export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
+  opts?: { provider?: string },
 ): FailoverReason | null {
-  const messageClassification = message ? classifyFailoverClassificationFromMessage(message) : null;
+  const messageClassification = message
+    ? classifyFailoverClassificationFromMessage(message, opts?.provider)
+    : null;
   return failoverReasonFromClassification(
     classifyFailoverClassificationFromHttpStatus(status, message, messageClassification),
   );
@@ -550,6 +572,11 @@ function classifyFailoverClassificationFromHttpStatus(
   if (status === 401 || status === 403) {
     if (message && isAuthPermanentErrorMessage(message)) {
       return toReasonClassification("auth_permanent");
+    }
+    // billing message on 401/403 takes precedence over generic auth (e.g. OpenRouter
+    // "Key limit exceeded" 401/403 should trigger model fallback, not auth)
+    if (messageReason === "billing") {
+      return toReasonClassification("billing");
     }
     return toReasonClassification("auth");
   }
@@ -625,7 +652,33 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
-function classifyFailoverClassificationFromMessage(raw: string): FailoverClassification | null {
+function isProvider(provider: string | undefined, match: string): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  return Boolean(normalized && normalized.includes(match));
+}
+
+function isAnthropicGenericUnknownError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "anthropic") && raw.toLowerCase().includes("an unknown error occurred")
+  );
+}
+
+function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") && raw.toLowerCase().includes("provider returned error")
+  );
+}
+
+function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") && /\bkey\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
+  );
+}
+
+function classifyFailoverClassificationFromMessage(
+  raw: string,
+  provider?: string,
+): FailoverClassification | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
   }
@@ -644,6 +697,9 @@ function classifyFailoverClassificationFromMessage(raw: string): FailoverClassif
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
+  }
+  if (isOpenRouterKeyLimitExceededError(raw, provider)) {
+    return toReasonClassification("billing");
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
@@ -673,6 +729,12 @@ function classifyFailoverClassificationFromMessage(raw: string): FailoverClassif
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
   }
+  if (isAnthropicGenericUnknownError(raw, provider)) {
+    return toReasonClassification("timeout");
+  }
+  if (isOpenRouterProviderReturnedError(raw, provider)) {
+    return toReasonClassification("timeout");
+  }
   if (isServerErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
@@ -699,7 +761,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
       ? signal.status
       : extractLeadingHttpStatus(signal.message?.trim() ?? "")?.code;
   const messageClassification = signal.message
-    ? classifyFailoverClassificationFromMessage(signal.message)
+    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
   const statusClassification = classifyFailoverClassificationFromHttpStatus(
     inferredStatus,
@@ -747,164 +809,6 @@ function stripFinalTagsFromText(text: unknown): string {
     return normalized;
   }
   return normalized.replace(FINAL_TAG_RE, "");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function findDelimitedTokenIndex(text: string, token: string, from: number): number {
-  const tokenRe = new RegExp(`(?:^|\\r?\\n)${escapeRegExp(token)}(?=\\r?\\n|$)`, "g");
-  tokenRe.lastIndex = Math.max(0, from);
-  const match = tokenRe.exec(text);
-  if (!match) {
-    return -1;
-  }
-  const prefixLength = match[0].length - token.length;
-  return match.index + prefixLength;
-}
-
-function stripDelimitedBlock(text: string, begin: string, end: string): string {
-  let next = text;
-  for (;;) {
-    const start = findDelimitedTokenIndex(next, begin, 0);
-    if (start === -1) {
-      return next;
-    }
-
-    let cursor = start + begin.length;
-    let depth = 1;
-    let finish = -1;
-    while (depth > 0) {
-      const nextBegin = findDelimitedTokenIndex(next, begin, cursor);
-      const nextEnd = findDelimitedTokenIndex(next, end, cursor);
-      if (nextEnd === -1) {
-        break;
-      }
-      if (nextBegin !== -1 && nextBegin < nextEnd) {
-        depth += 1;
-        cursor = nextBegin + begin.length;
-        continue;
-      }
-      depth -= 1;
-      finish = nextEnd;
-      cursor = nextEnd + end.length;
-    }
-
-    const before = next.slice(0, start).trimEnd();
-    if (finish === -1 || depth !== 0) {
-      return before;
-    }
-    const after = next.slice(finish + end.length).trimStart();
-    next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
-  }
-}
-
-const LEGACY_INTERNAL_CONTEXT_HEADER =
-  [
-    "OpenClaw runtime context (internal):",
-    "This context is runtime-generated, not user-authored. Keep internal details private.",
-    "",
-  ].join("\n") + "\n";
-
-const LEGACY_INTERNAL_EVENT_MARKER = "[Internal task completion event]";
-const LEGACY_INTERNAL_EVENT_SEPARATOR = "\n\n---\n\n";
-const LEGACY_UNTRUSTED_RESULT_BEGIN = "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>";
-const LEGACY_UNTRUSTED_RESULT_END = "<<<END_UNTRUSTED_CHILD_RESULT>>>";
-
-function findLegacyInternalEventEnd(text: string, start: number): number | null {
-  if (!text.startsWith(LEGACY_INTERNAL_EVENT_MARKER, start)) {
-    return null;
-  }
-
-  const resultBegin = text.indexOf(
-    LEGACY_UNTRUSTED_RESULT_BEGIN,
-    start + LEGACY_INTERNAL_EVENT_MARKER.length,
-  );
-  if (resultBegin === -1) {
-    return null;
-  }
-
-  const resultEnd = text.indexOf(
-    LEGACY_UNTRUSTED_RESULT_END,
-    resultBegin + LEGACY_UNTRUSTED_RESULT_BEGIN.length,
-  );
-  if (resultEnd === -1) {
-    return null;
-  }
-
-  const actionIndex = text.indexOf("\n\nAction:\n", resultEnd + LEGACY_UNTRUSTED_RESULT_END.length);
-  if (actionIndex === -1) {
-    return null;
-  }
-
-  const afterAction = actionIndex + "\n\nAction:\n".length;
-  const nextEvent = text.indexOf(
-    `${LEGACY_INTERNAL_EVENT_SEPARATOR}${LEGACY_INTERNAL_EVENT_MARKER}`,
-    afterAction,
-  );
-  if (nextEvent !== -1) {
-    return nextEvent;
-  }
-
-  const nextParagraph = text.indexOf("\n\n", afterAction);
-  return nextParagraph === -1 ? text.length : nextParagraph;
-}
-
-function stripLegacyInternalRuntimeContext(text: string): string {
-  let next = text;
-  let searchFrom = 0;
-  for (;;) {
-    const headerStart = next.indexOf(LEGACY_INTERNAL_CONTEXT_HEADER, searchFrom);
-    if (headerStart === -1) {
-      return next;
-    }
-
-    const eventStart = headerStart + LEGACY_INTERNAL_CONTEXT_HEADER.length;
-    if (!next.startsWith(LEGACY_INTERNAL_EVENT_MARKER, eventStart)) {
-      searchFrom = eventStart;
-      continue;
-    }
-
-    let blockEnd = findLegacyInternalEventEnd(next, eventStart);
-    if (blockEnd == null) {
-      const nextParagraph = next.indexOf("\n\n", eventStart + LEGACY_INTERNAL_EVENT_MARKER.length);
-      blockEnd = nextParagraph === -1 ? next.length : nextParagraph;
-    } else {
-      while (
-        next.startsWith(
-          `${LEGACY_INTERNAL_EVENT_SEPARATOR}${LEGACY_INTERNAL_EVENT_MARKER}`,
-          blockEnd,
-        )
-      ) {
-        const nextEventStart = blockEnd + LEGACY_INTERNAL_EVENT_SEPARATOR.length;
-        const nextEventEnd = findLegacyInternalEventEnd(next, nextEventStart);
-        if (nextEventEnd == null) {
-          break;
-        }
-        blockEnd = nextEventEnd;
-      }
-    }
-
-    const before = next.slice(0, headerStart).trimEnd();
-    const after = next.slice(blockEnd).trimStart();
-    next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
-    searchFrom = Math.max(0, before.length - 1);
-  }
-}
-
-function stripInternalRuntimeContext(text: string): string {
-  if (!text) {
-    return text;
-  }
-
-  const withoutDelimitedBlocks = stripDelimitedBlock(
-    text,
-    INTERNAL_RUNTIME_CONTEXT_BEGIN,
-    INTERNAL_RUNTIME_CONTEXT_END,
-  );
-
-  return stripLegacyInternalRuntimeContext(withoutDelimitedBlocks);
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -961,33 +865,6 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
     ERROR_PREFIX_RE.test(raw) ||
     CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
   );
-}
-
-const EXEC_DENIED_RE = /^exec denied \(([^)]*)\):(?:\s*([\s\S]*))?$/i;
-
-function formatExecDeniedUserMessage(raw: string): string | null {
-  const match = EXEC_DENIED_RE.exec(raw.trim());
-  if (!match) {
-    return null;
-  }
-
-  const metadata = match[1]?.toLowerCase() ?? "";
-  if (metadata.includes("approval-timeout")) {
-    return "Command did not run: approval timed out.";
-  }
-  if (metadata.includes("user-denied")) {
-    return "Command did not run: approval was denied.";
-  }
-  if (metadata.includes("allowlist-miss")) {
-    return "Command did not run: approval is required.";
-  }
-  if (metadata.includes("approval-request-failed")) {
-    return "Command did not run: approval request failed.";
-  }
-  if (metadata.includes("spawn-failed") || metadata.includes("invoke-failed")) {
-    return "Command did not run.";
-  }
-  return "Command did not run.";
 }
 
 export function getApiErrorPayloadFingerprint(raw?: string): string | null {
@@ -1064,6 +941,11 @@ export function formatAssistantErrorText(
     if (rewritten) {
       return rewritten;
     }
+  }
+
+  const diskSpaceCopy = formatDiskSpaceErrorCopy(raw);
+  if (diskSpaceCopy) {
+    return diskSpaceCopy;
   }
 
   if (isContextOverflowError(raw)) {
@@ -1162,6 +1044,11 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     const execDeniedMessage = formatExecDeniedUserMessage(trimmed);
     if (execDeniedMessage) {
       return execDeniedMessage;
+    }
+
+    const diskSpaceCopy = formatDiskSpaceErrorCopy(trimmed);
+    if (diskSpaceCopy) {
+      return diskSpaceCopy;
     }
 
     if (/incorrect role information|roles must alternate/i.test(trimmed)) {
@@ -1388,24 +1275,28 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
   );
 }
 
-export function classifyFailoverReason(raw: string): FailoverReason | null {
+export function classifyFailoverReason(
+  raw: string,
+  opts?: { provider?: string },
+): FailoverReason | null {
   const trimmed = raw.trim();
   const leadingStatus = extractLeadingHttpStatus(trimmed);
   return failoverReasonFromClassification(
     classifyFailoverSignal({
       status: leadingStatus?.code,
       message: raw,
+      provider: opts?.provider,
     }),
   );
 }
 
-export function isFailoverErrorMessage(raw: string): boolean {
-  return classifyFailoverReason(raw) !== null;
+export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }): boolean {
+  return classifyFailoverReason(raw, opts) !== null;
 }
 
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
-  return isFailoverErrorMessage(msg.errorMessage ?? "");
+  return isFailoverErrorMessage(msg.errorMessage ?? "", { provider: msg.provider });
 }

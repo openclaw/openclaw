@@ -15,7 +15,7 @@ import {
 import { logError } from "openclaw/plugin-sdk/text-runtime";
 import { slackNativeApprovalAdapter } from "../approval-native.js";
 import {
-  getSlackExecApprovalApprovers,
+  isSlackExecApprovalClientEnabled,
   normalizeSlackApproverId,
   shouldHandleSlackExecApprovalRequest,
 } from "../exec-approvals.js";
@@ -220,7 +220,7 @@ function buildSlackExpiredBlocks(request: ExecApprovalRequest): SlackBlock[] {
 }
 
 export class SlackExecApprovalHandler {
-  private readonly runtime: ExecApprovalChannelRuntime<ExecApprovalRequest, ExecApprovalResolved>;
+  private readonly runtime: ExecApprovalChannelRuntime;
   private readonly opts: SlackExecApprovalHandlerOpts;
 
   constructor(opts: SlackExecApprovalHandlerOpts) {
@@ -237,15 +237,13 @@ export class SlackExecApprovalHandler {
       cfg: opts.cfg,
       accountId: opts.accountId,
       gatewayUrl: opts.gatewayUrl,
+      eventKinds: ["exec"],
       nativeAdapter: slackNativeApprovalAdapter.native,
       isConfigured: () =>
-        Boolean(
-          opts.config.enabled &&
-          getSlackExecApprovalApprovers({
-            cfg: opts.cfg,
-            accountId: opts.accountId,
-          }).length > 0,
-        ),
+        isSlackExecApprovalClientEnabled({
+          cfg: opts.cfg,
+          accountId: opts.accountId,
+        }),
       shouldHandle: (request) => this.shouldHandle(request),
       buildPendingContent: ({ request }) => ({
         text: buildSlackPendingApprovalText(request),
@@ -269,7 +267,7 @@ export class SlackExecApprovalHandler {
               : undefined,
         },
       }),
-      deliverTarget: async ({ preparedTarget, pendingContent, request }) => {
+      deliverTarget: async ({ preparedTarget, pendingContent, request: _request }) => {
         const message = await sendMessageSlack(preparedTarget.to, pendingContent.text, {
           cfg: this.opts.cfg,
           accountId: this.opts.accountId,

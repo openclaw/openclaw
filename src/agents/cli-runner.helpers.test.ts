@@ -1,9 +1,17 @@
+import fs from "node:fs/promises";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
-import { buildCliArgs, loadPromptRefImages } from "./cli-runner/helpers.js";
+import {
+  buildCliArgs,
+  loadPromptRefImages,
+  resolveCliRunQueueKey,
+  writeCliImages,
+} from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import * as toolImages from "./tool-images.js";
 
 describe("loadPromptRefImages", () => {
@@ -116,5 +124,107 @@ describe("buildCliArgs", () => {
         useResume: true,
       }),
     ).toEqual(["exec", "resume", "thread-123", "--model", "gpt-5.4"]);
+  });
+
+  it("strips the internal cache boundary from CLI system prompt args", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptArg: "--append-system-prompt",
+        },
+        baseArgs: ["-p"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        useResume: false,
+      }),
+    ).toEqual(["-p", "--append-system-prompt", "Stable prefix\nDynamic suffix"]);
+  });
+});
+
+describe("writeCliImages", () => {
+  it("uses stable hashed file paths so repeated image hydration reuses the same path", async () => {
+    const image: ImageContent = {
+      type: "image",
+      data: "c29tZS1pbWFnZQ==",
+      mimeType: "image/png",
+    };
+
+    const first = await writeCliImages([image]);
+    const second = await writeCliImages([image]);
+
+    try {
+      expect(first.paths).toHaveLength(1);
+      expect(second.paths).toEqual(first.paths);
+      expect(first.paths[0]).toContain(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`);
+      expect(first.paths[0]).toMatch(/\.png$/);
+      await expect(fs.readFile(first.paths[0])).resolves.toEqual(Buffer.from(image.data, "base64"));
+    } finally {
+      await fs.rm(first.paths[0], { force: true });
+    }
+  });
+
+  it("uses the shared media extension map for image formats beyond the tiny builtin list", async () => {
+    const image: ImageContent = {
+      type: "image",
+      data: "aGVpYy1pbWFnZQ==",
+      mimeType: "image/heic",
+    };
+
+    const written = await writeCliImages([image]);
+
+    try {
+      expect(written.paths[0]).toMatch(/\.heic$/);
+    } finally {
+      await fs.rm(written.paths[0], { force: true });
+    }
+  });
+});
+
+describe("resolveCliRunQueueKey", () => {
+  it("scopes Claude CLI serialization to the workspace for fresh runs", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-1",
+        workspaceDir: "/tmp/project-a",
+      }),
+    ).toBe("claude-cli:workspace:/tmp/project-a");
+  });
+
+  it("scopes Claude CLI serialization to the resumed CLI session id", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-2",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "claude-session-123",
+      }),
+    ).toBe("claude-cli:session:claude-session-123");
+  });
+
+  it("keeps non-Claude backends on the provider lane when serialized", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "codex-cli",
+        serialize: true,
+        runId: "run-3",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "thread-123",
+      }),
+    ).toBe("codex-cli");
+  });
+
+  it("disables serialization when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: false,
+        runId: "run-4",
+        workspaceDir: "/tmp/project-a",
+      }),
+    ).toBe("claude-cli:run-4");
   });
 });

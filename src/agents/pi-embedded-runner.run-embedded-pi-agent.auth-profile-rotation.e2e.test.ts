@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import { buildAttemptReplayMetadata } from "./pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
@@ -58,8 +59,10 @@ const installRunEmbeddedMocks = () => {
   vi.doMock("./pi-embedded-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  vi.doMock("../plugins/provider-runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+      "../plugins/provider-runtime.js",
+    );
     return {
       ...actual,
       prepareProviderRuntimeAuth: async (params: {
@@ -91,8 +94,8 @@ const installRunEmbeddedMocks = () => {
       throw new Error("compact should not run in auth profile rotation tests");
     }),
   }));
-  vi.doMock("./models-config.js", async (importOriginal) => {
-    const mod = await importOriginal<typeof import("./models-config.js")>();
+  vi.doMock("./models-config.js", async () => {
+    const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
     return {
       ...mod,
       ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
@@ -174,24 +177,37 @@ const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage 
   ...overrides,
 });
 
-const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
-  aborted: false,
-  timedOut: false,
-  timedOutDuringCompaction: false,
-  promptError: null,
-  sessionIdUsed: "session:test",
-  systemPromptReport: undefined,
-  messagesSnapshot: [],
-  assistantTexts: [],
-  toolMetas: [],
-  lastAssistant: undefined,
-  didSendViaMessagingTool: false,
-  messagingToolSentTexts: [],
-  messagingToolSentMediaUrls: [],
-  messagingToolSentTargets: [],
-  cloudCodeAssistFormatError: false,
-  ...overrides,
-});
+const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => {
+  const toolMetas = overrides.toolMetas ?? [];
+  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
+  const successfulCronAdds = overrides.successfulCronAdds;
+  return {
+    aborted: false,
+    timedOut: false,
+    timedOutDuringCompaction: false,
+    promptError: null,
+    sessionIdUsed: "session:test",
+    systemPromptReport: undefined,
+    messagesSnapshot: [],
+    assistantTexts: [],
+    toolMetas,
+    lastAssistant: undefined,
+    replayMetadata:
+      overrides.replayMetadata ??
+      buildAttemptReplayMetadata({
+        toolMetas,
+        didSendViaMessagingTool,
+        successfulCronAdds,
+      }),
+    didSendViaMessagingTool,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    cloudCodeAssistFormatError: false,
+    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+    ...overrides,
+  };
+};
 
 const makeConfig = (opts?: {
   fallbacks?: string[];
@@ -323,7 +339,8 @@ const writeAuthStore = async (
   },
 ) => {
   const authPath = path.join(agentDir, "auth-profiles.json");
-  const payload = {
+  const statePath = path.join(agentDir, "auth-state.json");
+  const authPayload = {
     version: 1,
     profiles: {
       "openai:p1": { type: "api_key", provider: "openai", key: "sk-one" },
@@ -332,6 +349,9 @@ const writeAuthStore = async (
         ? { "anthropic:default": { type: "api_key", provider: "anthropic", key: "sk-anth" } }
         : {}),
     },
+  };
+  const statePayload = {
+    version: 1,
     usageStats:
       opts?.usageStats ??
       ({
@@ -339,7 +359,8 @@ const writeAuthStore = async (
         "openai:p2": { lastUsed: 2 },
       } as Record<string, { lastUsed?: number }>),
   };
-  await fs.writeFile(authPath, JSON.stringify(payload));
+  await fs.writeFile(authPath, JSON.stringify(authPayload));
+  await fs.writeFile(statePath, JSON.stringify(statePayload));
 };
 
 const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
@@ -422,9 +443,7 @@ async function runAutoPinnedOpenAiTurn(params: {
 }
 
 async function readUsageStats(agentDir: string) {
-  const stored = JSON.parse(
-    await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
-  ) as {
+  const stored = JSON.parse(await fs.readFile(path.join(agentDir, "auth-state.json"), "utf-8")) as {
     usageStats?: Record<
       string,
       {
@@ -1303,7 +1322,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     try {
       await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
         const authPath = path.join(agentDir, "auth-profiles.json");
-        await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {}, usageStats: {} }));
+        const authStatePath = path.join(agentDir, "auth-state.json");
+        await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {} }));
+        await fs.writeFile(authStatePath, JSON.stringify({ version: 1, usageStats: {} }));
 
         await expect(
           runEmbeddedPiAgentInline({

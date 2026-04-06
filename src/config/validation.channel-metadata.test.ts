@@ -9,6 +9,15 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
 }));
 
+vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  listPluginDoctorLegacyConfigRules: () => [],
+}));
+
+mockLoadPluginManifestRegistry.mockReturnValue({
+  diagnostics: [],
+  plugins: [],
+});
+
 beforeAll(async () => {
   ({ validateConfigObjectWithPlugins, validateConfigObjectRawWithPlugins } =
     await import("./validation.js"));
@@ -38,10 +47,40 @@ function setupTelegramSchemaWithDefault() {
                   default: "pairing",
                 },
               },
-              additionalProperties: false,
+              // validateConfigObjectWithPlugins starts from the core validated
+              // config, which can already include bundled runtime defaults for
+              // the channel. Keep this mock schema focused on the plugin-owned
+              // default under test instead of rejecting unrelated core fields.
+              additionalProperties: true,
             },
             uiHints: {},
           },
+        },
+      },
+    ],
+  });
+}
+
+function setupPluginSchemaWithRequiredDefault() {
+  mockLoadPluginManifestRegistry.mockReturnValue({
+    diagnostics: [],
+    plugins: [
+      {
+        id: "opik",
+        origin: "bundled",
+        channels: [],
+        providers: [],
+        kind: ["tool"],
+        configSchema: {
+          type: "object",
+          properties: {
+            workspace: {
+              type: "string",
+              default: "default-workspace",
+            },
+          },
+          required: ["workspace"],
+          additionalProperties: true,
         },
       },
     ],
@@ -90,6 +129,29 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
       // This is intentional — see comment above.
       expect(result.config.channels?.telegram).toEqual(
         expect.objectContaining({ dmPolicy: "pairing" }),
+      );
+    }
+  });
+});
+
+describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
+  it("still injects plugin AJV defaults in raw mode for required defaulted fields", async () => {
+    setupPluginSchemaWithRequiredDefault();
+
+    const result = validateConfigObjectRawWithPlugins({
+      plugins: {
+        entries: {
+          opik: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.entries?.opik?.config).toEqual(
+        expect.objectContaining({ workspace: "default-workspace" }),
       );
     }
   });

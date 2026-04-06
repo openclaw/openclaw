@@ -6,7 +6,11 @@ import { getSessionBindingService, __testing } from "openclaw/plugin-sdk/convers
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
-import { resolveMatrixStateFilePath, resolveMatrixStoragePaths } from "./client/storage.js";
+import {
+  resolveMatrixStateFilePath,
+  resolveMatrixStoragePaths,
+  writeStorageMeta,
+} from "./client/storage.js";
 import {
   createMatrixThreadBindingManager,
   resetMatrixThreadBindingsForTests,
@@ -23,10 +27,8 @@ const sendMessageMatrixMock = vi.hoisted(() =>
 const actualRename = fs.rename.bind(fs);
 const renameMock = vi.spyOn(fs, "rename");
 
-vi.mock("./send.js", async () => {
-  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+vi.mock("./send.js", () => {
   return {
-    ...actual,
     sendMessageMatrix: sendMessageMatrixMock,
   };
 });
@@ -372,7 +374,7 @@ describe("matrix thread bindings", () => {
     );
   });
 
-  it("reloads persisted bindings after the Matrix access token changes", async () => {
+  it("does not reload persisted bindings after the Matrix access token changes while deviceId is unknown", async () => {
     const initialAuth = {
       ...auth,
       accessToken: "token-old",
@@ -402,6 +404,108 @@ describe("matrix thread bindings", () => {
       },
       placement: "current",
     });
+    const initialStoragePaths = resolveMatrixStoragePaths({
+      ...initialAuth,
+      env: process.env,
+    });
+    writeStorageMeta({
+      storagePaths: initialStoragePaths,
+      homeserver: initialAuth.homeserver,
+      userId: initialAuth.userId,
+      accountId: initialAuth.accountId,
+      deviceId: null,
+    });
+
+    initialManager.stop();
+    resetMatrixThreadBindingsForTests();
+    __testing.resetSessionBindingAdaptersForTests();
+
+    await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth: rotatedAuth,
+      client: {} as never,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
+    });
+
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      }),
+    ).toBeNull();
+
+    const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
+    const rotatedBindingsPath = path.join(
+      resolveMatrixStoragePaths({
+        ...rotatedAuth,
+        env: process.env,
+      }).rootDir,
+      "thread-bindings.json",
+    );
+    expect(rotatedBindingsPath).not.toBe(initialBindingsPath);
+  });
+
+  it("reloads persisted bindings after the Matrix access token changes when deviceId is known", async () => {
+    const initialAuth = {
+      ...auth,
+      accessToken: "token-old",
+      deviceId: "DEVICE123",
+    };
+    const rotatedAuth = {
+      ...auth,
+      accessToken: "token-new",
+      deviceId: "DEVICE123",
+    };
+
+    const initialManager = await createMatrixThreadBindingManager({
+      accountId: "ops",
+      auth: initialAuth,
+      client: {} as never,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+      enableSweeper: false,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:ops:subagent:child",
+      targetKind: "subagent",
+      conversation: {
+        channel: "matrix",
+        accountId: "ops",
+        conversationId: "$thread",
+        parentConversationId: "!room:example",
+      },
+      placement: "current",
+    });
+    const initialStoragePaths = resolveMatrixStoragePaths({
+      ...initialAuth,
+      env: process.env,
+    });
+    writeStorageMeta({
+      storagePaths: initialStoragePaths,
+      homeserver: initialAuth.homeserver,
+      userId: initialAuth.userId,
+      accountId: initialAuth.accountId,
+      deviceId: initialAuth.deviceId,
+    });
+    const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
+    await vi.waitFor(async () => {
+      const persistedRaw = await fs.readFile(initialBindingsPath, "utf-8");
+      expect(JSON.parse(persistedRaw)).toMatchObject({
+        version: 1,
+        bindings: [
+          expect.objectContaining({
+            conversationId: "$thread",
+            parentConversationId: "!room:example",
+            targetSessionKey: "agent:ops:subagent:child",
+          }),
+        ],
+      });
+    });
 
     initialManager.stop();
     resetMatrixThreadBindingsForTests();
@@ -427,13 +531,6 @@ describe("matrix thread bindings", () => {
       targetSessionKey: "agent:ops:subagent:child",
     });
 
-    const initialBindingsPath = path.join(
-      resolveMatrixStoragePaths({
-        ...initialAuth,
-        env: process.env,
-      }).rootDir,
-      "thread-bindings.json",
-    );
     const rotatedBindingsPath = path.join(
       resolveMatrixStoragePaths({
         ...rotatedAuth,

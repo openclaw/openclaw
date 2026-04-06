@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const managerMocks = vi.hoisted(() => ({
@@ -40,8 +40,11 @@ const baseCfg = {
 
 let resetAcpSessionInPlace: typeof import("./persistent-bindings.lifecycle.js").resetAcpSessionInPlace;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ resetAcpSessionInPlace } = await import("./persistent-bindings.lifecycle.js"));
+});
+
+beforeEach(() => {
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
     metaCleared: false,
@@ -50,7 +53,6 @@ beforeEach(async () => {
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
   resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey.mockReset().mockReturnValue(null);
-  ({ resetAcpSessionInPlace } = await import("./persistent-bindings.lifecycle.js"));
 });
 
 describe("resetAcpSessionInPlace", () => {
@@ -79,15 +81,11 @@ describe("resetAcpSessionInPlace", () => {
     expect(managerMocks.closeSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey,
+        discardPersistentState: true,
         clearMeta: false,
       }),
     );
-    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        agent: "claude",
-        backendId: "acpx",
-      }),
-    );
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+    expect(managerMocks.updateSessionRuntimeOptions).not.toHaveBeenCalled();
   });
 });

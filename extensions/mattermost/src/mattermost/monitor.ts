@@ -1,14 +1,10 @@
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
-  fetchMattermostChannel,
   fetchMattermostMe,
-  fetchMattermostUser,
   normalizeMattermostBaseUrl,
-  sendMattermostTyping,
-  updateMattermostPost,
-  type MattermostChannel,
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
@@ -62,23 +58,23 @@ import type {
 import {
   buildAgentMediaPayload,
   buildModelsProviderData,
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  logInboundDrop,
-  logTypingFailure,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  createChannelPairingController,
+  createChannelReplyPipeline,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntryIfEnabled,
+  DM_GROUP_ACCESS_REASON,
   isDangerousNameMatchingEnabled,
-  registerPluginHttpRoute,
-  resolveControlCommandGate,
+  logInboundDrop,
+  logTypingFailure,
   readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
+  recordPendingHistoryEntryIfEnabled,
+  registerPluginHttpRoute,
   resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
+  resolveControlCommandGate,
+  resolveDefaultGroupPolicy,
+  resolveDmGroupAccessWithLists,
   warnMissingProviderGroupPolicyFallbackOnce,
   type HistoryEntry,
 } from "./runtime-api.js";
@@ -171,7 +167,7 @@ export function resolveMattermostReplyRootId(params: {
 export function resolveMattermostEffectiveReplyToId(params: {
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): string | undefined {
   const threadRootId = params.threadRootId?.trim();
@@ -185,14 +181,18 @@ export function resolveMattermostEffectiveReplyToId(params: {
   if (!postId) {
     return undefined;
   }
-  return params.replyToMode === "all" || params.replyToMode === "first" ? postId : undefined;
+  return params.replyToMode === "all" ||
+    params.replyToMode === "first" ||
+    params.replyToMode === "batched"
+    ? postId
+    : undefined;
 }
 
 export function resolveMattermostThreadSessionContext(params: {
   baseSessionKey: string;
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
   const effectiveReplyToId = resolveMattermostEffectiveReplyToId({
@@ -273,7 +273,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
   });
 
   // Wait for the Mattermost API to accept our bot token before proceeding.
@@ -1730,7 +1730,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     unregisterInteractions?.();
   }
 
-  if (slashShutdownCleanup) {
-    await slashShutdownCleanup;
+  const slashShutdownCleanupPromise = slashShutdownCleanup;
+  if (slashShutdownCleanupPromise) {
+    await Promise.resolve(slashShutdownCleanupPromise);
   }
 }

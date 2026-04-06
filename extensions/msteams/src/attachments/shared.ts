@@ -5,8 +5,8 @@ import {
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
-} from "../../runtime-api.js";
-import type { SsrFPolicy } from "../../runtime-api.js";
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-policy";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -90,7 +90,11 @@ export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
     return input.url;
   }
-  return String(input);
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return "";
+  }
 }
 
 export function normalizeContentType(value: unknown): string | undefined {

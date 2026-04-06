@@ -1,12 +1,12 @@
 import {
   DEFAULT_ACCOUNT_ID,
+  type OpenClawConfig as ClawdbotConfig,
   createAccountListHelpers,
   normalizeAccountId,
   normalizeOptionalAccountId,
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
-import type { ClawdbotConfig } from "../runtime-api.js";
+import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
 import type {
   FeishuConfig,
   FeishuAccountConfig,
@@ -15,13 +15,12 @@ import type {
   ResolvedFeishuAccount,
 } from "./types.js";
 
-const {
-  listConfiguredAccountIds,
-  listAccountIds: listFeishuAccountIds,
-  resolveDefaultAccountId,
-} = createAccountListHelpers("feishu", {
-  allowUnlistedDefaultAccount: true,
-});
+const { listAccountIds: listFeishuAccountIds, resolveDefaultAccountId } = createAccountListHelpers(
+  "feishu",
+  {
+    allowUnlistedDefaultAccount: true,
+  },
+);
 
 export { listFeishuAccountIds };
 

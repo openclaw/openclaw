@@ -60,7 +60,7 @@ function applyNullableStringField(
 function applyNullableSecretInputField(
   target: Record<string, unknown>,
   key: "accessToken" | "password",
-  value: MatrixConfig["accessToken"] | MatrixConfig["password"] | null | undefined,
+  value: MatrixConfig["accessToken"] | null | undefined,
   defaults?: NonNullable<CoreConfig["secrets"]>["defaults"],
 ): void {
   if (value === undefined) {
@@ -97,9 +97,7 @@ function cloneMatrixDmConfig(dm: MatrixConfig["dm"]): MatrixConfig["dm"] {
   };
 }
 
-function cloneMatrixRoomMap(
-  rooms: MatrixConfig["groups"] | MatrixConfig["rooms"],
-): MatrixConfig["groups"] | MatrixConfig["rooms"] {
+function cloneMatrixRoomMap(rooms: MatrixConfig["groups"]): MatrixConfig["groups"] {
   if (!rooms) {
     return rooms;
   }
@@ -167,10 +165,19 @@ export function updateMatrixAccountConfig(
   applyNullableStringField(nextAccount, "avatarUrl", patch.avatarUrl);
 
   if (patch.allowPrivateNetwork !== undefined) {
+    const nextNetwork =
+      nextAccount.network && typeof nextAccount.network === "object"
+        ? { ...(nextAccount.network as Record<string, unknown>) }
+        : {};
     if (patch.allowPrivateNetwork === null) {
-      delete nextAccount.allowPrivateNetwork;
+      delete nextNetwork.dangerouslyAllowPrivateNetwork;
     } else {
-      nextAccount.allowPrivateNetwork = patch.allowPrivateNetwork;
+      nextNetwork.dangerouslyAllowPrivateNetwork = patch.allowPrivateNetwork;
+    }
+    if (Object.keys(nextNetwork).length > 0) {
+      nextAccount.network = nextNetwork;
+    } else {
+      delete nextAccount.network;
     }
   }
 
@@ -201,7 +208,7 @@ export function updateMatrixAccountConfig(
       delete nextAccount.dm;
     } else {
       nextAccount.dm = cloneMatrixDmConfig({
-        ...((nextAccount.dm as MatrixConfig["dm"] | undefined) ?? {}),
+        ...(nextAccount.dm as MatrixConfig["dm"] | undefined),
         ...patch.dm,
       });
     }

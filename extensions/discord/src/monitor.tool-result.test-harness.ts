@@ -41,11 +41,12 @@ function createPairingStoreMocks() {
 }
 
 const conversationRuntimeModule = await import("openclaw/plugin-sdk/conversation-runtime");
-vi.spyOn(conversationRuntimeModule, "readChannelAllowFromStore").mockImplementation(
-  createPairingStoreMocks().readChannelAllowFromStore,
+const pairingStoreMocks = createPairingStoreMocks();
+vi.spyOn(conversationRuntimeModule, "readChannelAllowFromStore").mockImplementation((...args) =>
+  pairingStoreMocks.readChannelAllowFromStore(...args),
 );
-vi.spyOn(conversationRuntimeModule, "upsertChannelPairingRequest").mockImplementation(
-  createPairingStoreMocks().upsertChannelPairingRequest,
+vi.spyOn(conversationRuntimeModule, "upsertChannelPairingRequest").mockImplementation((...args) =>
+  pairingStoreMocks.upsertChannelPairingRequest(...args),
 );
 
 const configRuntimeModule = await import("openclaw/plugin-sdk/config-runtime");

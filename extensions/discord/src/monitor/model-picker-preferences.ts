@@ -29,6 +29,28 @@ type ModelPickerPreferencesStore = {
   entries: Record<string, ModelPickerPreferencesEntry>;
 };
 
+function sanitizePreferenceEntries(entries: unknown): Record<string, ModelPickerPreferencesEntry> {
+  if (!entries || typeof entries !== "object") {
+    return {};
+  }
+  const normalizedEntries: Record<string, ModelPickerPreferencesEntry> = {};
+  for (const [key, value] of Object.entries(entries)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const typedValue = value as {
+      recent?: unknown;
+      updatedAt?: unknown;
+    };
+    const recent = Array.isArray(typedValue.recent)
+      ? typedValue.recent.filter((item: unknown): item is string => typeof item === "string")
+      : [];
+    const updatedAt = typeof typedValue.updatedAt === "string" ? typedValue.updatedAt : "";
+    normalizedEntries[key] = { recent, updatedAt };
+  }
+  return normalizedEntries;
+}
+
 export type DiscordModelPickerPreferenceScope = {
   accountId?: string;
   guildId?: string;
@@ -94,16 +116,16 @@ function sanitizeRecentModels(models: string[] | undefined, limit: number): stri
 }
 
 async function readPreferencesStore(filePath: string): Promise<ModelPickerPreferencesStore> {
-  const { value } = await readJsonFileWithFallback<ModelPickerPreferencesStore>(filePath, {
+  const { value } = await readJsonFileWithFallback(filePath, {
     version: 1,
-    entries: {},
+    entries: {} as Record<string, ModelPickerPreferencesEntry>,
   });
   if (!value || typeof value !== "object" || value.version !== 1) {
     return { version: 1, entries: {} };
   }
   return {
     version: 1,
-    entries: value.entries && typeof value.entries === "object" ? value.entries : {},
+    entries: sanitizePreferenceEntries(value.entries),
   };
 }
 

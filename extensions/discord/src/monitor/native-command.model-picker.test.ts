@@ -3,10 +3,10 @@ import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
 import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as dispatcherModule from "openclaw/plugin-sdk/reply-runtime";
+import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
@@ -240,18 +240,21 @@ function createDispatchSpy() {
   const dispatchSpy = vi
     .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
     .mockResolvedValue({} as never);
-  nativeCommandTesting.setDispatchReplyWithDispatcher(
-    dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
-  );
+  nativeCommandTesting.setDispatchReplyWithDispatcher(dispatcherModule.dispatchReplyWithDispatcher);
   return dispatchSpy;
 }
 
 describe("Discord model picker interactions", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     nativeCommandTesting.setDispatchReplyWithDispatcher(
-      dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+      dispatcherModule.dispatchReplyWithDispatcher,
     );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("registers distinct fallback ids for button and select handlers", () => {

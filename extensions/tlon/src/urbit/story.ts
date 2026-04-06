@@ -242,7 +242,7 @@ export function markdownToStory(markdown: string): Story {
     const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headerMatch) {
       const level = headerMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6;
-      const tag = `h${level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+      const tag = `h${level}` as const;
       story.push({
         block: {
           header: {

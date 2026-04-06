@@ -2,13 +2,14 @@ import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import {
   resolveRetryConfig,
   retryAsync,
@@ -38,6 +39,8 @@ export type DiscordThreadBindingLookup = {
 };
 
 type ResolvedRetryConfig = Required<RetryConfig>;
+
+const DISCORD_VIDEO_MEDIA_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
 
 const DISCORD_DELIVERY_RETRY_DEFAULTS: ResolvedRetryConfig = {
   attempts: 3,
@@ -72,6 +75,31 @@ function getDiscordRetryAfterMs(err: unknown): number | undefined {
 
 function resolveDeliveryRetryConfig(retry?: RetryConfig): ResolvedRetryConfig {
   return resolveRetryConfig(DISCORD_DELIVERY_RETRY_DEFAULTS, retry);
+}
+
+function normalizeMediaPathForExtension(mediaUrl: string): string {
+  const trimmed = mediaUrl.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.pathname.toLowerCase();
+  } catch {
+    const withoutHash = trimmed.split("#", 1)[0] ?? trimmed;
+    const withoutQuery = withoutHash.split("?", 1)[0] ?? withoutHash;
+    return withoutQuery.toLowerCase();
+  }
+}
+
+function isLikelyDiscordVideoMedia(mediaUrl: string): boolean {
+  const normalized = normalizeMediaPathForExtension(mediaUrl);
+  for (const ext of DISCORD_VIDEO_MEDIA_EXTENSIONS) {
+    if (normalized.endsWith(ext)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function sendWithRetry(
@@ -111,6 +139,33 @@ function resolveBoundThreadBinding(params: {
     return undefined;
   }
   return bindings.find((entry) => entry.threadId === targetChannelId);
+}
+
+function createPayloadReplyToResolver(params: {
+  payload: ReplyPayload;
+  replyToMode: ReplyToMode;
+  resolveFallbackReplyTo: () => string | undefined;
+}): () => string | undefined {
+  const payloadReplyTo = params.payload.replyToId?.trim() || undefined;
+  const allowExplicitReplyWhenOff = Boolean(
+    payloadReplyTo && (params.payload.replyToTag || params.payload.replyToCurrent),
+  );
+
+  if (!payloadReplyTo || (params.replyToMode === "off" && !allowExplicitReplyWhenOff)) {
+    return params.resolveFallbackReplyTo;
+  }
+
+  let payloadReplyUsed = false;
+  return () => {
+    if (params.replyToMode === "all") {
+      return payloadReplyTo;
+    }
+    if (payloadReplyUsed) {
+      return undefined;
+    }
+    payloadReplyUsed = true;
+    return payloadReplyTo;
+  };
 }
 
 function resolveBindingPersona(
@@ -236,8 +291,7 @@ export async function deliverDiscordReply(params: {
   const chunkLimit = Math.min(params.textLimit, 2000);
   const replyTo = params.replyToId?.trim() || undefined;
   const replyToMode = params.replyToMode ?? "all";
-  // replyToMode=first should only apply to the first physical send.
-  const replyOnce = replyToMode === "first";
+  const replyOnce = isSingleUseReplyToMode(replyToMode);
   let replyUsed = false;
   const resolveReplyTo = () => {
     if (!replyTo) {
@@ -269,6 +323,11 @@ export async function deliverDiscordReply(params: {
     : undefined;
   let deliveredAny = false;
   for (const payload of params.replies) {
+    const resolvePayloadReplyTo = createPayloadReplyToResolver({
+      payload,
+      replyToMode,
+      resolveFallbackReplyTo: resolveReplyTo,
+    });
     const tableMode = params.tableMode ?? "code";
     const reply = resolveSendableOutboundReplyParts(payload, {
       text: convertMarkdownTables(payload.text ?? "", tableMode),
@@ -290,7 +349,7 @@ export async function deliverDiscordReply(params: {
         if (!chunk.trim()) {
           continue;
         }
-        const replyTo = resolveReplyTo();
+        const replyTo = resolvePayloadReplyTo();
         await sendDiscordChunkWithFallback({
           cfg: params.cfg,
           target: params.target,
@@ -319,7 +378,7 @@ export async function deliverDiscordReply(params: {
     }
     // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
     if (payload.audioAsVoice) {
-      const replyTo = resolveReplyTo();
+      const replyTo = resolvePayloadReplyTo();
       await sendVoiceMessageDiscord(params.target, firstMedia, {
         cfg: params.cfg,
         token: params.token,
@@ -337,7 +396,7 @@ export async function deliverDiscordReply(params: {
         rest: params.rest,
         accountId: params.accountId,
         maxLinesPerMessage: params.maxLinesPerMessage,
-        replyTo: resolveReplyTo(),
+        replyTo: resolvePayloadReplyTo(),
         binding,
         chunkMode: params.chunkMode,
         username: persona.username,
@@ -351,7 +410,7 @@ export async function deliverDiscordReply(params: {
         mediaUrls: reply.mediaUrls.slice(1),
         caption: "",
         send: async ({ mediaUrl }) => {
-          const replyTo = resolveReplyTo();
+          const replyTo = resolvePayloadReplyTo();
           await sendWithRetry(
             () =>
               sendMessageDiscord(params.target, "", {
@@ -370,11 +429,56 @@ export async function deliverDiscordReply(params: {
       continue;
     }
 
+    const shouldSplitVideoMediaReply =
+      reply.text.trim().length > 0 &&
+      reply.mediaUrls.some((mediaUrl) => isLikelyDiscordVideoMedia(mediaUrl));
+    if (shouldSplitVideoMediaReply) {
+      await sendDiscordChunkWithFallback({
+        cfg: params.cfg,
+        target: params.target,
+        text: reply.text,
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        maxLinesPerMessage: params.maxLinesPerMessage,
+        replyTo: resolvePayloadReplyTo(),
+        binding,
+        chunkMode: params.chunkMode,
+        username: persona.username,
+        avatarUrl: persona.avatarUrl,
+        channelId,
+        request,
+        retryConfig,
+      });
+      await sendMediaWithLeadingCaption({
+        mediaUrls: reply.mediaUrls,
+        caption: "",
+        send: async ({ mediaUrl }) => {
+          const replyTo = resolvePayloadReplyTo();
+          await sendWithRetry(
+            () =>
+              sendMessageDiscord(params.target, "", {
+                cfg: params.cfg,
+                token: params.token,
+                rest: params.rest,
+                mediaUrl,
+                accountId: params.accountId,
+                mediaLocalRoots: params.mediaLocalRoots,
+                replyTo,
+              }),
+            retryConfig,
+          );
+        },
+      });
+      deliveredAny = true;
+      continue;
+    }
+
     await sendMediaWithLeadingCaption({
       mediaUrls: reply.mediaUrls,
       caption: reply.text,
       send: async ({ mediaUrl, caption }) => {
-        const replyTo = resolveReplyTo();
+        const replyTo = resolvePayloadReplyTo();
         await sendWithRetry(
           () =>
             sendMessageDiscord(params.target, caption ?? "", {

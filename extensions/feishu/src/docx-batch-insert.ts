@@ -48,11 +48,15 @@ function collectDescendants(
   const visited = new Set<string>();
 
   function collect(blockId: string) {
-    if (visited.has(blockId)) return;
+    if (visited.has(blockId)) {
+      return;
+    }
     visited.add(blockId);
 
     const block = blockMap.get(blockId);
-    if (!block) return;
+    if (!block) {
+      return;
+    }
 
     result.push(block);
 

@@ -159,7 +159,6 @@ describe("telegram group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     expect(
       resolveTelegramGroupRequireMention({ cfg: telegramCfg, groupId: "-1001:topic:77" }),
@@ -169,6 +168,48 @@ describe("telegram group policy", () => {
         allow: ["message.send"],
       },
     );
+  });
+
+  it("honors account-scoped topic requireMention overrides", () => {
+    const telegramCfg = {
+      channels: {
+        telegram: {
+          botToken: "telegram-test",
+          groups: {
+            "-1001": {
+              requireMention: true,
+              topics: {
+                "77": {
+                  requireMention: true,
+                },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              botToken: "telegram-work",
+              groups: {
+                "-1001": {
+                  topics: {
+                    "77": {
+                      requireMention: false,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as any;
+
+    expect(
+      resolveTelegramGroupRequireMention({
+        cfg: telegramCfg,
+        accountId: "work",
+        groupId: "-1001:topic:77",
+      }),
+    ).toBe(false);
   });
 });
 

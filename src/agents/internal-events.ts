@@ -1,42 +1,42 @@
-export type AgentInternalEventType = "task_completion";
+import {
+  AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+  type AgentInternalEventSource,
+  type AgentInternalEventStatus,
+} from "./internal-event-contract.js";
+import {
+  escapeInternalRuntimeContextDelimiters,
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "./internal-runtime-context.js";
 
 export type AgentTaskCompletionInternalEvent = {
-  type: "task_completion";
-  source: "subagent" | "cron";
+  type: typeof AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION;
+  source: AgentInternalEventSource;
   childSessionKey: string;
   childSessionId?: string;
   announceType: string;
   taskLabel: string;
-  status: "ok" | "timeout" | "error" | "unknown";
+  status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  mediaUrls?: string[];
   statsLine?: string;
   replyInstruction: string;
 };
 
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
-export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
-export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-
-const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]";
-const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
-
-function escapeInternalContextDelimiters(value: string): string {
-  return value
-    .replaceAll(INTERNAL_RUNTIME_CONTEXT_BEGIN, ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN)
-    .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);
-}
+export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };
 
 function sanitizeSingleLineField(value: string, fallback: string): string {
-  const sanitized = escapeInternalContextDelimiters(value)
+  const sanitized = escapeInternalRuntimeContextDelimiters(value)
     .replace(/\r?\n+/g, " ")
     .trim();
   return sanitized || fallback;
 }
 
 function sanitizeMultilineField(value: string, fallback: string): string {
-  const sanitized = escapeInternalContextDelimiters(value).replace(/\r\n/g, "\n").trim();
+  const sanitized = escapeInternalRuntimeContextDelimiters(value).replace(/\r\n/g, "\n").trim();
   return sanitized || fallback;
 }
 

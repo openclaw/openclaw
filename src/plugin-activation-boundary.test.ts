@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 
-vi.mock("./plugin-sdk/facade-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-sdk/facade-runtime.js")>();
+vi.mock("./plugin-sdk/facade-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./plugin-sdk/facade-runtime.js")>(
+    "./plugin-sdk/facade-runtime.js",
+  );
   return {
     ...actual,
     loadBundledPluginPublicSurfaceModuleSync,
@@ -29,31 +31,24 @@ describe("plugin activation boundary", () => {
     | undefined;
   let browserHelpersPromise:
     | Promise<{
-        DEFAULT_AI_SNAPSHOT_MAX_CHARS: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_AI_SNAPSHOT_MAX_CHARS;
-        DEFAULT_BROWSER_EVALUATE_ENABLED: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_BROWSER_EVALUATE_ENABLED;
-        DEFAULT_OPENCLAW_BROWSER_COLOR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_COLOR;
-        DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
-        DEFAULT_UPLOAD_DIR: typeof import("./plugin-sdk/browser-runtime.js").DEFAULT_UPLOAD_DIR;
-        closeTrackedBrowserTabsForSessions: typeof import("./plugin-sdk/browser-runtime.js").closeTrackedBrowserTabsForSessions;
-        parseBrowserMajorVersion: typeof import("./plugin-sdk/browser-runtime.js").parseBrowserMajorVersion;
-        redactCdpUrl: typeof import("./plugin-sdk/browser-runtime.js").redactCdpUrl;
-        readBrowserVersion: typeof import("./plugin-sdk/browser-runtime.js").readBrowserVersion;
-        resolveBrowserConfig: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserConfig;
-        resolveBrowserControlAuth: typeof import("./plugin-sdk/browser-runtime.js").resolveBrowserControlAuth;
-        resolveGoogleChromeExecutableForPlatform: typeof import("./plugin-sdk/browser-runtime.js").resolveGoogleChromeExecutableForPlatform;
-        resolveProfile: typeof import("./plugin-sdk/browser-runtime.js").resolveProfile;
+        DEFAULT_AI_SNAPSHOT_MAX_CHARS: typeof import("./plugin-sdk/browser-config.js").DEFAULT_AI_SNAPSHOT_MAX_CHARS;
+        DEFAULT_BROWSER_EVALUATE_ENABLED: typeof import("./plugin-sdk/browser-config.js").DEFAULT_BROWSER_EVALUATE_ENABLED;
+        DEFAULT_OPENCLAW_BROWSER_COLOR: typeof import("./plugin-sdk/browser-config.js").DEFAULT_OPENCLAW_BROWSER_COLOR;
+        DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: typeof import("./plugin-sdk/browser-config.js").DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME;
+        DEFAULT_UPLOAD_DIR: typeof import("./plugin-sdk/browser-config.js").DEFAULT_UPLOAD_DIR;
+        closeTrackedBrowserTabsForSessions: typeof import("./plugin-sdk/browser-maintenance.js").closeTrackedBrowserTabsForSessions;
+        parseBrowserMajorVersion: typeof import("./plugin-sdk/browser-host-inspection.js").parseBrowserMajorVersion;
+        redactCdpUrl: typeof import("./plugin-sdk/browser-config.js").redactCdpUrl;
+        readBrowserVersion: typeof import("./plugin-sdk/browser-host-inspection.js").readBrowserVersion;
+        resolveBrowserConfig: typeof import("./plugin-sdk/browser-config.js").resolveBrowserConfig;
+        resolveBrowserControlAuth: typeof import("./plugin-sdk/browser-config.js").resolveBrowserControlAuth;
+        resolveGoogleChromeExecutableForPlatform: typeof import("./plugin-sdk/browser-host-inspection.js").resolveGoogleChromeExecutableForPlatform;
+        resolveProfile: typeof import("./plugin-sdk/browser-config.js").resolveProfile;
       }>
     | undefined;
   let browserAmbientImportsPromise: Promise<void> | undefined;
-  let discordMaintenancePromise:
-    | Promise<{
-        unbindThreadBindingsBySessionKey: typeof import("./plugin-sdk/discord-thread-bindings.js").unbindThreadBindingsBySessionKey;
-      }>
-    | undefined;
-
   function importAmbientModules() {
     ambientImportsPromise ??= Promise.all([
-      import("./agents/cli-session.js"),
       import("./commands/onboard-custom.js"),
       import("./commands/opencode-go-model-default.js"),
       import("./commands/opencode-zen-model-default.js"),
@@ -80,20 +75,24 @@ describe("plugin activation boundary", () => {
   }
 
   function importBrowserHelpers() {
-    browserHelpersPromise ??= import("./plugin-sdk/browser-runtime.js").then((module) => ({
-      DEFAULT_AI_SNAPSHOT_MAX_CHARS: module.DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-      DEFAULT_BROWSER_EVALUATE_ENABLED: module.DEFAULT_BROWSER_EVALUATE_ENABLED,
-      DEFAULT_OPENCLAW_BROWSER_COLOR: module.DEFAULT_OPENCLAW_BROWSER_COLOR,
-      DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: module.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-      DEFAULT_UPLOAD_DIR: module.DEFAULT_UPLOAD_DIR,
-      closeTrackedBrowserTabsForSessions: module.closeTrackedBrowserTabsForSessions,
-      parseBrowserMajorVersion: module.parseBrowserMajorVersion,
-      redactCdpUrl: module.redactCdpUrl,
-      readBrowserVersion: module.readBrowserVersion,
-      resolveBrowserConfig: module.resolveBrowserConfig,
-      resolveBrowserControlAuth: module.resolveBrowserControlAuth,
-      resolveGoogleChromeExecutableForPlatform: module.resolveGoogleChromeExecutableForPlatform,
-      resolveProfile: module.resolveProfile,
+    browserHelpersPromise ??= Promise.all([
+      import("./plugin-sdk/browser-config.js"),
+      import("./plugin-sdk/browser-host-inspection.js"),
+      import("./plugin-sdk/browser-maintenance.js"),
+    ]).then(([config, inspection, maintenance]) => ({
+      DEFAULT_AI_SNAPSHOT_MAX_CHARS: config.DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+      DEFAULT_BROWSER_EVALUATE_ENABLED: config.DEFAULT_BROWSER_EVALUATE_ENABLED,
+      DEFAULT_OPENCLAW_BROWSER_COLOR: config.DEFAULT_OPENCLAW_BROWSER_COLOR,
+      DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME: config.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+      DEFAULT_UPLOAD_DIR: config.DEFAULT_UPLOAD_DIR,
+      closeTrackedBrowserTabsForSessions: maintenance.closeTrackedBrowserTabsForSessions,
+      parseBrowserMajorVersion: inspection.parseBrowserMajorVersion,
+      redactCdpUrl: config.redactCdpUrl,
+      readBrowserVersion: inspection.readBrowserVersion,
+      resolveBrowserConfig: config.resolveBrowserConfig,
+      resolveBrowserControlAuth: config.resolveBrowserControlAuth,
+      resolveGoogleChromeExecutableForPlatform: inspection.resolveGoogleChromeExecutableForPlatform,
+      resolveProfile: config.resolveProfile,
     }));
     return browserHelpersPromise;
   }
@@ -110,15 +109,6 @@ describe("plugin activation boundary", () => {
     return browserAmbientImportsPromise;
   }
 
-  function importDiscordMaintenance() {
-    discordMaintenancePromise ??= import("./plugin-sdk/discord-thread-bindings.js").then(
-      (module) => ({
-        unbindThreadBindingsBySessionKey: module.unbindThreadBindingsBySessionKey,
-      }),
-    );
-    return discordMaintenancePromise;
-  }
-
   it("does not load bundled provider plugins on ambient command imports", async () => {
     await importAmbientModules();
 
@@ -128,8 +118,21 @@ describe("plugin activation boundary", () => {
   it("does not load bundled plugins for config and env detection helpers", async () => {
     const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
+    expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
+    expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
+    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
+    expect(
+      isChannelConfigured({}, "irc", { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" }),
+    ).toBe(true);
     expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
-    expect(resolveEnvApiKey("anthropic-vertex", {})).toBeNull();
+    expect(
+      resolveEnvApiKey("anthropic-vertex", {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      }),
+    ).toEqual({
+      apiKey: "gcp-vertex-credentials",
+      source: "gcloud adc",
+    });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
@@ -147,7 +150,7 @@ describe("plugin activation boundary", () => {
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
-  it("does not load the browser plugin for static browser config helpers", async () => {
+  it("keeps browser helper imports cold and loads only narrow browser helper surfaces on use", async () => {
     const browser = await importBrowserHelpers();
 
     expect(browser.DEFAULT_AI_SNAPSHOT_MAX_CHARS).toBe(80_000);
@@ -155,6 +158,7 @@ describe("plugin activation boundary", () => {
     expect(browser.DEFAULT_OPENCLAW_BROWSER_COLOR).toBe("#FF4500");
     expect(browser.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME).toBe("openclaw");
     expect(browser.DEFAULT_UPLOAD_DIR).toContain("uploads");
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
     expect(browser.parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
     expect(browser.resolveBrowserControlAuth({}, {} as NodeJS.ProcessEnv)).toEqual({
       token: undefined,
@@ -182,17 +186,16 @@ describe("plugin activation boundary", () => {
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
-  it("keeps discord cleanup helpers cold when discord is disabled", async () => {
-    const discord = await importDiscordMaintenance();
+  it("keeps generic session-binding cleanup helpers cold when plugins are disabled", async () => {
+    const { getSessionBindingService } =
+      await import("./infra/outbound/session-binding-service.js");
 
-    expect(
-      discord.unbindThreadBindingsBySessionKey({
+    await expect(
+      getSessionBindingService().unbind({
         targetSessionKey: "agent:main:test",
-        targetKind: "acp",
         reason: "session-reset",
-        sendFarewell: true,
       }),
-    ).toEqual([]);
+    ).resolves.toEqual([]);
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 

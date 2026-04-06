@@ -1,33 +1,41 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("node:child_process", () => ({
-  execFileSync: vi.fn(),
-}));
-vi.mock("node:fs", () => {
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      execFileSync: vi.fn(),
+    },
+  );
+});
+vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
-  const module = { existsSync, readFileSync };
-  return {
-    ...module,
-    default: module,
-  };
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs")>("node:fs"),
+    { existsSync, readFileSync },
+    { mirrorToDefault: true },
+  );
 });
-vi.mock("node:os", () => {
+vi.mock("node:os", async () => {
+  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
   const homedir = vi.fn();
-  const module = { homedir };
-  return {
-    ...module,
-    default: module,
-  };
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:os")>("node:os"),
+    { homedir },
+    { mirrorToDefault: true },
+  );
 });
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import os from "node:os";
+const { resolveBrowserExecutableForPlatform } = await import("./chrome.executables.js");
 
 describe("browser default executable detection", () => {
   const launchServicesPlist = "com.apple.launchservices.secure.plist";
   const chromeExecutablePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  let resolveBrowserExecutableForPlatform: typeof import("./chrome.executables.js").resolveBrowserExecutableForPlatform;
 
   function mockMacDefaultBrowser(bundleId: string, appPath = ""): void {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
@@ -54,10 +62,6 @@ describe("browser default executable detection", () => {
       return value.includes(chromeExecutablePath);
     });
   }
-
-  beforeAll(async () => {
-    ({ resolveBrowserExecutableForPlatform } = await import("./chrome.executables.js"));
-  });
 
   beforeEach(() => {
     vi.clearAllMocks();

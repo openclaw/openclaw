@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-import { buildStatusText } from "../../auto-reply/reply/commands-status.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -32,6 +31,10 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../model-selection.js";
+import {
+  describeSessionStatusTool,
+  SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
@@ -49,6 +52,15 @@ const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
 });
+
+let commandsStatusRuntimePromise: Promise<
+  typeof import("../../auto-reply/reply/commands-status.runtime.js")
+> | null = null;
+
+function loadCommandsStatusRuntime() {
+  commandsStatusRuntimePromise ??= import("../../auto-reply/reply/commands-status.runtime.js");
+  return commandsStatusRuntimePromise;
+}
 
 function resolveSessionEntry(params: {
   store: Record<string, SessionEntry>;
@@ -212,8 +224,8 @@ export function createSessionStatusTool(opts?: {
   return {
     label: "Session Status",
     name: "session_status",
-    description:
-      "Show a /status-equivalent session status card (usage + time + cost when available), including linked background task context when present. Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
+    displaySummary: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionStatusTool(),
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -426,6 +438,7 @@ export function createSessionStatusTool(opts?: {
                   model: selection.model,
                   isDefault: selection.isDefault,
                 },
+          markLiveSwitchPending: true,
         });
         if (applied.updated) {
           store[resolved.key] = nextEntry;
@@ -473,6 +486,7 @@ export function createSessionStatusTool(opts?: {
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,
       });
+      const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
         cfg,
         sessionEntry: statusSessionEntry,
@@ -499,6 +513,7 @@ export function createSessionStatusTool(opts?: {
         skipDefaultTaskLookup: true,
         primaryModelLabelOverride: primaryModelLabel,
         ...(providerForCard ? {} : { modelAuthOverride: undefined }),
+        includeTranscriptUsage: true,
       });
       const fullStatusText =
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;

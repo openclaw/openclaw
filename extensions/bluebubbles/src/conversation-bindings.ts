@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   registerSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
@@ -8,8 +9,7 @@ import {
   type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 
 type BlueBubblesBindingTargetKind = "subagent" | "acp";
 
@@ -202,7 +202,7 @@ export function createBlueBubblesConversationBindingManager(params: {
     },
     unbindBySessionKey: (targetSessionKey) => {
       const removed: BlueBubblesConversationBindingRecord[] = [];
-      for (const record of [...getState().bindingsByAccountConversation.values()]) {
+      for (const record of getState().bindingsByAccountConversation.values()) {
         if (record.accountId !== accountId || record.targetSessionKey !== targetSessionKey) {
           continue;
         }
@@ -214,7 +214,7 @@ export function createBlueBubblesConversationBindingManager(params: {
       return removed;
     },
     stop: () => {
-      for (const key of [...getState().bindingsByAccountConversation.keys()]) {
+      for (const key of getState().bindingsByAccountConversation.keys()) {
         if (key.startsWith(`${accountId}:`)) {
           getState().bindingsByAccountConversation.delete(key);
         }
