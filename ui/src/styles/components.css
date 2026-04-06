@@ -4270,6 +4270,7 @@ details[open] > .ov-expandable-toggle::after {
 
   .exec-approval-overlay {
     padding: 12px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
   }
 
   .exec-approval-card {
