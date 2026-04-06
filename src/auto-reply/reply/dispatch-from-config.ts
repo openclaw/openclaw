@@ -558,8 +558,10 @@ export async function dispatchReplyFromConfig(params: {
       chatType: sessionStoreEntry.entry?.chatType,
     });
 
-    const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
-    const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const defaultToolMessageLogging = ctx.ChatType !== "group" || ctx.IsForum === true;
+    const shouldSendToolSummaries = cfg.messages?.toolMessageLogging ?? defaultToolMessageLogging;
+    const shouldSendToolStartStatuses =
+      cfg.messages?.toolMessageLogging ?? defaultToolMessageLogging;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {

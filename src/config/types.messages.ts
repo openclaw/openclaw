@@ -118,6 +118,8 @@ export type MessagesConfig = {
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
+  /** When false, suppress intermediate tool-result/status messages and only send the final reply. Default: auto (on for DMs/forums, off for regular groups). */
+  toolMessageLogging?: boolean;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */

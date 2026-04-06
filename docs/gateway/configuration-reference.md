@@ -1762,6 +1762,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     responsePrefix: "🦞", // or "auto"
     ackReaction: "👀",
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all
+    toolMessageLogging: true,
     removeAckAfterReply: false,
     queue: {
       mode: "collect", // steer | followup | collect | steer-backlog | steer+backlog | queue | interrupt
@@ -1808,6 +1809,7 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
+- `toolMessageLogging`: when `false`, suppresses intermediate tool-result/status messages and only sends the final reply. Default behavior is automatic: enabled for DMs and forum-style threads, suppressed for regular group chats.
 - `removeAckAfterReply`: removes ack after reply on Slack, Discord, and Telegram.
 - `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, and Telegram.
   On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.

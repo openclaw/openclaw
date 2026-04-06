@@ -1495,6 +1495,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Map provider -> channel id -> model override (values are provider/model or aliases).",
   "messages.suppressToolErrors":
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
+  "messages.toolMessageLogging":
+    "When false, suppress intermediate tool-result/status messages and only send the final reply. Default behavior is automatic: enabled for DMs/forums, suppressed for regular group chats.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
