@@ -248,7 +248,6 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
             ),
             inlineCitations: resolveXaiInlineCitations(searchConfig),
             cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-            cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
           });
         },
       };

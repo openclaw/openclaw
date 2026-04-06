@@ -7,7 +7,6 @@ import {
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
   type AcpAgentRegistry,
-  type AcpSessionRecord,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
   type AcpRuntimeHandle,
