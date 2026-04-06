@@ -74,17 +74,18 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
     pids.push(currentPid);
   }
   // Deduplicate: dual-stack listeners (IPv4 + IPv6) cause lsof to emit the
-  // same PID twice. Return each PID at most once to avoid double-killing.
-  return [...new Set(pids)].filter((pid) => pid !== process.pid);
+  // same PID twice. Return each PID at most once.
+  // Note: selfPid filtering is done in findGatewayPidsOnPortSync, not here.
+  return [...new Set(pids)];
 }
 
 /**
  * Find PIDs of gateway processes listening on the given port using synchronous lsof.
- * Returns only PIDs that belong to openclaw gateway processes (not the current process).
  */
 export function findGatewayPidsOnPortSync(
   port: number,
   spawnTimeoutMs = SPAWN_TIMEOUT_MS,
+  selfPid?: number,
 ): number[] {
   if (process.platform === "win32") {
     return [];
@@ -114,7 +115,9 @@ export function findGatewayPidsOnPortSync(
     );
     return [];
   }
-  return parsePidsFromLsofOutput(res.stdout);
+  // Filter out selfPid if provided (only exclude the calling process, not all processes)
+  const pids = parsePidsFromLsofOutput(res.stdout);
+  return selfPid ? pids.filter((pid) => pid !== selfPid) : pids;
 }
 
 /**
@@ -253,13 +256,13 @@ function waitForPortFreeSync(port: number): void {
  *
  * Called before service restart commands to prevent port conflicts.
  */
-export function cleanStaleGatewayProcessesSync(portOverride?: number): number[] {
+export function cleanStaleGatewayProcessesSync(portOverride?: number, selfPid?: number): number[] {
   try {
     const port =
       typeof portOverride === "number" && Number.isFinite(portOverride) && portOverride > 0
         ? Math.floor(portOverride)
         : resolveGatewayPort(undefined, process.env);
-    const stalePids = findGatewayPidsOnPortSync(port);
+    const stalePids = findGatewayPidsOnPortSync(port, SPAWN_TIMEOUT_MS, selfPid);
     if (stalePids.length === 0) {
       return [];
     }

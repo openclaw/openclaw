@@ -581,7 +581,7 @@ export async function restartLaunchAgent({
 
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
-    cleanStaleGatewayProcessesSync(cleanupPort);
+    cleanStaleGatewayProcessesSync(cleanupPort, process.pid);
   }
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);

@@ -83,18 +83,8 @@ async function stopGatewayWithoutServiceManager(port: number) {
   if (pids.length === 0) {
     return null;
   }
-  // FIX: Use launchctl kickstart instead of SIGTERM to ensure launchd restarts properly
-  // Direct SIGTERM bypasses launchd supervision, causing restart failures on macOS (#50070)
-  try {
-    const { execSync: exec } = await import("child_process");
-    exec(`launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway`, {
-      stdio: "ignore",
-    });
-  } catch {
-    // Fallback to direct SIGTERM if kickstart fails (e.g., not running via launchd)
-    for (const pid of pids) {
-      signalVerifiedGatewayPidSync(pid, "SIGTERM");
-    }
+  for (const pid of pids) {
+    signalVerifiedGatewayPidSync(pid, "SIGTERM");
   }
   return {
     result: "stopped" as const,

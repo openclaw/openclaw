@@ -309,7 +309,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
-    const stale = cleanStaleGatewayProcessesSync(port);
+    const stale = cleanStaleGatewayProcessesSync(port, process.pid);
     if (stale.length > 0) {
       gatewayLog.info(
         `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
