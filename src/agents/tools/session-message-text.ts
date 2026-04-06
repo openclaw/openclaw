@@ -1,4 +1,9 @@
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import {
+  normalizeAssistantPhase,
+  parseAssistantTextSignature,
+  type AssistantPhase,
+} from "../../shared/chat-message-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
@@ -26,23 +31,80 @@ export function sanitizeTextContent(text: string): string {
   );
 }
 
-export function extractAssistantText(message: unknown): string | undefined {
+function extractAssistantTextForPhase(
+  message: unknown,
+  phase?: AssistantPhase,
+): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
   if ((message as { role?: unknown }).role !== "assistant") {
     return undefined;
   }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
+  const entry = message as { text?: unknown; content?: unknown; phase?: unknown };
+  const messagePhase = normalizeAssistantPhase(entry.phase);
+  const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
+    if (phase) {
+      return resolvedPhase === phase;
+    }
+    return resolvedPhase === undefined;
+  };
+  const normalizeVisibleText = (text: string) => {
+    const normalized = sanitizeTextContent(text).trim();
+    return normalized || undefined;
+  };
+
+  if (typeof entry.text === "string") {
+    return shouldIncludeContent(messagePhase) ? normalizeVisibleText(entry.text) : undefined;
+  }
+
+  if (typeof entry.content === "string") {
+    return shouldIncludeContent(messagePhase) ? normalizeVisibleText(entry.content) : undefined;
+  }
+
+  if (!Array.isArray(entry.content)) {
     return undefined;
   }
+
+  const hasExplicitPhasedTextBlocks = entry.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const record = block as { type?: unknown; textSignature?: unknown };
+    if (record.type !== "text") {
+      return false;
+    }
+    return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
+  });
+
   const joined =
-    extractTextFromChatContent(content, {
-      sanitizeText: sanitizeTextContent,
-      joinWith: "",
-      normalizeText: (text) => text.trim(),
-    }) ?? "";
+    extractTextFromChatContent(
+      entry.content.filter((block) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const record = block as { type?: unknown; textSignature?: unknown };
+        if (record.type !== "text") {
+          return false;
+        }
+        const signature = parseAssistantTextSignature(record.textSignature);
+        const resolvedPhase =
+          signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
+        return shouldIncludeContent(resolvedPhase);
+      }),
+      {
+        sanitizeText: sanitizeTextContent,
+        joinWith: "",
+        normalizeText: (text) => text.trim(),
+      },
+    ) ?? "";
+
+  return joined || undefined;
+}
+
+export function extractAssistantText(message: unknown): string | undefined {
+  const joined =
+    extractAssistantTextForPhase(message, "final_answer") ?? extractAssistantTextForPhase(message);
   const stopReason = (message as { stopReason?: unknown }).stopReason;
   const errorContext = stopReason === "error";
 

@@ -73,6 +73,32 @@ describe("readLatestAssistantReply", () => {
     expect(result.text).toBe("new output");
     expect(result.fingerprint).toContain('"timestamp":42');
   });
+
+  it("reads only final_answer text from phased assistant history", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Need fix line quoting properly.",
+              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Fixed the quoting issue.",
+              textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+
+    expect(result).toBe("Fixed the quoting issue.");
+  });
 });
 
 describe("waitForAgentRun", () => {

@@ -117,17 +117,7 @@ function extractSubagentOutputText(message: unknown): string {
   const role = (message as { role?: unknown }).role;
   const content = (message as { content?: unknown }).content;
   if (role === "assistant") {
-    const assistantText = extractAssistantText(message);
-    if (assistantText) {
-      return assistantText;
-    }
-    if (typeof content === "string") {
-      return sanitizeTextContent(content);
-    }
-    if (Array.isArray(content)) {
-      return extractInlineTextContent(content);
-    }
-    return "";
+    return extractAssistantText(message) ?? "";
   }
   if (role === "toolResult" || role === "tool") {
     return extractToolResultText((message as ToolResultMessage).content);
