@@ -22,6 +22,12 @@ export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): s
   if (env[AWS_PROFILE_ENV]?.trim()) {
     return AWS_PROFILE_ENV;
   }
+  // EC2 instances with IAM roles use IMDS for credentials — no env vars needed.
+  // Return a sentinel so callers know AWS SDK auth is available via the default
+  // credential chain even when no explicit env vars are set.
+  if (env["AWS_EXECUTION_ENV"]?.trim() || env["ECS_CONTAINER_METADATA_URI"]?.trim()) {
+    return "AWS_EXECUTION_ENV";
+  }
   return undefined;
 }
 

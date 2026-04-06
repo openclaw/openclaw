@@ -333,6 +333,11 @@ export function createEmbeddedRunAuthController(params: {
           `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
         );
       }
+      // AWS SDK auth (Bedrock via IMDS/env/profile): no API key needed, but
+      // we must notify pi's authStorage so hasConfiguredAuth() passes.
+      // Use a sentinel value that signals 'use SDK signing'.
+      const runtimeModel = params.getRuntimeModel();
+      params.authStorage.setRuntimeApiKey(runtimeModel.provider, "__aws_sdk_auth__");
       params.setLastProfileId(resolvedProfileId);
       return;
     }
