@@ -56,7 +56,7 @@ vi.mock("openclaw/plugin-sdk/command-auth", () => ({
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
   }) => ({
     commandAuthorized:
-      hasControlCommand && authorizers.some((entry) => entry.allowed || entry.configured === false),
+      hasControlCommand && authorizers.some((entry) => entry.allowed || !entry.configured),
   }),
 }));
 vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
@@ -196,16 +196,6 @@ let createLineWebhookReplayCache: typeof import("./bot-handlers.js").createLineW
 type LineWebhookContext = Parameters<typeof import("./bot-handlers.js").handleLineWebhookEvents>[1];
 
 const createRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
-
-function buildDefaultLineMessageContext() {
-  return {
-    ctxPayload: { From: "line:group:group-1" },
-    replyToken: "reply-token",
-    route: { agentId: "default" },
-    isGroup: true,
-    accountId: "default",
-  };
-}
 
 function createReplayMessageEvent(params: {
   messageId: string;
