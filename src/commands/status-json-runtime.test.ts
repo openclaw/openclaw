@@ -32,6 +32,7 @@ function createScan() {
     remoteUrlMissing: false,
     gatewayReachable: true,
     gatewayProbe: { connectLatencyMs: 42, error: null },
+    gatewayProbeAuth: { token: "tok" },
     gatewaySelf: { host: "gateway" },
     gatewayProbeAuthWarning: null,
     agentStatus: { agents: [{ id: "main" }], defaultId: "main" },
@@ -80,6 +81,12 @@ describe("status-json-runtime", () => {
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
       expect.objectContaining({
+        surface: expect.objectContaining({
+          gatewayConnection: { url: "ws://127.0.0.1:18789", urlSource: "config" },
+          gatewayProbeAuth: { token: "tok" },
+          gatewayService: { label: "LaunchAgent" },
+          nodeService: { label: "node" },
+        }),
         securityAudit: { summary: { critical: 1 } },
         usage: { providers: [] },
         health: { ok: true },
@@ -126,6 +133,9 @@ describe("status-json-runtime", () => {
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
       expect.objectContaining({
+        surface: expect.objectContaining({
+          gatewayProbeAuth: { token: "tok" },
+        }),
         securityAudit: undefined,
         usage: undefined,
         health: undefined,
@@ -154,6 +164,9 @@ describe("status-json-runtime", () => {
 
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
       expect.objectContaining({
+        surface: expect.objectContaining({
+          gatewayProbeAuth: { token: "tok" },
+        }),
         health: undefined,
       }),
     );

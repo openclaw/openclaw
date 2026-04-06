@@ -2,27 +2,17 @@ import {
   buildStatusChannelsTableRows,
   statusChannelsTableColumns,
 } from "./status-all/channels-table.js";
-import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
+import { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
+import { type StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
-  buildStatusEventsValue,
-  buildStatusPluginCompatibilityValue,
-  buildStatusProbesValue,
-  buildStatusSessionsOverviewValue,
-} from "./status-overview-values.ts";
-import {
-  buildStatusAgentsValue,
   buildStatusFooterLines,
   buildStatusHealthRows,
-  buildStatusHeartbeatValue,
-  buildStatusLastHeartbeatValue,
-  buildStatusMemoryValue,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
   buildStatusSecurityAuditLines,
   buildStatusSessionsRows,
   buildStatusSystemEventsRows,
   buildStatusSystemEventsTrailer,
-  buildStatusTasksValue,
   statusHealthColumns,
 } from "./status.command-sections.js";
 
@@ -31,75 +21,8 @@ export async function buildStatusCommandReportData(params: {
     deep?: boolean;
     verbose?: boolean;
   };
-  cfg: {
-    update?: {
-      channel?: string | null;
-    };
-    gateway?: {
-      bind?: string;
-      customBindHost?: string;
-      controlUi?: {
-        enabled?: boolean;
-        basePath?: string;
-      };
-    };
-  };
-  update: Record<string, unknown>;
+  surface: StatusOverviewSurface;
   osSummary: { label: string };
-  tailscaleMode: string;
-  tailscaleDns?: string | null;
-  tailscaleHttpsUrl?: string | null;
-  gatewayMode: "local" | "remote";
-  remoteUrlMissing: boolean;
-  gatewayConnection: {
-    url: string;
-    urlSource?: string;
-  };
-  gatewayReachable: boolean;
-  gatewayProbe: {
-    connectLatencyMs?: number | null;
-    error?: string | null;
-    close?: {
-      reason?: string | null;
-    } | null;
-  } | null;
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  } | null;
-  gatewayProbeAuthWarning?: string | null;
-  gatewaySelf:
-    | {
-        host?: string | null;
-        ip?: string | null;
-        version?: string | null;
-        platform?: string | null;
-      }
-    | null
-    | undefined;
-  gatewayService: {
-    label: string;
-    installed: boolean | null;
-    managedByOpenClaw?: boolean;
-    loadedText: string;
-    runtimeShort?: string | null;
-    runtime?: {
-      status?: string | null;
-      pid?: number | null;
-    } | null;
-  };
-  nodeService: {
-    label: string;
-    installed: boolean | null;
-    managedByOpenClaw?: boolean;
-    loadedText: string;
-    runtimeShort?: string | null;
-    runtime?: {
-      status?: string | null;
-      pid?: number | null;
-    } | null;
-  };
-  nodeOnlyGateway: unknown;
   summary: {
     tasks: {
       total: number;
@@ -215,6 +138,7 @@ export async function buildStatusCommandReportData(params: {
   resolveMemoryFtsState: (value: unknown) => { state: string; tone: "ok" | "warn" | "muted" };
   resolveMemoryCacheSummary: (value: unknown) => { text: string; tone: "ok" | "warn" | "muted" };
   accentDim: (value: string) => string;
+  updateValue?: string;
   theme: {
     heading: (value: string) => string;
     muted: (value: string) => string;
@@ -227,93 +151,26 @@ export async function buildStatusCommandReportData(params: {
     rows: Array<Record<string, string>>;
   }) => string;
 }) {
-  const agentsValue = buildStatusAgentsValue({
-    agentStatus: params.agentStatus,
-    formatTimeAgo: params.formatTimeAgo,
-  });
-  const eventsValue = buildStatusEventsValue({
-    queuedSystemEvents: params.summary.queuedSystemEvents,
-  });
-  const tasksValue = buildStatusTasksValue({
+  const overviewRows = buildStatusCommandOverviewRows({
+    opts: params.opts,
+    surface: params.surface,
+    osLabel: params.osSummary.label,
     summary: params.summary,
-    warn: params.warn,
-    muted: params.muted,
-  });
-  const probesValue = buildStatusProbesValue({
     health: params.health,
-    ok: params.ok,
-    muted: params.muted,
-  });
-  const heartbeatValue = buildStatusHeartbeatValue({ summary: params.summary });
-  const lastHeartbeatValue = buildStatusLastHeartbeatValue({
-    deep: params.opts.deep,
-    gatewayReachable: params.gatewayReachable,
-    lastHeartbeat: params.lastHeartbeat as never,
-    warn: params.warn,
-    muted: params.muted,
-    formatTimeAgo: params.formatTimeAgo,
-  });
-  const memoryValue = buildStatusMemoryValue({
+    lastHeartbeat: params.lastHeartbeat,
+    agentStatus: params.agentStatus,
     memory: params.memory,
     memoryPlugin: params.memoryPlugin,
+    pluginCompatibility: params.pluginCompatibility,
     ok: params.ok,
     warn: params.warn,
     muted: params.muted,
+    formatTimeAgo: params.formatTimeAgo,
+    formatKTokens: params.formatKTokens,
     resolveMemoryVectorState: params.resolveMemoryVectorState,
     resolveMemoryFtsState: params.resolveMemoryFtsState,
     resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,
-  });
-  const pluginCompatibilityValue = buildStatusPluginCompatibilityValue({
-    notices: params.pluginCompatibility,
-    ok: params.ok,
-    warn: params.warn,
-  });
-
-  const overviewRows = buildStatusOverviewSurfaceRows({
-    cfg: params.cfg,
-    update: params.update as never,
-    tailscaleMode: params.tailscaleMode,
-    tailscaleDns: params.tailscaleDns,
-    tailscaleHttpsUrl: params.tailscaleHttpsUrl,
-    gatewayMode: params.gatewayMode,
-    remoteUrlMissing: params.remoteUrlMissing,
-    gatewayConnection: params.gatewayConnection,
-    gatewayReachable: params.gatewayReachable,
-    gatewayProbe: params.gatewayProbe,
-    gatewayProbeAuth: params.gatewayProbeAuth,
-    gatewayProbeAuthWarning: params.gatewayProbeAuthWarning,
-    gatewaySelf: params.gatewaySelf,
-    gatewayService: params.gatewayService,
-    nodeService: params.nodeService,
-    nodeOnlyGateway: params.nodeOnlyGateway as never,
-    decorateOk: params.ok,
-    decorateWarn: params.warn,
-    decorateTailscaleOff: params.muted,
-    decorateTailscaleWarn: params.warn,
-    prefixRows: [
-      { Item: "OS", Value: `${params.osSummary.label} · node ${process.versions.node}` },
-    ],
     updateValue: params.updateValue,
-    agentsValue,
-    suffixRows: [
-      { Item: "Memory", Value: memoryValue },
-      { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
-      { Item: "Probes", Value: probesValue },
-      { Item: "Events", Value: eventsValue },
-      { Item: "Tasks", Value: tasksValue },
-      { Item: "Heartbeat", Value: heartbeatValue },
-      ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
-      {
-        Item: "Sessions",
-        Value: buildStatusSessionsOverviewValue({
-          sessions: params.summary.sessions,
-          formatKTokens: params.formatKTokens,
-        }),
-      },
-    ],
-    gatewayAuthWarningValue: params.gatewayProbeAuthWarning
-      ? params.warn(params.gatewayProbeAuthWarning)
-      : null,
   });
 
   const sessionsColumns = [
@@ -389,11 +246,11 @@ export async function buildStatusCommandReportData(params: {
       : undefined,
     usageLines: params.usageLines,
     footerLines: buildStatusFooterLines({
-      updateHint: params.formatUpdateAvailableHint(params.update),
+      updateHint: params.formatUpdateAvailableHint(params.surface.update),
       warn: params.theme.warn,
       formatCliCommand: params.formatCliCommand,
-      nodeOnlyGateway: params.nodeOnlyGateway as never,
-      gatewayReachable: params.gatewayReachable,
+      nodeOnlyGateway: params.surface.nodeOnlyGateway,
+      gatewayReachable: params.surface.gatewayReachable,
     }),
   };
 }
