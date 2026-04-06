@@ -28,13 +28,13 @@ import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   monitorIrcProvider: vi.fn(),
+  sendMessageIrc: vi.fn(),
 }));
 
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
+vi.mock("./channel-runtime.js", () => {
   return {
-    ...actual,
     monitorIrcProvider: hoisted.monitorIrcProvider,
+    sendMessageIrc: hoisted.sendMessageIrc,
   };
 });
 
