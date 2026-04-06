@@ -2250,6 +2250,90 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(deltas[0]).toMatchObject({ delta: "Leaked?" });
     expect(deltas[0]?.partial?.phase).toBe("commentary");
   });
+
+  it("buffers output_text.done until item phase is defined", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-phaseless-done-gate");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const events: Array<{
+      type?: string;
+      delta?: string;
+      partial?: { phase?: string; content?: unknown[] };
+    }> = [];
+    const done = (async () => {
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev as (typeof events)[number]);
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+
+    manager.simulateEvent({
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_phaseless_done",
+        role: "assistant",
+        content: [],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.output_text.done",
+      item_id: "item_phaseless_done",
+      output_index: 0,
+      content_index: 0,
+      text: "Buffered final text",
+    });
+
+    await new Promise((r) => setImmediate(r));
+    const prematureDeltas = events.filter((event) => event.type === "text_delta");
+    expect(prematureDeltas).toHaveLength(0);
+
+    manager.simulateEvent({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "message",
+        id: "item_phaseless_done",
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "output_text", text: "Buffered final text" }],
+      },
+    });
+    manager.simulateEvent({
+      type: "response.completed",
+      response: {
+        id: "resp_phaseless_done_gate",
+        object: "response",
+        created_at: Date.now(),
+        status: "completed",
+        model: "gpt-5.4",
+        output: [
+          {
+            type: "message",
+            id: "item_phaseless_done",
+            role: "assistant",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "Buffered final text" }],
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      },
+    });
+
+    await done;
+
+    const deltas = events.filter((event) => event.type === "text_delta");
+    expect(deltas).toHaveLength(1);
+    expect(deltas[0]).toMatchObject({ delta: "Buffered final text" });
+    expect(deltas[0]?.partial?.phase).toBe("commentary");
+  });
+
   it("falls back to HTTP when WebSocket connect fails (session pre-broken via flag)", async () => {
     // Set the class-level flag BEFORE calling streamFn so the new instance
     // fails on connect().  We patch the static default via MockManager directly.
