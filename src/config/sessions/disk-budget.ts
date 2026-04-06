@@ -370,6 +370,6 @@ export async function enforceSessionDiskBudget(params: {
     freedBytes,
     maxBytes,
     highWaterBytes,
-    overBudget: true,
+    overBudget: total > maxBytes,
   };
 }
