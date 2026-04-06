@@ -1324,7 +1324,9 @@ describe("resolveMatrixAuth", () => {
   });
 
   it("skips persistence when startup backfill is aborted before whoami resolves", async () => {
-    let resolveWhoami: ((value: { user_id: string; device_id: string }) => void) | undefined;
+    let resolveWhoami:
+      | ((value: { user_id: string; device_id: string }) => void)
+      | undefined;
     matrixDoRequestMock.mockImplementation(
       () =>
         new Promise((resolve) => {
