@@ -1,5 +1,0 @@
-[
-  { "source": "CLI", "target": "CLI" },
-  { "source": "Mintlify", "target": "Mintlify" },
-  { "source": "OpenClaw", "target": "OpenClaw" }
-]

@@ -1,9 +1,0 @@
-iTerm
-FO
-Nam
-Lins
-Vai
-OptionA
-CAF
-overlayed
-re-use

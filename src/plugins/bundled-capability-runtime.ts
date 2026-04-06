@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import {
+  describeBoundaryFileOpenFailure,
+  openBoundaryFileSync,
+} from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   withBundledPluginEnablementCompat,
@@ -254,7 +257,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       recordCapabilityLoadError(
         registry,
         record,
-        "plugin entry path escapes plugin root or fails alias checks",
+        describeBoundaryFileOpenFailure(opened, record.source),
       );
       continue;
     }

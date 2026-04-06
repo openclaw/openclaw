@@ -5,6 +5,7 @@ import {
   resolveBoundaryPathSync,
   type ResolvedBoundaryPath,
 } from "./boundary-path.js";
+import { extractErrorCode } from "./errors.js";
 import type { PathAliasPolicy } from "./path-alias-guards.js";
 import {
   openVerifiedFileSync,
@@ -108,6 +109,24 @@ export function matchBoundaryFileOpenFailure<T>(
     case "io":
       return handlers.io ? handlers.io(failure) : handlers.fallback(failure);
   }
+}
+
+export function describeBoundaryFileOpenFailure(
+  failure: BoundaryFileOpenFailure,
+  entryPath: string,
+): string {
+  return matchBoundaryFileOpenFailure(failure, {
+    path: (f) => {
+      const code = extractErrorCode(f.error);
+      if (code === "ENOENT") {
+        return `plugin entry file not found: ${entryPath}`;
+      }
+      return `plugin entry path error (${code ?? f.error}): ${entryPath}`;
+    },
+    validation: () => `plugin entry path escapes plugin root or fails alias checks: ${entryPath}`,
+    io: (f) => `plugin entry I/O error (${f.error}): ${entryPath}`,
+    fallback: () => `plugin entry path escapes plugin root or fails alias checks: ${entryPath}`,
+  });
 }
 
 function openBoundaryFileResolved(params: {

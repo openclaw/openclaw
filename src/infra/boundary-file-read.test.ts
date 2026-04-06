@@ -15,6 +15,7 @@ vi.mock("./safe-open-sync.js", () => ({
 }));
 
 let canUseBoundaryFileOpen: typeof import("./boundary-file-read.js").canUseBoundaryFileOpen;
+let describeBoundaryFileOpenFailure: typeof import("./boundary-file-read.js").describeBoundaryFileOpenFailure;
 let matchBoundaryFileOpenFailure: typeof import("./boundary-file-read.js").matchBoundaryFileOpenFailure;
 let openBoundaryFile: typeof import("./boundary-file-read.js").openBoundaryFile;
 let openBoundaryFileSync: typeof import("./boundary-file-read.js").openBoundaryFileSync;
@@ -24,6 +25,7 @@ describe("boundary-file-read", () => {
     vi.resetModules();
     ({
       canUseBoundaryFileOpen,
+      describeBoundaryFileOpenFailure,
       matchBoundaryFileOpenFailure,
       openBoundaryFile,
       openBoundaryFileSync,
@@ -236,5 +238,41 @@ describe("boundary-file-read", () => {
     expect(missing).toBe("missing");
     expect(io).toBe("io");
     expect(validation).toBe("validation");
+  });
+
+  it("describes ENOENT path failures as file-not-found", () => {
+    const error = Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+    const msg = describeBoundaryFileOpenFailure(
+      { ok: false, reason: "path", error },
+      "./src/channel.js",
+    );
+    expect(msg).toBe("plugin entry file not found: ./src/channel.js");
+  });
+
+  it("describes non-ENOENT path failures with the error code", () => {
+    const error = Object.assign(new Error("ENOTDIR: not a directory"), { code: "ENOTDIR" });
+    const msg = describeBoundaryFileOpenFailure(
+      { ok: false, reason: "path", error },
+      "./src/channel.js",
+    );
+    expect(msg).toBe("plugin entry path error (ENOTDIR): ./src/channel.js");
+  });
+
+  it("describes validation failures as boundary escape", () => {
+    const msg = describeBoundaryFileOpenFailure(
+      { ok: false, reason: "validation", error: new Error("outside root") },
+      "../escaped.js",
+    );
+    expect(msg).toContain("escapes plugin root");
+    expect(msg).toContain("../escaped.js");
+  });
+
+  it("describes io failures with the underlying error", () => {
+    const msg = describeBoundaryFileOpenFailure(
+      { ok: false, reason: "io", error: new Error("EACCES") },
+      "./src/entry.js",
+    );
+    expect(msg).toContain("I/O error");
+    expect(msg).toContain("./src/entry.js");
   });
 });
