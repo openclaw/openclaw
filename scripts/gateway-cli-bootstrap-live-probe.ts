@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { clearRuntimeConfigSnapshot, loadConfig } from "../src/config/config.js";
+import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../src/config/config.js";
 import { GatewayClient } from "../src/gateway/client.js";
 import { startGatewayServer } from "../src/gateway/server.js";
 import { extractPayloadText } from "../src/gateway/test-helpers.agent-results.js";
@@ -19,6 +19,12 @@ const DEFAULT_CLAUDE_ARGS = [
   "bypassPermissions",
 ];
 const DEFAULT_CLEAR_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"];
+const CLI_BOOTSTRAP_TIMEOUT_MS = 300_000;
+const GATEWAY_CONNECT_TIMEOUT_MS = 30_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
   const next = [...args];
@@ -32,8 +38,37 @@ function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[]
 }
 
 async function connectClient(params: { url: string; token: string }) {
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError: Error | null = null;
+
+  while (Date.now() - startedAt < GATEWAY_CONNECT_TIMEOUT_MS) {
+    attempt += 1;
+    const remainingMs = GATEWAY_CONNECT_TIMEOUT_MS - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    try {
+      return await connectClientOnce({
+        ...params,
+        timeoutMs: Math.min(remainingMs, 10_000),
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 2_000) {
+        throw lastError;
+      }
+      await sleep(Math.min(500 * attempt, 2_000));
+    }
+  }
+
+  throw lastError ?? new Error("gateway connect timeout");
+}
+
+async function connectClientOnce(params: { url: string; token: string; timeoutMs: number }) {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
+    let client: GatewayClient | undefined;
     const finish = (result: { client?: GatewayClient; error?: Error }) => {
       if (done) {
         return;
@@ -41,17 +76,22 @@ async function connectClient(params: { url: string; token: string }) {
       done = true;
       clearTimeout(connectTimeout);
       if (result.error) {
+        if (client) {
+          void client.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
+        }
         reject(result.error);
         return;
       }
       resolve(result.client as GatewayClient);
     };
-    const client = new GatewayClient({
+    client = new GatewayClient({
       url: params.url,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientVersion: "dev",
       mode: "test",
+      requestTimeoutMs: params.timeoutMs,
+      connectChallengeTimeoutMs: params.timeoutMs,
       onHelloOk: () => finish({ client }),
       onConnectError: (error) => finish({ error }),
       onClose: (code, reason) =>
@@ -59,11 +99,20 @@ async function connectClient(params: { url: string; token: string }) {
     });
     const connectTimeout = setTimeout(
       () => finish({ error: new Error("gateway connect timeout") }),
-      10_000,
+      params.timeoutMs,
     );
     connectTimeout.unref();
     client.start();
   });
+}
+
+function isRetryableGatewayConnectError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("gateway closed during connect (1000)") ||
+    message.includes("gateway connect timeout") ||
+    message.includes("gateway connect challenge timeout")
+  );
 }
 
 async function getFreeGatewayPort(): Promise<number> {
@@ -98,7 +147,7 @@ async function main() {
   await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), `${identitySecret}\n`);
   await fs.writeFile(path.join(workspaceDir, "USER.md"), `${userSecret}\n`);
 
-  const cfg = loadConfig();
+  const cfg: OpenClawConfig = {};
   const existingBackends = cfg.agents?.defaults?.cliBackends ?? {};
   const claudeBackend = existingBackends["claude-cli"] ?? {};
   const cliCommand =
@@ -166,7 +215,7 @@ async function main() {
         message: `BOOTSTRAP_CHECK ${randomUUID()}`,
         deliver: false,
       },
-      { expectFinal: true, timeoutMs: 60_000 },
+      { expectFinal: true, timeoutMs: CLI_BOOTSTRAP_TIMEOUT_MS },
     );
     const text = extractPayloadText(payload?.result);
     process.stdout.write(
