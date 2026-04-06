@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";
@@ -21,6 +22,12 @@ export function createScriptTestHarness() {
     return dir;
   }
 
+  async function createTempDirAsync(prefix: string): Promise<string> {
+    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  }
+
   function trackTempDir(dir: string): string {
     tempDirs.push(dir);
     return dir;
@@ -28,6 +35,7 @@ export function createScriptTestHarness() {
 
   return {
     createTempDir,
+    createTempDirAsync,
     trackTempDir,
   };
 }
