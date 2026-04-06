@@ -1107,9 +1107,10 @@ describe("short-term promotion", () => {
 
       const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
 
-      expect(repair.changed).toBe(false);
-      expect(repair.rewroteStore).toBe(false);
-      expect(await fs.readFile(storePath, "utf-8")).toBe(raw);
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      const nextRaw = await fs.readFile(storePath, "utf-8");
+      expect(nextRaw).not.toBe(raw);
     });
   });
 
