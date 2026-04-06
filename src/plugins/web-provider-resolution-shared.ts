@@ -154,8 +154,12 @@ export function buildWebProviderSnapshotCacheKey(params: {
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
-  envKey: Record<string, string>;
+  envKey: string | Record<string, string>;
 }): string {
+  const envKey =
+    typeof params.envKey === "string"
+      ? params.envKey
+      : Object.entries(params.envKey).toSorted(([left], [right]) => left.localeCompare(right));
   return JSON.stringify({
     workspaceDir: params.workspaceDir ?? "",
     bundledAllowlistCompat: params.bundledAllowlistCompat === true,
@@ -163,7 +167,7 @@ export function buildWebProviderSnapshotCacheKey(params: {
     onlyPluginIds: [...new Set(params.onlyPluginIds ?? [])].toSorted((left, right) =>
       left.localeCompare(right),
     ),
-    env: Object.entries(params.envKey).toSorted(([left], [right]) => left.localeCompare(right)),
+    env: envKey,
   });
 }
 
