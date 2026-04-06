@@ -17,6 +17,7 @@ import {
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { resolveNonCliModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
@@ -131,17 +132,22 @@ async function resolveRuntimeModel(params: {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 }> {
+  // Resolve CLI provider aliases before model lookup.
+  const cliResolved = resolveNonCliModelRef(
+    { provider: params.provider, model: params.model },
+    params.cfg,
+  );
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const model = resolveModelWithRegistry({
-    provider: params.provider,
-    modelId: params.model,
+    provider: cliResolved.provider,
+    modelId: cliResolved.model,
     modelRegistry,
     cfg: params.cfg,
   });
   if (!model) {
-    throw new Error(`Unknown model: ${params.provider}/${params.model}`);
+    throw new Error(`Unknown model: ${cliResolved.provider}/${cliResolved.model}`);
   }
 
   const authProfileId = await resolveSessionAuthProfileOverride({

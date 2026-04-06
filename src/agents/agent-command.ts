@@ -152,7 +152,6 @@ function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model")
   }
   return trimmed;
 }
-
 async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
   runtime: RuntimeEnv,

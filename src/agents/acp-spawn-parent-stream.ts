@@ -314,7 +314,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         (data as { delta?: unknown } | undefined)?.delta ??
         (data as { text?: unknown } | undefined)?.text;
       const delta = typeof deltaCandidate === "string" ? deltaCandidate : undefined;
-      if (!delta || !delta.trim()) {
+      if (!delta) {
         return;
       }
       logEvent("assistant_delta", { delta });

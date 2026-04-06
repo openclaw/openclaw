@@ -215,6 +215,22 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
 }
 
+function looksLikeCliStreamTranscript(raw: string): boolean {
+  if (!raw || raw.length < 100) {
+    return false;
+  }
+  if (!raw.includes('"type":"system"') || !raw.includes('"subtype":"init"')) {
+    return false;
+  }
+  return (
+    raw.includes('"type":"assistant"') ||
+    raw.includes('"type":"user"') ||
+    raw.includes('"type":"result"') ||
+    raw.includes('"session_id"') ||
+    raw.includes('"sessionId"')
+  );
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -227,6 +243,13 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   }
 
   if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
+  // Claude CLI can emit a whole prior session transcript on failure. Historical
+  // mentions of "Context overflow" inside that transcript are not a signal that
+  // the current attempt actually overflowed.
+  if (looksLikeCliStreamTranscript(errorMessage)) {
     return false;
   }
 
@@ -248,6 +271,8 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||
+    lower.includes("context overflow \u2014") || // claude-cli uses em-dash: "Context overflow — prompt too large"
+    lower.includes("context overflow --") || // ascii fallback variant
     lower.includes("exceed context limit") ||
     lower.includes("exceeds the model's maximum context") ||
     (lower.includes("max_tokens") && lower.includes("exceed") && lower.includes("context")) ||
@@ -291,6 +316,10 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   // "maximum token limit exceeded" that match the context overflow heuristic.
   // Billing is a more specific error class — exclude it early.
   if (isBillingErrorMessage(errorMessage)) {
+    return false;
+  }
+
+  if (looksLikeCliStreamTranscript(errorMessage)) {
     return false;
   }
 

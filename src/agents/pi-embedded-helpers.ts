@@ -4,10 +4,14 @@ export {
   DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
   DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
   ensureSessionHeader,
+  getBootstrapProfileConfig,
+  resolveBootstrapBudgetForModel,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
   stripThoughtSignatures,
+  type BootstrapProfile,
+  type BootstrapProfileConfig,
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
   BILLING_ERROR_USER_MESSAGE,

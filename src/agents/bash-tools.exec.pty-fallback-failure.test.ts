@@ -13,6 +13,7 @@ const makeSupervisor = () => {
     spawn: (...args: unknown[]) => supervisorSpawnMock(...args),
     cancel: noop,
     cancelScope: noop,
+    cancelSession: vi.fn(() => 0),
     reconcileOrphans: noop,
     getRecord: noop,
   };

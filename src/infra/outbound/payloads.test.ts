@@ -61,6 +61,10 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ).toEqual([]);
   });
 
+  it("drops standalone silent-token tail fragments without media", () => {
+    expect(normalizeReplyPayloadsForDelivery([{ text: "_REPLY" }])).toEqual([]);
+  });
+
   it("keeps JSON NO_REPLY objects that include extra fields", () => {
     expect(
       normalizeReplyPayloadsForDelivery([{ text: '{"action":"NO_REPLY","note":"example"}' }]),

@@ -141,6 +141,16 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses standalone silent-token tail fragments", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: "  _REPLY  " },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
   it("suppresses JSON NO_REPLY action payloads", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(

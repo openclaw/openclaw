@@ -4,6 +4,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
@@ -32,6 +33,7 @@ import {
 } from "./pi-tools.policy.js";
 import {
   assertRequiredParams,
+  createHostReadTool,
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
@@ -59,6 +61,8 @@ import {
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
+
+const piToolsLogger = createSubsystemLogger("pi-tools");
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -393,12 +397,15 @@ export function createOpenClawCodingTools(options?: {
   const fsConfig = resolveToolFsConfig({ cfg: options?.config, agentId });
   const fsPolicy = createToolFsPolicy({
     workspaceOnly: isMemoryFlushRun || fsConfig.workspaceOnly,
+    allowReadOutsideWorkspace: fsConfig.allowReadOutsideWorkspace,
   });
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = resolveWorkspaceRoot(options?.workspaceDir);
   const workspaceOnly = fsPolicy.workspaceOnly;
+  // allowReadOutsideWorkspace has no effect when workspaceOnly is active (workspaceOnly wins).
+  const allowReadOutsideWorkspace = !workspaceOnly && fsPolicy.allowReadOutsideWorkspace;
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
@@ -420,6 +427,7 @@ export function createOpenClawCodingTools(options?: {
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
       if (sandboxRoot) {
+        // Sandbox boundary takes precedence over allowReadOutsideWorkspace.
         const sandboxed = createSandboxedReadTool({
           root: sandboxRoot,
           bridge: sandboxFsBridge!,
@@ -434,11 +442,24 @@ export function createOpenClawCodingTools(options?: {
             : sandboxed,
         ];
       }
-      const freshReadTool = createReadTool(workspaceRoot);
-      const wrapped = createOpenClawReadTool(freshReadTool, {
+      const readToolOptions = {
         modelContextWindowTokens: options?.modelContextWindowTokens,
         imageSanitization,
-      });
+      };
+      if (allowReadOutsideWorkspace) {
+        // Unrestricted: bypass pi-coding-agent's internal root boundary entirely.
+        // tools.fs.allowReadOutsideWorkspace=true grants full host read access to the model.
+        piToolsLogger.warn(
+          "tools.fs.allowReadOutsideWorkspace is enabled — read tool has no workspace boundary",
+          {
+            agentId,
+            workspaceRoot,
+          },
+        );
+        return [createHostReadTool(workspaceRoot, readToolOptions)];
+      }
+      const freshReadTool = createReadTool(workspaceRoot);
+      const wrapped = createOpenClawReadTool(freshReadTool, readToolOptions);
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "bash" || tool.name === execToolName) {

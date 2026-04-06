@@ -5,6 +5,7 @@ import {
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
+import { isSilentReplyTailFragmentText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import {
   hasInteractiveReplyBlocks,
@@ -83,7 +84,10 @@ export function normalizeReplyPayloadsForDelivery(
       replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     };
-    if (parsed.isSilent && mergedMedia.length === 0) {
+    if (
+      (parsed.isSilent || isSilentReplyTailFragmentText(next.text, SILENT_REPLY_TOKEN)) &&
+      mergedMedia.length === 0
+    ) {
       continue;
     }
     if (!isRenderablePayload(next)) {

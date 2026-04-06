@@ -36,7 +36,7 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { normalizeProviderId, resolveNonCliModelRef } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
 import {
@@ -166,6 +166,13 @@ export async function runEmbeddedPiAgent(
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+
+      // Resolve CLI provider aliases (e.g. claude-cli/kimi → real provider/model)
+      // before the embedded runner tries to look up the model in the registry.
+      const resolvedCliRef = resolveNonCliModelRef({ provider, model: modelId }, params.config);
+      provider = resolvedCliRef.provider;
+      modelId = resolvedCliRef.model;
+
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured = hasConfiguredModelFallbacks({
         cfg: params.config,

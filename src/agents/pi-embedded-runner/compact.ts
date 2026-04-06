@@ -53,6 +53,7 @@ import {
   getApiKeyForModel,
   resolveModelAuthMode,
 } from "../model-auth.js";
+import { resolveNonCliModelRef } from "../model-selection.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -308,8 +309,16 @@ export async function compactEmbeddedPiSessionDirect(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const provider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
-  const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+  // Resolve CLI provider aliases before model lookup.
+  const cliResolved = resolveNonCliModelRef(
+    {
+      provider: resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER,
+      model: resolvedCompactionTarget.model ?? DEFAULT_MODEL,
+    },
+    params.config,
+  );
+  const provider = cliResolved.provider;
+  const modelId = cliResolved.model;
   const authProfileId = resolvedCompactionTarget.authProfileId;
   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
   const attemptedThinking = new Set<ThinkLevel>();

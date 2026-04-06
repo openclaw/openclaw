@@ -671,6 +671,37 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   } as const;
 }
 
+/** Unrestricted host read operations — no workspace boundary enforced. */
+function createHostReadOperations() {
+  return {
+    readFile: async (absolutePath: string) => {
+      const resolved = path.resolve(absolutePath);
+      return fs.readFile(resolved);
+    },
+    access: async (absolutePath: string) => {
+      const resolved = path.resolve(absolutePath);
+      await fs.access(resolved);
+    },
+    detectImageMimeType: async (absolutePath: string) => {
+      const resolved = path.resolve(absolutePath);
+      const buffer = await fs.readFile(resolved);
+      const mime = await detectMime({ buffer, filePath: absolutePath });
+      return mime && mime.startsWith("image/") ? mime : undefined;
+    },
+  } as const;
+}
+
+/**
+ * Create a host read tool with no workspace boundary restriction.
+ * Used when tools.fs.allowReadOutsideWorkspace is true.
+ */
+export function createHostReadTool(root: string, options?: OpenClawReadToolOptions): AnyAgentTool {
+  const base = createReadTool(root, {
+    operations: createHostReadOperations(),
+  }) as unknown as AnyAgentTool;
+  return createOpenClawReadTool(base, options);
+}
+
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return {
     mkdir: async (dir: string) => {

@@ -185,6 +185,8 @@ export async function resolveBootstrapContextForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  /** When provided, dynamically adjusts bootstrap budget based on model context window. */
+  contextWindowTokens?: number;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
@@ -192,7 +194,7 @@ export async function resolveBootstrapContextForRun(params: {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
     maxChars: resolveBootstrapMaxChars(params.config),
-    totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.contextWindowTokens),
     warn: params.warn,
   });
   return { bootstrapFiles, contextFiles };

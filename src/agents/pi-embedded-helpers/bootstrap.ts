@@ -104,12 +104,61 @@ export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
   return DEFAULT_BOOTSTRAP_MAX_CHARS;
 }
 
-export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
+export function resolveBootstrapTotalMaxChars(
+  cfg?: OpenClawConfig,
+  contextWindowTokens?: number,
+): number {
   const raw = cfg?.agents?.defaults?.bootstrapTotalMaxChars;
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }
+  if (typeof contextWindowTokens === "number" && contextWindowTokens > 0) {
+    return resolveBootstrapBudgetForModel(contextWindowTokens).totalMaxChars;
+  }
   return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+}
+
+// ── Bootstrap profiles ────────────────────────────────────────────────────────
+
+/** Controls how aggressively bootstrap content is trimmed for context overflow prevention. */
+export type BootstrapProfile = "normal" | "reduced" | "minimal";
+
+export type BootstrapProfileConfig = {
+  maxCharsPerFile: number;
+  totalMaxChars: number;
+};
+
+const BOOTSTRAP_PROFILE_CONFIGS: Record<BootstrapProfile, BootstrapProfileConfig> = {
+  normal: {
+    maxCharsPerFile: DEFAULT_BOOTSTRAP_MAX_CHARS,
+    totalMaxChars: DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  },
+  reduced: { maxCharsPerFile: 10_000, totalMaxChars: 50_000 },
+  minimal: { maxCharsPerFile: 5_000, totalMaxChars: 20_000 },
+};
+
+/** Returns the character budget limits for a given bootstrap profile. */
+export function getBootstrapProfileConfig(profile: BootstrapProfile): BootstrapProfileConfig {
+  return BOOTSTRAP_PROFILE_CONFIGS[profile];
+}
+
+/**
+ * Layer 3: Calculates a dynamic bootstrap budget based on the model's context window.
+ * Reserves 30% (minimum 30K tokens) for output and tool calls.
+ */
+export function resolveBootstrapBudgetForModel(
+  contextWindowTokens: number,
+): BootstrapProfileConfig {
+  const reserve = Math.max(contextWindowTokens * 0.3, 30_000);
+  const available = contextWindowTokens - reserve;
+  const bootstrapTotalMaxChars = Math.min(
+    DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+    Math.max(20_000, Math.floor(available * 4)),
+  );
+  return {
+    maxCharsPerFile: DEFAULT_BOOTSTRAP_MAX_CHARS,
+    totalMaxChars: bootstrapTotalMaxChars,
+  };
 }
 
 export function resolveBootstrapPromptTruncationWarningMode(

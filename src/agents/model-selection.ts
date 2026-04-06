@@ -27,6 +27,30 @@ import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalizat
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
 
+type CliBackendRuntimeModule = typeof import("../plugins/cli-backends.runtime.js");
+
+const CLI_BACKEND_RUNTIME_CANDIDATES = [
+  "../plugins/cli-backends.runtime.js",
+  "../plugins/cli-backends.runtime.ts",
+] as const;
+
+let cliBackendRuntimeModule: CliBackendRuntimeModule | undefined;
+
+function loadCliBackendRuntime(): CliBackendRuntimeModule | null {
+  if (cliBackendRuntimeModule) {
+    return cliBackendRuntimeModule;
+  }
+  for (const candidate of CLI_BACKEND_RUNTIME_CANDIDATES) {
+    try {
+      cliBackendRuntimeModule = require(candidate) as CliBackendRuntimeModule;
+      return cliBackendRuntimeModule;
+    } catch {
+      // Try source/runtime candidates in order.
+    }
+  }
+  return null;
+}
+
 function getLog(): ReturnType<typeof createSubsystemLogger> {
   log ??= createSubsystemLogger("model-selection");
   return log;
@@ -85,6 +109,19 @@ export {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 };
+
+export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "claude-cli" || normalized === "codex-cli") {
+    return true;
+  }
+  const cliBackends = loadCliBackendRuntime()?.resolveRuntimeCliBackends() ?? [];
+  if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
+    return true;
+  }
+  const backends = cfg?.agents?.defaults?.cliBackends ?? {};
+  return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
+}
 
 function normalizeProviderModelId(provider: string, model: string): string {
   const staticModelId = normalizeStaticProviderModelId(provider, model);
@@ -391,6 +428,42 @@ export function resolveConfiguredModelRef(params: {
     return fallbackProvider;
   }
   return { provider: params.defaultProvider, model: params.defaultModel };
+}
+
+/**
+ * Resolve a ModelRef that may point to a CLI provider (claude-cli, codex-cli,
+ * or a custom cliBackend) to a real API provider.
+ *
+ * - Non-CLI providers are returned as-is.
+ * - `claude-cli` maps to `anthropic`; `codex-cli` maps to `openai`.
+ * - Unknown custom CLI backends fall back to DEFAULT_PROVIDER.
+ * - The model string is resolved through the alias index for the target provider.
+ */
+export function resolveNonCliModelRef(ref: ModelRef, cfg?: OpenClawConfig): ModelRef {
+  if (!isCliProvider(ref.provider, cfg)) {
+    return ref;
+  }
+
+  const normalized = normalizeProviderId(ref.provider);
+  let realProvider: string;
+  if (normalized === "claude-cli") {
+    realProvider = "anthropic";
+  } else if (normalized === "codex-cli") {
+    realProvider = "openai";
+  } else {
+    realProvider = DEFAULT_PROVIDER;
+  }
+
+  if (cfg) {
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: realProvider });
+    const aliasKey = normalizeAliasKey(ref.model);
+    const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+    if (aliasMatch) {
+      return aliasMatch.ref;
+    }
+  }
+
+  return { provider: realProvider, model: ref.model };
 }
 
 export function resolveDefaultModelForAgent(params: {

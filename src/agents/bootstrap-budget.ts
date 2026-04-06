@@ -2,6 +2,8 @@ import path from "node:path";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
+export type { BootstrapProfile, BootstrapProfileConfig } from "./pi-embedded-helpers.js";
+
 export const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
 export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
 export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;

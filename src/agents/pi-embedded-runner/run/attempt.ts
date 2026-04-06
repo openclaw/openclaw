@@ -108,6 +108,7 @@ import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { registerLiveSessionTranscript } from "../live-session-registry.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
@@ -201,7 +202,8 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
-import { detectAndLoadPromptImages } from "./images.js";
+import { shouldUseImagePreAnalysis, analyzeImagesWithImageModel } from "./image-pre-analysis.js";
+import { detectAndLoadPromptImages, modelSupportsImages } from "./images.js";
 import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -772,6 +774,7 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
+    let unregisterLiveSessionTranscript: (() => void) | undefined;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -923,6 +926,11 @@ export async function runEmbeddedAttempt(
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
+      unregisterLiveSessionTranscript = registerLiveSessionTranscript({
+        sessionKey: sandboxSessionKey,
+        sessionId: activeSession.sessionId,
+        sessionReader: sessionManager,
+      });
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(
@@ -1746,7 +1754,65 @@ export async function runEmbeddedAttempt(
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            const mainModelSupportsImages = modelSupportsImages(params.model);
+            const usePreAnalysis = shouldUseImagePreAnalysis({ config: params.config });
+
+            if (usePreAnalysis) {
+              // Pre-analyze images with imageModel, then pass text analysis to main model
+              log.debug(`Image pre-analysis: using configured imageModel for image analysis`);
+              try {
+                const preAnalysis = await analyzeImagesWithImageModel({
+                  images: imageResult.images,
+                  config: params.config,
+                  agentDir: params.agentDir ?? "",
+                  userPrompt: effectivePrompt,
+                });
+                if (preAnalysis.successfulImageCount > 0 && preAnalysis.analysisText) {
+                  log.debug(
+                    `Image pre-analysis: analyzed ${preAnalysis.imageCount} image(s) with ${preAnalysis.provider}/${preAnalysis.model}`,
+                  );
+                  const promptWithAnalysis = effectivePrompt + preAnalysis.analysisText;
+                  await abortable(activeSession.prompt(promptWithAnalysis));
+                } else {
+                  // No successful analysis produced, fall back to main model with images if supported.
+                  if (mainModelSupportsImages) {
+                    log.debug(
+                      `Image pre-analysis: no successful analyses, falling back to main model with images`,
+                    );
+                    await abortable(
+                      activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                    );
+                  } else {
+                    await abortable(activeSession.prompt(effectivePrompt));
+                  }
+                }
+              } catch (preAnalysisErr) {
+                log.warn(
+                  `Image pre-analysis failed: ${preAnalysisErr instanceof Error ? preAnalysisErr.message : String(preAnalysisErr)}`,
+                );
+                // Fall back to main model with images if supported
+                if (mainModelSupportsImages) {
+                  log.debug(`Image pre-analysis: failed, falling back to main model with images`);
+                  await abortable(
+                    activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                  );
+                } else {
+                  await abortable(activeSession.prompt(effectivePrompt));
+                }
+              }
+            } else {
+              // No imageModel configured, use main model directly
+              if (mainModelSupportsImages) {
+                await abortable(
+                  activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+                );
+              } else {
+                log.debug(
+                  `Image pre-analysis: no imageModel configured and main model doesn't support images, ignoring images`,
+                );
+                await abortable(activeSession.prompt(effectivePrompt));
+              }
+            }
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
@@ -2009,6 +2075,7 @@ export async function runEmbeddedAttempt(
         if (params.replyOperation) {
           params.replyOperation.detachBackend(queueHandle);
         }
+        unregisterLiveSessionTranscript?.();
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }

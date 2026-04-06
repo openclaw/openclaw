@@ -213,7 +213,9 @@ function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
-          "- For `action=send`, include `to` and `message`.",
+          "- Prefer `target` for routing. `to` is a legacy alias; do not rely on it.",
+          "- For `action=send`, include `target` and `message`.",
+          "- For `action=read`, provide a concrete `messageId` when reading a specific message. Include `target` when the action is channel-scoped.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled

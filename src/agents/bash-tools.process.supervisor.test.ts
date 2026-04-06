@@ -5,6 +5,7 @@ const { supervisorMock } = vi.hoisted(() => ({
     spawn: vi.fn(),
     cancel: vi.fn(),
     cancelScope: vi.fn(),
+    cancelSession: vi.fn(() => 0),
     reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   },
