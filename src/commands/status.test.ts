@@ -284,6 +284,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../channels/config-presence.js", () => ({
   hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  hasMeaningfulChannelConfig: (entry: unknown) =>
+    Boolean(
+      entry && typeof entry === "object" && Object.keys(entry as Record<string, unknown>).length,
+    ),
   listPotentialConfiguredChannelIds: (cfg: { channels?: Record<string, unknown> }) =>
     Object.keys(cfg.channels ?? {}).filter((key) => key !== "defaults" && key !== "modelByChannel"),
 }));
