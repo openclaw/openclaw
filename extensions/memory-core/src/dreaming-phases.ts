@@ -86,6 +86,18 @@ const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
+const MANAGED_DAILY_DREAMING_BLOCKS = [
+  {
+    heading: "## Light Sleep",
+    startMarker: "<!-- openclaw:dreaming:light:start -->",
+    endMarker: "<!-- openclaw:dreaming:light:end -->",
+  },
+  {
+    heading: "## REM Sleep",
+    startMarker: "<!-- openclaw:dreaming:rem:start -->",
+    endMarker: "<!-- openclaw:dreaming:rem:end -->",
+  },
+] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -107,6 +119,10 @@ function formatErrorMessage(err: unknown): string {
     return err.message;
   }
   return String(err);
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function buildCronDescription(params: {
@@ -476,6 +492,23 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
   return chunks.slice(0, limit);
 }
 
+function blankNonNewlineCharacters(value: string): string {
+  return value.replace(/[^\n]/g, "");
+}
+
+function stripManagedDailyDreamingBlocks(raw: string): string {
+  let sanitized = raw;
+  for (const block of MANAGED_DAILY_DREAMING_BLOCKS) {
+    const pattern = new RegExp(
+      `${escapeRegex(block.heading)}\\n${escapeRegex(block.startMarker)}[\\s\\S]*?${escapeRegex(block.endMarker)}(?:\\n|$)?`,
+      "g",
+    );
+    // Preserve line numbers so evidence coordinates remain stable for later notes.
+    sanitized = sanitized.replace(pattern, (match) => blankNonNewlineCharacters(match));
+  }
+  return sanitized;
+}
+
 function entryWithinLookback(entry: ShortTermRecallEntry, cutoffMs: number): boolean {
   const byDay = (entry.recallDays ?? []).some((day) => isDayWithinLookback(day, cutoffMs));
   if (byDay) {
@@ -640,7 +673,7 @@ async function collectDailyIngestionBatches(params: {
     if (!raw) {
       continue;
     }
-    const lines = raw.split(/\r?\n/);
+    const lines = stripManagedDailyDreamingBlocks(raw).split(/\r?\n/);
     const chunks = buildDailySnippetChunks(lines, perFileCap);
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {

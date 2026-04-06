@@ -56,6 +56,76 @@ function createHarness(config: OpenClawConfig, workspaceDir?: string) {
 }
 
 describe("memory-core dreaming phases", () => {
+  it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      ["# 2026-04-05", "", "- Move backups to S3 Glacier.", "- Keep retention at 365 days."].join(
+        "\n",
+      ),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    const candidateCounts: number[] = [];
+    const candidateSnippets: string[][] = [];
+    for (let run = 0; run < 3; run += 1) {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+
+      const candidates = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse(`2026-04-05T10:0${run + 1}:00.000Z`),
+      });
+      candidateCounts.push(candidates.length);
+      candidateSnippets.push(candidates.map((candidate) => candidate.snippet));
+    }
+
+    expect(candidateCounts).toEqual([1, 1, 1]);
+    expect(candidateSnippets).toEqual([
+      ["Move backups to S3 Glacier.; Keep retention at 365 days."],
+      ["Move backups to S3 Glacier.; Keep retention at 365 days."],
+      ["Move backups to S3 Glacier.; Keep retention at 365 days."],
+    ]);
+
+    const dailyContent = await fs.readFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      "utf-8",
+    );
+    expect(dailyContent).toContain("## Light Sleep");
+    expect(dailyContent.match(/^- Candidate:/gm)).toHaveLength(1);
+    expect(dailyContent).not.toContain("Light Sleep: Candidate:");
+  });
+
   it("checkpoints daily ingestion and skips unchanged daily files", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
