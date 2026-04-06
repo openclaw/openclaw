@@ -361,6 +361,9 @@ export const VoiceCallConfigSchema = z
     /** Store path for call logs */
     store: z.string().optional(),
 
+    /** Agent ID to use for voice call sessions. Defaults to the default agent. */
+    agent: z.string().optional(),
+
     /** Optional model override for generating voice responses. */
     responseModel: z.string().optional(),
 
