@@ -2,6 +2,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { isRecord } from "../utils.js";
 import type { BundleMcpConfig } from "./bundle-mcp.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import type { OpenClawPluginMcpServerConfig } from "./types.js";
@@ -14,12 +15,42 @@ type PluginMcpServerConfigNormalizationResult =
   | { ok: true; server: OpenClawPluginMcpServerConfig }
   | { ok: false; error: string };
 
-function isPluginEnabledByConfig(pluginId: string, cfg?: OpenClawConfig): boolean {
-  const entry = cfg?.plugins?.entries?.[pluginId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+function isPluginEnabledByConfig(
+  plugin: PluginRegistry["plugins"][number],
+  cfg?: OpenClawConfig,
+): boolean {
+  if (!cfg?.plugins) {
     return true;
   }
-  return (entry as { enabled?: unknown }).enabled !== false;
+
+  const normalizedPlugins = normalizePluginsConfig(cfg.plugins);
+  if (!normalizedPlugins.enabled) {
+    return false;
+  }
+
+  if (normalizedPlugins.deny.includes(plugin.id)) {
+    return false;
+  }
+
+  const entry = normalizedPlugins.entries[plugin.id];
+  if (entry?.enabled === false) {
+    return false;
+  }
+
+  // The registry already reflects the active plugin set for this runtime. Only
+  // re-apply activation when config carries an explicit selection surface that
+  // can narrow or widen that set, such as allowlists or an explicit per-plugin
+  // enable override.
+  if (normalizedPlugins.allow.length === 0 && entry?.enabled !== true) {
+    return true;
+  }
+
+  return resolveEffectivePluginActivationState({
+    id: plugin.id,
+    origin: plugin.origin,
+    config: normalizedPlugins,
+    rootConfig: cfg,
+  }).activated;
 }
 
 function isWorkspaceMatch(params: { workspaceDir?: string; activeWorkspaceDir?: string }): boolean {
@@ -118,7 +149,7 @@ export function loadEnabledPluginMcpServerConfig(params?: {
         (plugin) =>
           plugin.enabled &&
           plugin.status === "loaded" &&
-          isPluginEnabledByConfig(plugin.id, params?.cfg),
+          isPluginEnabledByConfig(plugin, params?.cfg),
       )
       .map((plugin) => plugin.id),
   );

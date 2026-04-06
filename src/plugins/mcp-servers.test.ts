@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadEnabledPluginMcpServerConfig,
   normalizePluginRegisteredMcpServerConfig,
@@ -6,6 +6,10 @@ import {
 import { createEmptyPluginRegistry } from "./registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
+
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -168,6 +172,98 @@ describe("loadEnabledPluginMcpServerConfig", () => {
                 enabled: false,
               },
             },
+          },
+        },
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {},
+      },
+    });
+  });
+
+  it("honors plugins.allow allowlists from runtime config", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));
+    registry.mcpServers.push({
+      pluginId: "plugin-a",
+      name: "helloWorld",
+      server: { command: "node", args: ["hello.mjs"] },
+      source: "/tmp/plugin-a/index.cjs",
+      rootDir: "/tmp/plugin-a",
+    });
+    setActivePluginRegistry(registry, "mcp-server-test", "default", "/tmp/workspace-a");
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        workspaceDir: "/tmp/workspace-a",
+        cfg: {
+          plugins: {
+            allow: ["plugin-b"],
+          },
+        },
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {},
+      },
+    });
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        workspaceDir: "/tmp/workspace-a",
+        cfg: {
+          plugins: {
+            allow: ["plugin-a"],
+          },
+        },
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {
+          helloWorld: {
+            command: "node",
+            args: ["hello.mjs"],
+            cwd: "/tmp/plugin-a",
+          },
+        },
+      },
+    });
+  });
+
+  it("honors plugins.deny and plugins.enabled=false from runtime config", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));
+    registry.mcpServers.push({
+      pluginId: "plugin-a",
+      name: "helloWorld",
+      server: { command: "node", args: ["hello.mjs"] },
+      source: "/tmp/plugin-a/index.cjs",
+      rootDir: "/tmp/plugin-a",
+    });
+    setActivePluginRegistry(registry, "mcp-server-test", "default", "/tmp/workspace-a");
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        workspaceDir: "/tmp/workspace-a",
+        cfg: {
+          plugins: {
+            deny: ["plugin-a"],
+          },
+        },
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {},
+      },
+    });
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        workspaceDir: "/tmp/workspace-a",
+        cfg: {
+          plugins: {
+            enabled: false,
           },
         },
       }),
