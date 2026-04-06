@@ -102,6 +102,7 @@ function toJsonLike(value: unknown, seen = new WeakSet<object>()): JsonLike {
       return jsonObject;
     }
   }
+  return null;
 }
 
 function buildApprovalWaitState(envelope: Extract<LobsterEnvelope, { ok: true }>): JsonLike {
