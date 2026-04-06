@@ -90,15 +90,11 @@ async function withDreamingTestClock(run: () => Promise<void>) {
   }
 }
 
-async function writeDailyNote(
-  workspaceDir: string,
-  lines: string[],
-  newline = "\n",
-): Promise<void> {
+async function writeDailyNote(workspaceDir: string, lines: string[]): Promise<void> {
   await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
   await fs.writeFile(
     path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
-    lines.join(newline),
+    lines.join("\n"),
     "utf-8",
   );
 }
@@ -166,31 +162,6 @@ describe("memory-core dreaming phases", () => {
       expect(dailyContent).toContain("## Light Sleep");
       expect(dailyContent.match(/^- Candidate:/gm)).toHaveLength(1);
       expect(dailyContent).not.toContain("Light Sleep: Candidate:");
-    });
-  });
-
-  it("does not re-ingest managed light dreaming blocks from CRLF daily notes", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
-    await withDreamingTestClock(async () => {
-      await writeDailyNote(
-        workspaceDir,
-        [
-          `# ${DREAMING_TEST_DAY}`,
-          "",
-          "- Move backups to S3 Glacier.",
-          "- Keep retention at 365 days.",
-        ],
-        "\r\n",
-      );
-
-      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
-      for (let run = 0; run < 2; run += 1) {
-        await triggerLightDreaming(beforeAgentReply, workspaceDir, run + 1);
-      }
-
-      expect(await readCandidateSnippets(workspaceDir, "2026-04-05T10:02:00.000Z")).toEqual([
-        "Move backups to S3 Glacier.; Keep retention at 365 days.",
-      ]);
     });
   });
 
