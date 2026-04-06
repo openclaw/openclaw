@@ -296,6 +296,15 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /**
+   * Allow the read tool to access files outside the agent workspace directory when using
+   * direct API backends (non-claude-cli). By default, relative paths resolve against
+   * workspaceDir and the workspace-root guard blocks paths that escape it. Set to `true`
+   * when agents need to read shared files outside their workspace (e.g. ~/AgentData/shared/).
+   * Has no effect when workspaceOnly is true (workspaceOnly takes precedence).
+   * Has no effect when a container sandbox is active (sandbox boundary takes precedence).
+   */
+  allowReadOutsideWorkspace?: boolean;
 };
 
 export type AgentToolsConfig = {

@@ -52,4 +52,35 @@ describe("hook-runner-global", () => {
 
     await expectGlobalRunnerState({ hasRunner: false });
   });
+
+  it("carries forward hooks from the previous registry when the new one lacks them", async () => {
+    const mod = await importHookRunnerGlobalModule();
+    const handler = vi.fn();
+    const oldRegistry = createMockPluginRegistry([{ hookName: "message_received", handler }]);
+    mod.initializeGlobalHookRunner(oldRegistry);
+    expect(mod.getGlobalHookRunner()?.hasHooks("message_received")).toBe(true);
+
+    // Simulate a late plugin reload that produces a registry without the hook.
+    const newRegistry = createMockPluginRegistry([]);
+    // Give the new registry a different plugin id so it's clearly distinct.
+    newRegistry.plugins = [{ ...newRegistry.plugins[0], id: "other-plugin" }];
+    newRegistry.typedHooks = [];
+    mod.initializeGlobalHookRunner(newRegistry);
+
+    // The message_received hook from the old registry must survive.
+    expect(mod.getGlobalHookRunner()?.hasHooks("message_received")).toBe(true);
+  });
+
+  it("does not duplicate hooks when the new registry already contains the same plugin", async () => {
+    const mod = await importHookRunnerGlobalModule();
+    const handler = vi.fn();
+    const registry1 = createMockPluginRegistry([{ hookName: "message_received", handler }]);
+    mod.initializeGlobalHookRunner(registry1);
+
+    // Re-initialize with a registry that has the same plugin id's hooks.
+    const registry2 = createMockPluginRegistry([{ hookName: "message_received", handler }]);
+    mod.initializeGlobalHookRunner(registry2);
+
+    expect(mod.getGlobalHookRunner()?.getHookCount("message_received")).toBe(1);
+  });
 });

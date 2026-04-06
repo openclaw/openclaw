@@ -2,6 +2,7 @@ export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
 const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
+const SESSION_PROMPT_FILE_SUFFIX = ".claude-system-prompt.txt";
 
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
   const marker = `.${reason}.`;
@@ -32,6 +33,19 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
     return false;
   }
   return !isSessionArchiveArtifactName(fileName);
+}
+
+export function isPrimarySessionPromptFileName(fileName: string): boolean {
+  return fileName.endsWith(SESSION_PROMPT_FILE_SUFFIX);
+}
+
+export function resolveSessionPromptFileNameFromTranscriptFileName(
+  fileName: string,
+): string | null {
+  if (!isPrimarySessionTranscriptFileName(fileName)) {
+    return null;
+  }
+  return `${fileName.slice(0, -".jsonl".length)}${SESSION_PROMPT_FILE_SUFFIX}`;
 }
 
 export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {

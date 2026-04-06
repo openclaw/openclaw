@@ -57,6 +57,15 @@ function collectActionMediaSources(params: Record<string, unknown>): string[] {
   return sources;
 }
 
+function isCancelledPluginActionPayload(payload: unknown): boolean {
+  return Boolean(
+    payload &&
+    typeof payload === "object" &&
+    "cancelled" in payload &&
+    (payload as { cancelled?: unknown }).cancelled === true,
+  );
+}
+
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
   action: "send" | "poll";
@@ -88,10 +97,13 @@ async function tryHandleWithPluginAction(params: {
   if (!handled) {
     return null;
   }
-  await params.onHandled?.();
+  const payload = extractToolPayload(handled);
+  if (!isCancelledPluginActionPayload(payload)) {
+    await params.onHandled?.();
+  }
   return {
     handledBy: "plugin",
-    payload: extractToolPayload(handled),
+    payload,
     toolResult: handled,
   };
 }

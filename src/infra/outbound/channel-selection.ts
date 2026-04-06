@@ -158,10 +158,7 @@ export async function resolveMessageChannelSelection(params: {
       value: normalized,
     });
     if (!availableExplicit) {
-      const fallback = resolveAvailableKnownChannel({
-        cfg: params.cfg,
-        value: params.fallbackChannel,
-      });
+      const fallback = resolveKnownChannel(params.fallbackChannel);
       if (fallback) {
         return {
           channel: fallback,
@@ -181,10 +178,7 @@ export async function resolveMessageChannelSelection(params: {
     };
   }
 
-  const fallback = resolveAvailableKnownChannel({
-    cfg: params.cfg,
-    value: params.fallbackChannel,
-  });
+  const fallback = resolveKnownChannel(params.fallbackChannel);
   if (fallback) {
     return {
       channel: fallback,

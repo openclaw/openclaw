@@ -46,6 +46,92 @@ export type AgentContextPruningConfig = {
   };
 };
 
+export type CliBackendConfig = {
+  /** CLI command to execute (absolute path or on PATH). */
+  command: string;
+  /** Base args applied to every invocation. */
+  args?: string[];
+  /** Output parsing mode (default: json). */
+  output?: "json" | "text" | "jsonl" | "stream-json";
+  /** Output parsing mode when resuming a CLI session. */
+  resumeOutput?: "json" | "text" | "jsonl" | "stream-json";
+  /** Prompt input mode (default: arg). */
+  input?: "arg" | "stdin";
+  /** Max prompt length for arg mode (if exceeded, stdin is used). */
+  maxPromptArgChars?: number;
+  /** Extra env vars injected for this CLI. */
+  env?: Record<string, string>;
+  /** Env vars to remove before launching this CLI. */
+  clearEnv?: string[];
+  /** Flag used to pass model id (e.g. --model). */
+  modelArg?: string;
+  /** Model aliases mapping (config model id → CLI model id). */
+  modelAliases?: Record<string, string>;
+  /** Flag used to pass session id (e.g. --session-id). */
+  sessionArg?: string;
+  /** Extra args used when resuming a session (use {sessionId} placeholder). */
+  sessionArgs?: string[];
+  /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
+  resumeArgs?: string[];
+  /** When to pass session ids. */
+  sessionMode?: "always" | "existing" | "none";
+  /** JSON fields to read session id from (in order). */
+  sessionIdFields?: string[];
+  /** Flag used to pass system prompt. */
+  systemPromptArg?: string;
+  /** System prompt behavior (append vs replace). */
+  systemPromptMode?: "append" | "replace";
+  /** When to send system prompt. */
+  systemPromptWhen?: "first" | "always" | "never";
+  /** Flag used to pass image paths. */
+  imageArg?: string;
+  /** How to pass multiple images. */
+  imageMode?: "repeat" | "list";
+  /** Serialize runs for this CLI. */
+  serialize?: boolean;
+  /** Runtime reliability tuning for this backend's process lifecycle. */
+  reliability?: {
+    /** No-output watchdog tuning (fresh vs resumed runs). */
+    watchdog?: {
+      /** Fresh/new sessions (non-resume). */
+      fresh?: {
+        /** Fixed watchdog timeout in ms (overrides ratio when set). */
+        noOutputTimeoutMs?: number;
+        /** Fraction of overall timeout used when fixed timeout is not set. */
+        noOutputTimeoutRatio?: number;
+        /** Lower bound for computed watchdog timeout. */
+        minMs?: number;
+        /** Upper bound for computed watchdog timeout. */
+        maxMs?: number;
+      };
+      /** Resume sessions. */
+      resume?: {
+        /** Fixed watchdog timeout in ms (overrides ratio when set). */
+        noOutputTimeoutMs?: number;
+        /** Fraction of overall timeout used when fixed timeout is not set. */
+        noOutputTimeoutRatio?: number;
+        /** Lower bound for computed watchdog timeout. */
+        minMs?: number;
+        /** Upper bound for computed watchdog timeout. */
+        maxMs?: number;
+      };
+    };
+  };
+  /** MCP wiring controls (primarily for Claude CLI backends). */
+  mcp?: {
+    /** Enable MCP config injection for this backend (default: true for claude-cli). */
+    enabled?: boolean;
+    /** Add `--strict-mcp-config` when true (default: true). */
+    strict?: boolean;
+    /** Optional primary MCP config path (merged with OpenClaw MCP server when provided). */
+    configPath?: string;
+    /** Optional extra MCP config path whose servers are merged into the effective config. */
+    mergeConfigPath?: string;
+    /** Optional inline MCP servers merged into the effective config. */
+    servers?: Record<string, unknown>;
+  };
+};
+
 export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
@@ -118,6 +204,8 @@ export type AgentDefaultsConfig = {
   llm?: AgentLlmConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Per-CLI-backend configuration overrides keyed by provider id. */
+  cliBackends?: Record<string, CliBackendConfig>;
   /** Embedded Pi runner hardening and compatibility controls. */
   embeddedPi?: {
     /**

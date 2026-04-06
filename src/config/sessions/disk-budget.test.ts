@@ -92,4 +92,46 @@ describe("enforceSessionDiskBudget", () => {
       }),
     );
   });
+
+  it("removes orphaned session prompt files alongside transcript cleanup", async () => {
+    const dir = await createCaseDir("openclaw-disk-budget-");
+    const storePath = path.join(dir, "sessions.json");
+    const activeSessionId = "keep";
+    const staleSessionId = "stale";
+    const activeTranscriptPath = path.join(dir, `${activeSessionId}.jsonl`);
+    const activePromptPath = path.join(dir, `${activeSessionId}.claude-system-prompt.txt`);
+    const staleTranscriptPath = path.join(dir, `${staleSessionId}.jsonl`);
+    const stalePromptPath = path.join(dir, `${staleSessionId}.claude-system-prompt.txt`);
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: activeSessionId,
+        updatedAt: Date.now(),
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(activeTranscriptPath, "keep".repeat(8), "utf-8");
+    await fs.writeFile(activePromptPath, "prompt".repeat(6), "utf-8");
+    await fs.writeFile(staleTranscriptPath, "stale".repeat(120), "utf-8");
+    await fs.writeFile(stalePromptPath, "prompt".repeat(120), "utf-8");
+
+    const result = await enforceSessionDiskBudget({
+      store,
+      storePath,
+      maintenance: {
+        maxDiskBytes: 900,
+        highWaterBytes: 500,
+      },
+      warnOnly: false,
+    });
+
+    await expect(fs.stat(activeTranscriptPath)).resolves.toBeDefined();
+    await expect(fs.stat(activePromptPath)).resolves.toBeDefined();
+    await expect(fs.stat(staleTranscriptPath)).rejects.toThrow();
+    await expect(fs.stat(stalePromptPath)).rejects.toThrow();
+    expect(result).toEqual(
+      expect.objectContaining({
+        removedFiles: 2,
+      }),
+    );
+  });
 });

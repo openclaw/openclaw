@@ -981,7 +981,7 @@ describe("patchChannelConfigForAccount", () => {
           botToken: "legacy-token",
           allowFrom: ["100"],
           groupPolicy: "allowlist",
-          streaming: "partial",
+          streaming: { mode: "partial" },
         },
       },
     };

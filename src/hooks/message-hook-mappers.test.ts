@@ -248,6 +248,7 @@ describe("message hook mappers", () => {
       to: "demo-chat:chat:456",
       content: "reply",
       success: false,
+      messageId: "out-1",
       error: "network error",
     });
     expect(toInternalMessageSentContext(canonical)).toEqual({

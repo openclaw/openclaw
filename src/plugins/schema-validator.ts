@@ -1,9 +1,8 @@
-import { createRequire } from "node:module";
+import Ajv from "ajv";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
-const require = createRequire(import.meta.url);
 type AjvLike = {
   addFormat: (
     name: string,
@@ -23,11 +22,7 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
   if (cached) {
     return cached;
   }
-  const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
-  const AjvCtor =
-    typeof ajvModule.default === "function"
-      ? ajvModule.default
-      : (ajvModule as unknown as new (opts?: object) => AjvLike);
+  const AjvCtor = Ajv as unknown as new (opts?: object) => AjvLike;
   const instance = new AjvCtor({
     allErrors: true,
     strict: false,

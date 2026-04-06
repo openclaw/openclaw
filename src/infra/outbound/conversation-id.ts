@@ -7,7 +7,7 @@ function normalizeConversationId(value: unknown): string | undefined {
 }
 
 function resolveExplicitConversationTargetId(target: string): string | undefined {
-  for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:"]) {
+  for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:", "chat:"]) {
     if (target.toLowerCase().startsWith(prefix)) {
       return normalizeConversationId(target.slice(prefix.length));
     }

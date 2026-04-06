@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isPrimarySessionTranscriptFileName, isSessionArchiveArtifactName } from "./artifacts.js";
+import {
+  isPrimarySessionPromptFileName,
+  isPrimarySessionTranscriptFileName,
+  isSessionArchiveArtifactName,
+  resolveSessionPromptFileNameFromTranscriptFileName,
+} from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import type { SessionEntry } from "./types.js";
 
@@ -128,6 +133,45 @@ function resolveReferencedSessionTranscriptPaths(params: {
   return referenced;
 }
 
+function resolveReferencedSessionPromptPaths(params: {
+  sessionsDir: string;
+  store: Record<string, SessionEntry>;
+}): Set<string> {
+  const referenced = new Set<string>();
+  const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
+  for (const entry of Object.values(params.store)) {
+    const transcriptPath = resolveSessionTranscriptPathForEntry({
+      sessionsDir: params.sessionsDir,
+      entry,
+    });
+    if (transcriptPath) {
+      const promptFileName = resolveSessionPromptFileNameFromTranscriptFileName(
+        path.basename(transcriptPath),
+      );
+      if (promptFileName) {
+        referenced.add(
+          canonicalizePathForComparison(path.join(params.sessionsDir, promptFileName)),
+        );
+      }
+    }
+    const promptPath = entry.cliSessionBindings
+      ? Object.values(entry.cliSessionBindings)
+          .map((binding) => binding.systemPromptFile?.trim())
+          .find(Boolean)
+      : undefined;
+    if (!promptPath) {
+      continue;
+    }
+    const canonicalPath = canonicalizePathForComparison(promptPath);
+    const relative = path.relative(resolvedSessionsDir, canonicalPath);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      continue;
+    }
+    referenced.add(canonicalPath);
+  }
+  return referenced;
+}
+
 async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
@@ -251,11 +295,18 @@ export async function enforceSessionDiskBudget(params: {
     sessionsDir,
     store: params.store,
   });
+  const referencedPromptPaths = resolveReferencedSessionPromptPaths({
+    sessionsDir,
+    store: params.store,
+  });
   const removableFileQueue = files
     .filter(
       (file) =>
         isSessionArchiveArtifactName(file.name) ||
-        (isPrimarySessionTranscriptFileName(file.name) && !referencedPaths.has(file.canonicalPath)),
+        (isPrimarySessionTranscriptFileName(file.name) &&
+          !referencedPaths.has(file.canonicalPath)) ||
+        (isPrimarySessionPromptFileName(file.name) &&
+          !referencedPromptPaths.has(file.canonicalPath)),
     )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   for (const file of removableFileQueue) {
@@ -275,6 +326,23 @@ export async function enforceSessionDiskBudget(params: {
     total -= deletedBytes;
     freedBytes += deletedBytes;
     removedFiles += 1;
+    if (isPrimarySessionTranscriptFileName(file.name)) {
+      const promptFileName = resolveSessionPromptFileNameFromTranscriptFileName(file.name);
+      if (promptFileName) {
+        const promptPath = path.join(sessionsDir, promptFileName);
+        const promptDeletedBytes = await removeFileForBudget({
+          filePath: promptPath,
+          dryRun,
+          fileSizesByPath,
+          simulatedRemovedPaths,
+        });
+        if (promptDeletedBytes > 0) {
+          total -= promptDeletedBytes;
+          freedBytes += promptDeletedBytes;
+          removedFiles += 1;
+        }
+      }
+    }
   }
 
   if (total > highWaterBytes) {
@@ -335,6 +403,24 @@ export async function enforceSessionDiskBudget(params: {
       }
       total -= deletedBytes;
       freedBytes += deletedBytes;
+      removedFiles += 1;
+      const promptFileName = resolveSessionPromptFileNameFromTranscriptFileName(
+        path.basename(transcriptPath),
+      );
+      if (!promptFileName) {
+        continue;
+      }
+      const promptDeletedBytes = await removeFileForBudget({
+        filePath: path.join(sessionsDir, promptFileName),
+        dryRun,
+        fileSizesByPath,
+        simulatedRemovedPaths,
+      });
+      if (promptDeletedBytes <= 0) {
+        continue;
+      }
+      total -= promptDeletedBytes;
+      freedBytes += promptDeletedBytes;
       removedFiles += 1;
     }
   }

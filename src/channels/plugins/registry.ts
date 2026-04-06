@@ -1,6 +1,6 @@
 import {
-  getActivePluginChannelRegistryVersion,
-  requireActivePluginChannelRegistry,
+  getActivePluginRegistryVersion,
+  requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
@@ -21,23 +21,34 @@ function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
 
 type CachedChannelPlugins = {
   registryVersion: number;
+  sourceSignature: string;
   sorted: ChannelPlugin[];
   byId: Map<string, ChannelPlugin>;
 };
 
 const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
   registryVersion: -1,
+  sourceSignature: "",
   sorted: [],
   byId: new Map(),
 };
 
 let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
 
+function buildChannelPluginSourceSignature(
+  registry: ReturnType<typeof requireActivePluginRegistry>,
+) {
+  return registry.channels
+    .map((entry) => `${String(entry.plugin.id).trim()}:${entry.plugin.meta.order ?? ""}`)
+    .join("\u0000");
+}
+
 function resolveCachedChannelPlugins(): CachedChannelPlugins {
-  const registry = requireActivePluginChannelRegistry();
-  const registryVersion = getActivePluginChannelRegistryVersion();
+  const registry = requireActivePluginRegistry();
+  const registryVersion = getActivePluginRegistryVersion();
+  const sourceSignature = buildChannelPluginSourceSignature(registry);
   const cached = cachedChannelPlugins;
-  if (cached.registryVersion === registryVersion) {
+  if (cached.registryVersion === registryVersion && cached.sourceSignature === sourceSignature) {
     return cached;
   }
 
@@ -67,6 +78,7 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
 
   const next: CachedChannelPlugins = {
     registryVersion,
+    sourceSignature,
     sorted,
     byId,
   };

@@ -329,6 +329,33 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: External follow-up");
   });
 
+  it("filters out delivery-mirror assistant entries to avoid duplicate summaries", async () => {
+    const sessionContent = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Real user turn" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Mirrored outbound message",
+          provider: "openclaw",
+          model: "delivery-mirror",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Real model answer", provider: "anthropic" },
+      }),
+    ].join("\n");
+    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
+
+    expect(memoryContent).toContain("user: Real user turn");
+    expect(memoryContent).not.toContain("Mirrored outbound message");
+    expect(memoryContent).toContain("assistant: Real model answer");
+  });
+
   it("filters out command messages starting with /", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "/help" },

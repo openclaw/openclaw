@@ -1676,6 +1676,68 @@ describe("security audit", () => {
     });
   });
 
+  it("suggests prefix-matching commands for unknown denyCommands entries", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["system.run.prep"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("system.run.prep");
+    expect(finding?.detail).toContain("did you mean");
+    expect(finding?.detail).toContain("system.run.prepare");
+  });
+
+  it("keeps unknown denyCommands entries without suggestions when no close command exists", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["zzzzzzzzzzzzzz"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("zzzzzzzzzzzzzz");
+    expect(finding?.detail).not.toContain("did you mean");
+  });
+
+  it("flags ineffective gateway.nodes.overrides.*.denyCommands entries", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          overrides: {
+            "node-a": {
+              denyCommands: ["camera.*", "camera.snapx"],
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain('gateway.nodes.overrides["node-a"].denyCommands: camera.*');
+    expect(finding?.detail).toContain(
+      'gateway.nodes.overrides["node-a"].denyCommands: camera.snapx',
+    );
+  });
+
   it("evaluates dangerous gateway.nodes.allowCommands findings", async () => {
     const cases = [
       {
@@ -1733,6 +1795,63 @@ describe("security audit", () => {
         includes: ["camera.snap", "screen.record"],
       });
     });
+  });
+
+  it("flags dangerous gateway.nodes.overrides.*.allowCommands entries", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "loopback",
+        nodes: {
+          overrides: {
+            "node-a": {
+              allowCommands: ["camera.snap", "screen.record"],
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain('gateway.nodes.overrides["node-a"].allowCommands');
+    expect(finding?.detail).toContain("camera.snap");
+    expect(finding?.detail).toContain("screen.record");
+  });
+
+  it("does not flag dangerous allowCommands entries when denied again", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          allowCommands: ["camera.snap", "screen.record"],
+          denyCommands: ["camera.snap", "screen.record"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
+  });
+
+  it("does not flag dangerous overrides allowCommands entries when denied again", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["camera.snap"],
+          overrides: {
+            "node-a": {
+              allowCommands: ["camera.snap", "screen.record"],
+              denyCommands: ["screen.record"],
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
   });
 
   it("flags agent profile overrides when global tools.profile is minimal", async () => {

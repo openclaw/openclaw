@@ -16,6 +16,7 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
+import type { SessionTranscriptMessageMeta } from "../../config/sessions/transcript.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -318,12 +319,99 @@ type MessageSentEvent = {
   content: string;
   error?: string;
   messageId?: string;
+  metadata?: Record<string, unknown>;
 };
 
+function buildMirrorMessageMeta(params: {
+  channel: Exclude<OutboundChannel, "none">;
+  accountId?: string;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  mirror?: DeliverOutboundPayloadsCoreParams["mirror"];
+  results: OutboundDeliveryResult[];
+}): SessionTranscriptMessageMeta | undefined {
+  const providerMessageIds = [
+    ...new Set(
+      params.results
+        .map((result) => result.messageId)
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0),
+    ),
+  ];
+  const chatIds = [
+    ...new Set(
+      params.results
+        .map((result) => result.chatId)
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0),
+    ),
+  ];
+  const providerMessageId = providerMessageIds.at(-1);
+  const chatId = chatIds.length === 1 ? chatIds[0] : undefined;
+
+  if (
+    !providerMessageId &&
+    providerMessageIds.length === 0 &&
+    !chatId &&
+    !params.accountId &&
+    !params.replyToId &&
+    params.threadId == null
+  ) {
+    return undefined;
+  }
+
+  return {
+    channel: params.channel,
+    accountId: params.accountId,
+    chatId,
+    chatType: params.mirror?.isGroup ? "group" : "direct",
+    providerMessageId,
+    ...(providerMessageIds.length > 0 ? { providerMessageIds } : {}),
+    ...(params.replyToId ? { parentId: params.replyToId } : {}),
+    ...(params.threadId != null ? { threadId: params.threadId } : {}),
+  };
+}
+
+/**
+ * Extract channel-specific fields from a delivery result into hook metadata.
+ * This ensures fields like chatId (returned by the channel API but not in `to`)
+ * are available to message_sent hook consumers — critical for channels where the
+ * outbound `to` address differs from the resolved chat identifier (e.g. feishu DMs
+ * addressed by open_id but resolved to a chat_id by the API).
+ */
+function buildDeliveryResultMetadata(
+  result: OutboundDeliveryResult | undefined,
+): Record<string, unknown> | undefined {
+  if (!result) {
+    return undefined;
+  }
+  const meta: Record<string, unknown> = {};
+  // Spread adapter meta first, then set known fields so they cannot be
+  // overwritten by an adapter accidentally returning a colliding key.
+  if (result.meta) {
+    Object.assign(meta, result.meta);
+  }
+  if (result.chatId) {
+    meta.chatId = result.chatId;
+  }
+  if (result.channelId) {
+    meta.channelId = result.channelId;
+  }
+  return Object.keys(meta).length > 0 ? meta : undefined;
+}
+
+function hasMediaPayload(payload: ReplyPayload): boolean {
+  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+}
+
+function hasChannelDataPayload(payload: ReplyPayload): boolean {
+  return Boolean(payload.channelData && Object.keys(payload.channelData).length > 0);
+}
+
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
+  const hasMedia = hasMediaPayload(payload);
+  const hasChannelData = hasChannelDataPayload(payload);
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    if (!hasReplyPayloadContent({ ...payload, text }) && !hasMedia && !hasChannelData) {
       return null;
     }
     if (text) {
@@ -375,6 +463,25 @@ function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
   };
 }
 
+function resolveMirrorFallbackContent(payloads: ReplyPayload[]): {
+  text?: string;
+  mediaUrls?: string[];
+} {
+  if (payloads.length === 0) {
+    return {};
+  }
+  const summaries = payloads.map((payload) => buildPayloadSummary(payload));
+  const text = summaries
+    .map((summary) => summary.text)
+    .filter((value) => value.trim().length > 0)
+    .join("\n");
+  const mediaUrls = summaries.flatMap((summary) => summary.mediaUrls);
+  return {
+    ...(text ? { text } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+  };
+}
+
 function createMessageSentEmitter(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   channel: Exclude<OutboundChannel, "none">;
@@ -399,6 +506,7 @@ function createMessageSentEmitter(params: {
       accountId: params.accountId ?? undefined,
       conversationId: params.to,
       messageId: event.messageId,
+      metadata: event.metadata,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
     });
@@ -443,6 +551,8 @@ async function applyMessageSendingHook(params: {
   to: string;
   channel: Exclude<OutboundChannel, "none">;
   accountId?: string;
+  replyToId?: string | null;
+  threadId?: string | number | null;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
@@ -464,6 +574,8 @@ async function applyMessageSendingHook(params: {
           channel: params.channel,
           accountId: params.accountId,
           mediaUrls: params.payloadSummary.mediaUrls,
+          replyToId: params.payload.replyToId ?? params.replyToId,
+          ...(params.threadId != null ? { threadId: params.threadId } : {}),
         },
       },
       {
@@ -650,6 +762,7 @@ async function deliverOutboundPayloadsCore(
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, handler);
+  const mirrorFallback = resolveMirrorFallbackContent(normalizedPayloads);
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
@@ -688,6 +801,8 @@ async function deliverOutboundPayloadsCore(
         to,
         channel,
         accountId,
+        replyToId: params.replyToId,
+        threadId: params.threadId,
       });
       if (hookResult.cancelled) {
         continue;
@@ -715,6 +830,7 @@ async function deliverOutboundPayloadsCore(
           success: true,
           content: payloadSummary.text,
           messageId: delivery.messageId,
+          metadata: buildDeliveryResultMetadata(delivery),
         });
         continue;
       }
@@ -725,11 +841,12 @@ async function deliverOutboundPayloadsCore(
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
-        const messageId = results.at(-1)?.messageId;
+        const lastResult = results.at(-1);
         emitMessageSent({
           success: results.length > beforeCount,
           content: payloadSummary.text,
-          messageId,
+          messageId: lastResult?.messageId,
+          metadata: buildDeliveryResultMetadata(lastResult),
         });
         continue;
       }
@@ -756,6 +873,7 @@ async function deliverOutboundPayloadsCore(
           success: results.length > beforeCount,
           content: payloadSummary.text,
           messageId,
+          metadata: buildDeliveryResultMetadata(results.at(-1)),
         });
         continue;
       }
@@ -785,6 +903,7 @@ async function deliverOutboundPayloadsCore(
         success: true,
         content: payloadSummary.text,
         messageId: lastMessageId,
+        metadata: buildDeliveryResultMetadata(results.at(-1)),
       });
     } catch (err) {
       emitMessageSent({
@@ -800,8 +919,8 @@ async function deliverOutboundPayloadsCore(
   }
   if (params.mirror && results.length > 0) {
     const mirrorText = resolveMirroredTranscriptText({
-      text: params.mirror.text,
-      mediaUrls: params.mirror.mediaUrls,
+      text: params.mirror.text ?? mirrorFallback.text,
+      mediaUrls: params.mirror.mediaUrls ?? mirrorFallback.mediaUrls,
     });
     if (mirrorText) {
       const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
@@ -810,6 +929,14 @@ async function deliverOutboundPayloadsCore(
         sessionKey: params.mirror.sessionKey,
         text: mirrorText,
         idempotencyKey: params.mirror.idempotencyKey,
+        messageMeta: buildMirrorMessageMeta({
+          channel,
+          accountId,
+          replyToId: params.replyToId,
+          threadId: params.threadId,
+          mirror: params.mirror,
+          results,
+        }),
       });
     }
   }

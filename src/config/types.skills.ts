@@ -17,6 +17,14 @@ export type SkillsLoadConfig = {
   watch?: boolean;
   /** Debounce for the skills watcher (ms). */
   watchDebounceMs?: number;
+  /**
+   * Allow symlinks inside skill directories to point outside the configured
+   * skill root. By default, skill paths that resolve (via symlink) to a
+   * location outside their root are skipped as a safety measure. Set this
+   * to `true` if you intentionally use cross-root symlinks (e.g. a shared
+   * skills library linked into multiple workspace skill dirs).
+   */
+  allowSymlinksOutsideRoot?: boolean;
 };
 
 export type SkillsInstallConfig = {

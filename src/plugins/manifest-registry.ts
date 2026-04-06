@@ -69,6 +69,7 @@ export type PluginManifestRecord = {
   kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
+  cliBackends?: string[];
   modelSupport?: PluginManifestModelSupport;
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
@@ -596,6 +597,34 @@ export function loadPluginManifestRegistry(
             configSchema,
           }),
     );
+  }
+
+  // Inject embedded plugins from Bun compiled binary so they are visible
+  // to both the config validator and the plugin loader.
+  const embeddedPlugins = (globalThis as Record<string, unknown>).__OPENCLAW_EMBEDDED_PLUGINS__ as
+    | Array<{ id: string; manifest: Record<string, unknown> }>
+    | undefined;
+  if (Array.isArray(embeddedPlugins)) {
+    for (const ep of embeddedPlugins) {
+      const rootDir = `__embedded__:${ep.id}`;
+      records.push({
+        id: ep.manifest.id as string,
+        rootDir,
+        source: rootDir,
+        manifestPath: `${rootDir}/openclaw.plugin.json`,
+        origin: "bundled",
+        configSchema: ep.manifest.configSchema as Record<string, unknown> | undefined,
+        kind: ep.manifest.kind as PluginKind | undefined,
+        channels: (ep.manifest.channels as string[]) ?? [],
+        providers: (ep.manifest.providers as string[]) ?? [],
+        cliBackends: (ep.manifest.cliBackends as string[]) ?? [],
+        skills: [],
+        hooks: [],
+        name: ep.manifest.name as string | undefined,
+        description: ep.manifest.description as string | undefined,
+        version: ep.manifest.version as string | undefined,
+      });
+    }
   }
 
   const registry = { plugins: records, diagnostics };

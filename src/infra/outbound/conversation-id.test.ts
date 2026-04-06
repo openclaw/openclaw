@@ -64,6 +64,11 @@ describe("resolveConversationIdFromTargets", () => {
       expected: "1475250310120214812",
     },
     {
+      name: "extracts chat ids from chat: targets (Feishu format)",
+      targets: ["chat:oc_abc123def456"],
+      expected: "oc_abc123def456",
+    },
+    {
       name: "returns undefined for non-channel targets",
       targets: ["user:alice", "general"],
       expected: undefined,
