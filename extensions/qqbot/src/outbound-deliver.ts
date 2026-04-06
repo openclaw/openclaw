@@ -443,8 +443,11 @@ export async function sendPlainReply(
   );
   for (const m of mdMatches) {
     const url = m[2]?.trim();
-    const keepMarkdownImage =
-      Boolean(url) && (approvedMarkdownImageUrls.has(url) || (url ? isLocalFilePath(url) : false));
+    if (!url) {
+      textWithoutImages = textWithoutImages.replace(m[0], "").trim();
+      continue;
+    }
+    const keepMarkdownImage = approvedMarkdownImageUrls.has(url) || isLocalFilePath(url);
     if (!keepMarkdownImage) {
       textWithoutImages = textWithoutImages.replace(m[0], "").trim();
     }

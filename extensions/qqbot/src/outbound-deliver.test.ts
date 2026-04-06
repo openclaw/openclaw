@@ -245,14 +245,12 @@ describe("qqbot outbound deliver", () => {
   });
 
   it("does not append a duplicate markdown image when approval normalizes the URL", async () => {
-    fileUtilsMocks.resolveApprovedQqbotRemoteMediaUrl.mockImplementation(async (url: string) =>
-      url === "https://media.qq.com" ? "https://media.qq.com/" : url,
-    );
+    fileUtilsMocks.resolveApprovedQqbotRemoteMediaUrl.mockResolvedValueOnce("https://qq.com/a.png");
     imageSizeMocks.getImageSize.mockResolvedValue({ width: 640, height: 480 });
 
     await sendPlainReply(
       {},
-      "hello ![x](https://media.qq.com)",
+      "hello ![x](https://qq.com:443/a.png)",
       buildEvent(),
       buildAccountContext(true),
       sendWithRetry,
@@ -261,12 +259,13 @@ describe("qqbot outbound deliver", () => {
     );
 
     expect(imageSizeMocks.getImageSize).toHaveBeenCalledTimes(1);
+    expect(imageSizeMocks.getImageSize).toHaveBeenCalledWith("https://qq.com/a.png");
     expect(apiMocks.sendC2CMessage).toHaveBeenCalledTimes(1);
     expect(apiMocks.sendC2CMessage).toHaveBeenCalledWith(
       "app-id",
       "token",
       "user-1",
-      "hello ![img](https://media.qq.com/)",
+      "hello ![img](https://qq.com/a.png)",
       "msg-1",
       undefined,
     );
