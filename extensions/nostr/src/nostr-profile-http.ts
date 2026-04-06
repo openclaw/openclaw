@@ -8,6 +8,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/gateway-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
 import {
   createFixedWindowRateLimiter,
@@ -45,6 +46,7 @@ export interface NostrProfileHttpContext {
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 5; // 5 requests per minute
 const RATE_LIMIT_MAX_TRACKED_KEYS = 2_048;
+const ADMIN_SCOPE = "operator.admin";
 const profileRateLimiter = createFixedWindowRateLimiter({
   windowMs: RATE_LIMIT_WINDOW_MS,
   maxRequests: RATE_LIMIT_MAX_REQUESTS,
@@ -315,6 +317,20 @@ function enforceLoopbackMutationGuards(
   return true;
 }
 
+function enforceAdminMutationScope(
+  ctx: NostrProfileHttpContext,
+  res: ServerResponse,
+  actionLabel: string,
+): boolean {
+  const scopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes ?? [];
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+  ctx.log?.warn?.(`Rejected ${actionLabel} without ${ADMIN_SCOPE} gateway scope`);
+  sendJson(res, 403, { ok: false, error: `missing scope: ${ADMIN_SCOPE}` });
+  return false;
+}
+
 // ============================================================================
 // HTTP Handler
 // ============================================================================
@@ -397,6 +413,9 @@ async function handleUpdateProfile(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<true> {
+  if (!enforceAdminMutationScope(ctx, res, "profile update")) {
+    return true;
+  }
   if (!enforceLoopbackMutationGuards(ctx, req, res)) {
     return true;
   }
@@ -527,6 +546,10 @@ async function handleImportProfile(
     }
   } catch {
     // Ignore body parse errors - use defaults
+  }
+
+  if (autoMerge && !enforceAdminMutationScope(ctx, res, "profile import merge")) {
+    return true;
   }
 
   ctx.log?.info(`[${accountId}] Importing profile for ${pubkey.slice(0, 8)}...`);

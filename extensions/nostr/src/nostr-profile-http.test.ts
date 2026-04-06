@@ -5,6 +5,17 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: vi.fn(() => ({
+    client: {
+      connect: {
+        scopes: ["operator.admin"],
+      },
+    },
+  })),
+}));
+
 import {
   clearNostrProfileRateLimitStateForTest,
   createNostrProfileHttpHandler,
@@ -25,6 +36,7 @@ vi.mock("./nostr-profile-import.js", () => ({
   mergeProfiles: vi.fn((local, imported) => ({ ...imported, ...local })),
 }));
 
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/gateway-runtime";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { importProfileFromRelays } from "./nostr-profile-import.js";
 import { TEST_HEX_PUBLIC_KEY, TEST_SETUP_RELAY_URLS } from "./test-fixtures.js";
@@ -165,6 +177,17 @@ function mockSuccessfulProfileImport() {
   });
 }
 
+function mockGatewayScopes(scopes: string[]) {
+  vi.mocked(getPluginRuntimeGatewayRequestScope).mockReturnValue({
+    client: {
+      connect: {
+        scopes,
+      },
+    },
+    isWebchatConnect: () => false,
+  });
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -173,6 +196,7 @@ describe("nostr-profile-http", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearNostrProfileRateLimitStateForTest();
+    mockGatewayScopes(["operator.admin"]);
   });
 
   describe("route matching", () => {
@@ -291,6 +315,27 @@ describe("nostr-profile-http", () => {
 
       await run();
       expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects profile mutation without operator.admin scope", async () => {
+      mockGatewayScopes(["operator.write"]);
+      const { ctx, res, run } = createProfileHttpHarness(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        {
+          body: { name: "attacker" },
+        },
+      );
+
+      await run();
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(JSON.parse(res._getData())).toEqual({
+        ok: false,
+        error: "missing scope: operator.admin",
+      });
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      expect(publishNostrProfile).not.toHaveBeenCalled();
     });
 
     it("rejects cross-origin profile mutation attempts", async () => {
@@ -503,6 +548,44 @@ describe("nostr-profile-http", () => {
       const data = expectImportSuccessResponse(res);
       expect(data.saved).toBe(true);
       expect(ctx.updateConfigProfile).toHaveBeenCalled();
+    });
+
+    it("rejects auto-merge import without operator.admin scope", async () => {
+      mockGatewayScopes(["operator.write"]);
+      const { ctx, res, run } = createProfileHttpHarness(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {
+          body: { autoMerge: true },
+        },
+      );
+
+      await run();
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(JSON.parse(res._getData())).toEqual({
+        ok: false,
+        error: "missing scope: operator.admin",
+      });
+      expect(importProfileFromRelays).not.toHaveBeenCalled();
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+    });
+
+    it("allows non-admin import previews when auto-merge is not requested", async () => {
+      mockGatewayScopes(["operator.write"]);
+      const { res, run } = createProfileHttpHarness(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {
+          body: {},
+        },
+      );
+
+      mockSuccessfulProfileImport();
+      await run();
+
+      const data = expectImportSuccessResponse(res);
+      expect(data.saved).toBe(false);
     });
 
     it("returns error when account not found", async () => {

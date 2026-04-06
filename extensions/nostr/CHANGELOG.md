@@ -5,6 +5,7 @@
 ### Changes
 
 - Version alignment with core OpenClaw release numbers.
+- Require `operator.admin` before gateway-auth profile updates or auto-merge imports can persist profile changes to config.
 
 ## 2026.4.5
 

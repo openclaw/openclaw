@@ -7,3 +7,7 @@ export {
   withOperatorApprovalsGatewayClient,
 } from "../gateway/operator-approvals-client.js";
 export type { EventFrame } from "../gateway/protocol/index.js";
+export {
+  getPluginRuntimeGatewayRequestScope,
+  type PluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";

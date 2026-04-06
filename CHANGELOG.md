@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 - QQ Bot/media: route gateway-side attachment and fallback downloads through guarded QQ/Tencent HTTPS fetches so QQ media handling no longer follows arbitrary remote hosts.
 - Exec/runtime events: mark background `notifyOnExit` summaries and ACP parent-stream relays as untrusted system events so lower-trust runtime output no longer re-enters later turns as trusted `System:` text.
 - Hooks/wake: queue direct and mapped wake-hook payloads as untrusted system events so external wake content no longer enters the main session as trusted input. (#62003)
+- Channels/Nostr: require `operator.admin` before gateway-auth profile updates or auto-merge imports can persist profile changes to config.
 
 ## 2026.4.5
 
