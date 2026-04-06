@@ -218,6 +218,25 @@ describe("extractAssistantText", () => {
     };
     expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
   });
+
+  it("prefers final_answer text when phased assistant history is present", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "internal reasoning",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+    };
+    expect(extractAssistantText(message)).toBe("Done.");
+  });
 });
 
 describe("resolveAnnounceTarget", () => {

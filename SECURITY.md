@@ -97,6 +97,7 @@ When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (o
 OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boundary.
 
 - Authenticated Gateway callers are treated as trusted operators for that gateway instance.
+- Direct localhost/loopback Control UI and Gateway WebSocket sessions authenticated with the shared gateway secret (`token` / `password`) are in that same trusted-operator bucket. Local auto-paired device sessions on that path are expected to retain full localhost operator capability; they do not create a separate `operator.write` vs `operator.admin` security boundary.
 - The HTTP compatibility endpoints (`POST /v1/chat/completions`, `POST /v1/responses`) and direct tool endpoint (`POST /tools/invoke`) are in that same trusted-operator bucket. Passing Gateway bearer auth there is equivalent to operator access for that gateway; they do not implement a narrower `operator.write` vs `operator.admin` trust split.
 - Concretely, on the OpenAI-compatible HTTP surface:
   - shared-secret bearer auth (`token` / `password`) authenticates possession of the gateway operator secret

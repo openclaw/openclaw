@@ -13,12 +13,17 @@ import {
   buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  normalizeJitiAliasTargetPath,
   resolveExtensionApiAlias,
   resolvePluginRuntimeModulePath,
   resolvePluginSdkAliasFile,
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
-import { makeTrackedTempDir, mkdirSafeDir } from "./test-helpers/fs-fixtures.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir,
+} from "./test-helpers/fs-fixtures.js";
 
 type CreateJiti = typeof import("jiti").createJiti;
 
@@ -216,8 +221,14 @@ function expectPluginSdkAliasTargets(
   expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
     fs.realpathSync(params.rootAliasPath),
   );
+  expect(fs.realpathSync(aliases["@openclaw/plugin-sdk"] ?? "")).toBe(
+    fs.realpathSync(params.rootAliasPath),
+  );
   if (params.channelRuntimePath) {
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(params.channelRuntimePath),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
       fs.realpathSync(params.channelRuntimePath),
     );
   }
@@ -304,7 +315,7 @@ function expectCwdFallbackPluginSdkAliasResolution(params: {
 }
 
 afterAll(() => {
-  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  cleanupTrackedTempDirs(fixtureTempDirs);
 });
 
 describe("plugin sdk alias helpers", () => {
@@ -661,6 +672,45 @@ describe("plugin sdk alias helpers", () => {
     }
   });
 
+  it("disables native Jiti loads on Windows even for built JavaScript entries", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+
+    try {
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
+        false,
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
+    }
+  });
+
+  it("normalizes Windows alias targets before handing them to Jiti", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+
+    try {
+      expect(normalizeJitiAliasTargetPath(String.raw`C:\repo\dist\plugin-sdk\root-alias.cjs`)).toBe(
+        "C:/repo/dist/plugin-sdk/root-alias.cjs",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
+    }
+  });
+
   it("loads source runtime shims through the non-native Jiti boundary", async () => {
     const copiedExtensionRoot = path.join(makeTempDir(), bundledPluginRoot("discord"));
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
@@ -671,7 +721,7 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(jitiBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/infra-runtime";
+      `import { resolveOutboundSendDep } from "@openclaw/plugin-sdk/infra-runtime";
 
 export const syntheticRuntimeMarker = {
   resolveOutboundSendDep,
@@ -701,6 +751,7 @@ export const syntheticRuntimeMarker = {
     const withAlias = createJiti(jitiBaseUrl, {
       ...buildPluginLoaderJitiOptions({
         "openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
+        "@openclaw/plugin-sdk/infra-runtime": copiedChannelRuntimeShim,
       }),
       tryNative: false,
     });

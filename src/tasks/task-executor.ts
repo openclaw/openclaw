@@ -84,6 +84,7 @@ function ensureSingleTaskFlow(params: {
 
 export function createQueuedTaskRun(params: {
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   requesterSessionKey?: string;
   ownerKey?: string;
@@ -116,6 +117,7 @@ export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
 
 export function createRunningTaskRun(params: {
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   requesterSessionKey?: string;
   ownerKey?: string;

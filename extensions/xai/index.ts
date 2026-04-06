@@ -1,8 +1,8 @@
+import type { OpenClawConfig } from "@openclaw/plugin-sdk/plugin-entry";
+import { defineSingleProviderPluginEntry } from "@openclaw/plugin-sdk/provider-entry";
+import { buildProviderReplayFamilyHooks } from "@openclaw/plugin-sdk/provider-model-shared";
+import { jsonResult, readProviderEnvValue } from "@openclaw/plugin-sdk/provider-web-search";
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
   normalizeXaiModelId,
@@ -15,9 +15,8 @@ import { buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
-import {
-  wrapXaiProviderStream,
-} from "./stream.js";
+import { wrapXaiProviderStream } from "./stream.js";
+import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 const PROVIDER_ID = "xai";
@@ -205,7 +204,7 @@ export default defineSingleProviderPluginEntry({
         tool_stream: true,
       };
     },
-    wrapStreamFn: (ctx) => wrapXaiProviderStream(ctx),
+    wrapStreamFn: wrapXaiProviderStream,
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
@@ -232,6 +231,7 @@ export default defineSingleProviderPluginEntry({
   },
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
+    api.registerVideoGenerationProvider(buildXaiVideoGenerationProvider());
     api.registerTool((ctx) => createLazyCodeExecutionTool(ctx), { name: "code_execution" });
     api.registerTool((ctx) => createLazyXSearchTool(ctx), { name: "x_search" });
   },

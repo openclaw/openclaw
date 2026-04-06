@@ -157,6 +157,43 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("preserves Claude cache creation tokens instead of flattening them to zero", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-cache-123" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-cache-123",
+          result: "Claude says hello",
+          usage: {
+            input_tokens: 12,
+            output_tokens: 3,
+            cache_read_input_tokens: 4,
+            cache_creation_input_tokens: 7,
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Claude says hello",
+      sessionId: "session-cache-123",
+      usage: {
+        input: 12,
+        output: 3,
+        cacheRead: 4,
+        cacheWrite: 7,
+        total: undefined,
+      },
+    });
+  });
+
   it("preserves Claude session metadata even when the final result text is empty", () => {
     const result = parseCliJsonl(
       [

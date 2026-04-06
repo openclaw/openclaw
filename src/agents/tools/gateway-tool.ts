@@ -2,7 +2,6 @@ import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
-import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import {
@@ -63,7 +62,7 @@ function parseGatewayConfigMutationRaw(
   return parsedRes.parsed;
 }
 
-function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
+function getValueAtCanonicalPath(config: Record<string, unknown>, path: string): unknown {
   let current: unknown = config;
   for (const part of path.split(".")) {
     if (!current || typeof current !== "object" || Array.isArray(current)) {
@@ -72,6 +71,17 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
     current = (current as Record<string, unknown>)[part];
   }
   return current;
+}
+
+function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
+  const direct = getValueAtCanonicalPath(config, path);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!path.startsWith("tools.exec.")) {
+    return undefined;
+  }
+  return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
 function assertGatewayConfigMutationAllowed(params: {
@@ -86,10 +96,8 @@ function assertGatewayConfigMutationAllowed(params: {
       : (applyMergePatch(params.currentConfig, parsed, {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
-  const migratedNextConfig = applyLegacyMigrations(nextConfig).next ?? nextConfig;
   const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
-    (path) =>
-      getValueAtPath(params.currentConfig, path) !== getValueAtPath(migratedNextConfig, path),
+    (path) => getValueAtPath(params.currentConfig, path) !== getValueAtPath(nextConfig, path),
   );
   if (changedProtectedPaths.length === 0) {
     return;

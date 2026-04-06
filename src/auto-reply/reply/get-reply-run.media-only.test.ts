@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
+import type { SessionEntry } from "../../config/sessions/types.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -9,7 +10,9 @@ vi.mock("../../agents/pi-embedded.runtime.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
+  waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../../config/sessions/group.js", () => ({
@@ -100,7 +103,24 @@ let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
 let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
+let abortEmbeddedPiRunActual: typeof import("../../agents/pi-embedded-runner/runs.js").abortEmbeddedPiRun;
+let clearActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").clearActiveEmbeddedRun;
+let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
+let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
+let isEmbeddedPiRunActiveActual: typeof import("../../agents/pi-embedded-runner/runs.js").isEmbeddedPiRunActive;
+let isEmbeddedPiRunStreamingActual: typeof import("../../agents/pi-embedded-runner/runs.js").isEmbeddedPiRunStreaming;
+let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+let resolveActiveEmbeddedRunSessionIdActual: typeof import("../../agents/pi-embedded-runner/runs.js").resolveActiveEmbeddedRunSessionId;
+let runsTesting: typeof import("../../agents/pi-embedded-runner/runs.js").__testing;
+let setActiveEmbeddedRun: typeof import("../../agents/pi-embedded-runner/runs.js").setActiveEmbeddedRun;
+let waitForEmbeddedPiRunEndActual: typeof import("../../agents/pi-embedded-runner/runs.js").waitForEmbeddedPiRunEnd;
 let loadScopeCounter = 0;
+
+function createGatewayDrainingError(): Error {
+  const error = new Error("Gateway is draining for restart; new tasks are not accepted");
+  error.name = "GatewayDrainingError";
+  return error;
+}
 
 async function loadFreshGetReplyRunModuleForTest() {
   ({ runPreparedReply } = await importFreshModule<typeof import("./get-reply-run.js")>(
@@ -191,12 +211,45 @@ describe("runPreparedReply media-only handling", () => {
     ({ routeReply } = await import("./route-reply.runtime.js"));
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
+    ({
+      __testing: runsTesting,
+      abortEmbeddedPiRun: abortEmbeddedPiRunActual,
+      clearActiveEmbeddedRun,
+      isEmbeddedPiRunActive: isEmbeddedPiRunActiveActual,
+      isEmbeddedPiRunStreaming: isEmbeddedPiRunStreamingActual,
+      resolveActiveEmbeddedRunSessionId: resolveActiveEmbeddedRunSessionIdActual,
+      setActiveEmbeddedRun,
+      waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndActual,
+    } = await import("../../agents/pi-embedded-runner/runs.js"));
+    ({
+      __testing: replyRunTesting,
+      createReplyOperation,
+      getActiveReplyRunCount,
+    } = await import("./reply-run-registry.js"));
   });
 
   beforeEach(async () => {
     storeRuntimeLoads.mockClear();
     updateSessionStore.mockReset();
     vi.clearAllMocks();
+    runsTesting.resetActiveEmbeddedRuns();
+    replyRunTesting.resetReplyRunRegistry();
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    vi.mocked(piRuntime.abortEmbeddedPiRun).mockImplementation((sessionId, opts) =>
+      abortEmbeddedPiRunActual(sessionId, opts),
+    );
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockImplementation((sessionId) =>
+      isEmbeddedPiRunActiveActual(sessionId),
+    );
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockImplementation((sessionId) =>
+      isEmbeddedPiRunStreamingActual(sessionId),
+    );
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockImplementation((sessionKey) =>
+      resolveActiveEmbeddedRunSessionIdActual(sessionKey),
+    );
+    vi.mocked(piRuntime.waitForEmbeddedPiRunEnd).mockImplementation((sessionId, timeoutMs) =>
+      waitForEmbeddedPiRunEndActual(sessionId, timeoutMs),
+    );
     await loadFreshGetReplyRunModuleForTest();
   });
 
@@ -253,87 +306,313 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 
-  it("omits auth key labels from /new and /reset confirmation messages", async () => {
+  it("does not send a standalone reset notice for reply-producing /new turns", async () => {
     await runPreparedReply(
       baseParams({
         resetTriggered: true,
       }),
     );
 
-    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
-      | { payload?: { text?: string } }
-      | undefined;
-    expect(resetNoticeCall?.payload?.text).toContain("✅ New session started · model:");
-    expect(resetNoticeCall?.payload?.text).not.toContain("🔑");
-    expect(resetNoticeCall?.payload?.text).not.toContain("api-key");
-    expect(resetNoticeCall?.payload?.text).not.toContain("env:");
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.resetTriggered).toBe(true);
+    expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
   });
 
-  it("routes reset notices through the effective session account when AccountId is omitted", async () => {
-    await runPreparedReply(
-      baseParams({
-        resetTriggered: true,
-        ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
-          ThreadHistoryBody: "Earlier message in this thread",
-          OriginatingChannel: "slack",
-          OriginatingTo: "C123",
-          ChatType: "group",
-          AccountId: undefined,
-        },
-        sessionCtx: {
-          Body: "",
-          BodyStripped: "",
-          ThreadHistoryBody: "Earlier message in this thread",
-          MediaPath: "/tmp/input.png",
-          Provider: "slack",
-          ChatType: "group",
-          OriginatingChannel: "slack",
-          OriginatingTo: "C123",
-          AccountId: "work",
-        },
-      }),
-    );
+  it("does not emit a reset notice when /new is attempted during gateway drain", async () => {
+    vi.mocked(runReplyAgent).mockRejectedValueOnce(createGatewayDrainingError());
 
-    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
-      | { accountId?: string }
-      | undefined;
-    expect(resetNoticeCall?.accountId).toBe("work");
-  });
-
-  it("skips reset notice when only webchat fallback routing is available", async () => {
-    await runPreparedReply(
-      baseParams({
-        resetTriggered: true,
-        ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
-          ThreadHistoryBody: "Earlier message in this thread",
-          OriginatingChannel: undefined,
-          OriginatingTo: undefined,
-          ChatType: "group",
-        },
-        command: {
-          surface: "webchat",
-          isAuthorizedSender: true,
-          abortKey: "session-key",
-          ownerList: [],
-          senderIsOwner: false,
-          rawBodyNormalized: "",
-          commandBodyNormalized: "",
-          channel: "webchat",
-          from: undefined,
-          to: undefined,
-        } as never,
-      }),
-    );
+    await expect(
+      runPreparedReply(
+        baseParams({
+          resetTriggered: true,
+        }),
+      ),
+    ).rejects.toThrow("Gateway is draining for restart; new tasks are not accepted");
 
     expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
   });
 
+  it("does not register a reply operation before auth setup succeeds", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const sessionId = "reply-operation-auth-failure";
+    const activeBefore = getActiveReplyRunCount();
+    vi.mocked(resolveSessionAuthProfileOverride).mockRejectedValueOnce(new Error("auth failed"));
+
+    await expect(
+      runPreparedReply(
+        baseParams({
+          sessionId,
+        }),
+      ),
+    ).rejects.toThrow("auth failed");
+
+    expect(getActiveReplyRunCount()).toBe(activeBefore);
+  });
+  it("waits for the previous active run to clear before registering a new reply operation", async () => {
+    const queueSettings = await import("./queue/settings.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const previousRun = createReplyOperation({
+      sessionId: "session-overlap",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    previousRun.setPhase("running");
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-overlap",
+      }),
+    );
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+
+    previousRun.complete();
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+  });
+  it("interrupts embedded-only active runs even without a reply operation", async () => {
+    const queueSettings = await import("./queue/settings.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const embeddedAbort = vi.fn();
+    const embeddedHandle = {
+      queueMessage: vi.fn(async () => {}),
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: embeddedAbort,
+    };
+    setActiveEmbeddedRun("session-embedded-only", embeddedHandle, "session-key");
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-embedded-only",
+      }),
+    );
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    expect(embeddedAbort).toHaveBeenCalledOnce();
+
+    clearActiveEmbeddedRun("session-embedded-only", embeddedHandle, "session-key");
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+  });
+  it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const queueSettings = await import("./queue/settings.js");
+
+    let resolveAuth!: () => void;
+    const authPromise = new Promise<void>((resolve) => {
+      resolveAuth = resolve;
+    });
+
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(
+      async () => await authPromise.then(() => undefined),
+    );
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-auth-race",
+      }),
+    );
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+
+    const intruderRun = createReplyOperation({
+      sessionId: "session-auth-race",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    intruderRun.setPhase("running");
+    resolveAuth();
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+
+    intruderRun.complete();
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+  });
+  it("re-resolves auth profile after waiting for a prior run", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const queueSettings = await import("./queue/settings.js");
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": {
+        sessionId: "session-auth-profile",
+        sessionFile: "/tmp/session-auth-profile.jsonl",
+        authProfileOverride: "profile-before-wait",
+        authProfileOverrideSource: "auto",
+        updatedAt: 1,
+      },
+    };
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementation(async ({ sessionEntry }) => {
+      return sessionEntry?.authProfileOverride;
+    });
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const previousRun = createReplyOperation({
+      sessionId: "session-auth-profile",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    previousRun.setPhase("running");
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-auth-profile",
+        sessionEntry: sessionStore["session-key"],
+        sessionStore,
+      }),
+    );
+
+    await Promise.resolve();
+    sessionStore["session-key"] = {
+      ...sessionStore["session-key"],
+      authProfileOverride: "profile-after-wait",
+      authProfileOverrideSource: "auto",
+      updatedAt: 2,
+    };
+    previousRun.complete();
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
+    expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledTimes(2);
+  });
+  it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const queueSettings = await import("./queue/settings.js");
+
+    let resolveAuth!: () => void;
+    const authPromise = new Promise<void>((resolve) => {
+      resolveAuth = resolve;
+    });
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": {
+        sessionId: "session-before-rotation",
+        sessionFile: "/tmp/session-before-rotation.jsonl",
+        updatedAt: 1,
+      },
+    };
+
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(
+      async () => await authPromise.then(() => undefined),
+    );
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-before-rotation",
+        sessionEntry: sessionStore["session-key"],
+        sessionStore,
+      }),
+    );
+
+    await Promise.resolve();
+    const rotatedRun = createReplyOperation({
+      sessionId: "session-before-rotation",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    rotatedRun.setPhase("running");
+    sessionStore["session-key"] = {
+      ...sessionStore["session-key"],
+      sessionId: "session-after-rotation",
+      sessionFile: "/tmp/session-after-rotation.jsonl",
+      updatedAt: 2,
+    };
+    rotatedRun.updateSessionId("session-after-rotation");
+
+    resolveAuth();
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+
+    rotatedRun.complete();
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
+  });
+  it("rechecks same-session ownership after wait resolves before calling the runner", async () => {
+    const queueSettings = await import("./queue/settings.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    const previousRun = createReplyOperation({
+      sessionId: "session-before-wait",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    previousRun.setPhase("running");
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-before-wait",
+      }),
+    );
+
+    await Promise.resolve();
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+
+    previousRun.complete();
+    const nextRun = createReplyOperation({
+      sessionId: "session-after-wait",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    nextRun.setPhase("running");
+
+    await expect(runPromise).resolves.toEqual({
+      text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+    });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+
+    nextRun.complete();
+  });
+  it("re-drains system events after waiting behind an active run", async () => {
+    const queueSettings = await import("./queue/settings.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
+    vi.mocked(drainFormattedSystemEvents)
+      .mockResolvedValueOnce("System: [t] Initial event.")
+      .mockResolvedValueOnce("System: [t] Post-compaction context.");
+
+    const previousRun = createReplyOperation({
+      sessionId: "session-events-after-wait",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    previousRun.setPhase("running");
+
+    const runPromise = runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionId: "session-events-after-wait",
+      }),
+    );
+
+    await Promise.resolve();
+    previousRun.complete();
+
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain("System: [t] Initial event.");
+    expect(call?.commandBody).toContain("System: [t] Post-compaction context.");
+    expect(call?.followupRun.prompt).toContain("System: [t] Initial event.");
+    expect(call?.followupRun.prompt).toContain("System: [t] Post-compaction context.");
+  });
   it("uses inbound origin channel for run messageProvider", async () => {
     await runPreparedReply(
       baseParams({

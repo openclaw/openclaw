@@ -5,17 +5,14 @@ import type {
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/tool-result-context-guard.js";
 import {
-  HARD_MAX_TOOL_RESULT_CHARS,
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
 } from "./pi-embedded-runner/tool-result-truncation.js";
 import { createPendingToolCallState } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
-
-const GUARD_TRUNCATION_SUFFIX =
-  "\n\n⚠️ [Content truncated during persistence — original exceeded size limit. " +
-  "Use offset/limit parameters or request specific sections for large content.]";
 const RAW_APPEND_MESSAGE = Symbol("openclaw.session.rawAppendMessage");
 
 type SessionManagerWithRawAppend = SessionManager & {
@@ -31,8 +28,8 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   if ((msg as { role?: string }).role !== "toolResult") {
     return msg;
   }
-  return truncateToolResultMessage(msg, HARD_MAX_TOOL_RESULT_CHARS, {
-    suffix: GUARD_TRUNCATION_SUFFIX,
+  return truncateToolResultMessage(msg, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS, {
+    suffix: (truncatedChars) => formatContextLimitTruncationNotice(truncatedChars),
     minKeepChars: 2_000,
   });
 }

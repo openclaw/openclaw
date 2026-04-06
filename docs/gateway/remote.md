@@ -77,7 +77,7 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 With the tunnel up:
 
 - `openclaw health` and `openclaw status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
-- `openclaw gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
+- `openclaw gateway status`, `openclaw gateway health`, `openclaw gateway probe`, and `openclaw gateway call` can also target the forwarded URL via `--url` when needed.
 
 Note: replace `18789` with your configured `gateway.port` (or `--port`/`OPENCLAW_GATEWAY_PORT`).
 Note: when you pass `--url`, the CLI does not fall back to config or environment credentials.
@@ -145,9 +145,10 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
 - **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity
-  headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints still
-  require token/password auth. This tokenless flow assumes the gateway host is
-  trusted. Set it to `false` if you want tokens/passwords everywhere.
+  headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints do not
+  use that Tailscale header auth and instead follow the gateway's normal HTTP
+  auth mode. This tokenless flow assumes the gateway host is trusted. Set it to
+  `false` if you want shared-secret auth everywhere.
 - **Trusted-proxy** auth is for non-loopback identity-aware proxy setups only.
   Same-host loopback reverse proxies do not satisfy `gateway.auth.mode: "trusted-proxy"`.
 - Treat browser control like operator access: tailnet-only + deliberate node pairing.

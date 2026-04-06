@@ -4,6 +4,7 @@ import {
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import { canExecRequestNode } from "../agents/exec-defaults.js";
 import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
@@ -24,7 +25,14 @@ export function listSkillCommandsForWorkspace(params: {
     config: params.cfg,
     agentId: params.agentId,
     skillFilter: params.skillFilter,
-    eligibility: { remote: getRemoteSkillEligibility() },
+    eligibility: {
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({
+          cfg: params.cfg,
+          agentId: params.agentId,
+        }),
+      }),
+    },
     reservedNames: listReservedChatSlashCommandNames(),
   });
 }
@@ -100,7 +108,13 @@ export function listSkillCommandsForAgents(params: {
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
       skillFilter,
-      eligibility: { remote: getRemoteSkillEligibility() },
+      eligibility: {
+        remote: getRemoteSkillEligibility({
+          advertiseExecNode: canExecRequestNode({
+            cfg: params.cfg,
+          }),
+        }),
+      },
       reservedNames: used,
     });
     for (const command of commands) {

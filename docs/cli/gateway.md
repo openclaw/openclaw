@@ -3,7 +3,7 @@ summary: "OpenClaw Gateway CLI (`openclaw gateway`) — run, query, and discover
 read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
-  - Discovering gateways via Bonjour (LAN + tailnet)
+  - Discovering gateways via Bonjour (local + wide-area DNS-SD)
 title: "gateway"
 ---
 
@@ -58,7 +58,6 @@ Notes:
 - `--force`: kill any existing listener on the selected port before starting.
 - `--verbose`: verbose logs.
 - `--cli-backend-logs`: only show CLI backend logs in the console (and enable stdout/stderr).
-- `--claude-cli-logs`: deprecated alias for `--cli-backend-logs`.
 - `--ws-log <auto|full|compact>`: websocket log style (default `auto`).
 - `--compact`: alias for `--ws-log compact`.
 - `--raw-stream`: log raw model stream events to jsonl.
@@ -117,7 +116,7 @@ openclaw gateway status --require-rpc
 
 Options:
 
-- `--url <url>`: override the probe URL.
+- `--url <url>`: add an explicit probe target. Configured remote + localhost are still probed.
 - `--token <token>`: token auth for the probe.
 - `--password <password>`: password auth for the probe.
 - `--timeout <ms>`: probe timeout (default `10000`).
@@ -132,6 +131,7 @@ Notes:
 - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
 - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need the Gateway RPC itself to be healthy.
+- `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
 - Human output includes the resolved file log path plus the CLI-vs-service config paths/validity snapshot to help diagnose profile or state-dir drift.
 - On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
 - Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
@@ -143,6 +143,13 @@ Notes:
 
 - your configured remote gateway (if set), and
 - localhost (loopback) **even if remote is configured**.
+
+If you pass `--url`, that explicit target is added ahead of both. Human output labels the
+targets as:
+
+- `URL (explicit)`
+- `Remote (configured)` or `Remote (configured, inactive)`
+- `Local loopback`
 
 If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
 
@@ -163,10 +170,21 @@ JSON notes (`--json`):
 - Top level:
   - `ok`: at least one target is reachable.
   - `degraded`: at least one target had scope-limited detail RPC.
+  - `primaryTargetId`: best target to treat as the active winner in this order: explicit URL, SSH tunnel, configured remote, then local loopback.
+  - `warnings[]`: best-effort warning records with `code`, `message`, and optional `targetIds`.
+  - `network`: local loopback/tailnet URL hints derived from current config and host networking.
+  - `discovery.timeoutMs` and `discovery.count`: the actual discovery budget/result count used for this probe pass.
 - Per target (`targets[].connect`):
   - `ok`: reachability after connect + degraded classification.
   - `rpcOk`: full detail RPC success.
   - `scopeLimited`: detail RPC failed due to missing operator scope.
+
+Common warning codes:
+
+- `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
+- `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
+- `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
+- `probe_scope_limited`: WebSocket connect succeeded, but detail RPC was limited by missing `operator.read`.
 
 #### Remote over SSH (Mac app parity)
 
@@ -182,7 +200,9 @@ Options:
 
 - `--ssh <target>`: `user@host` or `user@host:port` (port defaults to `22`).
 - `--ssh-identity <path>`: identity file.
-- `--ssh-auto`: pick the first discovered gateway host as SSH target (LAN/WAB only).
+- `--ssh-auto`: pick the first discovered gateway host as SSH target from the resolved
+  discovery endpoint (`local.` plus the configured wide-area domain, if any). TXT-only
+  hints are ignored.
 
 Config (optional, used as defaults):
 
@@ -253,10 +273,10 @@ Wide-Area discovery records include (TXT):
 - `role` (gateway role hint)
 - `transport` (transport hint, e.g. `gateway`)
 - `gatewayPort` (WebSocket port, usually `18789`)
-- `sshPort` (SSH port; defaults to `22` if not present)
+- `sshPort` (optional; clients default SSH targets to `22` when it is absent)
 - `tailnetDns` (MagicDNS hostname, when available)
 - `gatewayTls` / `gatewayTlsSha256` (TLS enabled + cert fingerprint)
-- `cliPath` (optional hint for remote installs)
+- `cliPath` (remote-install hint written to the wide-area zone)
 
 ### `gateway discover`
 
@@ -275,3 +295,12 @@ Examples:
 openclaw gateway discover --timeout 4000
 openclaw gateway discover --json | jq '.beacons[].wsUrl'
 ```
+
+Notes:
+
+- The CLI scans `local.` plus the configured wide-area domain when one is enabled.
+- `wsUrl` in JSON output is derived from the resolved service endpoint, not from TXT-only
+  hints such as `lanHost` or `tailnetDns`.
+- On `local.` mDNS, `sshPort` and `cliPath` are only broadcast when
+  `discovery.mdns.mode` is `full`. Wide-area DNS-SD still writes `cliPath`; `sshPort`
+  stays optional there too.

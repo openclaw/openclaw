@@ -1,13 +1,17 @@
 import type { Command } from "commander";
-import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { removeCommandByName } from "./command-tree.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import { shouldRegisterPrimaryCommandOnly } from "../command-registration-policy.js";
 import type { ProgramContext } from "./context.js";
 import {
   type CoreCliCommandDescriptor,
   getCoreCliCommandDescriptors,
   getCoreCliCommandsWithSubcommands,
 } from "./core-command-descriptors.js";
-import { registerLazyCommand } from "./register-lazy-command.js";
+import {
+  registerCommandGroupByName,
+  registerCommandGroups,
+  type CommandGroupEntry,
+} from "./register-command-groups.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
 export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
@@ -25,14 +29,7 @@ export type CommandRegistration = {
 
 type CoreCliEntry = {
   commands: CoreCliCommandDescriptor[];
-  register: (params: CommandRegisterParams) => Promise<void> | void;
-};
-
-const shouldRegisterCorePrimaryOnly = (argv: string[]) => {
-  if (hasHelpOrVersion(argv)) {
-    return false;
-  }
-  return true;
+  registerWithParams: (params: CommandRegisterParams) => Promise<void> | void;
 };
 
 // Note for humans and agents:
@@ -47,7 +44,7 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: false,
       },
     ],
-    register: async ({ program }) => {
+    registerWithParams: async ({ program }) => {
       const mod = await import("./register.setup.js");
       mod.registerSetupCommand(program);
     },
@@ -60,7 +57,7 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: false,
       },
     ],
-    register: async ({ program }) => {
+    registerWithParams: async ({ program }) => {
       const mod = await import("./register.onboard.js");
       mod.registerOnboardCommand(program);
     },
@@ -74,7 +71,7 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: false,
       },
     ],
-    register: async ({ program }) => {
+    registerWithParams: async ({ program }) => {
       const mod = await import("./register.configure.js");
       mod.registerConfigureCommand(program);
     },
@@ -88,7 +85,7 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: true,
       },
     ],
-    register: async ({ program }) => {
+    registerWithParams: async ({ program }) => {
       const mod = await import("../config-cli.js");
       mod.registerConfigCli(program);
     },
@@ -101,7 +98,7 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: true,
       },
     ],
-    register: async ({ program }) => {
+    registerWithParams: async ({ program }) => {
       const mod = await import("./register.backup.js");
       mod.registerBackupCommand(program);
     },
@@ -129,7 +126,7 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: false,
       },
     ],
-    register: async ({ program }) => {
+    registerWithParams: async ({ program }) => {
       const mod = await import("./register.maintenance.js");
       mod.registerMaintenanceCommands(program);
     },
@@ -142,7 +139,7 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: true,
       },
     ],
-    register: async ({ program, ctx }) => {
+    registerWithParams: async ({ program, ctx }) => {
       const mod = await import("./register.message.js");
       mod.registerMessageCommands(program, ctx);
     },
@@ -155,7 +152,7 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: true,
       },
     ],
-    register: async ({ program }) => {
+    registerWithParams: async ({ program }) => {
       const mod = await import("../mcp-cli.js");
       mod.registerMcpCli(program);
     },
@@ -173,7 +170,7 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: true,
       },
     ],
-    register: async ({ program, ctx }) => {
+    registerWithParams: async ({ program, ctx }) => {
       const mod = await import("./register.agent.js");
       mod.registerAgentCommands(program, {
         agentChannelOptions: ctx.agentChannelOptions,
@@ -203,40 +200,24 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: true,
       },
     ],
-    register: async ({ program }) => {
+    registerWithParams: async ({ program }) => {
       const mod = await import("./register.status-health-sessions.js");
       mod.registerStatusHealthSessionsCommands(program);
     },
   },
 ];
 
+function resolveCoreCommandGroups(ctx: ProgramContext, argv: string[]): CommandGroupEntry[] {
+  return coreEntries.map((entry) => ({
+    placeholders: entry.commands,
+    register: async (program) => {
+      await entry.registerWithParams({ program, ctx, argv });
+    },
+  }));
+}
+
 export function getCoreCliCommandNames(): string[] {
   return getCoreCliCommandDescriptors().map((command) => command.name);
-}
-
-function removeEntryCommands(program: Command, entry: CoreCliEntry) {
-  // Some registrars install multiple top-level commands (e.g. status/health/sessions).
-  // Remove placeholders/old registrations for all names in the entry before re-registering.
-  for (const cmd of entry.commands) {
-    removeCommandByName(program, cmd.name);
-  }
-}
-
-function registerLazyCoreCommand(
-  program: Command,
-  ctx: ProgramContext,
-  entry: CoreCliEntry,
-  command: CoreCliCommandDescriptor,
-) {
-  registerLazyCommand({
-    program,
-    name: command.name,
-    description: command.description,
-    removeNames: entry.commands.map((cmd) => cmd.name),
-    register: async () => {
-      await entry.register({ program, ctx, argv: process.argv });
-    },
-  });
 }
 
 export async function registerCoreCliByName(
@@ -245,38 +226,16 @@ export async function registerCoreCliByName(
   name: string,
   argv: string[] = process.argv,
 ): Promise<boolean> {
-  const entry = coreEntries.find((candidate) =>
-    candidate.commands.some((cmd) => cmd.name === name),
-  );
-  if (!entry) {
-    return false;
-  }
-
-  removeEntryCommands(program, entry);
-  await entry.register({ program, ctx, argv });
-  return true;
+  return registerCommandGroupByName(program, resolveCoreCommandGroups(ctx, argv), name);
 }
 
 export function registerCoreCliCommands(program: Command, ctx: ProgramContext, argv: string[]) {
-  const primary = getPrimaryCommand(argv);
-  if (primary && shouldRegisterCorePrimaryOnly(argv)) {
-    const entry = coreEntries.find((candidate) =>
-      candidate.commands.some((cmd) => cmd.name === primary),
-    );
-    if (entry) {
-      const cmd = entry.commands.find((c) => c.name === primary);
-      if (cmd) {
-        registerLazyCoreCommand(program, ctx, entry, cmd);
-      }
-      return;
-    }
-  }
-
-  for (const entry of coreEntries) {
-    for (const cmd of entry.commands) {
-      registerLazyCoreCommand(program, ctx, entry, cmd);
-    }
-  }
+  const { primary } = resolveCliArgvInvocation(argv);
+  registerCommandGroups(program, resolveCoreCommandGroups(ctx, argv), {
+    eager: false,
+    primary,
+    registerPrimaryOnly: Boolean(primary && shouldRegisterPrimaryCommandOnly(argv)),
+  });
 }
 
 export function registerProgramCommands(

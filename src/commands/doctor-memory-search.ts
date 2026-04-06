@@ -8,6 +8,9 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/engine-embeddings.js";
+import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";
+import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
   auditShortTermPromotionArtifacts,
   getBuiltinMemoryEmbeddingProviderDoctorMetadata,
@@ -15,9 +18,6 @@ import {
   repairShortTermPromotionArtifacts,
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-engine-runtime.js";
-import { DEFAULT_LOCAL_MODEL } from "../plugin-sdk/memory-core-host-engine-embeddings.js";
-import { checkQmdBinaryAvailability } from "../plugin-sdk/memory-core-host-engine-qmd.js";
-import { hasConfiguredMemorySecretInput } from "../plugin-sdk/memory-core-host-secret.js";
 import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,
@@ -218,7 +218,7 @@ export async function noteMemorySearchHealth(
           qmdCheck.error ? `Probe error: ${qmdCheck.error}` : null,
           "",
           "Fix (pick one):",
-          "- Install the supported QMD package: npm install -g @tobilu/qmd",
+          "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
           `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
           `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
           "",

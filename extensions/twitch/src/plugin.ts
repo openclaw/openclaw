@@ -6,11 +6,11 @@
  */
 
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
   createComputedAccountStatusAdapter,

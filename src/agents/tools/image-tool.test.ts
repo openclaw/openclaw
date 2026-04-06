@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,14 +12,14 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
+import { createOpenClawCodingTools } from "../pi-tools.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 
-type PiToolsModule = typeof import("../pi-tools.js");
-type CreateOpenClawCodingToolsArgs = Parameters<PiToolsModule["createOpenClawCodingTools"]>[0];
+type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -65,10 +66,14 @@ const imageProviderHarness = vi.hoisted(() => {
   };
 });
 
-vi.mock("../bash-tools.js", () => ({
-  createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
-  createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
-}));
+vi.mock("../bash-tools.js", async () => {
+  const actual = await vi.importActual<typeof import("../bash-tools.js")>("../bash-tools.js");
+  return {
+    ...actual,
+    createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
+    createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
+  };
+});
 
 vi.mock("../channel-tools.js", () => ({
   copyChannelAgentToolMeta: vi.fn((_from, to) => to),
@@ -85,6 +90,50 @@ vi.mock("../pi-tools.before-tool-call.js", () => ({
 
 vi.mock("../pi-tools.abort.js", () => ({
   wrapToolWithAbortSignal: vi.fn((tool) => tool),
+}));
+
+vi.mock("../auth-profiles.js", () => ({
+  ensureAuthProfileStore: (agentDir?: string) => {
+    if (!agentDir) {
+      return { version: 1, profiles: {} };
+    }
+    const pathname = path.join(agentDir, "auth-profiles.json");
+    try {
+      return JSON.parse(fsSync.readFileSync(pathname, "utf8")) as {
+        version?: number;
+        profiles?: Record<string, { provider?: string }>;
+      };
+    } catch {
+      return { version: 1, profiles: {} };
+    }
+  },
+  listProfilesForProvider: (
+    store: { profiles?: Record<string, { provider?: string }> },
+    provider: string,
+  ) => Object.values(store.profiles ?? {}).filter((profile) => profile?.provider === provider),
+}));
+
+vi.mock("../model-auth.js", () => ({
+  resolveEnvApiKey: (provider: string) => {
+    const envVarByProvider: Record<string, string[]> = {
+      anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+      minimax: ["MINIMAX_API_KEY", "MINIMAX_OAUTH_TOKEN"],
+      "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
+      moonshot: ["MOONSHOT_API_KEY"],
+      openai: ["OPENAI_API_KEY"],
+      openrouter: ["OPENROUTER_API_KEY"],
+      zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+    };
+    const envVar = (envVarByProvider[provider] ?? []).find((key) => {
+      const value = process.env[key];
+      return typeof value === "string" && value.length > 0;
+    });
+    return {
+      apiKey: envVar ? process.env[envVar] : undefined,
+      source: envVar ? "env" : undefined,
+      envVar,
+    };
+  },
 }));
 
 vi.mock("../openclaw-tools.js", async () => {
@@ -120,17 +169,27 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 }
 
 async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
-  vi.resetModules();
-  const freshImageTool = await import("./image-tool.js");
-  freshImageTool.__testing.setProviderDepsForTest({
+  const defaultImageModels = new Map<string, string>([
+    ["anthropic", "claude-opus-4-6"],
+    ["minimax", "MiniMax-VL-01"],
+    ["minimax-portal", "MiniMax-VL-01"],
+    ["openai", "gpt-5.4-mini"],
+    ["zai", "glm-4.6v"],
+  ]);
+  __testing.setProviderDepsForTest({
     buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
     getMediaUnderstandingProvider: (
       id: string,
       registry: Map<string, MediaUnderstandingProvider>,
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    describeImageWithModel: describeGenericImageWithModel,
+    describeImagesWithModel: describeGenericImagesWithModel,
+    resolveAutoMediaKeyProviders: ({ capability }) =>
+      capability === "image" ? ["openai", "anthropic"] : [],
+    resolveDefaultMediaModel: ({ providerId, capability }) =>
+      capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
   });
-  const { createOpenClawCodingTools } = await import("../pi-tools.js");
   return createOpenClawCodingTools(options);
 }
 
@@ -356,6 +415,50 @@ async function describeMoonshotImages(
   });
 }
 
+async function readMockResponseText(response: Response): Promise<string> {
+  const contentType =
+    response.headers instanceof Headers ? (response.headers.get("content-type") ?? "") : "";
+  if (contentType.includes("application/json") || typeof response.text !== "function") {
+    const payload = (await response.json()) as { content?: string };
+    return payload.content ?? "";
+  }
+  const raw = await response.text();
+  const match = raw.match(/"content":"([^"]*)"/);
+  return match?.[1] ?? "";
+}
+
+async function describeGenericImageWithModel(
+  params: ImageDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const response = await global.fetch("https://example.invalid/media-image", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      mime: params.mime,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
+}
+
+async function describeGenericImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const response = await global.fetch("https://example.invalid/media-images", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      imageCount: params.images.length,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
+}
+
 const moonshotProvider = {
   id: "moonshot",
   capabilities: ["image"],
@@ -365,6 +468,13 @@ const moonshotProvider = {
 
 function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
   imageProviderHarness.setProviders(providers);
+  const defaultImageModels = new Map<string, string>([
+    ["anthropic", "claude-opus-4-6"],
+    ["minimax", "MiniMax-VL-01"],
+    ["minimax-portal", "MiniMax-VL-01"],
+    ["openai", "gpt-5.4-mini"],
+    ["zai", "glm-4.6v"],
+  ]);
   __testing.setProviderDepsForTest({
     buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
@@ -372,6 +482,12 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
       id: string,
       registry: Map<string, MediaUnderstandingProvider>,
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    describeImageWithModel: describeGenericImageWithModel,
+    describeImagesWithModel: describeGenericImagesWithModel,
+    resolveAutoMediaKeyProviders: ({ capability }) =>
+      capability === "image" ? ["openai", "anthropic"] : [],
+    resolveDefaultMediaModel: ({ providerId, capability }) =>
+      capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
   });
 }
 
@@ -466,7 +582,12 @@ describe("image tool implicit imageModel config", () => {
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_OAUTH_TOKEN",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
     "MINIMAX_API_KEY",
+    "MODELSTUDIO_API_KEY",
+    "QWEN_API_KEY",
+    "DASHSCOPE_API_KEY",
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
     // Avoid implicit Copilot provider discovery hitting the network in tests.
@@ -497,14 +618,16 @@ describe("image tool implicit imageModel config", () => {
   it("pairs minimax primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+      vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-test");
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
       };
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
-        createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
-      );
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
+        fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
+      });
       expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
     });
   });

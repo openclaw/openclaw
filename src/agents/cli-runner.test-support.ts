@@ -2,11 +2,14 @@ import fs from "node:fs/promises";
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
 import { buildAnthropicCliBackend } from "../../extensions/anthropic/test-api.js";
-import { buildGoogleGeminiCliBackend } from "../../extensions/google/test-api.js";
-import { buildOpenAICodexCliBackend } from "../../extensions/openai/test-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../infra/system-events.js";
+import type { CliBackendPlugin } from "../plugin-sdk/cli-backend.js";
+import {
+  CLI_FRESH_WATCHDOG_DEFAULTS,
+  CLI_RESUME_WATCHDOG_DEFAULTS,
+} from "../plugin-sdk/cli-backend.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -99,6 +102,77 @@ type ManagedRunMock = {
   cancel: Mock<() => void>;
 };
 
+function buildOpenAICodexCliBackendFixture(): CliBackendPlugin {
+  return {
+    id: "codex-cli",
+    config: {
+      command: "codex",
+      args: [
+        "exec",
+        "--json",
+        "--color",
+        "never",
+        "--sandbox",
+        "workspace-write",
+        "--skip-git-repo-check",
+      ],
+      resumeArgs: [
+        "exec",
+        "resume",
+        "{sessionId}",
+        "--color",
+        "never",
+        "--sandbox",
+        "workspace-write",
+        "--skip-git-repo-check",
+      ],
+      output: "jsonl",
+      resumeOutput: "text",
+      input: "arg",
+      modelArg: "--model",
+      sessionIdFields: ["thread_id"],
+      sessionMode: "existing",
+      imageArg: "--image",
+      imageMode: "repeat",
+      reliability: {
+        watchdog: {
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+        },
+      },
+      serialize: true,
+    },
+  };
+}
+
+function buildGoogleGeminiCliBackendFixture(): CliBackendPlugin {
+  return {
+    id: "google-gemini-cli",
+    config: {
+      command: "gemini",
+      args: ["--prompt", "--output-format", "json"],
+      resumeArgs: ["--resume", "{sessionId}", "--prompt", "--output-format", "json"],
+      output: "json",
+      input: "arg",
+      modelArg: "--model",
+      modelAliases: {
+        pro: "gemini-3.1-pro-preview",
+        flash: "gemini-3.1-flash-preview",
+        "flash-lite": "gemini-3.1-flash-lite-preview",
+      },
+      sessionMode: "existing",
+      sessionIdFields: ["session_id", "sessionId"],
+      reliability: {
+        watchdog: {
+          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
+          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+        },
+      },
+      serialize: true,
+    },
+  };
+}
+
 export function createManagedRun(
   exit: MockRunExit,
   pid = 1234,
@@ -155,12 +229,12 @@ export async function setupCliRunnerTestModule() {
     },
     {
       pluginId: "openai",
-      backend: buildOpenAICodexCliBackend(),
+      backend: buildOpenAICodexCliBackendFixture(),
       source: "test",
     },
     {
       pluginId: "google",
-      backend: buildGoogleGeminiCliBackend(),
+      backend: buildGoogleGeminiCliBackendFixture(),
       source: "test",
     },
   ];
@@ -189,6 +263,13 @@ export function stubBootstrapContext(params: {
   contextFiles: EmbeddedContextFile[];
 }) {
   hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce(params);
+}
+
+export function restoreCliRunnerPrepareTestDeps() {
+  setCliRunnerPrepareTestDeps({
+    makeBootstrapWarn: () => () => {},
+    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+  });
 }
 
 export async function runCliAgentWithBackendConfig(params: {

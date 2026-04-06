@@ -13,6 +13,8 @@ import type {
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
+import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 import type {
   ChannelAccountSnapshot,
@@ -95,6 +97,11 @@ export type ChannelSetupAdapter = {
     accountId: string;
     input: ChannelSetupInput;
   }) => string | null;
+  singleAccountKeysToMove?: readonly string[];
+  namedAccountPromotionKeys?: readonly string[];
+  resolveSingleAccountPromotionTarget?: (params: {
+    channel: Record<string, unknown>;
+  }) => string | undefined;
 };
 
 export type ChannelConfigAdapter<ResolvedAccount> = {
@@ -122,11 +129,26 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
+  hasConfiguredState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
   hasPersistedAuthState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
   resolveDefaultTo?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string | undefined;
+};
+
+export type ChannelSecretsAdapter = {
+  secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
+  unsupportedSecretRefSurfacePatterns?: readonly string[];
+  collectUnsupportedSecretRefConfigCandidates?: (raw: unknown) => Array<{
+    path: string;
+    value: unknown;
+  }>;
+  collectRuntimeConfigAssignments?: (params: {
+    config: OpenClawConfig;
+    defaults: SecretDefaults | undefined;
+    context: ResolverContext;
+  }) => void;
 };
 
 export type ChannelGroupAdapter = {
@@ -712,6 +734,17 @@ export type ChannelApprovalRenderAdapter = {
   };
 };
 
+export type ChannelApprovalAdapter = {
+  delivery?: ChannelApprovalDeliveryAdapter;
+  render?: ChannelApprovalRenderAdapter;
+  native?: ChannelApprovalNativeAdapter;
+  describeExecApprovalSetup?: (params: {
+    channel: string;
+    channelLabel: string;
+    accountId?: string;
+  }) => string | null | undefined;
+};
+
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
   authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
   getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
@@ -721,12 +754,6 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     senderId?: string | null;
     approvalKind: ChannelApprovalKind;
   }) => ChannelApproveCommandBehavior | undefined;
-};
-
-export type ChannelApprovalAdapter = {
-  delivery?: ChannelApprovalDeliveryAdapter;
-  render?: ChannelApprovalRenderAdapter;
-  native?: ChannelApprovalNativeAdapter;
 };
 
 export type ChannelAllowlistAdapter = {

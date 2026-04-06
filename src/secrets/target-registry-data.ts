@@ -1,17 +1,48 @@
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
+import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
-
-type ChannelSecretTargetRegistrySurface = {
-  secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
-};
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
 const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
-  return (getBundledChannelContractSurfaces() as ChannelSecretTargetRegistrySurface[]).flatMap(
-    (surface) => surface.secretTargetRegistryEntries ?? [],
-  );
+  const entries: SecretTargetRegistryEntry[] = [];
+  const handledChannelIds = new Set<string>();
+
+  for (const metadata of listBundledPluginMetadata({
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  })) {
+    const channelIds = metadata.manifest.channels ?? [];
+    if (channelIds.length === 0) {
+      continue;
+    }
+    if (!metadata.publicSurfaceArtifacts?.includes("contract-api.js")) {
+      continue;
+    }
+    try {
+      const contractApi = loadBundledPluginPublicSurfaceModuleSync<{
+        secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
+      }>({
+        dirName: metadata.dirName,
+        artifactBasename: "contract-api.js",
+      });
+      entries.push(...(contractApi.secretTargetRegistryEntries ?? []));
+      channelIds.forEach((channelId) => handledChannelIds.add(channelId));
+    } catch {
+      // Fall back to the full bootstrap plugin surface for channels that do not
+      // expose a usable secret contract artifact.
+    }
+  }
+
+  for (const plugin of iterateBootstrapChannelPlugins()) {
+    if (handledChannelIds.has(plugin.id)) {
+      continue;
+    }
+    entries.push(...(plugin.secrets?.secretTargetRegistryEntries ?? []));
+  }
+  return entries;
 }
 
 const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
@@ -322,6 +353,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,
+    providerIdPathSegmentIndex: 2,
   },
   {
     id: "tools.web.search.apiKey",

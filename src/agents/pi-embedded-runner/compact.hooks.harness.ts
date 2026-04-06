@@ -234,12 +234,16 @@ export async function loadCompactHooksHarness(): Promise<{
             : JSON.parse(JSON.stringify(message)),
         ),
         agent: {
-          replaceMessages: vi.fn((messages: unknown[]) => {
-            session.messages = [...(messages as typeof session.messages)];
-          }),
           streamFn: vi.fn(),
-          setTransport: vi.fn(),
           transport: "sse",
+          state: {
+            get messages() {
+              return session.messages;
+            },
+            set messages(messages: unknown[]) {
+              session.messages = [...(messages as typeof session.messages)];
+            },
+          },
         },
         compact: vi.fn(async () => {
           session.messages.splice(1);
@@ -358,6 +362,8 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./stream-resolution.js", () => ({
+    resolveEmbeddedAgentApiKey: vi.fn(async () => "test-api-key"),
+    resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
     resolveEmbeddedAgentStreamFn: resolveEmbeddedAgentStreamFnMock,
   }));
 
@@ -424,7 +430,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./extensions.js", () => ({
-    buildEmbeddedExtensionFactories: vi.fn(() => ({ factories: [] })),
+    buildEmbeddedExtensionFactories: vi.fn(() => []),
   }));
 
   vi.doMock("./history.js", () => ({
@@ -492,6 +498,11 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../pi-embedded-helpers.js", () => ({
     ensureSessionHeader: vi.fn(async () => {}),
+    pickFallbackThinkingLevel: vi.fn((params: { message?: string; attempted?: Set<string> }) =>
+      params.message?.includes("Reasoning is mandatory") && !params.attempted?.has("minimal")
+        ? "minimal"
+        : undefined,
+    ),
     validateAnthropicTurns: vi.fn((m: unknown[]) => m),
     validateGeminiTurns: vi.fn((m: unknown[]) => m),
   }));
@@ -528,7 +539,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./utils.js", () => ({
     describeUnknownError: vi.fn((err: unknown) => String(err)),
-    mapThinkingLevel: vi.fn(() => "off"),
+    mapThinkingLevel: vi.fn((level?: string) => level ?? "off"),
     resolveExecToolDefaults: vi.fn(() => undefined),
   }));
 

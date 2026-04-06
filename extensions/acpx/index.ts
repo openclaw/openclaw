@@ -1,18 +1,19 @@
-import type { OpenClawPluginApi } from "./runtime-api.js";
+import { createAcpxRuntimeService } from "./register.runtime.js";
+import { tryDispatchAcpReplyHook, type OpenClawPluginApi } from "./runtime-api.js";
 import { createAcpxPluginConfigSchema } from "./src/config-schema.js";
 
 const plugin = {
   id: "acpx",
   name: "ACPX Runtime",
-  description: "ACP runtime backend powered by the acpx CLI.",
+  description: "Embedded ACP runtime backend with plugin-owned session and transport management.",
   configSchema: () => createAcpxPluginConfigSchema(),
-  async register(api: OpenClawPluginApi) {
-    const { createAcpxRuntimeService } = await import("./register.runtime.js");
+  register(api: OpenClawPluginApi) {
     api.registerService(
       createAcpxRuntimeService({
         pluginConfig: api.pluginConfig,
       }),
     );
+    api.on("reply_dispatch", tryDispatchAcpReplyHook);
   },
 };
 

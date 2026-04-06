@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearInternalHooks, getRegisteredEventKeys } from "../hooks/internal-hooks.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -28,7 +28,10 @@ import {
 import {
   buildMemoryPromptSection,
   getMemoryRuntime,
+  listMemoryCorpusSupplements,
+  registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
+  registerMemoryPromptSupplement,
   registerMemoryPromptSection,
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
@@ -1381,7 +1384,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
       id: "active",
       create: async () => ({ provider: null }),
     });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => null,
+    });
     registerMemoryPromptSection(() => ["active memory section"]);
+    registerMemoryPromptSupplement("memory-wiki", () => ["active wiki supplement"]);
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,
       forceFlushTranscriptBytes: 2,
@@ -1448,7 +1456,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-memory")?.status).toBe("loaded");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "active memory section",
+      "active wiki supplement",
     ]);
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
@@ -1468,6 +1478,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
             create: async () => ({ provider: null }),
           });
           api.registerMemoryPromptSection(() => ["stale failure section"]);
+          api.registerMemoryPromptSupplement(() => ["stale failure supplement"]);
+          api.registerMemoryCorpusSupplement({
+            search: async () => [],
+            get: async () => null,
+          });
           api.registerMemoryFlushPlan(() => ({
             softThresholdTokens: 10,
             forceFlushTranscriptBytes: 20,
@@ -1504,6 +1519,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(listMemoryCorpusSupplements()).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(listMemoryEmbeddingProviders()).toEqual([]);
@@ -2130,21 +2146,6 @@ module.exports = { id: "throws-after-import", register() {} };`,
           });
         },
       },
-      {
-        label: "requires cli backend ids",
-        pluginId: "cli-backend-missing-id",
-        body: `module.exports = { id: "cli-backend-missing-id", register(api) {
-  api.registerCliBackend({ id: "   ", config: { command: "claude" } });
-} };`,
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          expect(registry.cliBackends).toHaveLength(0);
-          expectRegistryErrorDiagnostic({
-            registry,
-            pluginId: "cli-backend-missing-id",
-            message: "cli backend registration missing id",
-          });
-        },
-      },
     ] as const;
 
     runSinglePluginRegistryScenarios(scenarios);
@@ -2236,22 +2237,6 @@ module.exports = { id: "throws-after-import", register() {} };`,
         duplicateMessage: "cli command already registered: shared-cli (cli-owner-a)",
         assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
-        },
-        assert: expectDuplicateRegistrationResult,
-      },
-      {
-        label: "plugin cli backend ids",
-        ownerA: "cli-backend-owner-a",
-        ownerB: "cli-backend-owner-b",
-        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
-  api.registerCliBackend({ id: "shared-cli-backend", config: { command: "backend-${ownerId}" } });
-} };`,
-        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
-          registry.cliBackends?.length ?? 0,
-        duplicateMessage:
-          "cli backend already registered: shared-cli-backend (cli-backend-owner-a)",
-        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          expect(registry.cliBackends?.[0]?.pluginId).toBe("cli-backend-owner-a");
         },
         assert: expectDuplicateRegistrationResult,
       },
@@ -3682,6 +3667,43 @@ module.exports = {
     }
   });
 
+  it("suppresses trust warning logs for non-activating snapshot loads", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const globalDir = path.join(stateDir, "extensions", "rogue");
+      mkdirSafe(globalDir);
+      writePlugin({
+        id: "rogue",
+        body: simplePluginBody("rogue"),
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const warnings: string[] = [];
+      const registry = loadOpenClawPlugins({
+        activate: false,
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+      });
+
+      expect(warnings).toEqual([]);
+      expect(
+        registry.diagnostics.some(
+          (diag) =>
+            diag.level === "warn" &&
+            diag.pluginId === "rogue" &&
+            diag.message.includes("loaded without install/load-path provenance"),
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("loads source TypeScript plugins that route through local runtime shims", () => {
     const plugin = writePlugin({
       id: "source-runtime-shim",
@@ -3719,5 +3741,23 @@ export const runtimeValue = helperValue;`,
 
     const record = registry.plugins.find((entry) => entry.id === "source-runtime-shim");
     expect(record?.status).toBe("loaded");
+  });
+
+  it("converts Windows absolute import specifiers to file URLs only for module loading", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
+        "file:///C:/Users/alice/plugin/index.mjs",
+      );
+      expect(__testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
+        "file://server/share/plugin/index.mjs",
+      );
+      expect(__testing.toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
+        "file:///C:/Users/alice/plugin/index.mjs",
+      );
+      expect(__testing.toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });

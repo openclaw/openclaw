@@ -7,9 +7,11 @@ import {
   auditShortTermPromotionArtifacts,
   isShortTermMemoryPath,
   rankShortTermPromotionCandidates,
+  recordDreamingPhaseSignals,
   recordShortTermRecalls,
   repairShortTermPromotionArtifacts,
   resolveShortTermRecallLockPath,
+  resolveShortTermPhaseSignalStorePath,
   resolveShortTermRecallStorePath,
   __testing,
 } from "./short-term-promotion.js";
@@ -22,6 +24,17 @@ describe("short-term promotion", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  }
+
+  async function writeDailyMemoryNote(
+    workspaceDir: string,
+    date: string,
+    lines: string[],
+  ): Promise<string> {
+    const notePath = path.join(workspaceDir, "memory", `${date}.md`);
+    await fs.mkdir(path.dirname(notePath), { recursive: true });
+    await fs.writeFile(notePath, `${lines.join("\n")}\n`, "utf-8");
+    return notePath;
   }
 
   it("detects short-term daily memory paths", () => {
@@ -195,6 +208,319 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("lets recency half-life tune the temporal score", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier retention",
+        nowMs: Date.parse("2026-04-01T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.92,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const slowerDecay = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-15T10:00:00.000Z"),
+        recencyHalfLifeDays: 14,
+      });
+      const fasterDecay = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-15T10:00:00.000Z"),
+        recencyHalfLifeDays: 7,
+      });
+
+      expect(slowerDecay).toHaveLength(1);
+      expect(fasterDecay).toHaveLength(1);
+      expect(slowerDecay[0]?.components.recency).toBeCloseTo(0.5, 3);
+      expect(fasterDecay[0]?.components.recency).toBeCloseTo(0.25, 3);
+      expect(slowerDecay[0]!.score).toBeGreaterThan(fasterDecay[0]!.score);
+    });
+  });
+
+  it("boosts deep ranking when light/rem phase signals reinforce a candidate", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router setup",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet: "Router VLAN baseline noted.",
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet: "Backup policy for router snapshots.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router backup",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet: "Router VLAN baseline noted.",
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet: "Backup policy for router snapshots.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const baseline = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+      expect(baseline).toHaveLength(2);
+      expect(baseline[0]?.path).toBe("memory/2026-04-01.md");
+
+      const boostedKey = baseline.find((entry) => entry.path === "memory/2026-04-02.md")?.key;
+      expect(boostedKey).toBeTruthy();
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "light",
+        keys: [boostedKey!],
+        nowMs,
+      });
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "rem",
+        keys: [boostedKey!],
+        nowMs,
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+      expect(ranked[0]?.path).toBe("memory/2026-04-02.md");
+      expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+
+      const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+      const phaseStore = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
+        entries: Record<string, { lightHits: number; remHits: number }>;
+      };
+      expect(phaseStore.entries[boostedKey!]).toMatchObject({
+        lightHits: 1,
+        remHits: 1,
+      });
+    });
+  });
+
+  it("weights fresh phase signals more than stale ones", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier cadence",
+        nowMs: Date.parse("2026-04-01T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "backup lifecycle",
+        nowMs: Date.parse("2026-04-01T12:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const rankedBaseline = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+      const key = rankedBaseline[0]?.key;
+      expect(key).toBeTruthy();
+
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "rem",
+        keys: [key!],
+        nowMs: Date.parse("2026-02-01T10:00:00.000Z"),
+      });
+      const staleSignalRank = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "rem",
+        keys: [key!],
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+      const freshSignalRank = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+
+      expect(staleSignalRank).toHaveLength(1);
+      expect(freshSignalRank).toHaveLength(1);
+      expect(freshSignalRank[0]!.score).toBeGreaterThan(staleSignalRank[0]!.score);
+    });
+  });
+
+  it("reconciles existing promotion markers instead of appending duplicates", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "line 1",
+        "line 2",
+        "The gateway should stay loopback-only on port 18789.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "gateway loopback",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 3,
+            endLine: 3,
+            score: 0.95,
+            snippet: "The gateway should stay loopback-only on port 18789.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const firstApply = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(firstApply.applied).toBe(1);
+      expect(firstApply.appended).toBe(1);
+      expect(firstApply.reconciledExisting).toBe(0);
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        entries: Record<string, { promotedAt?: string }>;
+      };
+      for (const entry of Object.values(rawStore.entries)) {
+        delete entry.promotedAt;
+      }
+      await fs.writeFile(storePath, `${JSON.stringify(rawStore, null, 2)}\n`, "utf-8");
+
+      const secondApply = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(secondApply.applied).toBe(1);
+      expect(secondApply.appended).toBe(0);
+      expect(secondApply.reconciledExisting).toBe(1);
+
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText.match(/openclaw-memory-promotion:/g)?.length).toBe(1);
+      expect(
+        memoryText.match(/The gateway should stay loopback-only on port 18789\./g)?.length,
+      ).toBe(1);
+    });
+  });
+
+  it("filters out candidates older than maxAgeDays during ranking", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "old note",
+        nowMs: Date.parse("2026-04-01T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.92,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-15T10:00:00.000Z"),
+        maxAgeDays: 7,
+      });
+
+      expect(ranked).toHaveLength(0);
+    });
+  });
+
   it("treats negative threshold overrides as invalid and keeps defaults", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -260,8 +586,69 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("skips direct candidates that exceed maxAgeDays during apply", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        maxAgeDays: 7,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        candidates: [
+          {
+            key: "memory:memory/2026-04-01.md:1:1",
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Expired short-term note.",
+            recallCount: 3,
+            avgScore: 0.95,
+            maxScore: 0.95,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-02T00:00:00.000Z",
+            ageDays: 10,
+            score: 0.95,
+            recallDays: ["2026-04-01", "2026-04-02"],
+            conceptTags: ["expired"],
+            components: {
+              frequency: 1,
+              relevance: 1,
+              diversity: 1,
+              recency: 1,
+              consolidation: 1,
+              conceptual: 1,
+            },
+          },
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      await expect(
+        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
   it("applies promotion candidates to MEMORY.md and marks them promoted", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon",
+        "zeta",
+        "eta",
+        "theta",
+        "iota",
+        "Gateway binds loopback and port 18789",
+        "Keep gateway on localhost only",
+        "Document healthcheck endpoint",
+      ]);
       await recordShortTermRecalls({
         workspaceDir,
         query: "gateway host",
@@ -294,7 +681,7 @@ describe("short-term promotion", () => {
 
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       expect(memoryText).toContain("Promoted From Short-Term Memory");
-      expect(memoryText).toContain("memory/2026-04-01.md:10-12");
+      expect(memoryText).toContain("memory/2026-04-01.md:10-10");
 
       const rankedAfter = await rankShortTermPromotionCandidates({
         workspaceDir,
@@ -318,6 +705,20 @@ describe("short-term promotion", () => {
 
   it("does not re-append candidates that were promoted in a prior run", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+        "epsilon",
+        "zeta",
+        "eta",
+        "theta",
+        "iota",
+        "Gateway binds loopback and port 18789",
+        "Keep gateway on localhost only",
+        "Document healthcheck endpoint",
+      ]);
       await recordShortTermRecalls({
         workspaceDir,
         query: "gateway host",
@@ -360,6 +761,229 @@ describe("short-term promotion", () => {
       const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
       const sectionCount = memoryText.match(/Promoted From Short-Term Memory/g)?.length ?? 0;
       expect(sectionCount).toBe(1);
+    });
+  });
+
+  it("rehydrates moved snippets from the live daily note before promotion", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "intro",
+        "summary",
+        "Moved backups to S3 Glacier.",
+        "Keep cold storage retention at 365 days.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.94,
+            snippet: "Moved backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(3);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(3);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("memory/2026-04-01.md:3-3");
+    });
+  });
+
+  it("prefers the nearest matching snippet when the same text appears multiple times", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "header",
+        "Repeat backup note.",
+        "gap",
+        "gap",
+        "gap",
+        "gap",
+        "gap",
+        "gap",
+        "Repeat backup note.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "backup repeat",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 8,
+            endLine: 9,
+            score: 0.9,
+            snippet: "Repeat backup note.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(9);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(10);
+    });
+  });
+
+  it("rehydrates legacy basename-only short-term paths from the memory directory", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Legacy basename path note."]);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: [
+          {
+            key: "memory:2026-04-01.md:1:1",
+            path: "2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Legacy basename path note.",
+            recallCount: 2,
+            avgScore: 0.9,
+            maxScore: 0.95,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-01T00:00:00.000Z",
+            lastRecalledAt: "2026-04-02T00:00:00.000Z",
+            ageDays: 0,
+            score: 0.9,
+            recallDays: ["2026-04-01", "2026-04-02"],
+            conceptTags: ["legacy", "note"],
+            components: {
+              frequency: 0.3,
+              relevance: 0.9,
+              diversity: 0.4,
+              recency: 1,
+              consolidation: 0.5,
+              conceptual: 0.3,
+            },
+          },
+        ],
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("source=2026-04-01.md:1-1");
+    });
+  });
+
+  it("skips promotion when the live daily note no longer contains the snippet", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["Different note content now."]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.94,
+            snippet: "Moved backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(0);
+      await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
+  it("uses dreaming timezone for recall-day bucketing and promotion headers", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "Cross-midnight router maintenance window.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router window",
+        nowMs: Date.parse("2026-04-01T23:30:00.000Z"),
+        timezone: "America/Los_Angeles",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Cross-midnight router maintenance window.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(ranked[0]?.recallDays).toEqual(["2026-04-01"]);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-02T06:30:00.000Z"),
+        timezone: "America/Los_Angeles",
+      });
+
+      expect(applied.applied).toBe(1);
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("Promoted From Short-Term Memory (2026-04-01)");
     });
   });
 
@@ -462,6 +1086,7 @@ describe("short-term promotion", () => {
               source: "memory",
               snippet,
               recallCount: 2,
+              dailyCount: 0,
               totalScore: 1.8,
               maxScore: 0.95,
               firstRecalledAt: "2026-04-01T00:00:00.000Z",
@@ -484,7 +1109,8 @@ describe("short-term promotion", () => {
 
       expect(repair.changed).toBe(false);
       expect(repair.rewroteStore).toBe(false);
-      expect(await fs.readFile(storePath, "utf-8")).toBe(raw);
+      const nextRaw = await fs.readFile(storePath, "utf-8");
+      expect(nextRaw).toBe(raw);
     });
   });
 
