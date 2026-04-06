@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import { loadConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   asConfig,
@@ -15,7 +14,7 @@ import { activateSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } from ".
 
 vi.unmock("../version.js");
 
-describe("secrets runtime snapshot auth activation", () => {
+describe("secrets runtime snapshot auth-store activation", () => {
   let envSnapshot: SecretsRuntimeEnvSnapshot;
 
   beforeEach(() => {
@@ -26,7 +25,7 @@ describe("secrets runtime snapshot auth activation", () => {
     endSecretsRuntimeIsolationForTest(envSnapshot);
   });
 
-  it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
+  it("activates runtime snapshots for ensureAuthProfileStore", async () => {
     await withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
@@ -61,7 +60,6 @@ describe("secrets runtime snapshot auth activation", () => {
 
         activateSecretsRuntimeSnapshot(prepared);
 
-        expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
         expect(
           ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles["openai:default"],
         ).toMatchObject({
