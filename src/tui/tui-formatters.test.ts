@@ -119,6 +119,29 @@ Actual user message`,
     expect(text).toBe("Actual user message");
   });
 
+  it("strips leading inbound metadata blocks for command messages (#59871)", () => {
+    const text = extractTextFromMessage({
+      command: true,
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "message_id": "abc123"
+}
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{
+  "label": "Someone"
+}
+\`\`\`
+
+Exec completed: task finished successfully`,
+    });
+
+    expect(text).toBe("Exec completed: task finished successfully");
+  });
+
   it("keeps metadata-like blocks for non-user messages", () => {
     const text = extractTextFromMessage({
       role: "assistant",
