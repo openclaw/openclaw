@@ -325,6 +325,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/tavily/**"
+"extensions: mrscraper":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mrscraper/**"
 "extensions: talk-voice":
   - changed-files:
       - any-glob-to-any-file:

@@ -11,6 +11,10 @@ Docs: https://docs.openclaw.ai
 - Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
 - Agents/heartbeat: stop truncating live session transcripts after no-op heartbeat acks, move heartbeat cleanup to prompt assembly and compaction, and keep post-filter context-engine ingestion aligned with the real session baseline. (#60998) Thanks @nxmxbbd.
 
+### Changes
+
+- Web tools/MrScraper: add a bundled `mrscraper` plugin with `web_fetch` provider fallback via the unblocker plus explicit `mrscraper_fetch_html` and `mrscraper_scrape` tools, using plugin-owned config under `plugins.entries.mrscraper.config.*`.
+
 ## 2026.4.5
 
 ### Breaking

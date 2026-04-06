@@ -550,6 +550,8 @@ importers:
 
   extensions/moonshot: {}
 
+  extensions/mrscraper: {}
+
   extensions/msteams:
     dependencies:
       '@microsoft/teams.api':

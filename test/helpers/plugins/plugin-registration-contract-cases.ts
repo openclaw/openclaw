@@ -68,6 +68,11 @@ export const pluginRegistrationContractCases = {
     speechProviderIds: ["microsoft"],
     requireSpeechVoices: true,
   },
+  mrscraper: {
+    pluginId: "mrscraper",
+    webFetchProviderIds: ["mrscraper"],
+    toolNames: ["mrscraper_fetch_html", "mrscraper_scrape"],
+  },
   minimax: {
     pluginId: "minimax",
     providerIds: ["minimax", "minimax-portal"],
