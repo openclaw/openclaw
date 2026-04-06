@@ -640,6 +640,42 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    music_generate: {
+      emoji: "🎵",
+      title: "Music Generation",
+      actions: {
+        generate: {
+          label: "generate",
+          detailKeys: ["prompt", "model", "durationSeconds", "format", "instrumental"],
+        },
+        list: {
+          label: "list",
+          detailKeys: ["provider", "model"],
+        },
+      },
+    },
+    video_generate: {
+      emoji: "🎬",
+      title: "Video Generation",
+      actions: {
+        generate: {
+          label: "generate",
+          detailKeys: [
+            "prompt",
+            "model",
+            "durationSeconds",
+            "resolution",
+            "aspectRatio",
+            "audio",
+            "watermark",
+          ],
+        },
+        list: {
+          label: "list",
+          detailKeys: ["provider", "model"],
+        },
+      },
+    },
     pdf: {
       emoji: "📑",
       title: "PDF",

@@ -303,16 +303,16 @@ describe("provider-runtime", () => {
   it("matches providers by hook alias for runtime hook lookup", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {
-        id: "anthropic",
-        label: "Anthropic",
-        hookAliases: ["claude-cli"],
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        hookAliases: ["codex-cli"],
         auth: [],
       },
     ]);
 
     expectProviderRuntimePluginLoad({
-      provider: "claude-cli",
-      expectedPluginId: "anthropic",
+      provider: "codex-cli",
+      expectedPluginId: "openai-codex",
     });
   });
 

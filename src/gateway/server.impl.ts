@@ -17,7 +17,6 @@ import {
   getRuntimeConfig,
   isNixMode,
   loadConfig,
-  migrateLegacyConfig,
   registerConfigWriteListener,
   readConfigFileSnapshot,
   writeConfigFile,
@@ -33,7 +32,7 @@ import {
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import { logAcceptedEnvOption } from "../infra/env.js";
+import { isTruthyEnvValue, logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -180,6 +179,20 @@ function getChannelRuntime() {
   cachedChannelRuntime ??= createPluginRuntime().channel;
   return cachedChannelRuntime;
 }
+
+function pruneSkippedStartupSecretSurfaces(config: OpenClawConfig): OpenClawConfig {
+  const skipChannels =
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  if (!skipChannels || !config.channels) {
+    return config;
+  }
+  return {
+    ...config,
+    channels: undefined,
+  };
+}
+
 const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
@@ -263,7 +276,7 @@ function assertValidGatewayStartupConfigSnapshot(
       ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
       : "Unknown validation issue.";
   const doctorHint = options.includeDoctorHint
-    ? `\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`
+    ? `\nRun "${formatCliCommand("openclaw doctor --fix")}" to repair, then retry.`
     : "";
   throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${doctorHint}`);
 }
@@ -418,24 +431,7 @@ export async function startGatewayServer(
         "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
       );
     }
-    const { config: migrated, changes } = migrateLegacyConfig(configSnapshot.parsed);
-    if (!migrated) {
-      log.warn(
-        "gateway: legacy config entries detected but no auto-migration changes were produced; continuing with validation.",
-      );
-    } else {
-      await writeConfigFile(migrated);
-      if (changes.length > 0) {
-        log.info(
-          `gateway: migrated legacy config entries:\n${changes
-            .map((entry) => `- ${entry}`)
-            .join("\n")}`,
-        );
-      }
-    }
   }
-
-  configSnapshot = await readConfigFileSnapshot();
   if (configSnapshot.exists) {
     assertValidGatewayStartupConfigSnapshot(configSnapshot, { includeDoctorHint: true });
   }
@@ -482,7 +478,9 @@ export async function startGatewayServer(
   ) =>
     await runWithSecretsActivationLock(async () => {
       try {
-        const prepared = await prepareSecretsRuntimeSnapshot({ config });
+        const prepared = await prepareSecretsRuntimeSnapshot({
+          config: pruneSkippedStartupSecretSurfaces(config),
+        });
         if (params.activate) {
           activateSecretsRuntimeSnapshot(prepared);
           logGatewayAuthSurfaceDiagnostics(prepared);

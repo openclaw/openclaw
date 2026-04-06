@@ -25,6 +25,7 @@ vi.mock("../../agents/skills/refresh.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  resolveAgentConfig: vi.fn(() => undefined),
   resolveSessionAgentIds: vi.fn(() => ({ sessionAgentId: "main" })),
 }));
 

@@ -9,7 +9,6 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import { resolveBundledPluginPublicSurfacePath } from "../plugins/bundled-plugin-metadata.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -19,6 +18,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
+import { resolveBundledPluginPublicSurfacePath } from "../plugins/public-surface-runtime.js";
 import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,

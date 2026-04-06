@@ -8,6 +8,7 @@ import {
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -20,6 +21,7 @@ import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
+import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
@@ -31,6 +33,7 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
+import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -79,7 +82,7 @@ export function createOpenClawTools(
     /** Current inbound message id for action fallbacks (e.g. Telegram react). */
     currentMessageId?: string | number;
     /** Reply-to mode for Slack auto-threading. */
-    replyToMode?: "off" | "first" | "all";
+    replyToMode?: "off" | "first" | "all" | "batched";
     /** Mutable ref to track if a reply was sent (for "first" mode). */
     hasRepliedRef?: { value: boolean };
     /** If true, the model has native vision capability */
@@ -159,6 +162,24 @@ export function createOpenClawTools(
     sandbox,
     fsPolicy: options?.fsPolicy,
   });
+  const videoGenerateTool = createVideoGenerateTool({
+    config: options?.config,
+    agentDir: options?.agentDir,
+    agentSessionKey: options?.agentSessionKey,
+    requesterOrigin: deliveryContext ?? undefined,
+    workspaceDir,
+    sandbox,
+    fsPolicy: options?.fsPolicy,
+  });
+  const musicGenerateTool = createMusicGenerateTool({
+    config: options?.config,
+    agentDir: options?.agentDir,
+    agentSessionKey: options?.agentSessionKey,
+    requesterOrigin: deliveryContext ?? undefined,
+    workspaceDir,
+    sandbox,
+    fsPolicy: options?.fsPolicy,
+  });
   const pdfTool = options?.agentDir?.trim()
     ? createPdfTool({
         config: options?.config,
@@ -216,6 +237,8 @@ export function createOpenClawTools(
       config: options?.config,
     }),
     ...(imageGenerateTool ? [imageGenerateTool] : []),
+    ...(musicGenerateTool ? [musicGenerateTool] : []),
+    ...(videoGenerateTool ? [videoGenerateTool] : []),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
@@ -282,28 +305,13 @@ export function createOpenClawTools(
   }
 
   const pluginTools = resolvePluginTools({
-    context: {
-      config: options?.config,
+    ...resolveOpenClawPluginToolInputs({
+      options,
+      resolvedConfig,
       runtimeConfig: runtimeSnapshot?.config,
-      workspaceDir,
-      agentDir: options?.agentDir,
-      agentId: sessionAgentId,
-      sessionKey: options?.agentSessionKey,
-      sessionId: options?.sessionId,
-      browser: {
-        sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
-        allowHostControl: options?.allowHostBrowserControl,
-      },
-      messageChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      deliveryContext,
-      requesterSenderId: options?.requesterSenderId ?? undefined,
-      senderIsOwner: options?.senderIsOwner ?? undefined,
-      sandboxed: options?.sandboxed,
-    },
+    }),
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,
-    allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   });
 
   const wrappedPluginTools = applyPluginToolDeliveryDefaults({

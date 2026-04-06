@@ -27,7 +27,7 @@ function extractToolText(result: unknown): string {
 }
 
 describe("createOpenClawCodingTools read behavior", () => {
-  it("applies sandbox path guards to file_path alias", async () => {
+  it("applies sandbox path guards to canonical path", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-"));
     const outsidePath = path.join(os.tmpdir(), "openclaw-outside.txt");
     await fs.writeFile(outsidePath, "outside", "utf8");
@@ -36,7 +36,7 @@ describe("createOpenClawCodingTools read behavior", () => {
         root: tmpDir,
         bridge: createHostSandboxFsBridge(tmpDir),
       });
-      await expect(readTool.execute("sandbox-1", { file_path: outsidePath })).rejects.toThrow(
+      await expect(readTool.execute("sandbox-1", { path: outsidePath })).rejects.toThrow(
         /sandbox root/i,
       );
     } finally {

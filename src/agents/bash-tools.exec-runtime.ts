@@ -259,9 +259,17 @@ export function resolveExecTarget(params: {
       sandboxAvailable: params.sandboxAvailable,
     })
   ) {
+    const allowedConfig = Array.from(
+      new Set(
+        requestedTarget === "gateway" && !params.sandboxAvailable
+          ? ["gateway", "auto"]
+          : [renderExecTargetLabel(requestedTarget), "auto"],
+      ),
+    ).join(" or ");
     throw new Error(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configure tools.exec.host=${renderExecTargetLabel(requestedTarget)} to allow).`,
+        `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
+        `set tools.exec.host=${allowedConfig} to allow this override).`,
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;

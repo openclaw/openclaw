@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.4",
+  "version": "2026.4.5",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -67,9 +67,17 @@
       "types": "./dist/plugin-sdk/runtime.d.ts",
       "default": "./dist/plugin-sdk/runtime.js"
     },
+    "./plugin-sdk/runtime-doctor": {
+      "types": "./dist/plugin-sdk/runtime-doctor.d.ts",
+      "default": "./dist/plugin-sdk/runtime-doctor.js"
+    },
     "./plugin-sdk/runtime-env": {
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
+    },
+    "./plugin-sdk/runtime-secret-resolution": {
+      "types": "./dist/plugin-sdk/runtime-secret-resolution.d.ts",
+      "default": "./dist/plugin-sdk/runtime-secret-resolution.js"
     },
     "./plugin-sdk/setup": {
       "types": "./dist/plugin-sdk/setup.d.ts",
@@ -255,10 +263,6 @@
       "types": "./dist/plugin-sdk/cli-runtime.d.ts",
       "default": "./dist/plugin-sdk/cli-runtime.js"
     },
-    "./plugin-sdk/cli-backend": {
-      "types": "./dist/plugin-sdk/cli-backend.d.ts",
-      "default": "./dist/plugin-sdk/cli-backend.js"
-    },
     "./plugin-sdk/hook-runtime": {
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"
@@ -278,6 +282,10 @@
     "./plugin-sdk/acp-runtime": {
       "types": "./dist/plugin-sdk/acp-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-runtime.js"
+    },
+    "./plugin-sdk/acp-binding-runtime": {
+      "types": "./dist/plugin-sdk/acp-binding-runtime.d.ts",
+      "default": "./dist/plugin-sdk/acp-binding-runtime.js"
     },
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
@@ -335,13 +343,41 @@
       "types": "./dist/plugin-sdk/bluebubbles-policy.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles-policy.js"
     },
-    "./plugin-sdk/elevenlabs": {
-      "types": "./dist/plugin-sdk/elevenlabs.d.ts",
-      "default": "./dist/plugin-sdk/elevenlabs.js"
+    "./plugin-sdk/browser-cdp": {
+      "types": "./dist/plugin-sdk/browser-cdp.d.ts",
+      "default": "./dist/plugin-sdk/browser-cdp.js"
+    },
+    "./plugin-sdk/browser-config": {
+      "types": "./dist/plugin-sdk/browser-config.d.ts",
+      "default": "./dist/plugin-sdk/browser-config.js"
+    },
+    "./plugin-sdk/browser-config-runtime": {
+      "types": "./dist/plugin-sdk/browser-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-config-runtime.js"
     },
     "./plugin-sdk/browser-config-support": {
       "types": "./dist/plugin-sdk/browser-config-support.d.ts",
       "default": "./dist/plugin-sdk/browser-config-support.js"
+    },
+    "./plugin-sdk/browser-control-auth": {
+      "types": "./dist/plugin-sdk/browser-control-auth.d.ts",
+      "default": "./dist/plugin-sdk/browser-control-auth.js"
+    },
+    "./plugin-sdk/browser-node-runtime": {
+      "types": "./dist/plugin-sdk/browser-node-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-node-runtime.js"
+    },
+    "./plugin-sdk/browser-profiles": {
+      "types": "./dist/plugin-sdk/browser-profiles.d.ts",
+      "default": "./dist/plugin-sdk/browser-profiles.js"
+    },
+    "./plugin-sdk/browser-security-runtime": {
+      "types": "./dist/plugin-sdk/browser-security-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-security-runtime.js"
+    },
+    "./plugin-sdk/browser-setup-tools": {
+      "types": "./dist/plugin-sdk/browser-setup-tools.d.ts",
+      "default": "./dist/plugin-sdk/browser-setup-tools.js"
     },
     "./plugin-sdk/browser-support": {
       "types": "./dist/plugin-sdk/browser-support.d.ts",
@@ -435,6 +471,10 @@
       "types": "./dist/plugin-sdk/channel-core.d.ts",
       "default": "./dist/plugin-sdk/channel-core.js"
     },
+    "./plugin-sdk/channel-entry-contract": {
+      "types": "./dist/plugin-sdk/channel-entry-contract.d.ts",
+      "default": "./dist/plugin-sdk/channel-entry-contract.js"
+    },
     "./plugin-sdk/channel-contract": {
       "types": "./dist/plugin-sdk/channel-contract.d.ts",
       "default": "./dist/plugin-sdk/channel-contract.js"
@@ -503,6 +543,10 @@
       "types": "./dist/plugin-sdk/googlechat.d.ts",
       "default": "./dist/plugin-sdk/googlechat.js"
     },
+    "./plugin-sdk/googlechat-runtime-shared": {
+      "types": "./dist/plugin-sdk/googlechat-runtime-shared.d.ts",
+      "default": "./dist/plugin-sdk/googlechat-runtime-shared.js"
+    },
     "./plugin-sdk/image-generation": {
       "types": "./dist/plugin-sdk/image-generation.d.ts",
       "default": "./dist/plugin-sdk/image-generation.js"
@@ -510,6 +554,14 @@
     "./plugin-sdk/image-generation-core": {
       "types": "./dist/plugin-sdk/image-generation-core.d.ts",
       "default": "./dist/plugin-sdk/image-generation-core.js"
+    },
+    "./plugin-sdk/music-generation": {
+      "types": "./dist/plugin-sdk/music-generation.d.ts",
+      "default": "./dist/plugin-sdk/music-generation.js"
+    },
+    "./plugin-sdk/music-generation-core": {
+      "types": "./dist/plugin-sdk/music-generation-core.d.ts",
+      "default": "./dist/plugin-sdk/music-generation-core.js"
     },
     "./plugin-sdk/video-generation": {
       "types": "./dist/plugin-sdk/video-generation.d.ts",
@@ -695,6 +747,10 @@
       "types": "./dist/plugin-sdk/nostr.d.ts",
       "default": "./dist/plugin-sdk/nostr.js"
     },
+    "./plugin-sdk/qa-channel": {
+      "types": "./dist/plugin-sdk/qa-channel.d.ts",
+      "default": "./dist/plugin-sdk/qa-channel.js"
+    },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
@@ -743,10 +799,6 @@
       "types": "./dist/plugin-sdk/provider-onboard.d.ts",
       "default": "./dist/plugin-sdk/provider-onboard.js"
     },
-    "./plugin-sdk/provider-stream": {
-      "types": "./dist/plugin-sdk/provider-stream.d.ts",
-      "default": "./dist/plugin-sdk/provider-stream.js"
-    },
     "./plugin-sdk/provider-stream-family": {
       "types": "./dist/plugin-sdk/provider-stream-family.d.ts",
       "default": "./dist/plugin-sdk/provider-stream-family.js"
@@ -754,6 +806,10 @@
     "./plugin-sdk/provider-stream-shared": {
       "types": "./dist/plugin-sdk/provider-stream-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-stream-shared.js"
+    },
+    "./plugin-sdk/provider-stream": {
+      "types": "./dist/plugin-sdk/provider-stream.d.ts",
+      "default": "./dist/plugin-sdk/provider-stream.js"
     },
     "./plugin-sdk/provider-tools": {
       "types": "./dist/plugin-sdk/provider-tools.d.ts",
@@ -1001,6 +1057,9 @@
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
+    "qa:e2e": "node --import tsx scripts/qa-e2e.ts",
+    "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
+    "qa:lab:ui": "pnpm openclaw qa ui",
     "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
@@ -1031,7 +1090,6 @@
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
     "test:docker:live-acp-bind": "bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-build": "bash scripts/test-live-build-docker.sh",
-    "test:docker:live-cli-backend": "bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-models": "bash scripts/test-live-models-docker.sh",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
@@ -1095,6 +1153,8 @@
     "@agentclientprotocol/sdk": "0.18.0",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
     "@aws-sdk/client-bedrock": "3.1023.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1023.0",
+    "@aws-sdk/credential-provider-node": "3.972.29",
     "@clack/prompts": "^1.2.0",
     "@homebridge/ciao": "^1.3.6",
     "@line/bot-sdk": "^10.6.0",

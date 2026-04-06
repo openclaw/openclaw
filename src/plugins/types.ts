@@ -16,16 +16,15 @@ import type { ProviderRequestTransportOverrides } from "../agents/provider-reque
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  CliBackendConfig,
-  ModelProviderAuthMode,
-  ModelProviderConfig,
-} from "../config/types.js";
+import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import type { TtsAutoMode } from "../config/types.tts.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
@@ -33,6 +32,7 @@ import type { HookEntry } from "../hooks/types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
@@ -54,6 +54,7 @@ import type {
   RuntimeWebFetchMetadata,
   RuntimeWebSearchMetadata,
 } from "../secrets/runtime-web-tools.types.js";
+import type { SecurityAuditFinding } from "../security/audit.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -1724,6 +1725,7 @@ export type PluginRealtimeVoiceProviderEntry = RealtimeVoiceProviderPlugin & {
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
 export type ImageGenerationProviderPlugin = ImageGenerationProvider;
 export type VideoGenerationProviderPlugin = VideoGenerationProvider;
+export type MusicGenerationProviderPlugin = MusicGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
   method: string;
@@ -1929,6 +1931,30 @@ export type OpenClawPluginCliCommandDescriptor = {
   hasSubcommands: boolean;
 };
 
+export type OpenClawPluginReloadRegistration = {
+  restartPrefixes?: string[];
+  hotPrefixes?: string[];
+  noopPrefixes?: string[];
+};
+
+export type OpenClawPluginNodeHostCommand = {
+  command: string;
+  cap?: string;
+  handle: (paramsJSON?: string | null) => Promise<string>;
+};
+
+export type OpenClawPluginSecurityAuditContext = {
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  configPath: string;
+};
+
+export type OpenClawPluginSecurityAuditCollector = (
+  ctx: OpenClawPluginSecurityAuditContext,
+) => SecurityAuditFinding[] | Promise<SecurityAuditFinding[]>;
+
 /** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
@@ -1944,28 +1970,6 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
-/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
-export type CliBackendPlugin = {
-  /** Provider id used in model refs, for example `claude-cli/opus`. */
-  id: string;
-  /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
-  config: CliBackendConfig;
-  /**
-   * Whether OpenClaw should inject bundle MCP config for this backend.
-   *
-   * Keep this opt-in. Only backends that explicitly consume an MCP config file
-   * should enable it.
-   */
-  bundleMcp?: boolean;
-  /**
-   * Optional config normalizer applied after user overrides merge.
-   *
-   * Use this for backend-specific compatibility rewrites when old config
-   * shapes need to stay working.
-   */
-  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
-};
-
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };
@@ -1978,6 +1982,9 @@ export type OpenClawPluginDefinition = {
   version?: string;
   kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
+  reload?: OpenClawPluginReloadRegistration;
+  nodeHostCommands?: OpenClawPluginNodeHostCommand[];
+  securityAuditCollectors?: OpenClawPluginSecurityAuditCollector[];
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;
 };
@@ -1995,8 +2002,6 @@ export type PluginConfigMigration = (config: OpenClawConfig) =>
     }
   | null
   | undefined;
-
-export type PluginLegacyConfigMigration = (raw: Record<string, unknown>, changes: string[]) => void;
 
 export type PluginSetupAutoEnableContext = {
   config: OpenClawConfig;
@@ -2065,13 +2070,12 @@ export type OpenClawPluginApi = {
       descriptors?: OpenClawPluginCliCommandDescriptor[];
     },
   ) => void;
+  registerReload: (registration: OpenClawPluginReloadRegistration) => void;
+  registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
+  registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: (service: OpenClawPluginService) => void;
-  /** Register a text-only CLI backend used by the local CLI runner. */
-  registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
-  /** Register a lightweight raw legacy-config migration for pre-schema config repair. */
-  registerLegacyConfigMigration: (migrate: PluginLegacyConfigMigration) => void;
   /** Register a lightweight config probe that can auto-enable this plugin generically. */
   registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */
@@ -2088,6 +2092,8 @@ export type OpenClawPluginApi = {
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   /** Register a video generation provider (video generation capability). */
   registerVideoGenerationProvider: (provider: VideoGenerationProviderPlugin) => void;
+  /** Register a music generation provider (music generation capability). */
+  registerMusicGenerationProvider: (provider: MusicGenerationProviderPlugin) => void;
   /** Register a web fetch provider (web fetch capability). */
   registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */
@@ -2173,6 +2179,7 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop"
   | "before_dispatch"
+  | "reply_dispatch"
   | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
@@ -2203,6 +2210,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_dispatch",
+  "reply_dispatch",
   "before_install",
 ] as const satisfies readonly PluginHookName[];
 
@@ -2480,6 +2488,44 @@ export type PluginHookBeforeDispatchResult = {
   handled: boolean;
   /** Plugin-defined reply text (used when handled=true). */
   text?: string;
+};
+
+// reply_dispatch hook
+export type PluginHookReplyDispatchEvent = {
+  ctx: FinalizedMsgContext;
+  runId?: string;
+  sessionKey?: string;
+  inboundAudio: boolean;
+  sessionTtsAuto?: TtsAutoMode;
+  ttsChannel?: string;
+  suppressUserDelivery?: boolean;
+  shouldRouteToOriginating: boolean;
+  originatingChannel?: string;
+  originatingTo?: string;
+  shouldSendToolSummaries: boolean;
+  sendPolicy: "allow" | "deny";
+  isTailDispatch?: boolean;
+};
+
+export type PluginHookReplyDispatchContext = {
+  cfg: OpenClawConfig;
+  dispatcher: ReplyDispatcher;
+  abortSignal?: AbortSignal;
+  onReplyStart?: () => Promise<void> | void;
+  recordProcessed: (
+    outcome: "completed" | "skipped" | "error",
+    opts?: {
+      reason?: string;
+      error?: string;
+    },
+  ) => void;
+  markIdle: (reason: string) => void;
+};
+
+export type PluginHookReplyDispatchResult = {
+  handled: boolean;
+  queuedFinal: boolean;
+  counts: Record<ReplyDispatchKind, number>;
 };
 
 // message_received hook
@@ -2900,6 +2946,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
   ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
+  reply_dispatch: (
+    event: PluginHookReplyDispatchEvent,
+    ctx: PluginHookReplyDispatchContext,
+  ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

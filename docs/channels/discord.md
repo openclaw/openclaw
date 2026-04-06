@@ -571,8 +571,14 @@ Default slash command settings:
     - `off` (default)
     - `first`
     - `all`
+    - `batched`
 
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+    `first` always attaches the implicit native reply reference to the first outbound Discord message for the turn.
+    `batched` only attaches Discord's implicit native reply reference when the
+    inbound turn was a debounced batch of multiple messages. This is useful
+    when you want native replies mainly for ambiguous bursty chats, not every
+    single-message turn.
 
     Message IDs are surfaced in context/history so agents can target specific messages.
 

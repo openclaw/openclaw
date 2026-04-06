@@ -16,9 +16,9 @@ function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   const accounts = isRecord(value) ? value : null;
   return Boolean(
     accounts &&
-      Object.values(accounts).some((account) =>
-        hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
-      ),
+    Object.values(accounts).some((account) =>
+      hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
+    ),
   );
 }
 
@@ -26,13 +26,13 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "nextcloud-talk"],
     message:
-      "channels.nextcloud-talk.allowPrivateNetwork is legacy; use channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.nextcloud-talk.allowPrivateNetwork is legacy; use channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(isRecord(value) ? value : {}),
   },
   {
     path: ["channels", "nextcloud-talk", "accounts"],
     message:
-      "channels.nextcloud-talk.accounts.<id>.allowPrivateNetwork is legacy; use channels.nextcloud-talk.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.nextcloud-talk.accounts.<id>.allowPrivateNetwork is legacy; use channels.nextcloud-talk.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: hasLegacyAllowPrivateNetworkInAccounts,
   },
 ];
@@ -95,8 +95,9 @@ export function normalizeCompatibilityConfig({
       ...cfg,
       channels: {
         ...cfg.channels,
-        "nextcloud-talk":
-          updatedNextcloudTalk as NonNullable<OpenClawConfig["channels"]>["nextcloud-talk"],
+        "nextcloud-talk": updatedNextcloudTalk as NonNullable<
+          OpenClawConfig["channels"]
+        >["nextcloud-talk"],
       },
     },
     changes,

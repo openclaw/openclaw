@@ -31,6 +31,8 @@ vi.mock("../../tts/provider-registry.js", () => ({
 vi.mock("../../tts/tts.js", () => ttsMocks);
 
 const { handleTtsCommands } = await import("./commands-tts.js");
+const PRIMARY_TTS_PROVIDER = "acme-speech";
+const FALLBACK_TTS_PROVIDER = "backup-speech";
 
 function buildTtsParams(commandBodyNormalized: string): Parameters<typeof handleTtsCommands>[0] {
   return {
@@ -49,7 +51,7 @@ describe("handleTtsCommands status fallback reporting", () => {
     ttsMocks.resolveTtsConfig.mockReturnValue({});
     ttsMocks.resolveTtsPrefsPath.mockReturnValue("/tmp/tts-prefs.json");
     ttsMocks.isTtsEnabled.mockReturnValue(true);
-    ttsMocks.getTtsProvider.mockReturnValue("elevenlabs");
+    ttsMocks.getTtsProvider.mockReturnValue(PRIMARY_TTS_PROVIDER);
     ttsMocks.isTtsProviderConfigured.mockReturnValue(true);
     ttsMocks.getTtsMaxLength.mockReturnValue(1500);
     ttsMocks.isSummarizationEnabled.mockReturnValue(true);
@@ -62,18 +64,18 @@ describe("handleTtsCommands status fallback reporting", () => {
       success: true,
       textLength: 128,
       summarized: false,
-      provider: "microsoft",
-      fallbackFrom: "elevenlabs",
-      attemptedProviders: ["elevenlabs", "microsoft"],
+      provider: FALLBACK_TTS_PROVIDER,
+      fallbackFrom: PRIMARY_TTS_PROVIDER,
+      attemptedProviders: [PRIMARY_TTS_PROVIDER, FALLBACK_TTS_PROVIDER],
       attempts: [
         {
-          provider: "elevenlabs",
+          provider: PRIMARY_TTS_PROVIDER,
           outcome: "failed",
           reasonCode: "provider_error",
           latencyMs: 73,
         },
         {
-          provider: "microsoft",
+          provider: FALLBACK_TTS_PROVIDER,
           outcome: "success",
           reasonCode: "success",
           latencyMs: 420,
@@ -84,10 +86,14 @@ describe("handleTtsCommands status fallback reporting", () => {
 
     const result = await handleTtsCommands(buildTtsParams("/tts status"), true);
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Fallback: elevenlabs -> microsoft");
-    expect(result?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
     expect(result?.reply?.text).toContain(
-      "Attempt details: elevenlabs:failed(provider_error) 73ms, microsoft:success(ok) 420ms",
+      `Fallback: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`,
+    );
+    expect(result?.reply?.text).toContain(
+      `Attempts: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`,
+    );
+    expect(result?.reply?.text).toContain(
+      `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(provider_error) 73ms, ${FALLBACK_TTS_PROVIDER}:success(ok) 420ms`,
     );
   });
 
@@ -98,10 +104,10 @@ describe("handleTtsCommands status fallback reporting", () => {
       textLength: 128,
       summarized: false,
       error: "TTS conversion failed",
-      attemptedProviders: ["elevenlabs", "microsoft"],
+      attemptedProviders: [PRIMARY_TTS_PROVIDER, FALLBACK_TTS_PROVIDER],
       attempts: [
         {
-          provider: "elevenlabs",
+          provider: PRIMARY_TTS_PROVIDER,
           outcome: "failed",
           reasonCode: "timeout",
           latencyMs: 999,
@@ -113,8 +119,12 @@ describe("handleTtsCommands status fallback reporting", () => {
     const result = await handleTtsCommands(buildTtsParams("/tts status"), true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Error: TTS conversion failed");
-    expect(result?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
-    expect(result?.reply?.text).toContain("Attempt details: elevenlabs:failed(timeout) 999ms");
+    expect(result?.reply?.text).toContain(
+      `Attempts: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`,
+    );
+    expect(result?.reply?.text).toContain(
+      `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(timeout) 999ms`,
+    );
   });
 
   it("persists fallback metadata from /tts audio and renders it in /tts status", async () => {
@@ -126,18 +136,18 @@ describe("handleTtsCommands status fallback reporting", () => {
     ttsMocks.textToSpeech.mockResolvedValue({
       success: true,
       audioPath: "/tmp/fallback.ogg",
-      provider: "microsoft",
-      fallbackFrom: "elevenlabs",
-      attemptedProviders: ["elevenlabs", "microsoft"],
+      provider: FALLBACK_TTS_PROVIDER,
+      fallbackFrom: PRIMARY_TTS_PROVIDER,
+      attemptedProviders: [PRIMARY_TTS_PROVIDER, FALLBACK_TTS_PROVIDER],
       attempts: [
         {
-          provider: "elevenlabs",
+          provider: PRIMARY_TTS_PROVIDER,
           outcome: "failed",
           reasonCode: "provider_error",
           latencyMs: 65,
         },
         {
-          provider: "microsoft",
+          provider: FALLBACK_TTS_PROVIDER,
           outcome: "success",
           reasonCode: "success",
           latencyMs: 175,
@@ -153,11 +163,15 @@ describe("handleTtsCommands status fallback reporting", () => {
 
     const statusResult = await handleTtsCommands(buildTtsParams("/tts status"), true);
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(statusResult?.reply?.text).toContain("Provider: microsoft");
-    expect(statusResult?.reply?.text).toContain("Fallback: elevenlabs -> microsoft");
-    expect(statusResult?.reply?.text).toContain("Attempts: elevenlabs -> microsoft");
+    expect(statusResult?.reply?.text).toContain(`Provider: ${FALLBACK_TTS_PROVIDER}`);
     expect(statusResult?.reply?.text).toContain(
-      "Attempt details: elevenlabs:failed(provider_error) 65ms, microsoft:success(ok) 175ms",
+      `Fallback: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`,
+    );
+    expect(statusResult?.reply?.text).toContain(
+      `Attempts: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`,
+    );
+    expect(statusResult?.reply?.text).toContain(
+      `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(provider_error) 65ms, ${FALLBACK_TTS_PROVIDER}:success(ok) 175ms`,
     );
   });
 });

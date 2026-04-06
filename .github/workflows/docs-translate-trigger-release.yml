@@ -29,6 +29,7 @@ jobs:
             translate-ar-release \
             translate-it-release \
             translate-tr-release \
+            translate-uk-release \
             translate-id-release \
             translate-pl-release
           do

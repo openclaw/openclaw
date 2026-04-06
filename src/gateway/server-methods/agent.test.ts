@@ -146,33 +146,12 @@ function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string
   });
 }
 
-function captureUpdatedMainEntry() {
-  let capturedEntry: Record<string, unknown> | undefined;
-  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-    const store: Record<string, unknown> = {};
-    await updater(store);
-    capturedEntry = store["agent:main:main"] as Record<string, unknown>;
-  });
-  return () => capturedEntry;
-}
-
 function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: "existing-session-id",
     updatedAt: Date.now(),
     ...overrides,
   };
-}
-
-async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
-  const getCapturedEntry = captureUpdatedMainEntry();
-  mocks.agentCommand.mockResolvedValue({
-    payloads: [{ text: "ok" }],
-    meta: { durationMs: 100 },
-  });
-  await runMainAgent("test", idempotencyKey);
-  expect(mocks.updateSessionStore).toHaveBeenCalled();
-  return getCapturedEntry();
 }
 
 function setupNewYorkTimeConfig(isoDate: string) {
@@ -450,21 +429,6 @@ describe("gateway agent handler", () => {
         senderIsOwner: false,
       }),
     );
-  });
-
-  it("preserves cliSessionIds from existing session entry", async () => {
-    const existingCliSessionIds = { "claude-cli": "abc-123-def" };
-    const existingClaudeCliSessionId = "abc-123-def";
-
-    mockMainSessionEntry({
-      cliSessionIds: existingCliSessionIds,
-      claudeCliSessionId: existingClaudeCliSessionId,
-    });
-
-    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem");
-    expect(capturedEntry).toBeDefined();
-    expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
-    expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
   });
 
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
@@ -795,6 +759,44 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("accepts music generation internal events", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "music generation finished",
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "compose a loop",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "MEDIA: https://example.test/song.mp3",
+            replyInstruction: "Reply in your normal assistant voice now.",
+          },
+        ],
+        idempotencyKey: "music-generation-event",
+      },
+      { reqId: "music-generation-event-1", respond },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
   it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
     primeMainAgentRun();
     mockMainSessionEntry({
@@ -894,16 +896,6 @@ describe("gateway agent handler", () => {
         status: "running",
       });
     });
-  });
-
-  it("handles missing cliSessionIds gracefully", async () => {
-    mockMainSessionEntry({});
-
-    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-2");
-    expect(capturedEntry).toBeDefined();
-    // Should be undefined, not cause an error
-    expect(capturedEntry?.cliSessionIds).toBeUndefined();
-    expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
   });
 
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {

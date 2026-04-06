@@ -52,26 +52,26 @@ function resolveQwenVideoBaseUrl(req: VideoGenerationRequest): string {
     return DEFAULT_QWEN_VIDEO_BASE_URL;
   }
   try {
-    const url = new URL(direct);
-    if (url.hostname === "coding-intl.dashscope.aliyuncs.com") {
-      return "https://dashscope-intl.aliyuncs.com";
-    }
-    if (url.hostname === "coding.dashscope.aliyuncs.com") {
-      return "https://dashscope.aliyuncs.com";
-    }
-    if (url.hostname === "dashscope-intl.aliyuncs.com") {
-      return "https://dashscope-intl.aliyuncs.com";
-    }
-    if (url.hostname === "dashscope.aliyuncs.com") {
-      return "https://dashscope.aliyuncs.com";
-    }
-    return url.origin;
+    return new URL(direct).toString();
   } catch {
     return DEFAULT_QWEN_VIDEO_BASE_URL;
   }
 }
 
 function resolveDashscopeAigcApiBaseUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    if (
+      url.hostname === "coding-intl.dashscope.aliyuncs.com" ||
+      url.hostname === "coding.dashscope.aliyuncs.com" ||
+      url.hostname === "dashscope-intl.aliyuncs.com" ||
+      url.hostname === "dashscope.aliyuncs.com"
+    ) {
+      return url.origin;
+    }
+  } catch {
+    // Fall through to legacy prefix handling for non-URL strings.
+  }
   if (baseUrl.startsWith(QWEN_STANDARD_CN_BASE_URL)) {
     return "https://dashscope.aliyuncs.com";
   }
@@ -90,7 +90,22 @@ function resolveReferenceUrls(
     .filter((value): value is string => Boolean(value));
 }
 
+function assertQwenReferenceInputsSupported(
+  inputImages: VideoGenerationSourceAsset[] | undefined,
+  inputVideos: VideoGenerationSourceAsset[] | undefined,
+): void {
+  const unsupported = [...(inputImages ?? []), ...(inputVideos ?? [])].some(
+    (asset) => !asset.url?.trim() && asset.buffer,
+  );
+  if (unsupported) {
+    throw new Error(
+      "Qwen video generation currently requires remote http(s) URLs for reference images/videos.",
+    );
+  }
+}
+
 function buildQwenVideoGenerationInput(req: VideoGenerationRequest): Record<string, unknown> {
+  assertQwenReferenceInputsSupported(req.inputImages, req.inputVideos);
   const input: Record<string, unknown> = {
     prompt: req.prompt,
   };

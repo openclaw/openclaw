@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   imageGenerationProviderContractRegistry,
   mediaUnderstandingProviderContractRegistry,
+  musicGenerationProviderContractRegistry,
   pluginRegistrationContractRegistry,
   speechProviderContractRegistry,
   videoGenerationProviderContractRegistry,
@@ -19,7 +20,7 @@ type PluginRegistrationContractParams = {
   mediaUnderstandingProviderIds?: string[];
   imageGenerationProviderIds?: string[];
   videoGenerationProviderIds?: string[];
-  cliBackendIds?: string[];
+  musicGenerationProviderIds?: string[];
   toolNames?: string[];
   requireSpeechVoices?: boolean;
   requireDescribeImages?: boolean;
@@ -111,6 +112,13 @@ function findVideoGenerationProvider(pluginId: string) {
   return entry.provider;
 }
 
+function findMusicGenerationProviderIds(pluginId: string) {
+  return musicGenerationProviderContractRegistry
+    .filter((entry) => entry.pluginId === pluginId)
+    .map((entry) => entry.provider.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function describePluginRegistrationContract(params: PluginRegistrationContractParams) {
   describe(`${params.pluginId} plugin registration contract`, () => {
     if (params.providerIds) {
@@ -193,9 +201,14 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
       });
     }
 
-    if (params.cliBackendIds) {
-      it("keeps bundled CLI backend ownership explicit", () => {
-        expect(findRegistration(params.pluginId).cliBackendIds).toEqual(params.cliBackendIds);
+    if (params.musicGenerationProviderIds) {
+      it("keeps bundled music-generation ownership explicit", () => {
+        expect(findRegistration(params.pluginId).musicGenerationProviderIds).toEqual(
+          params.musicGenerationProviderIds,
+        );
+        expect(findMusicGenerationProviderIds(params.pluginId)).toEqual(
+          params.musicGenerationProviderIds,
+        );
       });
     }
 

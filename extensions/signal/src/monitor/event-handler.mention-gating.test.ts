@@ -28,6 +28,10 @@ let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").c
 let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
 let renderSignalMentions: typeof import("./mentions.js").renderSignalMentions;
 
+beforeAll(async () => {
+  ({ renderSignalMentions } = await import("./mentions.js"));
+});
+
 type GroupEventOpts = {
   message?: string;
   attachments?: unknown[];
@@ -106,7 +110,6 @@ describe("signal mention gating", () => {
     ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
       await import("./event-handler.test-harness.js"));
     ({ createSignalEventHandler } = await import("./event-handler.js"));
-    ({ renderSignalMentions } = await import("./mentions.js"));
   });
 
   beforeEach(() => {

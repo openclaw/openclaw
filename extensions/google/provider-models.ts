@@ -4,13 +4,13 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 
-const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GEMINI_2_5_PRO_PREFIX = "gemini-2.5-pro";
 const GEMINI_2_5_FLASH_LITE_PREFIX = "gemini-2.5-flash-lite";
 const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
+const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
 const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
 const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
@@ -67,12 +67,17 @@ function buildGoogleTemplateSources(params: {
   templateProviderId?: string;
   family: GoogleForwardCompatFamily;
 }): GoogleTemplateSource[] {
+  const defaultTemplateProviderId = params.templateProviderId?.trim()
+    ? params.templateProviderId
+    : isGoogleGeminiCliProvider(params.providerId)
+      ? "google"
+      : GOOGLE_GEMINI_CLI_PROVIDER_ID;
   const preferredExternalFirst =
     isGoogleGeminiCliProvider(params.providerId) &&
     params.family.preferExternalFirstForCli === true;
   const orderedTemplateProviderIds = preferredExternalFirst
-    ? [params.templateProviderId, params.providerId]
-    : [params.providerId, params.templateProviderId];
+    ? [defaultTemplateProviderId, params.providerId]
+    : [params.providerId, defaultTemplateProviderId];
 
   const seen = new Set<string>();
   const sources: GoogleTemplateSource[] = [];
@@ -99,6 +104,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
   const lower = trimmed.toLowerCase();
 
   let family: GoogleForwardCompatFamily;
+  let patch: Partial<ProviderRuntimeModel> | undefined;
   if (lower.startsWith(GEMINI_2_5_PRO_PREFIX)) {
     family = {
       googleTemplateIds: GEMINI_2_5_PRO_TEMPLATE_IDS,
@@ -122,6 +128,9 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       googleTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
     };
+    if (params.providerId === "google" || params.providerId === GOOGLE_GEMINI_CLI_PROVIDER_ID) {
+      patch = { reasoning: true };
+    }
   } else if (lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX)) {
     family = {
       googleTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
@@ -147,6 +156,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       templateProviderId: source.templateProviderId,
       templateIds: source.templateIds,
       ctx: params.ctx,
+      patch,
     });
     if (model) {
       return model;

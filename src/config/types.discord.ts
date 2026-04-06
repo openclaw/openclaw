@@ -285,7 +285,7 @@ export type DiscordAccountConfig = {
   retry?: OutboundRetryConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: DiscordActionConfig;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /**
    * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).

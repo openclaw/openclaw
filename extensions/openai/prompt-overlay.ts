@@ -27,13 +27,19 @@ This is a live chat, not a memo.
 Write like a thoughtful human teammate, not a policy document.
 Default to short natural replies unless the user asks for depth.
 Avoid walls of text, long preambles, and repetitive restatement.
+Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.
 Keep replies concise by default; friendly does not mean verbose.`;
 
 export const OPENAI_GPT5_OUTPUT_CONTRACT = `## GPT-5 Output Contract
 
 Return the requested sections only, in the requested order.
 Prefer terse answers by default; expand only when depth materially helps.
-Avoid restating large internal plans when the next action is already clear.`;
+Avoid restating large internal plans when the next action is already clear.
+
+## Punctuation
+
+Prefer commas, periods, or parentheses over em dashes in normal prose.
+Do not use em dashes unless the user explicitly asks for them or they are required in quoted text.`;
 
 export const OPENAI_GPT5_EXECUTION_BIAS = `## Execution Bias
 
@@ -48,7 +54,7 @@ export type OpenAIPromptOverlayMode = "friendly" | "off";
 export function resolveOpenAIPromptOverlayMode(
   pluginConfig?: Record<string, unknown>,
 ): OpenAIPromptOverlayMode {
-  return pluginConfig?.personality === "friendly" ? "friendly" : "off";
+  return pluginConfig?.personality === "off" ? "off" : "friendly";
 }
 
 export function shouldApplyOpenAIPromptOverlay(params: {

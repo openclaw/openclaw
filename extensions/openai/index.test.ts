@@ -286,6 +286,9 @@ describe("openai plugin", () => {
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       "Have emotional range when it fits the moment.",
     );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
+    );
     expect(codexProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
       stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
       sectionOverrides: {
@@ -314,16 +317,53 @@ describe("openai plugin", () => {
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
       'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
     );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
+    );
     expect(OPENAI_GPT5_EXECUTION_BIAS).toContain(
       "Do prerequisite lookup or discovery before dependent actions.",
     );
     expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
       "Return the requested sections only, in the requested order.",
     );
+    expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
+      "Prefer commas, periods, or parentheses over em dashes in normal prose.",
+    );
+    expect(OPENAI_GPT5_OUTPUT_CONTRACT).toContain(
+      "Do not use em dashes unless the user explicitly asks for them or they are required in quoted text.",
+    );
   });
 
-  it("defaults to no OpenAI interaction-style overlay", async () => {
+  it("defaults to the friendly OpenAI interaction-style overlay", async () => {
     const { on, providers } = await registerOpenAIPluginWithHook();
+
+    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    expect(
+      openaiProvider.resolveSystemPromptContribution?.({
+        config: undefined,
+        agentDir: undefined,
+        workspaceDir: undefined,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        promptMode: "full",
+        runtimeChannel: undefined,
+        runtimeCapabilities: undefined,
+        agentId: undefined,
+      }),
+    ).toEqual({
+      stablePrefix: OPENAI_GPT5_OUTPUT_CONTRACT,
+      sectionOverrides: {
+        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+        execution_bias: OPENAI_GPT5_EXECUTION_BIAS,
+      },
+    });
+  });
+
+  it("supports opting out of the friendly prompt overlay via plugin config", async () => {
+    const { on, providers } = await registerOpenAIPluginWithHook({
+      pluginConfig: { personality: "off" },
+    });
 
     expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
     const openaiProvider = requireRegisteredProvider(providers, "openai");
@@ -347,7 +387,7 @@ describe("openai plugin", () => {
     });
   });
 
-  it("supports opting into the friendly prompt overlay via plugin config", async () => {
+  it("supports explicitly configuring the friendly prompt overlay", async () => {
     const { on, providers } = await registerOpenAIPluginWithHook({
       pluginConfig: { personality: "friendly" },
     });

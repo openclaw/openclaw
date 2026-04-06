@@ -107,4 +107,79 @@ describe("qwen video generation provider", () => {
       }),
     );
   });
+
+  it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {
+    const provider = buildQwenVideoGenerationProvider();
+
+    await expect(
+      provider.generateVideo({
+        provider: "qwen",
+        model: "wan2.6-i2v",
+        prompt: "animate this local frame",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow(
+      "Qwen video generation currently requires remote http(s) URLs for reference images/videos.",
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves dedicated coding endpoints for dedicated API keys", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          request_id: "req-2",
+          output: {
+            task_id: "task-2",
+          },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          output: {
+            task_status: "SUCCEEDED",
+            results: [{ video_url: "https://example.com/out.mp4" }],
+          },
+        }),
+        headers: new Headers(),
+      })
+      .mockResolvedValueOnce({
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      });
+
+    const provider = buildQwenVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "qwen",
+      model: "wan2.6-t2v",
+      prompt: "animate this shot",
+      cfg: {
+        models: {
+          providers: {
+            qwen: {
+              baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://coding-intl.dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+      }),
+    );
+    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
+      1,
+      "https://coding-intl.dashscope.aliyuncs.com/api/v1/tasks/task-2",
+      expect.objectContaining({ method: "GET" }),
+      120000,
+      fetch,
+    );
+  });
 });

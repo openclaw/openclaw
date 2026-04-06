@@ -147,7 +147,6 @@ describe("non-extension test boundaries", () => {
       "../plugin-sdk/synthetic.js",
       "../plugin-sdk/xai.js",
       "../plugin-sdk/xiaomi.js",
-      "../plugin-sdk/zai.js",
     ]);
     const file = "src/commands/onboard-auth.test.ts";
     const source = fs.readFileSync(path.join(repoRoot, file), "utf8");

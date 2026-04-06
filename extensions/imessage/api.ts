@@ -1,4 +1,5 @@
 export { imessagePlugin } from "./src/channel.js";
+export { imessageSetupPlugin } from "./src/channel.setup.js";
 export * from "./src/accounts.js";
 export * from "./src/conversation-bindings.js";
 export * from "./src/conversation-id.js";

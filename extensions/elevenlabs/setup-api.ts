@@ -6,16 +6,6 @@ export default definePluginEntry({
   name: "ElevenLabs Setup",
   description: "Lightweight ElevenLabs setup hooks",
   register(api) {
-    api.registerLegacyConfigMigration((raw, changes) => {
-      const migrated = migrateElevenLabsLegacyTalkConfig(raw);
-      if (migrated.changes.length === 0) {
-        return;
-      }
-      for (const key of Object.keys(raw)) {
-        delete raw[key];
-      }
-      Object.assign(raw, migrated.config);
-      changes.push(...migrated.changes);
-    });
+    api.registerConfigMigration((config) => migrateElevenLabsLegacyTalkConfig(config));
   },
 });

@@ -510,10 +510,16 @@ export async function resolveValidatedMatrixHomeserverUrl(
     lookupFn?: LookupFn;
   },
 ): Promise<string> {
-  const normalized = validateMatrixHomeserverUrl(homeserver, opts);
+  const allowPrivateNetwork =
+    typeof opts?.dangerouslyAllowPrivateNetwork === "boolean"
+      ? opts.dangerouslyAllowPrivateNetwork
+      : opts?.allowPrivateNetwork;
+  const normalized = validateMatrixHomeserverUrl(homeserver, {
+    allowPrivateNetwork,
+  });
   await assertHttpUrlTargetsPrivateNetwork(normalized, {
     dangerouslyAllowPrivateNetwork: opts?.dangerouslyAllowPrivateNetwork,
-    allowPrivateNetwork: opts?.allowPrivateNetwork,
+    allowPrivateNetwork,
     lookupFn: opts?.lookupFn,
     errorMessage: MATRIX_HTTP_HOMESERVER_ERROR,
   });

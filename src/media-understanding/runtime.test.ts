@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { MediaUnderstandingOutput } from "../media-understanding/types.js";
+import type { MediaAttachment, MediaUnderstandingOutput } from "../media-understanding/types.js";
 import { describeImageFile, runMediaUnderstandingFile } from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => {
   return {
     buildProviderRegistry: vi.fn(() => new Map()),
     createMediaAttachmentCache: vi.fn(() => ({ cleanup })),
-    normalizeMediaAttachments: vi.fn(() => []),
+    normalizeMediaAttachments: vi.fn<() => MediaAttachment[]>(() => []),
     normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
     runCapability: vi.fn(),
     cleanup,
@@ -35,7 +35,9 @@ describe("media-understanding runtime", () => {
   });
 
   it("returns disabled state without loading providers", async () => {
-    mocks.normalizeMediaAttachments.mockReturnValue([{ kind: "image" }]);
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
 
     await expect(
       runMediaUnderstandingFile({
@@ -72,7 +74,9 @@ describe("media-understanding runtime", () => {
       model: "vision-v1",
       text: "image ok",
     };
-    mocks.normalizeMediaAttachments.mockReturnValue([{ kind: "image" }]);
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
     mocks.runCapability.mockResolvedValue({
       outputs: [output],
     });

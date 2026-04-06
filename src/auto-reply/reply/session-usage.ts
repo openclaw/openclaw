@@ -1,4 +1,3 @@
-import { setCliSessionBinding, setCliSessionId } from "../../agents/cli-session.js";
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
@@ -13,39 +12,6 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
-
-function applyCliSessionIdToSessionPatch(
-  params: {
-    providerUsed?: string;
-    cliSessionId?: string;
-    cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
-  },
-  entry: SessionEntry,
-  patch: Partial<SessionEntry>,
-): Partial<SessionEntry> {
-  const cliProvider = params.providerUsed ?? entry.modelProvider;
-  if (params.cliSessionBinding && cliProvider) {
-    const nextEntry = { ...entry, ...patch };
-    setCliSessionBinding(nextEntry, cliProvider, params.cliSessionBinding);
-    return {
-      ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
-      cliSessionBindings: nextEntry.cliSessionBindings,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
-    };
-  }
-  if (params.cliSessionId && cliProvider) {
-    const nextEntry = { ...entry, ...patch };
-    setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
-    return {
-      ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
-      cliSessionBindings: nextEntry.cliSessionBindings,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
-    };
-  }
-  return patch;
-}
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -86,8 +52,6 @@ export async function persistSessionUsageUpdate(params: {
   promptTokens?: number;
   usageIsContextSnapshot?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
-  cliSessionId?: string;
-  cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -158,7 +122,7 @@ export async function persistSessionUsageUpdate(params: {
           // context utilization is stale/unknown.
           patch.totalTokens = totalTokens;
           patch.totalTokensFresh = typeof totalTokens === "number";
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
+          return patch;
         },
       });
     } catch (err) {
@@ -180,7 +144,7 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
+          return patch;
         },
       });
     } catch (err) {

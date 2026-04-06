@@ -37,7 +37,6 @@ describe("config io write", () => {
       origin: "bundled",
       channels: ["bluebubbles"],
       providers: [],
-      cliBackends: [],
       skills: [],
       hooks: [],
       rootDir: "/virtual/plugins/bluebubbles",
@@ -416,41 +415,6 @@ describe("config io write", () => {
     });
   });
 
-  it("preserves env var references when writing", async () => {
-    await withSuiteHome(async (home) => {
-      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
-        home,
-        env: { OPENAI_API_KEY: "sk-secret" } as NodeJS.ProcessEnv,
-        initialConfig: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                codex: {
-                  command: "codex",
-                  env: {
-                    OPENAI_API_KEY: "${OPENAI_API_KEY}",
-                  },
-                },
-              },
-            },
-          },
-          gateway: { port: 18789 },
-        },
-      });
-      const persisted = (await writeTokenAuthAndReadConfig({ io, snapshot, configPath })) as {
-        agents: { defaults: { cliBackends: { codex: { env: { OPENAI_API_KEY: string } } } } };
-        gateway: { port: number; auth: { mode: string } };
-      };
-      expect(persisted.agents.defaults.cliBackends.codex.env.OPENAI_API_KEY).toBe(
-        "${OPENAI_API_KEY}",
-      );
-      expect(persisted.gateway).toEqual({
-        port: 18789,
-        auth: { mode: "token" },
-      });
-    });
-  });
-
   it("does not leak channel plugin AJV defaults into persisted config (issue #56772)", async () => {
     // Regression test for #56772. Mock the BlueBubbles channel metadata so
     // read-time AJV validation injects the same default that triggered the
@@ -556,79 +520,6 @@ describe("config io write", () => {
       expect(persisted.channels?.discord?.dm).toEqual({ enabled: true });
       expect(persisted.channels?.slack?.dmPolicy).toBe("pairing");
       expect(persisted.channels?.slack?.dm).toEqual({ enabled: true });
-    });
-  });
-
-  it("keeps env refs in arrays when appending entries", async () => {
-    await withSuiteHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            agents: {
-              defaults: {
-                cliBackends: {
-                  codex: {
-                    command: "codex",
-                    args: ["${DISCORD_USER_ID}", "123"],
-                  },
-                },
-              },
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      const io = createConfigIO({
-        env: { DISCORD_USER_ID: "999" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: silentLogger,
-      });
-
-      const snapshot = await io.readConfigFileSnapshot();
-      expect(snapshot.valid).toBe(true);
-
-      const next = structuredClone(snapshot.config);
-      const codexBackend = next.agents?.defaults?.cliBackends?.codex;
-      const args = Array.isArray(codexBackend?.args) ? codexBackend?.args : [];
-      next.agents = {
-        ...next.agents,
-        defaults: {
-          ...next.agents?.defaults,
-          cliBackends: {
-            ...next.agents?.defaults?.cliBackends,
-            codex: {
-              ...codexBackend,
-              command: typeof codexBackend?.command === "string" ? codexBackend.command : "codex",
-              args: [...args, "456"],
-            },
-          },
-        },
-      };
-
-      await io.writeConfigFile(next);
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                args: string[];
-              };
-            };
-          };
-        };
-      };
-      expect(persisted.agents.defaults.cliBackends.codex.args).toEqual([
-        "${DISCORD_USER_ID}",
-        "123",
-        "456",
-      ]);
     });
   });
 
@@ -746,85 +637,6 @@ describe("config io write", () => {
       expect(last.watchMode).toBe(true);
       expect(last.watchSession).toBe("watch-session-1");
       expect(last.watchCommand).toBe("gateway --force");
-    });
-  });
-
-  it("accepts unrelated writes when the file still contains legacy nested allow aliases", async () => {
-    await withSuiteHome(async (home) => {
-      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
-        home,
-        initialConfig: {
-          channels: {
-            slack: {
-              channels: {
-                ops: {
-                  allow: false,
-                },
-              },
-            },
-            googlechat: {
-              groups: {
-                "spaces/aaa": {
-                  allow: true,
-                },
-              },
-            },
-            discord: {
-              guilds: {
-                "100": {
-                  channels: {
-                    general: {
-                      allow: false,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-
-      const next = structuredClone(snapshot.config);
-      next.gateway = {
-        ...next.gateway,
-        auth: { mode: "token" },
-      };
-
-      await io.writeConfigFile(next);
-
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        channels?: Record<string, unknown>;
-        gateway?: Record<string, unknown>;
-      };
-      expect(persisted.gateway).toEqual({
-        auth: { mode: "token" },
-      });
-      expect(
-        (
-          (persisted.channels?.slack as { channels?: Record<string, unknown> } | undefined)
-            ?.channels?.ops as Record<string, unknown> | undefined
-        )?.enabled,
-      ).toBe(false);
-      expect(
-        (
-          (persisted.channels?.googlechat as { groups?: Record<string, unknown> } | undefined)
-            ?.groups?.["spaces/aaa"] as Record<string, unknown> | undefined
-        )?.enabled,
-      ).toBe(true);
-      expect(
-        (
-          (
-            (persisted.channels?.discord as { guilds?: Record<string, unknown> } | undefined)
-              ?.guilds?.["100"] as { channels?: Record<string, unknown> } | undefined
-          )?.channels?.general as Record<string, unknown> | undefined
-        )?.enabled,
-      ).toBe(false);
-      expect(
-        (
-          (persisted.channels?.slack as { channels?: Record<string, unknown> } | undefined)
-            ?.channels?.ops as Record<string, unknown> | undefined
-        )?.allow,
-      ).toBeUndefined();
     });
   });
 });

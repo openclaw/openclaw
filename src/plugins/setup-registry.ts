@@ -15,10 +15,8 @@ import {
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
 import type {
-  CliBackendPlugin,
   OpenClawPluginModule,
   PluginConfigMigration,
-  PluginLegacyConfigMigration,
   PluginLogger,
   PluginSetupAutoEnableProbe,
   ProviderPlugin,
@@ -35,19 +33,9 @@ type SetupProviderEntry = {
   provider: ProviderPlugin;
 };
 
-type SetupCliBackendEntry = {
-  pluginId: string;
-  backend: CliBackendPlugin;
-};
-
 type SetupConfigMigrationEntry = {
   pluginId: string;
   migrate: PluginConfigMigration;
-};
-
-type SetupLegacyConfigMigrationEntry = {
-  pluginId: string;
-  migrate: PluginLegacyConfigMigration;
 };
 
 type SetupAutoEnableProbeEntry = {
@@ -57,9 +45,7 @@ type SetupAutoEnableProbeEntry = {
 
 type PluginSetupRegistry = {
   providers: SetupProviderEntry[];
-  cliBackends: SetupCliBackendEntry[];
   configMigrations: SetupConfigMigrationEntry[];
-  legacyConfigMigrations: SetupLegacyConfigMigrationEntry[];
   autoEnableProbes: SetupAutoEnableProbeEntry[];
 };
 
@@ -77,9 +63,11 @@ const NOOP_LOGGER: PluginLogger = {
 
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const setupRegistryCache = new Map<string, PluginSetupRegistry>();
+const setupProviderCache = new Map<string, ProviderPlugin | null>();
 
 export function clearPluginSetupRegistryCache(): void {
   setupRegistryCache.clear();
+  setupProviderCache.clear();
 }
 
 function getJiti(modulePath: string) {
@@ -111,16 +99,47 @@ function buildSetupRegistryCacheKey(params: {
   });
 }
 
+function buildSetupProviderCacheKey(params: {
+  provider: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  return JSON.stringify({
+    provider: normalizeProviderId(params.provider),
+    registry: buildSetupRegistryCacheKey(params),
+  });
+}
+
 function resolveSetupApiPath(rootDir: string): string | null {
   const orderedExtensions = RUNNING_FROM_BUILT_ARTIFACT
     ? SETUP_API_EXTENSIONS
     : ([...SETUP_API_EXTENSIONS.slice(3), ...SETUP_API_EXTENSIONS.slice(0, 3)] as const);
-  for (const extension of orderedExtensions) {
-    const candidate = path.join(rootDir, `setup-api${extension}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
+
+  const findSetupApi = (candidateRootDir: string): string | null => {
+    for (const extension of orderedExtensions) {
+      const candidate = path.join(candidateRootDir, `setup-api${extension}`);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  };
+
+  const direct = findSetupApi(rootDir);
+  if (direct) {
+    return direct;
+  }
+
+  const bundledExtensionDir = path.basename(rootDir);
+  const repoRoot = path.resolve(path.dirname(CURRENT_MODULE_PATH), "..", "..");
+  const sourceExtensionRoot = path.join(repoRoot, "extensions", bundledExtensionDir);
+  if (sourceExtensionRoot !== rootDir) {
+    const sourceFallback = findSetupApi(sourceExtensionRoot);
+    if (sourceFallback) {
+      return sourceFallback;
     }
   }
+
   return null;
 }
 
@@ -165,12 +184,9 @@ export function resolvePluginSetupRegistry(params?: {
   }
 
   const providers: SetupProviderEntry[] = [];
-  const cliBackends: SetupCliBackendEntry[] = [];
   const configMigrations: SetupConfigMigrationEntry[] = [];
-  const legacyConfigMigrations: SetupLegacyConfigMigrationEntry[] = [];
   const autoEnableProbes: SetupAutoEnableProbeEntry[] = [];
   const providerKeys = new Set<string>();
-  const cliBackendKeys = new Set<string>();
 
   const discovery = discoverOpenClawPlugins({
     workspaceDir: params?.workspaceDir,
@@ -230,25 +246,8 @@ export function resolvePluginSetupRegistry(params?: {
             provider,
           });
         },
-        registerCliBackend(backend) {
-          const key = `${record.id}:${normalizeProviderId(backend.id)}`;
-          if (cliBackendKeys.has(key)) {
-            return;
-          }
-          cliBackendKeys.add(key);
-          cliBackends.push({
-            pluginId: record.id,
-            backend,
-          });
-        },
         registerConfigMigration(migrate) {
           configMigrations.push({
-            pluginId: record.id,
-            migrate,
-          });
-        },
-        registerLegacyConfigMigration(migrate) {
-          legacyConfigMigrations.push({
             pluginId: record.id,
             migrate,
           });
@@ -274,9 +273,7 @@ export function resolvePluginSetupRegistry(params?: {
 
   const registry = {
     providers,
-    cliBackends,
     configMigrations,
-    legacyConfigMigrations,
     autoEnableProbes,
   } satisfies PluginSetupRegistry;
   setupRegistryCache.set(cacheKey, registry);
@@ -288,20 +285,99 @@ export function resolvePluginSetupProvider(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
-  return resolvePluginSetupRegistry(params).providers.find((entry) =>
-    matchesProvider(entry.provider, params.provider),
-  )?.provider;
-}
+  const cacheKey = buildSetupProviderCacheKey(params);
+  if (setupProviderCache.has(cacheKey)) {
+    return setupProviderCache.get(cacheKey) ?? undefined;
+  }
 
-export function resolvePluginSetupCliBackend(params: {
-  backend: string;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): SetupCliBackendEntry | undefined {
-  const normalized = normalizeProviderId(params.backend);
-  return resolvePluginSetupRegistry(params).cliBackends.find(
-    (entry) => normalizeProviderId(entry.backend.id) === normalized,
+  const env = params.env ?? process.env;
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const discovery = discoverOpenClawPlugins({
+    workspaceDir: params.workspaceDir,
+    env,
+    cache: true,
+  });
+  const manifestRegistry = loadPluginManifestRegistry({
+    workspaceDir: params.workspaceDir,
+    env,
+    cache: true,
+    candidates: discovery.candidates,
+    diagnostics: discovery.diagnostics,
+  });
+  const record = manifestRegistry.plugins.find((entry) =>
+    entry.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider),
   );
+  if (!record) {
+    setupProviderCache.set(cacheKey, null);
+    return undefined;
+  }
+
+  const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
+  if (!setupSource) {
+    setupProviderCache.set(cacheKey, null);
+    return undefined;
+  }
+
+  let mod: OpenClawPluginModule;
+  try {
+    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+  } catch {
+    setupProviderCache.set(cacheKey, null);
+    return undefined;
+  }
+
+  const resolved = resolveRegister((mod as { default?: OpenClawPluginModule }).default ?? mod);
+  if (!resolved.register) {
+    setupProviderCache.set(cacheKey, null);
+    return undefined;
+  }
+  if (resolved.definition?.id && resolved.definition.id !== record.id) {
+    setupProviderCache.set(cacheKey, null);
+    return undefined;
+  }
+
+  let matchedProvider: ProviderPlugin | undefined;
+  const localProviderKeys = new Set<string>();
+  const api = buildPluginApi({
+    id: record.id,
+    name: record.name ?? record.id,
+    version: record.version,
+    description: record.description,
+    source: setupSource,
+    rootDir: record.rootDir,
+    registrationMode: "setup-only",
+    config: {} as OpenClawConfig,
+    runtime: EMPTY_RUNTIME,
+    logger: NOOP_LOGGER,
+    resolvePath: (input) => input,
+    handlers: {
+      registerProvider(provider) {
+        const key = normalizeProviderId(provider.id);
+        if (localProviderKeys.has(key)) {
+          return;
+        }
+        localProviderKeys.add(key);
+        if (matchesProvider(provider, normalizedProvider)) {
+          matchedProvider = provider;
+        }
+      },
+      registerConfigMigration() {},
+      registerAutoEnableProbe() {},
+    },
+  });
+
+  try {
+    const result = resolved.register(api);
+    if (result && typeof result.then === "function") {
+      // Keep setup registration sync-only.
+    }
+  } catch {
+    setupProviderCache.set(cacheKey, null);
+    return undefined;
+  }
+
+  setupProviderCache.set(cacheKey, matchedProvider ?? null);
+  return matchedProvider;
 }
 
 export function runPluginSetupConfigMigrations(params: {
@@ -325,17 +401,6 @@ export function runPluginSetupConfigMigrations(params: {
   }
 
   return { config: next, changes };
-}
-
-export function runPluginSetupLegacyConfigMigrations(params: {
-  raw: Record<string, unknown>;
-  changes: string[];
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): void {
-  for (const entry of resolvePluginSetupRegistry(params).legacyConfigMigrations) {
-    entry.migrate(params.raw, params.changes);
-  }
 }
 
 export function resolvePluginSetupAutoEnableReasons(params: {

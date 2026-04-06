@@ -63,6 +63,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         kind: "enabled",
         channel: undefined,
         channelLabel: "this platform",
+        accountId: undefined,
       },
     },
     {
@@ -71,6 +72,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         kind: "enabled",
         channel: "tui",
         channelLabel: "terminal UI",
+        accountId: undefined,
       },
     },
     {
@@ -79,6 +81,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         kind: "enabled",
         channel: "web",
         channelLabel: "Web UI",
+        accountId: undefined,
       },
     },
   ])("treats built-in initiating surface %j", ({ channel, expected }) => {
@@ -115,6 +118,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "enabled",
       channel: "telegram",
       channelLabel: "Telegram",
+      accountId: "main",
     });
     expect(
       resolveExecApprovalInitiatingSurfaceState({
@@ -126,6 +130,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "disabled",
       channel: "discord",
       channelLabel: "Discord",
+      accountId: "main",
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
@@ -149,6 +154,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "disabled",
       channel: "discord",
       channelLabel: "Discord",
+      accountId: "main",
     });
   });
 
@@ -174,6 +180,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "disabled",
       channel: "telegram",
       channelLabel: "Telegram",
+      accountId: "main",
     });
     expect(loadConfigMock).toHaveBeenCalledOnce();
 
@@ -181,6 +188,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "unsupported",
       channel: "signal",
       channelLabel: "Signal",
+      accountId: undefined,
     });
   });
 
@@ -189,6 +197,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "enabled",
       channel: "slack",
       channelLabel: "Slack",
+      accountId: undefined,
     });
   });
 });

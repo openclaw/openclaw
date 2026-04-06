@@ -71,9 +71,6 @@ export const pluginSdkDocMetadata = {
   "provider-onboard": {
     category: "provider",
   },
-  elevenlabs: {
-    category: "provider",
-  },
   "runtime-store": {
     category: "runtime",
   },

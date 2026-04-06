@@ -108,7 +108,7 @@ export function shouldInitializeSlackDraftStream(params: {
 }
 
 export function resolveSlackStreamingThreadHint(params: {
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   isThreadReply?: boolean;
