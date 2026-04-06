@@ -8,6 +8,7 @@ export {
   resolveExecApprovalSessionTarget,
   type ExecApprovalSessionTarget,
 } from "../infra/exec-approval-session-target.js";
+export { buildChannelApprovalNativeTargetKey } from "../infra/approval-native-target-key.js";
 export {
   doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestAccountId,

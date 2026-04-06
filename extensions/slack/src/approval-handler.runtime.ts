@@ -7,6 +7,7 @@ import type {
   ExecApprovalResolvedView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildApprovalInteractiveReplyFromActionDescriptors,
@@ -283,7 +284,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
   },
   transport: {
     prepareTarget: ({ plannedTarget }) => ({
-      dedupeKey: `${plannedTarget.target.to}:${plannedTarget.target.threadId == null ? "" : String(plannedTarget.target.threadId)}`,
+      dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
       target: {
         to: plannedTarget.target.to,
         threadTs:

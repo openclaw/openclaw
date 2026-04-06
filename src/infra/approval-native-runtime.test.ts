@@ -510,6 +510,95 @@ describe("createChannelNativeApprovalRuntime", () => {
     await slackRuntime.stop();
   });
 
+  it("does not let disabled sibling runtimes block route notices", async () => {
+    mockGatewayClientStarts.mockReset();
+    mockGatewayClientStops.mockReset();
+    mockGatewayClientRequests.mockReset();
+    mockCreateOperatorApprovalsGatewayClient.mockReset().mockResolvedValue({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
+    const slackRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-slack-disabled-sibling",
+      clientDisplayName: "Slack",
+      channel: "slack",
+      channelLabel: "Slack",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({ to: "channel:C123", threadId: "1712345678.123456" }),
+        resolveApproverDmTargets: async () => [{ to: "owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "slack-dm:owner",
+        target: { chatId: "slack-dm:owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "slack-dm:owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+    const disabledTelegramRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-disabled-telegram-sibling",
+      clientDisplayName: "Telegram",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: false,
+          supportsApproverDmSurface: true,
+        }),
+        resolveApproverDmTargets: async () => [{ to: "owner" }],
+      },
+      isConfigured: () => false,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "telegram-dm:owner",
+        target: { chatId: "telegram-dm:owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "telegram-dm:owner", messageId: "m2" }),
+      finalizeResolved: async () => {},
+    });
+
+    await disabledTelegramRuntime.start();
+    await slackRuntime.start();
+    await slackRuntime.handleRequested({
+      id: "req-disabled-sibling",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "1712345678.123456",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("send", {
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "1712345678.123456",
+      message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+      idempotencyKey: "approval-route-notice:req-disabled-sibling",
+    });
+    await slackRuntime.stop();
+    await disabledTelegramRuntime.stop();
+  });
+
   it("passes the resolved approval kind and pending content through native delivery hooks", async () => {
     const describeDeliveryCapabilities = vi.fn().mockReturnValue({
       enabled: true,

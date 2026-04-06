@@ -344,8 +344,11 @@ export function createChannelNativeApprovalRuntime<
   return {
     ...runtime,
     async start() {
+      const shouldRegisterRoutes = adapter.isConfigured();
       await runtime.start();
-      routeReporter.start();
+      if (shouldRegisterRoutes) {
+        routeReporter.start();
+      }
     },
     async stop() {
       await routeReporter.stop();

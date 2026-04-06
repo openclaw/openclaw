@@ -9,15 +9,15 @@ vi.mock("openclaw/plugin-sdk/approval-handler-runtime", () => ({
     approvalRuntimeHoisted.resolveApprovalOverGatewaySpy(...args),
 }));
 
-describe("resolveMatrixExecApproval", () => {
+describe("resolveMatrixApproval", () => {
   beforeEach(() => {
     approvalRuntimeHoisted.resolveApprovalOverGatewaySpy.mockReset();
   });
 
   it("submits exec approval resolutions through the shared gateway resolver", async () => {
-    const { resolveMatrixExecApproval } = await import("./exec-approval-resolver.js");
+    const { resolveMatrixApproval } = await import("./exec-approval-resolver.js");
 
-    await resolveMatrixExecApproval({
+    await resolveMatrixApproval({
       cfg: {} as never,
       approvalId: "req-123",
       decision: "allow-once",
@@ -35,9 +35,9 @@ describe("resolveMatrixExecApproval", () => {
   });
 
   it("passes plugin approval ids through unchanged", async () => {
-    const { resolveMatrixExecApproval } = await import("./exec-approval-resolver.js");
+    const { resolveMatrixApproval } = await import("./exec-approval-resolver.js");
 
-    await resolveMatrixExecApproval({
+    await resolveMatrixApproval({
       cfg: {} as never,
       approvalId: "plugin:req-123",
       decision: "deny",

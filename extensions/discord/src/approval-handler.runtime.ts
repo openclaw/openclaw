@@ -371,7 +371,7 @@ async function updateMessage(params: {
       "update-approval",
     );
   } catch (err) {
-    logError(`discord exec approvals: failed to update message: ${String(err)}`);
+    logError(`discord approvals: failed to update message: ${String(err)}`);
   }
 }
 
@@ -398,7 +398,7 @@ async function finalizeMessage(params: {
       "delete-approval",
     );
   } catch (err) {
-    logError(`discord exec approvals: failed to delete message: ${String(err)}`);
+    logError(`discord approvals: failed to delete message: ${String(err)}`);
     await updateMessage(params);
   }
 }
@@ -525,7 +525,7 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         "dm-channel",
       )) as { id: string };
       if (!dmChannel?.id) {
-        logError(`discord exec approvals: failed to create DM for user ${userId}`);
+        logError(`discord approvals: failed to create DM for user ${userId}`);
         return null;
       }
       return {
@@ -561,10 +561,10 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       )) as { id: string; channel_id: string };
       if (!message?.id) {
         if (plannedTarget.surface === "origin") {
-          logError("discord exec approvals: failed to send to channel");
+          logError("discord approvals: failed to send to channel");
         } else if (preparedTarget.recipientUserId) {
           logError(
-            `discord exec approvals: failed to send message to user ${preparedTarget.recipientUserId}`,
+            `discord approvals: failed to send message to user ${preparedTarget.recipientUserId}`,
           );
         }
         return null;
@@ -595,27 +595,25 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
   observe: {
     onDuplicateSkipped: ({ preparedTarget, request }) => {
       logDebug(
-        `discord exec approvals: skipping duplicate approval ${request.id} for channel ${preparedTarget.dedupeKey}`,
+        `discord approvals: skipping duplicate approval ${request.id} for channel ${preparedTarget.dedupeKey}`,
       );
     },
     onDelivered: ({ plannedTarget, preparedTarget, request }) => {
       if (plannedTarget.surface === "origin") {
         logDebug(
-          `discord exec approvals: sent approval ${request.id} to channel ${preparedTarget.target.discordChannelId}`,
+          `discord approvals: sent approval ${request.id} to channel ${preparedTarget.target.discordChannelId}`,
         );
         return;
       }
-      logDebug(
-        `discord exec approvals: sent approval ${request.id} to user ${plannedTarget.target.to}`,
-      );
+      logDebug(`discord approvals: sent approval ${request.id} to user ${plannedTarget.target.to}`);
     },
     onDeliveryError: ({ error, plannedTarget }) => {
       if (plannedTarget.surface === "origin") {
-        logError(`discord exec approvals: failed to send to channel: ${String(error)}`);
+        logError(`discord approvals: failed to send to channel: ${String(error)}`);
         return;
       }
       logError(
-        `discord exec approvals: failed to notify user ${plannedTarget.target.to}: ${String(error)}`,
+        `discord approvals: failed to notify user ${plannedTarget.target.to}: ${String(error)}`,
       );
     },
   },

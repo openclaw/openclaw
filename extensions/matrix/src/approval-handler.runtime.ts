@@ -4,6 +4,7 @@ import type {
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
@@ -49,7 +50,7 @@ type ReactionTargetRef = {
   eventId: string;
 };
 
-export type MatrixExecApprovalHandlerDeps = {
+export type MatrixApprovalHandlerDeps = {
   nowMs?: () => number;
   sendMessage?: typeof sendMessageMatrix;
   reactMessage?: typeof reactMatrixMessage;
@@ -60,7 +61,7 @@ export type MatrixExecApprovalHandlerDeps = {
 
 export type MatrixApprovalHandlerContext = {
   client: MatrixClient;
-  deps?: MatrixExecApprovalHandlerDeps;
+  deps?: MatrixApprovalHandlerDeps;
 };
 
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext): {
@@ -261,7 +262,10 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       }).then((preparedTarget) =>
         preparedTarget
           ? {
-              dedupeKey: `${preparedTarget.roomId}:${preparedTarget.threadId ?? ""}`,
+              dedupeKey: buildChannelApprovalNativeTargetKey({
+                to: preparedTarget.roomId,
+                threadId: preparedTarget.threadId,
+              }),
               target: preparedTarget,
             }
           : null,

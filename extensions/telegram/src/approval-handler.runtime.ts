@@ -3,6 +3,7 @@ import type {
   PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   buildApprovalInteractiveReplyFromActionDescriptors,
@@ -19,7 +20,7 @@ import {
 } from "./exec-approvals.js";
 import { editMessageReplyMarkupTelegram, sendMessageTelegram, sendTypingTelegram } from "./send.js";
 
-const log = createSubsystemLogger("telegram/exec-approvals");
+const log = createSubsystemLogger("telegram/approvals");
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type PendingMessage = {
@@ -125,7 +126,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
   },
   transport: {
     prepareTarget: ({ plannedTarget }) => ({
-      dedupeKey: `${plannedTarget.target.to}:${plannedTarget.target.threadId == null ? "" : String(plannedTarget.target.threadId)}`,
+      dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
       target: {
         chatId: plannedTarget.target.to,
         messageThreadId:
@@ -181,7 +182,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
   },
   observe: {
     onDeliveryError: ({ error, request }) => {
-      log.error(`telegram exec approvals: failed to send request ${request.id}: ${String(error)}`);
+      log.error(`telegram approvals: failed to send request ${request.id}: ${String(error)}`);
     },
   },
 });

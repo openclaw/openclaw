@@ -5,7 +5,7 @@ import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 
 export { isApprovalNotFoundError };
 
-export async function resolveMatrixExecApproval(params: {
+export async function resolveMatrixApproval(params: {
   cfg: OpenClawConfig;
   approvalId: string;
   decision: ExecApprovalReplyDecision;
@@ -21,3 +21,5 @@ export async function resolveMatrixExecApproval(params: {
     clientDisplayName: `Matrix approval (${params.senderId?.trim() || "unknown"})`,
   });
 }
+
+export const resolveMatrixExecApproval = resolveMatrixApproval;

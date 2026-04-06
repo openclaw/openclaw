@@ -4,10 +4,7 @@ import {
   resolveMatrixApprovalReactionTarget,
   unregisterMatrixApprovalReactionTarget,
 } from "../../approval-reactions.js";
-import {
-  isApprovalNotFoundError,
-  resolveMatrixExecApproval,
-} from "../../exec-approval-resolver.js";
+import { isApprovalNotFoundError, resolveMatrixApproval } from "../../exec-approval-resolver.js";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
@@ -55,7 +52,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
     return false;
   }
   try {
-    await resolveMatrixExecApproval({
+    await resolveMatrixApproval({
       cfg: params.cfg,
       approvalId: params.target.approvalId,
       decision: params.target.decision,

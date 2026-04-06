@@ -193,4 +193,77 @@ describe("startChannelApprovalHandlerBootstrap", () => {
 
     await cleanup();
   });
+
+  it("restarts the shared approval handler when the runtime context is replaced", async () => {
+    const channelRuntime = createRuntimeChannel();
+    const startFirst = vi.fn().mockResolvedValue(undefined);
+    const stopFirst = vi.fn().mockResolvedValue(undefined);
+    const startSecond = vi.fn().mockResolvedValue(undefined);
+    const stopSecond = vi.fn().mockResolvedValue(undefined);
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({
+        start: startFirst,
+        stop: stopFirst,
+      })
+      .mockResolvedValueOnce({
+        start: startSecond,
+        stop: stopSecond,
+      });
+
+    const cleanup = await startChannelApprovalHandlerBootstrap({
+      plugin: {
+        id: "slack",
+        meta: { label: "Slack" },
+        approvalCapability: {
+          nativeRuntime: {
+            availability: {
+              isConfigured: vi.fn().mockReturnValue(true),
+              shouldHandle: vi.fn().mockReturnValue(true),
+            },
+            presentation: {
+              buildPendingPayload: vi.fn(),
+              buildResolvedResult: vi.fn(),
+              buildExpiredResult: vi.fn(),
+            },
+            transport: {
+              prepareTarget: vi.fn(),
+              deliverPending: vi.fn(),
+            },
+          },
+        },
+      } as never,
+      cfg: {} as never,
+      accountId: "default",
+      channelRuntime,
+    });
+
+    const firstLease = channelRuntime.runtimeContexts.register({
+      channelId: "slack",
+      accountId: "default",
+      capability: "approval.native",
+      context: { app: { ok: "first" } },
+    });
+    await flushTransitions();
+
+    const secondLease = channelRuntime.runtimeContexts.register({
+      channelId: "slack",
+      accountId: "default",
+      capability: "approval.native",
+      context: { app: { ok: "second" } },
+    });
+    await flushTransitions();
+
+    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
+    expect(startFirst).toHaveBeenCalledTimes(1);
+    expect(stopFirst).toHaveBeenCalledTimes(1);
+    expect(startSecond).toHaveBeenCalledTimes(1);
+
+    secondLease.dispose();
+    await flushTransitions();
+
+    expect(stopSecond).toHaveBeenCalledTimes(1);
+
+    firstLease.dispose();
+    await cleanup();
+  });
 });
