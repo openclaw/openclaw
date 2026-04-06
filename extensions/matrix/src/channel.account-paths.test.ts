@@ -49,6 +49,7 @@ describe("matrix account path propagation", () => {
       homeserver: "https://matrix.example.org",
       userId: "@poe:example.org",
       accessToken: "poe-token",
+      deviceId: "POEDEVICE",
     });
   });
 
@@ -83,6 +84,7 @@ describe("matrix account path propagation", () => {
       homeserver: "https://matrix.example.org",
       accessToken: "poe-token",
       userId: "@poe:example.org",
+      deviceId: "POEDEVICE",
       timeoutMs: 500,
       accountId: "poe",
     });
