@@ -154,7 +154,7 @@ export function buildWebProviderSnapshotCacheKey(params: {
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
-  envKey: string;
+  envKey: Record<string, string>;
 }): string {
   return JSON.stringify({
     workspaceDir: params.workspaceDir ?? "",
@@ -163,7 +163,7 @@ export function buildWebProviderSnapshotCacheKey(params: {
     onlyPluginIds: [...new Set(params.onlyPluginIds ?? [])].toSorted((left, right) =>
       left.localeCompare(right),
     ),
-    env: params.envKey,
+    env: Object.entries(params.envKey).toSorted(([left], [right]) => left.localeCompare(right)),
   });
 }
 

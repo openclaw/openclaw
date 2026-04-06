@@ -1,26 +1,27 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const resolveRuntimePluginRegistryMock = vi.fn((_options: unknown): unknown => undefined);
-const applyPluginAutoEnableMock = vi.fn<(params: { config: unknown; env?: unknown }) => unknown>();
-const getMemoryRuntimeMock = vi.fn();
-const resolveAgentWorkspaceDirMock = vi.fn(
-  (_config: unknown, _agentId: unknown): unknown => undefined,
-);
-const resolveDefaultAgentIdMock = vi.fn((_config: unknown) => "default");
+const resolveRuntimePluginRegistryMock =
+  vi.fn<typeof import("./loader.js").resolveRuntimePluginRegistry>();
+const applyPluginAutoEnableMock =
+  vi.fn<typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable>();
+const getMemoryRuntimeMock = vi.fn<typeof import("./memory-state.js").getMemoryRuntime>();
+const resolveAgentWorkspaceDirMock =
+  vi.fn<typeof import("../agents/agent-scope.js").resolveAgentWorkspaceDir>();
+const resolveDefaultAgentIdMock = vi.fn<
+  typeof import("../agents/agent-scope.js").resolveDefaultAgentId
+>(() => "default");
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (params: { config: unknown; env?: unknown }) =>
-    applyPluginAutoEnableMock(params),
+  applyPluginAutoEnable: applyPluginAutoEnableMock,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: (config: unknown, agentId: unknown) =>
-    resolveAgentWorkspaceDirMock(config, agentId),
-  resolveDefaultAgentId: (config: unknown) => resolveDefaultAgentIdMock(config),
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
+  resolveDefaultAgentId: resolveDefaultAgentIdMock,
 }));
 
 vi.mock("./loader.js", () => ({
-  resolveRuntimePluginRegistry: (options: unknown) => resolveRuntimePluginRegistryMock(options),
+  resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
 }));
 
 vi.mock("./memory-state.js", () => ({
@@ -129,12 +130,12 @@ describe("memory runtime auto-enable loading", () => {
     getMemoryRuntimeMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     resolveDefaultAgentIdMock.mockClear();
-    applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
-      config: params.config,
+    applyPluginAutoEnableMock.mockImplementation((params) => ({
+      config: params.config ?? {},
       changes: [],
       autoEnabledReasons: {},
     }));
-    resolveAgentWorkspaceDirMock.mockReturnValue(undefined);
+    resolveAgentWorkspaceDirMock.mockReturnValue("/resolved-workspace");
   });
 
   it.each([
@@ -177,6 +178,8 @@ describe("memory runtime auto-enable loading", () => {
       config: {},
       setup: () => {
         const runtime = {
+          getMemorySearchManager: vi.fn(async () => ({ manager: null, error: "no index" })),
+          resolveMemoryBackendConfig: vi.fn(() => ({ backend: "builtin" as const })),
           closeAllMemorySearchManagers: vi.fn(async () => {}),
         };
         getMemoryRuntimeMock.mockReturnValue(runtime);

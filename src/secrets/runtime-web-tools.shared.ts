@@ -9,8 +9,7 @@ import type {
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import type { RuntimeWebDiagnostic, RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
 
-type RuntimeWebWarningDiagnosticCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
-
+type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
 export type SecretResolutionResult<TSource extends string> = {
   value?: string;
   source: TSource;
@@ -49,9 +48,9 @@ export type RuntimeWebProviderSelectionParams<
   context: ResolverContext;
   defaults: SecretDefaults | undefined;
   deferKeylessFallback: boolean;
-  fallbackUsedCode: RuntimeWebWarningDiagnosticCode;
-  noFallbackCode: RuntimeWebWarningDiagnosticCode;
-  autoDetectSelectedCode: RuntimeWebDiagnosticCode;
+  fallbackUsedCode: RuntimeWebWarningCode;
+  noFallbackCode: RuntimeWebWarningCode;
+  autoDetectSelectedCode: RuntimeWebWarningCode;
   readConfiguredCredential: (params: {
     provider: TProvider;
     config: OpenClawConfig;
@@ -140,7 +139,7 @@ export type ResolveRuntimeWebProviderSurfaceParams<
   toolConfig: TToolConfig;
   diagnostics: RuntimeWebDiagnostic[];
   metadataDiagnostics: RuntimeWebDiagnostic[];
-  invalidAutoDetectCode: RuntimeWebWarningDiagnosticCode;
+  invalidAutoDetectCode: RuntimeWebWarningCode;
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
   resolveProviders: (params: { configuredBundledPluginId?: string }) => TProvider[];
