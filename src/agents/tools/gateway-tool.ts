@@ -354,18 +354,27 @@ function assertGatewayConfigMutationAllowed(params: {
     );
   }
   // Load config fresh (not captured opts.config) so gateway.mode changes during a session are seen.
-  if (
-    isRemoteGatewayTargetForAgentTools({
-      gatewayUrl: params.gatewayUrl,
-    }) &&
-    !isDeepStrictEqual(
-      getValueAtCanonicalPath(params.currentConfig, "plugins.entries"),
-      getValueAtCanonicalPath(nextConfig, "plugins.entries"),
-    )
-  ) {
-    throw new Error(
-      `gateway ${params.action} cannot change plugin config on remote gateways because dangerous plugin flags are host-specific`,
+  if (isRemoteGatewayTargetForAgentTools({ gatewayUrl: params.gatewayUrl })) {
+    // Check all plugin activation-related paths: entries, global enabled, allow/deny lists.
+    // Any of these can activate plugins with dangerous host-specific config on a remote gateway.
+    const REMOTE_PLUGIN_ACTIVATION_PATHS = [
+      "plugins.entries",
+      "plugins.enabled",
+      "plugins.allow",
+      "plugins.deny",
+    ] as const;
+    const changedActivationPaths = REMOTE_PLUGIN_ACTIVATION_PATHS.filter(
+      (path) =>
+        !isDeepStrictEqual(
+          getValueAtCanonicalPath(params.currentConfig, path),
+          getValueAtCanonicalPath(nextConfig, path),
+        ),
     );
+    if (changedActivationPaths.length > 0) {
+      throw new Error(
+        `gateway ${params.action} cannot change plugin config on remote gateways because dangerous plugin flags are host-specific`,
+      );
+    }
   }
   const newlyEnabledDangerousFlags = collectNewlyEnabledDangerousConfigFlags(
     params.currentConfig,

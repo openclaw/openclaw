@@ -649,6 +649,31 @@ describe("gateway tool", () => {
     );
   });
 
+  it.each([
+    ["plugins.enabled", "{ plugins: { enabled: false } }"],
+    ["plugins.allow", '{ plugins: { allow: ["acpx"] } }'],
+    ["plugins.deny", '{ plugins: { deny: ["acpx"] } }'],
+  ])("rejects remote config.patch that changes plugin activation via %s", async (_label, raw) => {
+    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute(`call-remote-plugin-activation-${_label}`, {
+        action: "config.patch",
+        gatewayUrl: "wss://gateway.example",
+        raw,
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("rejects config.patch when a legacy tools.bash alias changes exec security", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
