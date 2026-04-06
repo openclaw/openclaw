@@ -86,6 +86,28 @@ function didCrossDocumentUrlChange(page: { url(): string }, previousUrl: string)
   return true;
 }
 
+// Returns true when a framenavigated event represents only a hash-only
+// same-document mutation (no network request). Used in event-driven checks
+// where the event itself is the navigation signal — unlike URL polling, we
+// cannot use identical URLs as a "no navigation" sentinel because same-URL
+// reloads and form submits also fire framenavigated with an unchanged URL.
+function isHashOnlyNavigation(currentUrl: string, previousUrl: string): boolean {
+  if (currentUrl === previousUrl) {
+    // Exact same URL + framenavigated firing = reload or form submit, not a
+    // fragment hop. Must run SSRF checks.
+    return false;
+  }
+  try {
+    const prev = new URL(previousUrl);
+    const curr = new URL(currentUrl);
+    return (
+      prev.origin === curr.origin && prev.pathname === curr.pathname && prev.search === curr.search
+    );
+  } catch {
+    return false;
+  }
+}
+
 function observeDelayedInteractionNavigation(
   page: NavigationObservablePage,
   previousUrl: string,
@@ -99,7 +121,10 @@ function observeDelayedInteractionNavigation(
 
   return new Promise<boolean>((resolve) => {
     const onFrameNavigated = (_frame: Frame) => {
-      if (!didCrossDocumentUrlChange(page, previousUrl)) {
+      // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
+      // event firing is itself the navigation signal, so a same-URL reload must
+      // not be treated as "no navigation" the way URL polling would.
+      if (isHashOnlyNavigation(page.url(), previousUrl)) {
         return;
       }
       cleanup();
@@ -147,7 +172,10 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
   pendingInteractionNavigationGuardCleanup.get(opts.page)?.();
 
   const onFrameNavigated = (_frame: Frame) => {
-    if (!didCrossDocumentUrlChange(page, opts.previousUrl)) {
+    // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
+    // event firing is itself the navigation signal, so a same-URL reload must
+    // not be treated as "no navigation" the way URL polling would.
+    if (isHashOnlyNavigation(page.url(), opts.previousUrl)) {
       return;
     }
     cleanup();
@@ -189,7 +217,10 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   const navPage = opts.page as unknown as NavigationObservablePage;
   let navigatedDuringAction = false;
   const onFrameNavigated = (_frame: Frame) => {
-    if (didCrossDocumentUrlChange(opts.page, opts.previousUrl)) {
+    // Use isHashOnlyNavigation rather than didCrossDocumentUrlChange: the event
+    // firing is the navigation signal, so a same-URL reload must not be skipped
+    // the way it would be by URL-equality polling.
+    if (!isHashOnlyNavigation(opts.page.url(), opts.previousUrl)) {
       navigatedDuringAction = true;
     }
   };

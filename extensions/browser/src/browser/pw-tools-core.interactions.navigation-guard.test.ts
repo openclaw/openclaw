@@ -267,6 +267,50 @@ describe("pw-tools-core interaction navigation guard", () => {
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).not.toHaveBeenCalled();
   });
 
+  it("runs the navigation guard when a same-URL reload fires framenavigated during a click", async () => {
+    // A page reload (form submit, location.reload()) keeps the URL identical but
+    // fires framenavigated. Prior to the isHashOnlyNavigation fix, didCrossDocumentUrlChange
+    // would treat currentUrl === previousUrl as "no navigation" and skip the SSRF guard.
+    const listeners = new Set<() => void>();
+    const sameUrl = "http://192.168.1.1/admin";
+    const click = vi.fn(async () => {
+      // Simulate reload: URL stays the same but framenavigated fires during the click
+      for (const listener of listeners) {
+        listener();
+      }
+    });
+    const page = {
+      on: vi.fn((event: string, listener: () => void) => {
+        if (event === "framenavigated") {
+          listeners.add(listener);
+        }
+      }),
+      off: vi.fn((event: string, listener: () => void) => {
+        if (event === "framenavigated") {
+          listeners.delete(listener);
+        }
+      }),
+      url: vi.fn(() => sameUrl),
+    };
+    setPwToolsCoreCurrentRefLocator({ click });
+    setPwToolsCoreCurrentPage(page);
+
+    await mod.clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "1",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "T1",
+    });
+  });
+
   it("does not run the post-evaluate navigation guard when the url is unchanged", async () => {
     const page = {
       evaluate: vi.fn(async () => "ok"),
