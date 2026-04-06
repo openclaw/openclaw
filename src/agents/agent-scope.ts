@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { MoltbotConfig } from "../config/config.js";
+import { collectConfigEnvVars } from "../config/env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   DEFAULT_AGENT_ID,
@@ -28,6 +29,7 @@ type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
+  env?: AgentEntry["env"];
 };
 
 let defaultAgentWarned = false;
@@ -111,6 +113,7 @@ export function resolveAgentConfig(
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
+    env: entry.env,
   };
 }
 
@@ -152,4 +155,55 @@ export function resolveAgentDir(cfg: MoltbotConfig, agentId: string) {
   if (configured) return resolveUserPath(configured);
   const root = resolveStateDir(process.env, os.homedir);
   return path.join(root, "agents", id, "agent");
+}
+
+/**
+ * Resolve environment variables scoped to a specific agent.
+ *
+ * Scope modes:
+ * - "all" (default): agent inherits all global env vars + its own vars
+ * - "own": agent gets only its own vars + allowlisted global keys
+ * - "none": agent gets only its own vars, zero global inheritance
+ *
+ * Agent-specific vars (agent.env.vars) always take highest priority.
+ */
+export function resolveAgentEnvVars(
+  cfg: MoltbotConfig,
+  agentId: string,
+): Record<string, string> {
+  const id = normalizeAgentId(agentId);
+  const agentCfg = resolveAgentConfig(cfg, id);
+  const agentEnv = agentCfg?.env;
+  const scope = agentEnv?.scope ?? "all";
+
+  const globalVars = collectConfigEnvVars(cfg);
+  const agentVars = agentEnv?.vars ?? {};
+
+  let base: Record<string, string>;
+
+  switch (scope) {
+    case "all":
+      base = { ...globalVars };
+      break;
+    case "own": {
+      base = {};
+      const allow = new Set(agentEnv?.allow ?? []);
+      for (const key of allow) {
+        if (key in globalVars) base[key] = globalVars[key];
+      }
+      break;
+    }
+    case "none":
+      base = {};
+      break;
+    default:
+      base = { ...globalVars };
+  }
+
+  // Agent-specific vars always override
+  for (const [key, value] of Object.entries(agentVars)) {
+    if (value) base[key] = value;
+  }
+
+  return base;
 }

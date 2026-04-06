@@ -6,6 +6,7 @@ import {
   readTool,
 } from "@mariozechner/pi-coding-agent";
 import type { MoltbotConfig } from "../config/config.js";
+import { resolveAgentEnvVars } from "./agent-scope.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -250,6 +251,21 @@ export function createMoltbotCodingTools(options?: {
     return [tool as AnyAgentTool];
   });
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
+  // Resolve agent-scoped env vars (returns undefined for scope="all" agents,
+  // letting them inherit process.env as before).
+  const agentEnvVars =
+    agentId && options?.config
+      ? (() => {
+          const agentEnvCfg = options.config?.agents?.list?.find(
+            (a) => a?.id?.toLowerCase() === agentId.toLowerCase(),
+          )?.env;
+          // Only build scoped env when agent explicitly opts into isolation
+          if (agentEnvCfg?.scope && agentEnvCfg.scope !== "all") {
+            return resolveAgentEnvVars(options.config, agentId);
+          }
+          return undefined;
+        })()
+      : undefined;
   const execTool = createExecTool({
     ...execDefaults,
     host: options?.exec?.host ?? execConfig.host,
@@ -259,6 +275,7 @@ export function createMoltbotCodingTools(options?: {
     pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
     safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
     agentId,
+    agentEnvVars,
     cwd: options?.workspaceDir,
     allowBackground,
     scopeKey,

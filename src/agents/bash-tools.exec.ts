@@ -26,6 +26,7 @@ import {
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { reportCompletionNow } from "../infra/completion-report.js";
 import { logInfo, logWarn } from "../logger.js";
 import { formatSpawnError, spawnWithFallback } from "../process/spawn-utils.js";
 import {
@@ -134,6 +135,13 @@ export type ExecToolDefaults = {
   messageProvider?: string;
   notifyOnExit?: boolean;
   cwd?: string;
+  /**
+   * Pre-resolved agent-scoped env vars. When set, these replace the global
+   * process.env as the base environment for command execution (non-sandbox).
+   * This enables per-agent env isolation so external collaborator agents
+   * don't inherit the owner's API keys.
+   */
+  agentEnvVars?: Record<string, string>;
 };
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -303,6 +311,20 @@ function applyShellPath(env: Record<string, string>, shellPath?: string | null) 
   if (merged) env.PATH = merged;
 }
 
+function buildExecCompletionMessage(params: {
+  title: string;
+  detail?: string;
+  status: "ok" | "error" | "timeout";
+}): string {
+  const prefix =
+    params.status === "ok"
+      ? `✅ ${params.title}`
+      : params.status === "timeout"
+        ? `🔴 ${params.title}`
+        : `🔴 ${params.title}`;
+  return params.detail?.trim() ? `${prefix}\n\n${params.detail.trim()}` : prefix;
+}
+
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
   if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) return;
   const sessionKey = session.sessionKey?.trim();
@@ -317,8 +339,21 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+  const completionText = buildExecCompletionMessage({
+    title: status === "completed" ? "命令执行完成" : "命令执行失败",
+    detail: summary,
+    status: status === "completed" ? "ok" : "error",
+  });
+  void reportCompletionNow({
+    sessionKey,
+    source: "exec-notify-on-exit",
+    text: completionText,
+  }).then((delivered) => {
+    if (!delivered) {
+      enqueueSystemEvent(summary, { sessionKey });
+      requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+    }
+  });
 }
 
 function createApprovalSlug(id: string) {
@@ -336,6 +371,28 @@ function resolveApprovalRunningNoticeMs(value?: number) {
 function emitExecSystemEvent(text: string, opts: { sessionKey?: string; contextKey?: string }) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) return;
+  const isTerminal = /^Exec (finished|completed|failed|denied)\b/i.test(text.trim());
+  if (isTerminal) {
+    const lowered = text.toLowerCase();
+    const status = lowered.includes("timeout")
+      ? "timeout"
+      : lowered.includes("failed") || lowered.includes("denied") || /code\s+[1-9]/i.test(text)
+        ? "error"
+        : "ok";
+    const title =
+      status === "ok" ? "命令执行完成" : status === "timeout" ? "命令执行超时" : "命令执行异常";
+    void reportCompletionNow({
+      sessionKey,
+      source: "exec-event",
+      text: buildExecCompletionMessage({ title, detail: text, status }),
+    }).then((delivered) => {
+      if (!delivered) {
+        enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
+        requestHeartbeatNow({ reason: "exec-event" });
+      }
+    });
+    return;
+  }
   enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
   requestHeartbeatNow({ reason: "exec-event" });
 }
@@ -866,7 +923,12 @@ export function createExecTool(
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 
-      const baseEnv = coerceEnv(process.env);
+      // When agentEnvVars is set, use it as the base instead of process.env
+      // to enforce per-agent env isolation (external collaborators won't
+      // inherit owner's global API keys).
+      const baseEnv = defaults?.agentEnvVars
+        ? { ...defaults.agentEnvVars, ...coerceEnv({ PATH: process.env.PATH, HOME: process.env.HOME, SHELL: process.env.SHELL, USER: process.env.USER, LANG: process.env.LANG, TERM: process.env.TERM }) }
+        : coerceEnv(process.env);
       const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
       const env = sandbox
         ? buildSandboxEnv({
