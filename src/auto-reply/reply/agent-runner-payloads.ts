@@ -158,12 +158,6 @@ export async function buildReplyPayloads(params: {
   ).filter(isRenderablePayload);
   const silentFilteredPayloads = params.silentExpected ? [] : replyTaggedPayloads;
 
-  // Drop final payloads only when block streaming succeeded end-to-end.
-  // If streaming aborted (e.g., timeout), fall back to final payloads.
-  const shouldDropFinalPayloads =
-    params.blockStreamingEnabled &&
-    Boolean(params.blockReplyPipeline?.didStream()) &&
-    !params.blockReplyPipeline?.isAborted();
   const messagingToolSentTexts = params.messagingToolSentTexts ?? [];
   const messagingToolSentTargets = params.messagingToolSentTargets ?? [];
   const shouldCheckMessagingToolDedupe =
@@ -214,13 +208,14 @@ export async function buildReplyPayloads(params: {
       })
     : dedupedPayloads;
   // Filter out payloads already sent via pipeline or directly during tool flush.
-  const filteredPayloads = shouldDropFinalPayloads
-    ? []
-    : params.blockStreamingEnabled
-      ? mediaFilteredPayloads.filter(
-          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
-        )
-      : params.directlySentBlockKeys?.size
+  // When block streaming is enabled, use hasSentPayload to deduplicate — only
+  // drop payloads that were actually streamed. New content generated after tool
+  // calls (never streamed) is preserved and delivered as a final payload.
+  const filteredPayloads = params.blockStreamingEnabled
+    ? mediaFilteredPayloads.filter(
+        (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+      )
+    : params.directlySentBlockKeys?.size
         ? mediaFilteredPayloads.filter(
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
           )
