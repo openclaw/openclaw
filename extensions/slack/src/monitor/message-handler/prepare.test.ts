@@ -744,7 +744,6 @@ describe("slack thread.requireExplicitMention", () => {
       } as OpenClawConfig,
       threadRequireExplicitMention: requireExplicitMention,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
     ctx.resolveUserName = async () => ({ name: "Alice" }) as any;
     return ctx;
   }
