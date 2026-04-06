@@ -38,6 +38,7 @@ export async function fetchWithWebToolsNetworkGuard(
   params: WebToolGuardedFetchOptions,
 ): Promise<GuardedFetchResult> {
   const { timeoutSeconds, useEnvProxy, ...rest } = params;
+
   const resolved = {
     ...rest,
     timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),

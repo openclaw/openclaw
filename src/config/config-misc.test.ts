@@ -149,6 +149,54 @@ describe("plugins.entries.*.subagent", () => {
   });
 });
 
+describe("web fetch ssrf policy config", () => {
+  it("accepts tools.web.fetch.ssrfPolicy.assumeProxyEnvironment=true", () => {
+    const result = OpenClawSchema.safeParse({
+      tools: {
+        web: {
+          fetch: {
+            ssrfPolicy: {
+              assumeProxyEnvironment: true,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts tools.web.fetch.ssrfPolicy.assumeProxyEnvironment=false", () => {
+    const result = OpenClawSchema.safeParse({
+      tools: {
+        web: {
+          fetch: {
+            ssrfPolicy: {
+              assumeProxyEnvironment: false,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts tools.web.fetch.ssrfPolicy with both assumeProxyEnvironment and dangerouslyAllowPrivateNetwork", () => {
+    const result = OpenClawSchema.safeParse({
+      tools: {
+        web: {
+          fetch: {
+            ssrfPolicy: {
+              assumeProxyEnvironment: true,
+              dangerouslyAllowPrivateNetwork: false,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("web search provider config", () => {
   it("accepts kimi provider and config", () => {
     const res = validateConfigObject(

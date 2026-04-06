@@ -542,6 +542,13 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** SSRF policy overrides for web fetch. */
+      ssrfPolicy?: {
+        /** Dangerous private-network bypass for web fetch. */
+        dangerouslyAllowPrivateNetwork?: boolean;
+        /** Assume fake-ip proxy environment and skip IP range checks while keeping hostname blocking. */
+        assumeProxyEnvironment?: boolean;
+      };
     };
   };
   media?: MediaToolsConfig;

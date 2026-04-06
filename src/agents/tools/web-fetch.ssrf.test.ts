@@ -147,4 +147,55 @@ describe("web_fetch SSRF protection", () => {
       extractor: "raw",
     });
   });
+
+  it("does not share cache entries across different SSRF policy states", async () => {
+    const { createWebFetchTool } = await import("./web-tools.js");
+
+    lookupMock.mockImplementation(async (hostname: string) => {
+      if (hostname === "public.test") {
+        return [{ address: "93.184.216.34", family: 4 }];
+      }
+      return [{ address: "127.0.0.1", family: 4 }];
+    });
+
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("strict-ok"));
+
+    const relaxedTool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 1,
+              ssrfPolicy: {
+                dangerouslyAllowPrivateNetwork: true,
+              },
+            },
+          },
+        },
+      },
+      lookupFn: lookupMock as unknown as LookupFn,
+    });
+
+    const strictTool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 1,
+            },
+          },
+        },
+      },
+      lookupFn: lookupMock as unknown as LookupFn,
+    });
+
+    const relaxedResult = await relaxedTool?.execute?.("call", { url: "http://127.0.0.1/test" });
+    expect(relaxedResult?.details).toMatchObject({ status: 200 });
+
+    await expect(strictTool?.execute?.("call", { url: "http://127.0.0.1/test" })).rejects.toThrow(
+      /private|internal|blocked/i,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
 });

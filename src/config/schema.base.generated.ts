@@ -7010,6 +7010,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
                   },
+                  ssrfPolicy: {
+                    type: "object",
+                    properties: {
+                      dangerouslyAllowPrivateNetwork: {
+                        type: "boolean",
+                      },
+                      assumeProxyEnvironment: {
+                        type: "boolean",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   firecrawl: {
                     type: "object",
                     properties: {

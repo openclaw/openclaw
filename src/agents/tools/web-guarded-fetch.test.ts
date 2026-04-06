@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
-import { withStrictWebToolsEndpoint, withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
+import {
+  fetchWithWebToolsNetworkGuard,
+  withStrictWebToolsEndpoint,
+  withTrustedWebToolsEndpoint,
+} from "./web-guarded-fetch.js";
 
 vi.mock("../../infra/net/fetch-guard.js", () => {
   const GUARDED_FETCH_MODE = {
@@ -64,5 +68,45 @@ describe("web-guarded-fetch", () => {
     const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
     expect(call?.policy).toBeUndefined();
     expect(call?.mode).toBe(GUARDED_FETCH_MODE.STRICT);
+  });
+
+  it("propagates assumeProxyEnvironment when explicitly set on policy", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await fetchWithWebToolsNetworkGuard({
+      url: "https://example.com",
+      policy: { assumeProxyEnvironment: true },
+    });
+
+    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        policy: expect.objectContaining({ assumeProxyEnvironment: true }),
+      }),
+    );
+  });
+
+  it("does not add assumeProxyEnvironment unless explicitly configured", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await fetchWithWebToolsNetworkGuard({
+      url: "https://example.com",
+      policy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        policy: expect.objectContaining({ allowRfc2544BenchmarkRange: true }),
+      }),
+    );
+    const call = vi.mocked(fetchWithSsrFGuard).mock.calls[0]?.[0];
+    expect(call?.policy).not.toHaveProperty("assumeProxyEnvironment");
   });
 });

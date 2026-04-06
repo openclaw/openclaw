@@ -208,18 +208,160 @@ describe("ssrf pinning", () => {
     expect(lookup).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts dangerouslyAllowPrivateNetwork as an allowPrivateNetwork alias", async () => {
+  it("accepts dangerouslyAllowPrivateNetwork as an allowPrivateNetwork alias for DNS results", async () => {
     const lookup = vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
 
     await expect(
-      resolvePinnedHostnameWithPolicy("localhost", {
+      resolvePinnedHostnameWithPolicy("example.com", {
         lookupFn: lookup,
         policy: { dangerouslyAllowPrivateNetwork: true },
       }),
     ).resolves.toMatchObject({
-      hostname: "localhost",
+      hostname: "example.com",
       addresses: ["127.0.0.1"],
     });
     expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors allowPrivateNetwork for blocked hostname literals", async () => {
+    const lookup = createPublicLookupMock();
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("localhost", {
+        lookupFn: lookup,
+        policy: { allowPrivateNetwork: true },
+      }),
+    ).resolves.toMatchObject({
+      hostname: "localhost",
+      addresses: ["93.184.216.34"],
+    });
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors hostnameAllowlist for blocked hostnames when private network is explicitly enabled", async () => {
+    const lookup = createPublicLookupMock();
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("localhost", {
+        lookupFn: lookup,
+        policy: {
+          allowPrivateNetwork: true,
+          hostnameAllowlist: ["localhost"],
+        },
+      }),
+    ).resolves.toMatchObject({
+      hostname: "localhost",
+      addresses: ["93.184.216.34"],
+    });
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows RFC2544 fake-ip results when assumeProxyEnvironment is enabled", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "198.18.0.153", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("api.telegram.org", {
+        lookupFn: lookup,
+        policy: { assumeProxyEnvironment: true },
+      }),
+    ).resolves.toMatchObject({
+      hostname: "api.telegram.org",
+      addresses: ["198.18.0.153"],
+    });
+  });
+
+  it("allows 198.19.x.x fake-ip results when assumeProxyEnvironment is enabled", async () => {
+    const lookup = vi.fn(async () => [{ address: "198.19.0.1", family: 4 }]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("api.telegram.org", {
+        lookupFn: lookup,
+        policy: { assumeProxyEnvironment: true },
+      }),
+    ).resolves.toMatchObject({
+      hostname: "api.telegram.org",
+      addresses: ["198.19.0.1"],
+    });
+  });
+
+  it("still blocks non-RFC2544 private DNS results when assumeProxyEnvironment is enabled", async () => {
+    const lookup = vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("api.telegram.org", {
+        lookupFn: lookup,
+        policy: { assumeProxyEnvironment: true },
+      }),
+    ).rejects.toThrow(/private|internal/i);
+  });
+
+  it("still blocks literal RFC2544 fake-ip addresses when assumeProxyEnvironment is enabled", async () => {
+    const lookup = createPublicLookupMock();
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("198.18.1.2", {
+        lookupFn: lookup,
+        policy: { assumeProxyEnvironment: true },
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("still blocks disallowed hostnames when assumeProxyEnvironment is enabled", async () => {
+    const lookup = createPublicLookupMock();
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("localhost", {
+        lookupFn: lookup,
+        policy: { assumeProxyEnvironment: true },
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("adds a fake-ip proxy hint when RFC2544 resolved addresses are blocked", async () => {
+    const lookup = vi.fn(async () => [{ address: "198.18.0.1", family: 4 }]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: lookup,
+      }),
+    ).rejects.toThrow(/fake-ip compatibility/i);
+  });
+
+  it("does not add a fake-ip proxy hint for non-RFC2544 private IP blocks", async () => {
+    const lookup = vi.fn(async () => [{ address: "10.0.0.1", family: 4 }]) as unknown as LookupFn;
+
+    try {
+      await resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: lookup,
+      });
+      expect.unreachable("expected SSRF block");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SsrFBlockedError);
+      expect((error as Error).message).not.toMatch(/assumeProxyEnvironment/i);
+    }
+  });
+
+  it("still blocks non-RFC2544 private IP literals when assumeProxyEnvironment is enabled", async () => {
+    const lookup = createPublicLookupMock();
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("127.0.0.1", {
+        lookupFn: lookup,
+        policy: { assumeProxyEnvironment: true },
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("10.0.0.1", {
+        lookupFn: lookup,
+        policy: { assumeProxyEnvironment: true },
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+
+    expect(lookup).not.toHaveBeenCalled();
   });
 });
