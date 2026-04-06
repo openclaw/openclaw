@@ -61,13 +61,15 @@ What the Matrix wizard actually asks for:
 - optional device name
 - whether to enable E2EE
 - whether to configure Matrix room access now
+- whether to configure Matrix invite auto-join now
 
 Wizard behavior that matters:
 
-- If Matrix auth env vars already exist for the selected account, and that account does not already have auth saved in config, the wizard offers an env shortcut and only writes `enabled: true` for that account.
+- If Matrix auth env vars already exist for the selected account, and that account does not already have auth saved in config, the wizard offers an env shortcut so setup can keep auth in env vars instead of copying secrets into config.
 - When you add another Matrix account interactively, the entered account name is normalized into the account ID used in config and env vars. For example, `Ops Bot` becomes `ops-bot`.
 - DM allowlist prompts accept full `@user:server` values immediately. Display names only work when live directory lookup finds one exact match; otherwise the wizard asks you to retry with a full Matrix ID.
 - Room allowlist prompts accept room IDs and aliases directly. They can also resolve joined-room names live, but unresolved names are only kept as typed during setup and are ignored later by runtime allowlist resolution. Prefer `!room:server` or `#alias:server`.
+- The wizard now shows an explicit warning before the invite auto-join step because `channels.matrix.autoJoin` defaults to `off`; agents will not join invited rooms or fresh DM-style invites unless you set it.
 - Runtime room/session identity uses the stable Matrix room ID. Room-declared aliases are only used as lookup inputs, not as the long-term session key or stable group identity.
 - To resolve room names before saving them, use `openclaw channels resolve --channel matrix "Project Room"`.
 

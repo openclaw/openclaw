@@ -52,6 +52,7 @@ Docs: https://docs.openclaw.ai
 - Hooks/wake: queue direct and mapped wake-hook payloads as untrusted system events so external wake content no longer enters the main session as trusted input. (#62003)
 - Slack/thread mentions: add `channels.slack.thread.requireExplicitMention` so Slack channels that already require mentions can also require explicit `@bot` mentions inside bot-participated threads. (#58276) Thanks @praktika-engineer.
 - UI/light mode: target both root and nested WebKit scrollbar thumbs in the light theme so page-level and container scrollbars stay visible on light backgrounds. (#61753) Thanks @chziyue.
+- Matrix/onboarding: add an invite auto-join setup step with explicit off warnings and strict stable-target validation so new Matrix accounts stop silently ignoring invited rooms and fresh DM-style invites unless operators opt in. (#62168) Thanks @gumadeiras.
 
 ## 2026.4.5
 
