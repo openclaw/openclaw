@@ -86,7 +86,7 @@ export function listThinkingLevelLabels(provider?: string | null, model?: string
   if (isBinaryThinkingProvider(provider, model)) {
     return ["off", "on"];
   }
-  return listThinkingLevelLabelsFallback(provider, model);
+  return listThinkingLevels(provider, model);
 }
 
 export function formatThinkingLevels(
