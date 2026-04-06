@@ -22,6 +22,11 @@ import type {
 } from "../../video-generation/types.js";
 import { normalizeProviderId } from "../provider-id.js";
 import {
+  buildVideoGenerationTaskStatusDetails,
+  buildVideoGenerationTaskStatusText,
+  findActiveVideoGenerationTaskForSession,
+} from "../video-generation-task-status.js";
+import {
   ToolInputError,
   readNumberParam,
   readStringArrayParam,
@@ -76,7 +81,7 @@ const VideoGenerateToolSchema = Type.Object({
   action: Type.Optional(
     Type.String({
       description:
-        'Optional action: "generate" (default) or "list" to inspect available providers/models.',
+        'Optional action: "generate" (default), "status" to inspect the active session task, or "list" to inspect available providers/models.',
     }),
   ),
   prompt: Type.Optional(Type.String({ description: "Video generation prompt." })),
@@ -241,16 +246,16 @@ function isVideoGenerationProviderConfigured(params: {
   return hasAuthForProvider({ provider: provider.id, agentDir: params.agentDir });
 }
 
-function resolveAction(args: Record<string, unknown>): "generate" | "list" {
+function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
   const raw = readStringParam(args, "action");
   if (!raw) {
     return "generate";
   }
   const normalized = raw.trim().toLowerCase();
-  if (normalized === "generate" || normalized === "list") {
+  if (normalized === "generate" || normalized === "list" || normalized === "status") {
     return normalized;
   }
-  throw new ToolInputError('action must be "generate" or "list"');
+  throw new ToolInputError('action must be "generate", "status", or "list"');
 }
 
 function normalizeResolution(raw: string | undefined): VideoGenerationResolution | undefined {
@@ -812,6 +817,53 @@ export function createVideoGenerateTool(options?: {
         };
       }
 
+      if (action === "status") {
+        const activeTask = findActiveVideoGenerationTaskForSession(options?.agentSessionKey);
+        if (!activeTask) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "No active video generation task is currently running for this session.",
+              },
+            ],
+            details: {
+              action: "status",
+              active: false,
+            },
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: buildVideoGenerationTaskStatusText(activeTask),
+            },
+          ],
+          details: {
+            action: "status",
+            ...buildVideoGenerationTaskStatusDetails(activeTask),
+          },
+        };
+      }
+
+      const activeTask = findActiveVideoGenerationTaskForSession(options?.agentSessionKey);
+      if (activeTask) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: buildVideoGenerationTaskStatusText(activeTask, { duplicateGuard: true }),
+            },
+          ],
+          details: {
+            action: "status",
+            duplicateGuard: true,
+            ...buildVideoGenerationTaskStatusDetails(activeTask),
+          },
+        };
+      }
+
       const prompt = readStringParam(args, "prompt", { required: true });
       const model = readStringParam(args, "model");
       const filename = readStringParam(args, "filename");
@@ -934,7 +986,7 @@ export function createVideoGenerateTool(options?: {
           content: [
             {
               type: "text",
-              text: `Started video generation task ${taskHandle?.taskId ?? "unknown"} in the background. I'll post the finished video here when it's ready.`,
+              text: `Background task started for video generation (${taskHandle?.taskId ?? "unknown"}). Do not call video_generate again for this request. Wait for the completion event; I'll post the finished video here when it's ready.`,
             },
           ],
           details: {

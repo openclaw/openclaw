@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Tools/video generation: add a bundled Runway video provider (`runway/gen4.5`) with native async task polling, local image/video reference support via data URIs, provider docs, and live-test wiring.
 - Agents/video generation: register `video_generate` runs in the task ledger with task/run ids and lifecycle updates so long-running generations can be tracked more reliably.
 - Agents/video generation: make session-backed `video_generate` runs detach into background tasks, wake the same agent session on completion, and have the agent post the finished video back into the original channel as a follow-up reply.
+- Agents/video generation: add active-task prompt hints plus a hard duplicate guard so session-backed `video_generate` returns task status for in-flight jobs instead of spawning the same video request twice, and expose `action=status` for explicit lookup.
 - Providers/CLI: remove bundled CLI text-provider backends and the `agents.defaults.cliBackends` surface, while keeping ACP harness sessions and Gemini media understanding on the native bundled providers.
 - Matrix/exec approvals: clarify unavailable-approval replies so Matrix no longer claims chat approvals are unsupported when native exec approvals are merely unconfigured. (#61424) Thanks @gumadeiras.
 - Docs/IRC: replace public IRC hostname examples with `irc.example.com` and recommend private servers for bot coordination while listing common public networks for intentional use.
