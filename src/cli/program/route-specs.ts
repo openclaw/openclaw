@@ -20,9 +20,9 @@ function createCommandLoadPlugins(commandPath: readonly string[]): (argv: string
   };
 }
 
-function createParsedRoute<TArgs>(params: {
+function createParsedRoute(params: {
   entry: CliCommandCatalogEntry;
-  definition: RoutedCommandDefinition<TArgs>;
+  definition: RoutedCommandDefinition;
 }): RouteSpec {
   return {
     match: (path) =>
@@ -51,6 +51,6 @@ export const routedCommands: RouteSpec[] = cliCommandCatalog
   .map((entry) =>
     createParsedRoute({
       entry,
-      definition: routedCommandDefinitions[entry.route.id],
+      definition: routedCommandDefinitions[entry.route.id] as RoutedCommandDefinition,
     }),
   );
