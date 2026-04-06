@@ -1608,13 +1608,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       let imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
       const imageModelConfigFallbacks = resolveAgentModelFallbackValues(imageModelConfig);
 
-      // Determine if primary was promoted from fallback (fallback-only config).
-      // This affects how we resolve providerless primaries in allowlist checks.
-      // CRITICAL: This must match the logic in the switch path (line 1788-1791).
-      let usedPrimaryFromFallback = false;
+      // If primary is absent, promote the first fallback as primary.
+      // This handles fallback-only configs like imageModel: { fallbacks: ["gpt-4o", "openai/gpt-4.1"] }
       if (!imageModelPrimary && imageModelConfigFallbacks.length > 0) {
         imageModelPrimary = imageModelConfigFallbacks[0];
-        usedPrimaryFromFallback = true;
       }
 
       // Consider imageModel configured if we have either a primary or fallbacks.
@@ -1679,11 +1676,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
 
           // If primary resolution didn't determine provider, scan fallbacks for provider.
-          // CRITICAL: Only do this when primary was promoted from fallback (usedPrimaryFromFallback=true).
-          // For explicitly set providerless primaries, we should use defaultProvider to match
-          // the switch path behavior (lines 1911-1930). This ensures consistent resolution
-          // between the allowlist pre-check and the actual model switch.
-          if (!imageModelProvider && usedPrimaryFromFallback) {
+          // This handles two cases:
+          // 1. Primary was promoted from first fallback (fallback-only config)
+          // 2. Primary was explicitly set to providerless non-alias (e.g., imageModel.primary: "gpt-4o")
+          // CRITICAL: This must match the switch path behavior (lines 1879-1894) to ensure
+          // consistent resolution between the allowlist pre-check and the actual model switch.
+          if (!imageModelProvider) {
             // First pass: find first fallback with explicit provider prefix
             for (const fb of imageModelConfigFallbacks) {
               if (!fb?.trim()) {
