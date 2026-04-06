@@ -7,6 +7,11 @@ import { resolveUserPath } from "../../../../src/utils.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import {
+  createBedrockEmbeddingProvider,
+  hasAwsCredentials,
+  type BedrockEmbeddingClient,
+} from "./embeddings-bedrock.js";
+import {
   createGeminiEmbeddingProvider,
   type GeminiEmbeddingClient,
   type GeminiTaskType,
@@ -18,11 +23,6 @@ import {
 import { createOllamaEmbeddingProvider, type OllamaEmbeddingClient } from "./embeddings-ollama.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
-import {
-  createBedrockEmbeddingProvider,
-  hasAwsCredentials,
-  type BedrockEmbeddingClient,
-} from "./embeddings-bedrock.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
@@ -41,7 +41,14 @@ export type EmbeddingProvider = {
   embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "bedrock";
+export type EmbeddingProviderId =
+  | "openai"
+  | "local"
+  | "gemini"
+  | "voyage"
+  | "mistral"
+  | "ollama"
+  | "bedrock";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
@@ -80,7 +87,7 @@ export type EmbeddingProviderOptions = {
     modelPath?: string;
     modelCacheDir?: string;
   };
-  /** Gemini embedding-2: output vector dimensions (768, 1536, or 3072). */
+  /** Provider-specific output vector dimensions for supported embedding families. */
   outputDimensionality?: number;
   /** Gemini: override the default task type sent with embedding requests. */
   taskType?: GeminiTaskType;
@@ -242,7 +249,7 @@ export async function createEmbeddingProvider(
     }
 
     // Try bedrock if AWS credentials are available
-    if (hasAwsCredentials()) {
+    if (await hasAwsCredentials()) {
       try {
         const result = await createProvider("bedrock");
         return { ...result, requestedProvider };

@@ -292,8 +292,9 @@ inference provider — set `agents.defaults.memorySearch.provider` to `"bedrock"
 ```
 
 Bedrock embeddings use the same AWS SDK credential chain as inference (instance
-roles, SSO, access keys). No API key is needed. When `provider` is `"auto"`,
-Bedrock is auto-detected if AWS credentials are available in the environment.
+roles, SSO, access keys, shared config, and web identity). No API key is
+needed. When `provider` is `"auto"`, Bedrock is auto-detected if that
+credential chain resolves successfully.
 
 Supported embedding models include Amazon Titan Embed (v1, v2), Amazon Nova
 Embed, Cohere Embed (v3, v4), and TwelveLabs Marengo. See

@@ -41,7 +41,7 @@ When `provider` is not set, OpenClaw selects the first available:
 3. `gemini` -- if a Gemini key can be resolved.
 4. `voyage` -- if a Voyage key can be resolved.
 5. `mistral` -- if a Mistral key can be resolved.
-6. `bedrock` -- if AWS credentials are detected (instance role, access keys, profile, etc.).
+6. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
 
 `ollama` is supported but not auto-detected (set it explicitly).
 
@@ -156,10 +156,10 @@ the base model's configuration.
 Bedrock auth uses the standard AWS SDK credential resolution order:
 
 1. Environment variables (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`)
-2. Named profile (`AWS_PROFILE`)
-3. ECS container credentials
-4. EC2 instance metadata (IMDS)
-5. SSO token cache
+2. SSO token cache
+3. Web identity token credentials
+4. Shared credentials and config files
+5. ECS or EC2 metadata credentials
 
 Region is resolved from `AWS_REGION`, `AWS_DEFAULT_REGION`, the
 `amazon-bedrock` provider `baseUrl`, or defaults to `us-east-1`.
