@@ -158,7 +158,9 @@ export function isRemoteGatewayTargetForAgentTools(params: {
   config?: ReturnType<typeof loadConfig>;
   gatewayUrl?: string;
 }): boolean {
-  const cfg = params.config ?? {};
+  // Use live config when none is captured, so gateway.remote.url set in config file is detected
+  // even when the tool was created without a config snapshot.
+  const cfg = params.config ?? loadConfig();
   const override = trimToUndefined(params.gatewayUrl);
   if (override) {
     const remoteKey = readConfiguredRemoteGatewayKey(cfg);

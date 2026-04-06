@@ -221,6 +221,20 @@ describe("gateway tool defaults", () => {
     expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
   });
 
+  it("treats config-selected remote targets as remote when no config is passed (live config fallback)", () => {
+    configState.value = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example/ws",
+        },
+      },
+    };
+
+    // No config passed — isRemoteGatewayTargetForAgentTools must fall back to loadConfig()
+    expect(isRemoteGatewayTargetForAgentTools({})).toBe(true);
+  });
+
   it("keeps remote-mode fallback-local targets classified as local without an override", () => {
     configState.value = {
       gateway: {
