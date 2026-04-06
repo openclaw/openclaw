@@ -757,7 +757,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    const nodeId = client?.connect?.client?.instanceId ?? client?.connect?.device?.id ?? client?.connect?.client?.id;
     const trimmedNodeId = String(nodeId ?? "").trim();
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
@@ -788,7 +788,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+    const nodeId = client?.connect?.client?.instanceId ?? client?.connect?.device?.id ?? client?.connect?.client?.id;
     const trimmedNodeId = String(nodeId ?? "").trim();
     if (!trimmedNodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
@@ -1056,7 +1056,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           : null;
     await respondUnavailableOnThrow(respond, async () => {
       const { handleNodeEvent } = await import("../server-node-events.js");
-      const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
+      const nodeId = client?.connect?.client?.instanceId ?? client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
       const nodeContext = {
         deps: context.deps,
         broadcast: context.broadcast,
