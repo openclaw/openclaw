@@ -102,8 +102,9 @@ Name lookup:
 - `read`
   - Channels: Discord/Slack/Matrix
   - Required: `--target`
-  - Optional: `--limit`, `--before`, `--after`
+  - Optional: `--limit`, `--before`, `--after`, `--thread-id`
   - Discord only: `--around`
+  - Fetches messages from a channel or thread. Use `--thread-id` to read historical messages in a Slack or Discord thread (e.g. a thread timestamp like `1234567890.123456`). Use `--limit` to control how many messages to fetch (default varies by channel). Use `--before` or `--after` with a message ID or timestamp to paginate. This is useful when the agent needs context from earlier in a thread that may have been lost due to context pruning or a session reset.
 
 - `edit`
   - Channels: Discord/Slack/Matrix
@@ -217,6 +218,20 @@ openclaw message send --channel discord \
 ```
 
 See [Discord components](/channels/discord#interactive-components) for the full schema.
+
+Read messages from a Slack thread:
+
+```
+openclaw message read --channel slack \
+  --target C123 --thread-id 1234567890.123456 --limit 20
+```
+
+Read messages from a Discord thread:
+
+```
+openclaw message read --channel discord \
+  --target channel:123 --thread-id 456789 --limit 20
+```
 
 Send a shared interactive payload:
 
