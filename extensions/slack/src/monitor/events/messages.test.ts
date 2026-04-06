@@ -230,6 +230,35 @@ describe("registerSlackMessageEvents", () => {
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("drops self-authored message_deleted events via previous_message identity", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open", botUserId: "U_BOT", botId: "B_BOT" },
+      event: makeDeletedEvent({ user: "U_BOT" }),
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("drops self-authored message_changed events via nested bot_id when edited.user is absent", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "message",
+      overrides: { dmPolicy: "open", botId: "B_BOT" },
+      event: {
+        type: "message",
+        subtype: "message_changed",
+        channel: "D1",
+        message: { ts: "123.456", bot_id: "B_BOT" },
+        previous_message: { ts: "123.450" },
+        event_ts: "123.456",
+      },
+    });
+
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+    expect(messageQueueMock).not.toHaveBeenCalled();
+  });
+
   it("drops self-authored regular messages by user ID", async () => {
     const { handleSlackMessage } = await invokeRegisteredHandler({
       eventName: "message",

@@ -96,7 +96,7 @@ export function createSlackMonitorContext(params: {
   runtime: RuntimeEnv;
 
   botUserId: string;
-  botId: string;
+  botId?: string;
   teamId: string;
   apiAppId: string;
 
@@ -397,7 +397,7 @@ export function createSlackMonitorContext(params: {
     app: params.app,
     runtime: params.runtime,
     botUserId: params.botUserId,
-    botId: params.botId,
+    botId: params.botId ?? "",
     teamId: params.teamId,
     apiAppId: params.apiAppId,
     historyLimit: params.historyLimit,

@@ -5,7 +5,7 @@ import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
-import type { SlackMessageChangedEvent } from "../types.js";
+import type { SlackMessageChangedEvent, SlackMessageDeletedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
@@ -17,22 +17,44 @@ function isSelfAuthoredSlackMessageEvent(
   if (!botUserId && !botId) {
     return false;
   }
-  if (message.subtype !== "message_changed") {
-    // Check both user ID (U-prefix) and bot ID (B-prefix) since bot_message
-    // subtypes carry bot_id without a user field.  With ignoreSelf disabled
-    // on Bolt, this is the only gate preventing message loops from the bot's
-    // own outbound messages.
+
+  // message_deleted: identity lives under previous_message, not top-level.
+  if (message.subtype === "message_deleted") {
+    const deleted = message as SlackMessageDeletedEvent;
+    const user = deleted.previous_message?.user;
+    const msgBotId = deleted.previous_message?.bot_id;
     return (
-      (Boolean(botUserId) && message.user === botUserId) ||
-      (Boolean(botId) && message.bot_id === botId)
+      (Boolean(botUserId) && user === botUserId) ||
+      (Boolean(botId) && msgBotId === botId)
     );
   }
-  const changed = message as SlackMessageChangedEvent & {
-    message?: { edited?: { user?: string } };
-    previous_message?: { edited?: { user?: string } };
-  };
-  const editorUserId = changed.message?.edited?.user ?? changed.previous_message?.edited?.user;
-  return editorUserId ? editorUserId === botUserId : message.user === botUserId;
+
+  // message_changed: prefer edited.user, fall back to nested message author.
+  if (message.subtype === "message_changed") {
+    const changed = message as SlackMessageChangedEvent & {
+      message?: { edited?: { user?: string }; user?: string; bot_id?: string };
+      previous_message?: { edited?: { user?: string }; user?: string; bot_id?: string };
+    };
+    const editorUserId = changed.message?.edited?.user ?? changed.previous_message?.edited?.user;
+    if (editorUserId) {
+      return editorUserId === botUserId;
+    }
+    // Fall back to nested message author fields (not top-level message.user).
+    const user = changed.message?.user ?? changed.previous_message?.user;
+    const msgBotId = changed.message?.bot_id ?? changed.previous_message?.bot_id;
+    return (
+      (Boolean(botUserId) && user === botUserId) ||
+      (Boolean(botId) && msgBotId === botId)
+    );
+  }
+
+  // Default: check top-level user/bot_id for regular messages and other subtypes.
+  // With ignoreSelf disabled on Bolt, this is the only gate preventing message
+  // loops from the bot's own outbound messages.
+  return (
+    (Boolean(botUserId) && message.user === botUserId) ||
+    (Boolean(botId) && message.bot_id === botId)
+  );
 }
 
 export function registerSlackMessageEvents(params: {
