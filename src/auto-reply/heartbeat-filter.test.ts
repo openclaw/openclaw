@@ -111,13 +111,13 @@ describe("isHeartbeatOkResponse", () => {
     ).toBe(true);
   });
 
-  it("returns false for response with real content", () => {
+  it("returns true for short text ending in HEARTBEAT_OK", () => {
     expect(
       isHeartbeatOkResponse({
         role: "assistant",
         content: "You have 3 unread urgent emails. HEARTBEAT_OK",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("returns false for user messages", () => {
@@ -196,6 +196,36 @@ describe("isHeartbeatOkResponse", () => {
           "has been failing for the last 3 hours due to a flaky test in the extension shards. " +
           "I have drafted a summary of all action items for your review.",
       }),
+    ).toBe(false);
+  });
+
+  it("returns false for HEARTBEAT_OK mentioned mid-sentence", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: "Status HEARTBEAT_OK due to watchdog failure",
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for non-text content blocks", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tool-1", name: "search", input: {} }],
+      }),
+    ).toBe(false);
+  });
+
+  it("respects ackMaxChars overrides", () => {
+    expect(
+      isHeartbeatOkResponse(
+        {
+          role: "assistant",
+          content: "HEARTBEAT_OK all good",
+        },
+        0,
+      ),
     ).toBe(false);
   });
 });

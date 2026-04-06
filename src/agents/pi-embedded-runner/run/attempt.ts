@@ -15,6 +15,7 @@ import {
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -1669,7 +1670,12 @@ export async function runEmbeddedAttempt(
           // Filter out no-op heartbeat user+assistant pairs from session context.
           // Heartbeat entries are now kept in the JSONL (append-only) to avoid the
           // fs.truncate race that caused orphaned parentId chains (#39609).
-          const filteredMessages = filterHeartbeatPairs(activeSession.messages);
+          const filteredMessages = filterHeartbeatPairs(
+            activeSession.messages,
+            params.config
+              ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId).ackMaxChars
+              : undefined,
+          );
           if (filteredMessages.length < activeSession.messages.length) {
             activeSession.agent.state.messages = filteredMessages;
           }

@@ -1,28 +1,33 @@
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "./heartbeat.js";
+import { stripHeartbeatToken } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-/**
- * Extract text content from a message's content field.
- * Handles both string content and content block arrays.
- */
-function extractMessageText(content: unknown): string {
+function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
   if (typeof content === "string") {
-    return content;
+    return { text: content, hasNonTextContent: false };
   }
   if (!Array.isArray(content)) {
-    return "";
+    return { text: "", hasNonTextContent: content != null };
   }
-  return content
-    .filter(
-      (block): block is { type: "text"; text: string } =>
-        typeof block === "object" &&
-        block !== null &&
-        "type" in block &&
-        block.type === "text" &&
-        typeof (block as { text?: unknown }).text === "string",
-    )
+  let hasNonTextContent = false;
+  const text = content
+    .filter((block): block is { type: "text"; text: string } => {
+      if (typeof block !== "object" || block === null || !("type" in block)) {
+        hasNonTextContent = true;
+        return false;
+      }
+      if (block.type !== "text") {
+        hasNonTextContent = true;
+        return false;
+      }
+      if (typeof (block as { text?: unknown }).text !== "string") {
+        hasNonTextContent = true;
+        return false;
+      }
+      return true;
+    })
     .map((block) => block.text)
     .join("");
+  return { text, hasNonTextContent };
 }
 
 /**
@@ -37,7 +42,7 @@ export function isHeartbeatUserMessage(message: { role: string; content?: unknow
   if (message.role !== "user") {
     return false;
   }
-  const text = extractMessageText(message.content);
+  const { text } = resolveMessageText(message.content);
   // Heartbeat prompts instruct the model with a verb + HEARTBEAT_OK pattern.
   // A plain mention of "HEARTBEAT_OK" in normal conversation (e.g. "what does
   // HEARTBEAT_OK mean?") won't match.  We accept common instruction verbs to
@@ -49,71 +54,24 @@ export function isHeartbeatUserMessage(message: { role: string; content?: unknow
 }
 
 /**
- * Strip lightweight markup (HTML tags, markdown bold/italic/code wrappers)
- * so "**HEARTBEAT_OK**" normalizes to "HEARTBEAT_OK".
- */
-function stripMarkup(text: string): string {
-  return (
-    text
-      .replace(/<[^>]*>/g, " ")
-      .replace(/&nbsp;/gi, " ")
-      .trim()
-      // Strip leading/trailing markdown wrappers
-      .replace(/^[*`~_]+/, "")
-      .replace(/[*`~_]+$/, "")
-      .trim()
-  );
-}
-
-/**
  * Check if an assistant message is effectively a HEARTBEAT_OK response
  * (no actionable content beyond the token itself).
  *
- * Matches responses that are purely the HEARTBEAT_OK token — possibly
- * wrapped in markup, preceded by a responsePrefix, or followed by
- * lightweight suffixes (emoji, punctuation) that don't carry real content.
- * This mirrors the detection logic in heartbeat-events-filter.ts.
- *
- * Responses with additional real content are preserved.
+ * Reuse the runtime heartbeat suppression rule so prompt filtering and
+ * compaction deletion make the same keep/remove decision as heartbeat send.
  */
-export function isHeartbeatOkResponse(message: { role: string; content?: unknown }): boolean {
+export function isHeartbeatOkResponse(
+  message: { role: string; content?: unknown },
+  ackMaxChars?: number,
+): boolean {
   if (message.role !== "assistant") {
     return false;
   }
-  const text = extractMessageText(message.content);
-  // Empty/blank assistant responses from heartbeat runs are classified as
-  // "ok-empty" no-ops by runHeartbeatOnce — treat them as removable acks
-  // so they don't accumulate in history after transcript pruning was removed.
-  if (!text || !text.trim()) {
-    return true;
-  }
-  const normalized = stripMarkup(text);
-  if (!normalized.includes(HEARTBEAT_TOKEN)) {
+  const { text, hasNonTextContent } = resolveMessageText(message.content);
+  if (hasNonTextContent) {
     return false;
   }
-
-  // Strip the HEARTBEAT_OK token and check if only lightweight noise remains.
-  // Handles: "HEARTBEAT_OK", "Nex HEARTBEAT_OK", "HEARTBEAT_OK 👍",
-  //          "**HEARTBEAT_OK**", responsePrefix + token, etc.
-  const tokenIdx = normalized.indexOf(HEARTBEAT_TOKEN);
-  const before = normalized.slice(0, tokenIdx).trim();
-  const after = normalized.slice(tokenIdx + HEARTBEAT_TOKEN.length).trim();
-
-  // Content before the token must be empty or a short prefix (responsePrefix
-  // is typically just the agent name — a single word).
-  if (before && before.split(/\s+/).length > 2) {
-    return false;
-  }
-
-  // Content after the token is allowed up to DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  // matching the suppression logic in heartbeat.ts (stripHeartbeatToken).
-  // Short suffixes like "all good" or "👍" are treated as ack noise.
-  // Anything longer is real content worth preserving.
-  if (after.length > DEFAULT_HEARTBEAT_ACK_MAX_CHARS) {
-    return false;
-  }
-
-  return true;
+  return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;
 }
 
 /**
@@ -128,6 +86,7 @@ export function isHeartbeatOkResponse(message: { role: string; content?: unknown
  */
 export function filterHeartbeatPairs<T extends { role: string; content?: unknown }>(
   messages: T[],
+  ackMaxChars?: number,
 ): T[] {
   if (messages.length < 2) {
     return messages;
@@ -140,7 +99,7 @@ export function filterHeartbeatPairs<T extends { role: string; content?: unknown
     if (
       i + 1 < messages.length &&
       isHeartbeatUserMessage(messages[i]) &&
-      isHeartbeatOkResponse(messages[i + 1])
+      isHeartbeatOkResponse(messages[i + 1], ackMaxChars)
     ) {
       // Skip both the user message and the HEARTBEAT_OK response
       i += 2;

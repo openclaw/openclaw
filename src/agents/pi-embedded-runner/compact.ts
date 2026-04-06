@@ -15,6 +15,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
+import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -1006,6 +1007,8 @@ export async function compactEmbeddedPiSessionDirect(
             try {
               const truncResult = await truncateSessionAfterCompaction({
                 sessionFile: params.sessionFile,
+                ackMaxChars: resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
+                  .ackMaxChars,
               });
               if (truncResult.truncated) {
                 log.info(

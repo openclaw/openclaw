@@ -38,6 +38,7 @@ export async function truncateSessionAfterCompaction(params: {
   sessionFile: string;
   /** Optional path to archive the pre-truncation file. */
   archivePath?: string;
+  ackMaxChars?: number;
 }): Promise<TruncationResult> {
   const { sessionFile } = params;
 
@@ -131,7 +132,7 @@ export async function truncateSessionAfterCompaction(params: {
       !removedIds.has(userEntry.id) &&
       !removedIds.has(assistantEntry.id) &&
       isHeartbeatUserMessage(userEntry.message) &&
-      isHeartbeatOkResponse(assistantEntry.message)
+      isHeartbeatOkResponse(assistantEntry.message, params.ackMaxChars)
     ) {
       removedIds.add(userEntry.id);
       removedIds.add(assistantEntry.id);
