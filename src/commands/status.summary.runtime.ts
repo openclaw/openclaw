@@ -151,11 +151,16 @@ function resolveSessionModelRef(
     defaultModel: DEFAULT_MODEL,
     agentId,
   });
+  // Skip session-stored runtime model if it came from the fallback chain,
+  // mirroring the logic in session-utils.ts. See #47705.
+  const isFromFallback =
+    entry && "modelIsFromFallback" in entry && entry.modelIsFromFallback === true;
+
   return (
     resolvePersistedSelectedModelRef({
       defaultProvider: resolved.provider || DEFAULT_PROVIDER,
-      runtimeProvider: entry?.modelProvider,
-      runtimeModel: entry?.model,
+      runtimeProvider: isFromFallback ? undefined : entry?.modelProvider,
+      runtimeModel: isFromFallback ? undefined : entry?.model,
       overrideProvider: entry?.providerOverride,
       overrideModel: entry?.modelOverride,
       allowPluginNormalization: false,

@@ -106,4 +106,32 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
       model: "gpt-5.4",
     });
   });
+
+  it("ignores runtime model/provider when modelIsFromFallback is true", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        modelProvider: "amazon-bedrock",
+        model: "minimax.minimax-m2.5",
+        modelIsFromFallback: true,
+      } as never),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
+  it("still honours explicit overrides even when modelIsFromFallback is true", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.4",
+        modelProvider: "amazon-bedrock",
+        model: "minimax.minimax-m2.5",
+        modelIsFromFallback: true,
+      } as never),
+    ).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.4",
+    });
+  });
 });
