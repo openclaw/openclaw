@@ -740,6 +740,8 @@ Manager handoff triage helper:
 - `scripts/runtime/sense-runtime-manager-dispatch.sh`
 - `scripts/runtime/sense_runtime_manager_runtime_entry.py`
 - `scripts/runtime/sense-runtime-manager-runtime-entry.sh`
+- `scripts/runtime/sense_runtime_manager_policy_bridge.py`
+- `scripts/runtime/sense-runtime-manager-policy-bridge.sh`
 
 This helper is intentionally lightweight. It reads `manager_handoff` and decides whether the next manager turn should:
 
@@ -797,6 +799,17 @@ The manager runtime entrypoint now chains entry and dispatch into a single comma
   - dispatch selects the normal full-evaluator path
 
 This keeps the architecture layered while letting the manager start from a single runtime entry command.
+
+The manager policy bridge adds one more thin shortcut layer for high-confidence handoff paths:
+
+- if manager entry returns a valid shortcut plan
+  - the bridge converts it into a lightweight manager policy outcome
+  - runtime entry can pass that outcome directly to the thin executor
+- if the shortcut plan is not usable
+  - the bridge stays inactive
+  - runtime entry falls back to the normal dispatch path
+
+This bridge is not a replacement for the full evaluator. It is only a high-confidence shortcut that keeps the normal path intact.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 

@@ -63,6 +63,35 @@ def run_dispatch(script_dir: Path, entry_result: dict, runtime_args: list[str]) 
     return json.loads(completed.stdout)
 
 
+def run_bridge(script_dir: Path, entry_result: dict, handoff_json: str | None) -> dict:
+    cmd = [
+        str(script_dir / 'sense-runtime-manager-policy-bridge.sh'),
+        '--entry-json',
+        json.dumps(entry_result, ensure_ascii=False),
+    ]
+    if handoff_json:
+        cmd.extend(['--handoff-json', handoff_json])
+    completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        error_text = completed.stderr.strip() or completed.stdout.strip() or 'manager policy bridge failed'
+        raise RuntimeError(error_text)
+    return json.loads(completed.stdout)
+
+
+def run_executor(script_dir: Path, policy_payload: dict, runtime_args: list[str]) -> dict:
+    cmd = [
+        str(script_dir / 'sense-runtime-manager-executor.sh'),
+        '--policy-json',
+        json.dumps(policy_payload, ensure_ascii=False),
+        *runtime_args,
+    ]
+    completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        error_text = completed.stderr.strip() or completed.stdout.strip() or 'manager executor failed'
+        raise RuntimeError(error_text)
+    return json.loads(completed.stdout)
+
+
 def infer_runtime_entry_state(dispatch_result: dict) -> str:
     result = dispatch_result.get('dispatch_result')
     if isinstance(result, dict):
@@ -165,16 +194,31 @@ def main() -> int:
     script_dir = Path(__file__).resolve().parent
     runtime_args = build_runtime_args(args)
     entry_result = run_entry(script_dir, args, runtime_args)
-    dispatch_result = run_dispatch(script_dir, entry_result, runtime_args)
+    bridge_result = run_bridge(script_dir, entry_result, args.handoff_json)
+    if bridge_result.get('bridge_used') is True:
+        manager_policy_outcome = bridge_result.get('manager_policy_outcome') or {}
+        dispatch_result = {
+            'dispatch_mode': 'shortcut_executor',
+            'shortcut_used': True,
+            'dispatch_reason': 'lightweight policy bridge promoted the handoff shortcut into a direct executor path',
+            'dispatch_result': run_executor(script_dir, manager_policy_outcome, runtime_args),
+        }
+    else:
+        dispatch_result = run_dispatch(script_dir, entry_result, runtime_args)
     feedback_summary = build_feedback_summary(entry_result, dispatch_result)
     feedback_memory = build_feedback_memory(entry_result, dispatch_result, feedback_summary)
     output = {
         'entry_decision': entry_result.get('entry_decision'),
         'dispatch_mode': dispatch_result.get('dispatch_mode'),
         'runtime_entry_state': infer_runtime_entry_state(dispatch_result),
+        'bridge_used': bridge_result.get('bridge_used') is True,
+        'bridge_mode': bridge_result.get('bridge_mode'),
         'feedback_summary': feedback_summary,
         'feedback_memory': feedback_memory,
-        'result': dispatch_result,
+        'result': {
+            'bridge': bridge_result,
+            'dispatch': dispatch_result,
+        },
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
