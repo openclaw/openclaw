@@ -1108,6 +1108,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/webhooks",
                   "plugins/voice-call",
                   {
                     "group": "Building Plugins",
