@@ -511,15 +511,15 @@ async function verifyClawHubArchiveFiles(params: {
       return extractedBytes <= DEFAULT_MAX_EXTRACTED_BYTES;
     };
     for (const entry of Object.values(zip.files)) {
-      if (entry.dir) {
-        continue;
-      }
       entryCount += 1;
       if (entryCount > DEFAULT_MAX_ENTRIES) {
         return buildClawHubInstallFailure(
           "ClawHub archive fallback verification exceeded the archive entry limit.",
           CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
         );
+      }
+      if (entry.dir) {
+        continue;
       }
       const relativePath = normalizeClawHubRelativePath(entry.name);
       if (!relativePath) {

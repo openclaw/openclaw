@@ -941,6 +941,60 @@ describe("installPluginFromClawHub", () => {
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
   });
 
+  it("rejects fallback verification when archive directories alone exceed the entry limit", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
+    tempDirs.push(dir);
+    const archivePath = path.join(dir, "archive.zip");
+    await fs.writeFile(archivePath, "placeholder", "utf8");
+    const zipEntries = Object.fromEntries(
+      Array.from({ length: 50_001 }, (_, index) => [
+        `folder-${index}/`,
+        {
+          name: `folder-${index}/`,
+          dir: true,
+        },
+      ]),
+    );
+    const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync").mockResolvedValueOnce({
+      files: zipEntries,
+    } as unknown as JSZip);
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.3.22",
+        createdAt: 0,
+        changelog: "",
+        files: [
+          {
+            path: "openclaw.plugin.json",
+            size: 13,
+            sha256: sha256Hex('{"id":"demo"}'),
+          },
+        ],
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+      archivePath,
+      integrity: "sha256-not-used-in-fallback",
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+    });
+
+    loadAsyncSpy.mockRestore();
+    expect(result).toMatchObject({
+      ok: false,
+      code: CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      error: "ClawHub archive fallback verification exceeded the archive entry limit.",
+    });
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+  });
+
   it("rejects fallback verification when a file hash drifts from files[] metadata", async () => {
     const archive = await createClawHubArchive({
       "openclaw.plugin.json": '{"id":"demo"}',
