@@ -97,6 +97,7 @@ def main() -> int:
         filtered_records.append(normalized)
 
     grouped: dict[str, dict] = {}
+    owner_bucket_crosstab: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for record in filtered_records:
         route_signature = record['route_signature']
         aggregate = grouped.setdefault(
@@ -116,6 +117,12 @@ def main() -> int:
         owner = record.get('recovery_owner')
         if isinstance(owner, str) and owner.strip():
             aggregate['recovery_owner_counts'][owner] += 1
+            owner_key = owner
+        else:
+            owner_key = 'unknown'
+        bucket = record.get('recovery_bucket')
+        bucket_key = bucket if isinstance(bucket, str) and bucket.strip() else 'unknown'
+        owner_bucket_crosstab[owner_key][bucket_key] += 1
         if record.get('recovery_actionable') is True:
             aggregate['actionable_count'] += 1
         rank = record.get('recovery_rank')
@@ -163,9 +170,29 @@ def main() -> int:
     if isinstance(args.top_n, int) and args.top_n > 0:
         aggregated_routes = aggregated_routes[: args.top_n]
 
+    ordered_buckets = [
+        'auth',
+        'runtime_submit',
+        'runtime_poll',
+        'control_plane',
+        'config_mapping',
+        'executor_gate',
+        'none',
+        'unknown',
+    ]
+    crosstab_output: dict[str, dict[str, int]] = {}
+    for owner_key in sorted(owner_bucket_crosstab.keys()):
+        row = owner_bucket_crosstab[owner_key]
+        ordered_row = {bucket_name: int(row.get(bucket_name, 0)) for bucket_name in ordered_buckets}
+        extra_buckets = sorted(bucket for bucket in row.keys() if bucket not in ordered_row)
+        for bucket_name in extra_buckets:
+            ordered_row[bucket_name] = int(row.get(bucket_name, 0))
+        crosstab_output[owner_key] = ordered_row
+
     output = {
         'total_records': len(filtered_records),
         'aggregated_routes': aggregated_routes,
+        'owner_bucket_crosstab': crosstab_output,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0

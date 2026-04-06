@@ -891,7 +891,7 @@ These fields are for observability and aggregation only. They do not change runt
 
 The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `path_signature`, `error_code`, `error_detail_code`, `error_source_layer`, `error_stage`, `recovery_hint`, `recovery_priority`, `recovery_rank`, `recovery_bucket`, `recovery_owner`, `recovery_actionable`, `recovery_vector`, and `recovery_signature` for lightweight aggregation and faster operational triage.
 
-For log aggregation and dashboard use, `sense-runtime-log-aggregate.sh` provides a thin read-only view over runtime entry observability records. It groups by `route_signature`, reports per-route counts, latest occurrence timestamp, per-owner counts, actionable counts, and max recovery rank. This helper is observational only and does not execute runtime work.
+For log aggregation and dashboard use, `sense-runtime-log-aggregate.sh` provides a thin read-only view over runtime entry observability records. It groups by `route_signature`, reports per-route counts, latest occurrence timestamp, per-owner counts, actionable counts, max recovery rank, and an owner x bucket cross-tab summary over the filtered record set. This helper is observational only and does not execute runtime work.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
