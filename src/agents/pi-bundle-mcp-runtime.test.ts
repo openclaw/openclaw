@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   cleanupBundleMcpHarness,
   makeTempDir,
@@ -18,6 +22,7 @@ import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
 afterEach(async () => {
   await cleanupBundleMcpHarness();
+  resetPluginRuntimeStateForTest();
 });
 
 describe("session MCP runtime", () => {
@@ -254,6 +259,101 @@ describe("session MCP runtime", () => {
     expect(resultA.content[0]).toMatchObject({ type: "text", text: "FROM-CONFIG-A" });
     expect(resultB.content[0]).toMatchObject({ type: "text", text: "FROM-CONFIG-B" });
     expect(await fs.readFile(startupCounterPath, "utf8")).toBe("2");
+  });
+
+  it("materializes registered native plugin MCP servers", async () => {
+    const workspaceDir = await makeTempDir("openclaw-native-plugin-mcp-");
+    const pluginRoot = path.join(
+      process.cwd(),
+      "test",
+      "fixtures",
+      "native-plugin-mcp-hello-world",
+    );
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      config: {
+        plugins: {
+          load: { paths: [path.join(pluginRoot, "index.ts")] },
+          allow: ["native-plugin-mcp-hello-world"],
+        },
+      },
+    });
+    setActivePluginRegistry(registry, "native-plugin-mcp", "default", workspaceDir);
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-native-plugin-mcp",
+      sessionKey: "agent:test:native-plugin-mcp",
+      workspaceDir,
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const result = await materialized.tools[0].execute(
+      "call-native-plugin-mcp",
+      {},
+      undefined,
+      undefined,
+    );
+
+    expect(materialized.tools.map((tool) => tool.name)).toEqual(["helloWorld__hello_world"]);
+    expect(result.content[0]).toMatchObject({ type: "text", text: "hi human" });
+  });
+
+  it("lets configured MCP override native plugin MCP servers by name", async () => {
+    const workspaceDir = await makeTempDir("openclaw-native-plugin-mcp-override-");
+    const pluginRoot = path.join(workspaceDir, "native-plugins", "hello-world");
+    const serverScriptPath = path.join(pluginRoot, "hello-world.mjs");
+    await writeBundleProbeMcpServer(serverScriptPath);
+
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "native-hello-world",
+        source: path.join(pluginRoot, "index.mjs"),
+        rootDir: pluginRoot,
+      }),
+    );
+    registry.mcpServers.push({
+      pluginId: "native-hello-world",
+      name: "helloWorld",
+      server: {
+        command: "node",
+        args: [serverScriptPath],
+        env: {
+          BUNDLE_PROBE_TEXT: "FROM-PLUGIN",
+        },
+      },
+      source: path.join(pluginRoot, "index.mjs"),
+      rootDir: pluginRoot,
+    });
+    setActivePluginRegistry(registry, "native-plugin-mcp-override", "default", workspaceDir);
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-native-plugin-mcp-override",
+      workspaceDir,
+      cfg: {
+        mcp: {
+          servers: {
+            helloWorld: {
+              command: "node",
+              args: [serverScriptPath],
+              env: {
+                BUNDLE_PROBE_TEXT: "FROM-CONFIG",
+              },
+            },
+          },
+        },
+      },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const result = await materialized.tools[0].execute(
+      "call-native-plugin-mcp-override",
+      {},
+      undefined,
+      undefined,
+    );
+
+    expect(materialized.tools.map((tool) => tool.name)).toEqual(["helloWorld__bundle_probe"]);
+    expect(result.content[0]).toMatchObject({ type: "text", text: "FROM-CONFIG" });
   });
 
   it("disposes startup-in-flight runtimes without leaking MCP processes", async () => {

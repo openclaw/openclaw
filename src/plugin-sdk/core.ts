@@ -34,6 +34,8 @@ export type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  OpenClawPluginMcpServerConfig,
+  OpenClawPluginMcpServerRegistration,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginCommandContext,

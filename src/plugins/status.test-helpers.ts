@@ -119,6 +119,7 @@ export function createPluginLoadResult(
     channels: [],
     channelSetups: [],
     providers: [],
+    mcpServers: [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],

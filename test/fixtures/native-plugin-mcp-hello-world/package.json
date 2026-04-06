@@ -1,0 +1,11 @@
+{
+  "name": "@openclaw-dev/native-plugin-mcp-hello-world",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

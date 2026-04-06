@@ -163,6 +163,7 @@ A single plugin can register any number of capabilities via the `api` object:
 | Web fetch              | `api.registerWebFetchProvider(...)`              | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search             | `api.registerWebSearchProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
+| Managed MCP servers    | `api.registerMcpServer(...)`                     | Below                                                                           |
 | Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
 | Event hooks            | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
 | HTTP routes            | `api.registerHttpRoute(...)`                     | [Internals](/plugins/architecture#gateway-http-routes)                          |
@@ -236,6 +237,30 @@ Users enable optional tools in config:
 - Tool names must not clash with core tools (conflicts are skipped)
 - Use `optional: true` for tools with side effects or extra binary requirements
 - Users can enable all tools from a plugin by adding the plugin id to `tools.allow`
+
+## Registering managed MCP servers
+
+Plugins can also register MCP server launch definitions for embedded
+OpenAI-backed runs. OpenClaw owns the server process lifecycle, lists the MCP
+tools, and exposes them to the agent with provider-safe tool names.
+
+```typescript
+register(api) {
+  api.registerMcpServer("myTools", {
+    command: "node",
+    args: [api.resolvePath("./server.mjs")],
+    cwd: api.rootDir,
+    env: {
+      MY_PLUGIN_MODE: "agent",
+    },
+  });
+}
+```
+
+Use this when a plugin needs a dynamic tool inventory that is better expressed
+through MCP than a fixed `api.registerTool(...)` list. User-managed
+`mcp.servers` config remains the final override when it uses the same server
+name.
 
 ## Import conventions
 

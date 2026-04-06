@@ -1,0 +1,9 @@
+{
+  "id": "native-plugin-mcp-hello-world",
+  "name": "Native Plugin MCP Hello World",
+  "description": "Dummy development plugin that registers a hello-world MCP server",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}

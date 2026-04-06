@@ -309,6 +309,7 @@ methods:
 | `api.registerVideoGenerationProvider(...)`       | Video generation                 |
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider      |
 | `api.registerWebSearchProvider(...)`             | Web search                       |
+| `api.registerMcpServer(name, server)`            | Managed MCP server               |
 
 ### Tools and commands
 

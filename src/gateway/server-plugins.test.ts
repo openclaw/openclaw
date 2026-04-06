@@ -62,6 +62,7 @@ vi.mock("../channels/registry.js", () => ({
 const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   plugins: [],
   tools: [],
+  mcpServers: [],
   hooks: [],
   typedHooks: [],
   channels: [],

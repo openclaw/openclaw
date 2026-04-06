@@ -7,6 +7,8 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  OpenClawPluginMcpServerConfig,
+  OpenClawPluginMcpServerRegistration,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
@@ -138,6 +140,8 @@ export type {
   ProviderAuthResult,
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
+  OpenClawPluginMcpServerConfig,
+  OpenClawPluginMcpServerRegistration,
   PluginLogger,
 };
 export type { OpenClawConfig };

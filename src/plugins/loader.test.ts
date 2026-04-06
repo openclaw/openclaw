@@ -2344,6 +2344,30 @@ module.exports = { id: "throws-after-import", register() {} };`,
     );
   });
 
+  it("registers plugin MCP servers", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "mcp-server-demo",
+      filename: "mcp-server-demo.cjs",
+      body: `module.exports = { id: "mcp-server-demo", register(api) {
+  api.registerMcpServer("helloWorld", { command: "node", args: ["server.mjs"] });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["mcp-server-demo"] },
+    });
+
+    expect(registry.mcpServers).toEqual([
+      expect.objectContaining({
+        pluginId: "mcp-server-demo",
+        name: "helloWorld",
+        server: { command: "node", args: ["server.mjs"] },
+      }),
+    ]);
+  });
+
   it("rejects duplicate plugin registrations", () => {
     useNoBundledPlugins();
     const scenarios = [
@@ -2369,6 +2393,18 @@ module.exports = { id: "throws-after-import", register() {} };`,
         selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
           registry.services.filter((entry) => entry.service.id === "shared-service").length,
         duplicateMessage: "service already registered: shared-service (service-owner-a)",
+        assert: expectDuplicateRegistrationResult,
+      },
+      {
+        label: "plugin MCP server names",
+        ownerA: "mcp-server-owner-a",
+        ownerB: "mcp-server-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
+  api.registerMcpServer("shared-mcp-server", { command: "node", args: ["server.mjs"] });
+} };`,
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.mcpServers.filter((entry) => entry.name === "shared-mcp-server").length,
+        duplicateMessage: "MCP server already registered: shared-mcp-server (mcp-server-owner-a)",
         assert: expectDuplicateRegistrationResult,
       },
       {

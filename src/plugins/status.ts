@@ -34,6 +34,7 @@ export type PluginCapabilityKind =
   | "media-understanding"
   | "image-generation"
   | "web-search"
+  | "mcp-server"
   | "channel";
 
 export type PluginInspectShape =
@@ -235,7 +236,10 @@ export function buildPluginDiagnosticsReport(params?: PluginReportParams): Plugi
   return buildPluginReport(params, true);
 }
 
-function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
+function buildCapabilityEntries(
+  plugin: PluginRegistry["plugins"][number],
+  mcpServerNames: string[],
+) {
   return [
     { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
@@ -245,6 +249,7 @@ function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
+    { kind: "mcp-server" as const, ids: mcpServerNames },
     { kind: "channel" as const, ids: plugin.channelIds },
   ].filter((entry) => entry.ids.length > 0);
 }
@@ -305,7 +310,18 @@ export function buildPluginInspectReport(params: {
     return null;
   }
 
-  const capabilities = buildCapabilityEntries(plugin);
+  const nativeMcpServers = report.mcpServers
+    .filter((entry) => entry.pluginId === plugin.id)
+    .map((entry) => ({
+      name: entry.name,
+      hasStdioTransport:
+        typeof entry.server.command === "string" && entry.server.command.trim().length > 0,
+    }))
+    .toSorted((a, b) => a.name.localeCompare(b.name));
+  const capabilities = buildCapabilityEntries(
+    plugin,
+    nativeMcpServers.map((entry) => entry.name),
+  );
   const typedHooks = report.typedHooks
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
@@ -342,7 +358,7 @@ export function buildPluginInspectReport(params: {
   });
 
   // Populate MCP server info for bundle-format plugins with a known rootDir.
-  let mcpServers: PluginInspectReport["mcpServers"] = [];
+  let mcpServers: PluginInspectReport["mcpServers"] = nativeMcpServers;
   if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
     const mcpSupport = inspectBundleMcpRuntimeSupport({
       pluginId: plugin.id,

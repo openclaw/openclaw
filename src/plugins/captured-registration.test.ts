@@ -13,6 +13,7 @@ describe("captured plugin registration", () => {
     const captured = capturePluginRegistration({
       register(api) {
         api.registerTool(capturedTool);
+        api.registerMcpServer("captured-mcp", { command: "node", args: ["server.mjs"] });
         api.registerProvider({
           id: "captured-provider",
           label: "Captured Provider",
@@ -46,6 +47,7 @@ describe("captured plugin registration", () => {
     });
 
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
+    expect(captured.mcpServers.map((server) => server.name)).toEqual(["captured-mcp"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
   });

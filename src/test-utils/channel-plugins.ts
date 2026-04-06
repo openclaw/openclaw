@@ -16,6 +16,7 @@ export type TestChannelRegistration = {
 export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
   plugins: [],
   tools: [],
+  mcpServers: [],
   hooks: [],
   typedHooks: [],
   channels: channels as unknown as PluginRegistry["channels"],
