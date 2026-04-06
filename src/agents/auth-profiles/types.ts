@@ -3,6 +3,8 @@ import type { SecretRef } from "../../config/types.secrets.js";
 
 export type OAuthProvider = string;
 
+export type ExternalOAuthManager = "codex-cli" | "minimax-cli";
+
 export type OAuthCredentials = {
   access: string;
   refresh: string;

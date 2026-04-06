@@ -216,7 +216,6 @@ async function executeReadWithAdaptivePaging(params: {
   if (hasExplicitLimit) {
     return await params.base.execute(params.toolCallId, params.args, params.signal);
   }
-
   const offsetRaw = params.args.offset;
   let nextOffset =
     typeof offsetRaw === "number" && Number.isFinite(offsetRaw) && offsetRaw > 0
@@ -634,6 +633,7 @@ export function createOpenClawReadTool(
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       assertRequiredParams(record, REQUIRED_PARAM_GROUPS.read, base.name);
+      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
@@ -641,7 +641,6 @@ export function createOpenClawReadTool(
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
       });
-      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
       return sanitizeToolResultImages(

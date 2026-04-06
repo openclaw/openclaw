@@ -149,6 +149,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    cliBackends: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
     embeddedPi: z
       .object({
         projectSettingsPolicy: z

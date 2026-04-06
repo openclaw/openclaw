@@ -84,6 +84,7 @@ import type {
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  CliBackendPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -136,6 +137,14 @@ export type PluginProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginCliBackendRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  backend: CliBackendPlugin;
   source: string;
   rootDir?: string;
 };
@@ -284,6 +293,7 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  cliBackends?: PluginCliBackendRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
   realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
   realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];

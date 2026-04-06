@@ -26,14 +26,11 @@ function replacementPreservesWordBoundary(source: string, offset: number, length
 }
 
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/\r\n/g, "\n")
-    .replace(/([^\s])[ \t]{2,}([^\s])/g, "$1 $2")
-    .replace(/^\n+/, "")
-    .replace(/^[ \t](?=\S)/, "")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trimEnd();
+  // Minimal cleanup: only strip leading/trailing whitespace left behind
+  // after directive tags are removed.  Do NOT rewrite internal whitespace —
+  // that destroys markdown tables, code-block indentation and other
+  // formatting that the model intentionally produced.
+  return text.replace(/\r\n/g, "\n").replace(/^\n+/, "").trimEnd();
 }
 
 type StripInlineDirectiveTagsResult = {

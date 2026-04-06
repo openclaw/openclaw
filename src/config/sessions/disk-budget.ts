@@ -35,6 +35,8 @@ const NOOP_LOGGER: SessionDiskBudgetLogger = {
   info: () => {},
 };
 
+const SESSION_PROMPT_CHUNK_FILE_RE = /^(.*)\.part\d+\.claude-system-prompt\.txt$/;
+
 type SessionsDirFileStat = {
   path: string;
   canonicalPath: string;
@@ -172,6 +174,20 @@ function resolveReferencedSessionPromptPaths(params: {
   return referenced;
 }
 
+function resolveOwningPromptCanonicalPath(params: {
+  sessionsDir: string;
+  fileName: string;
+  canonicalPath: string;
+}): string {
+  const match = params.fileName.match(SESSION_PROMPT_CHUNK_FILE_RE);
+  if (!match?.[1]) {
+    return params.canonicalPath;
+  }
+  return canonicalizePathForComparison(
+    path.join(params.sessionsDir, `${match[1]}.claude-system-prompt.txt`),
+  );
+}
+
 async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
@@ -306,7 +322,13 @@ export async function enforceSessionDiskBudget(params: {
         (isPrimarySessionTranscriptFileName(file.name) &&
           !referencedPaths.has(file.canonicalPath)) ||
         (isPrimarySessionPromptFileName(file.name) &&
-          !referencedPromptPaths.has(file.canonicalPath)),
+          !referencedPromptPaths.has(
+            resolveOwningPromptCanonicalPath({
+              sessionsDir,
+              fileName: file.name,
+              canonicalPath: file.canonicalPath,
+            }),
+          )),
     )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);
   for (const file of removableFileQueue) {

@@ -4,7 +4,9 @@ type StreamingSessionStub = {
   active: boolean;
   start: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
+  updateThinking: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  discard: ReturnType<typeof vi.fn>;
   isActive: ReturnType<typeof vi.fn>;
 };
 
@@ -17,6 +19,8 @@ const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
+const emitMessageSentMock = vi.hoisted(() => vi.fn());
+const runMessageSendingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
@@ -70,14 +74,20 @@ vi.mock("./streaming-card.js", () => {
     mergeStreamingText,
     FeishuStreamingSession: class {
       active = false;
+      messageId = "stream-message-id";
       start = vi.fn(async () => {
         this.active = true;
       });
       update = vi.fn(async () => {});
+      updateThinking = vi.fn(async () => {});
       close = vi.fn(async () => {
         this.active = false;
       });
+      discard = vi.fn(async () => {
+        this.active = false;
+      });
       isActive = vi.fn(() => this.active);
+      getMessageId = vi.fn(() => this.messageId);
 
       constructor() {
         streamingInstances.push(this);
@@ -87,6 +97,12 @@ vi.mock("./streaming-card.js", () => {
 });
 
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
+
+async function flushAsyncTasks(iterations = 8): Promise<void> {
+  for (let i = 0; i < iterations; i += 1) {
+    await Promise.resolve();
+  }
+}
 
 describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
@@ -132,7 +148,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
           resolveHumanDelayConfig: vi.fn(() => undefined),
         },
       },
+      hooks: {
+        hasMessageSendingHooks: () => false,
+        runMessageSending: runMessageSendingMock,
+        emitMessageSent: emitMessageSentMock,
+      },
     });
+    runMessageSendingMock.mockResolvedValue(undefined);
   });
 
   function setupNonStreamingAutoDispatcher() {
@@ -155,6 +177,51 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     return createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+  }
+
+  function setupHookedAutoDispatcher() {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+      },
+    });
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 4000),
+          resolveChunkMode: vi.fn(() => "line"),
+          resolveMarkdownTableMode: vi.fn(() => "preserve"),
+          convertMarkdownTables: vi.fn((text) => text),
+          chunkTextWithMode: vi.fn((text) => [text]),
+        },
+        reply: {
+          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+          resolveHumanDelayConfig: vi.fn(() => undefined),
+        },
+      },
+      hooks: {
+        hasMessageSendingHooks: () => true,
+        runMessageSending: runMessageSendingMock,
+        emitMessageSent: emitMessageSentMock,
+      },
+    });
+
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    return {
+      result,
+      options: createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0],
+    };
   }
 
   function createRuntimeLogger() {
@@ -275,15 +342,56 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("sets disableBlockStreaming in replyOptions to prevent silent reply drops", async () => {
-    const result = createFeishuReplyDispatcher({
+  it("streams reasoning and tool state in auto mode before plain-text final content", async () => {
+    const dispatcher = createFeishuReplyDispatcher({
       cfg: {} as never,
       agentId: "agent",
-      runtime: {} as never,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
       chatId: "oc_chat",
     });
 
-    expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await dispatcher.replyOptions.onReasoningStream?.({ text: "reasoning...", isReasoning: true });
+    await flushAsyncTasks();
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("🔧 Tool calls (1)"),
+      { title: "💭 Thinking" },
+    );
+
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("plain text", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("renders first partial text chunk in auto mode once streaming starts", async () => {
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(1, "第一段答案", {
+      replace: true,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onIdle?.();
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案", {
+      note: "Agent: agent",
+    });
   });
 
   it("uses streaming session for auto mode markdown payloads", async () => {
@@ -386,6 +494,59 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("applies message_sending rewrites before non-streaming final sends", async () => {
+    runMessageSendingMock.mockResolvedValueOnce({ content: "rewritten final" });
+
+    const options = setupNonStreamingAutoDispatcher();
+    await options.deliver({ text: "plain final" }, { kind: "final" });
+
+    expect(runMessageSendingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "oc_chat",
+        content: "plain final",
+      }),
+      expect.objectContaining({
+        channelId: "feishu",
+        conversationId: "oc_chat",
+      }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "rewritten final",
+      }),
+    );
+  });
+
+  it("honors message_sending cancellation for media-only final sends", async () => {
+    runMessageSendingMock.mockResolvedValueOnce({ cancel: true });
+
+    const options = setupNonStreamingAutoDispatcher();
+    await options.deliver({ mediaUrl: "https://example.com/a.png" }, { kind: "final" });
+
+    // Cancelled final sends now show a policy note instead of silently discarding.
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "[Message filtered by policy]" }),
+    );
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(emitMessageSentMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps streaming partial text even when message_sending hooks are active", async () => {
+    const { result, options } = setupHookedAutoDispatcher();
+    await options.onReplyStart?.();
+    await result.replyOptions.onReasoningStream?.({ text: "thinking..." });
+    await result.replyOptions.onPartialReply?.({ text: "partial text" });
+    await options.deliver({ text: "stream candidate" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].update).toHaveBeenCalled();
+    expect(streamingInstances[0].updateThinking).toHaveBeenCalled();
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("stream candidate", {
+      note: "Agent: agent",
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("keeps distinct non-streaming final payloads", async () => {
     const options = setupNonStreamingAutoDispatcher();
     await options.deliver({ text: "notice header" }, { kind: "final" });
@@ -402,7 +563,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
-  it("treats block updates as delta chunks", async () => {
+  it("starts a streaming card on assistant activity in card mode", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -421,12 +582,561 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await result.replyOptions.onPartialReply?.({ text: "hello" });
     await options.deliver({ text: "lo world" }, { kind: "block" });
     await options.onIdle?.();
-
     expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("hellolo world", {
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("hello world", {
       note: "Agent: agent",
     });
+  });
+
+  it("shows accumulated reasoning and tool history while keeping streamed text separate", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await dispatcher.replyOptions.onReasoningStream?.({
+      text: "Reasoning:\n_step_",
+      isReasoning: true,
+    });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("step\n\n⏳ Thinking"),
+      {
+        title: "💭 Thinking",
+      },
+    );
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("step\n\n🔧 Tool calls (1)\n\n⏳ Running Read..."),
+      { title: "💭 Thinking" },
+    );
+
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].update).toHaveBeenNthCalledWith(1, "第一段答案", {
+      replace: true,
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Grep", phase: "start" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      "step\n\n🔧 Tool calls (2)\n\n⏳ Running Grep...",
+      { title: "💭 Thinking" },
+    );
+
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案\n第二段答案" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案\n第二段答案", {
+      replace: true,
+    });
+
+    await options.onIdle?.();
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案\n第二段答案", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("shows tool status even when the first visible event is a tool call", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("⏳ Running Read...", {
+      title: "🔧 Tool calls (1)",
+    });
+
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案", {
+      replace: true,
+    });
+
+    await options.onIdle?.();
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("starts the streaming card for tool-only updates in auto mode", async () => {
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("⏳ Running Read...", {
+      title: "🔧 Tool calls (1)",
+    });
+  });
+
+  it("updates the thinking panel for text-only streaming in auto mode", async () => {
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Streaming reply"),
+      { title: "💭 Thinking" },
+    );
+    expect(streamingInstances[0].update).toHaveBeenLastCalledWith("第一段答案", {
+      replace: true,
+    });
+  });
+
+  it("groups repeated tool calls instead of listing each invocation separately", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec", phase: "start" });
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec", phase: "start" });
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec", phase: "start" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running exec..."),
+      { title: "🔧 Tool calls (3)" },
+    );
+  });
+
+  it("clears running tool status once a tool result arrives", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "memory_search", phase: "start" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running memory_search..."),
+      { title: "🔧 Tool calls (1)" },
+    );
+
+    await dispatcher.replyOptions.onToolResult?.({});
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ 1 completed", {
+      title: "🔧 Tool calls (1)",
+    });
+  });
+
+  it("clears running tool status as soon as assistant text starts streaming", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Bash", phase: "start" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running Bash..."),
+      { title: "🔧 Tool calls (1)" },
+    );
+
+    await dispatcher.replyOptions.onPartialReply?.({ text: "final answer" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Streaming reply"),
+      {
+        title: "🔧 Tool calls (1)",
+      },
+    );
+  });
+
+  it("keeps the tool-only final panel in the closing card", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
+    await flushAsyncTasks();
+
+    await options.onIdle?.();
+
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ 1 completed", {
+      title: "🔧 Tool calls (1)",
+    });
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("keeps the tool-only final panel when card note is disabled", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+        cardNote: false,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
+    await flushAsyncTasks();
+    await options.onIdle?.();
+
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案", {});
+  });
+
+  it("clears running tool status when visible assistant text arrives through block delivery", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Bash", phase: "start" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running Bash..."),
+      { title: "🔧 Tool calls (1)" },
+    );
+
+    await options.deliver({ text: "visible block text" }, { kind: "block" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Streaming reply"),
+      {
+        title: "🔧 Tool calls (1)",
+      },
+    );
+  });
+
+  it("does not reset cumulative tool count when onReplyStart fires again mid-reply", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.onReplyStart?.();
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+    await options.onReplyStart?.();
+    await dispatcher.replyOptions.onToolStart?.({ name: "Grep", phase: "start" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running Grep..."),
+      { title: "🔧 Tool calls (2)" },
+    );
+  });
+
+  it("shows running status again when a new tool starts after earlier text streaming", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
+    await flushAsyncTasks();
+    await dispatcher.replyOptions.onToolStart?.({ name: "Grep", phase: "start" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("⏳ Running Grep...", {
+      title: "🔧 Tool calls (2)",
+    });
+  });
+
+  it("tracks unnamed tool starts as generic tool entries instead of reusing the previous name", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Bash", phase: "start" });
+    await dispatcher.replyOptions.onToolStart?.({ phase: "start" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running tool..."),
+      { title: "🔧 Tool calls (2)" },
+    );
+  });
+
+  it("removes the correct active tool when tool results arrive out of order", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({
+      name: "memory_search",
+      phase: "start",
+      toolCallId: "tool-memory",
+    });
+    await dispatcher.replyOptions.onToolStart?.({
+      name: "exec",
+      phase: "start",
+      toolCallId: "tool-exec",
+    });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running exec..."),
+      { title: "🔧 Tool calls (2)" },
+    );
+
+    await dispatcher.replyOptions.onToolResult?.({ toolCallId: "tool-memory" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running exec..."),
+      { title: "🔧 Tool calls (2)" },
+    );
+  });
+
+  it("restores the previous running tool when nested tool activity unwinds", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "memory_search", phase: "start" });
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec", phase: "start" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running exec..."),
+      { title: "🔧 Tool calls (2)" },
+    );
+
+    await dispatcher.replyOptions.onToolResult?.({});
+    await flushAsyncTasks();
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running memory_search..."),
+      { title: "🔧 Tool calls (2)" },
+    );
+  });
+
+  it("only groups consecutive repeated tool calls so chronology stays intact", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec", phase: "start" });
+    await dispatcher.replyOptions.onToolStart?.({ name: "read", phase: "start" });
+    await dispatcher.replyOptions.onToolStart?.({ name: "exec", phase: "start" });
+    await flushAsyncTasks();
+
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      expect.stringContaining("⏳ Running exec..."),
+      { title: "🔧 Tool calls (3)" },
+    );
   });
 
   it("sends media-only payloads as attachments", async () => {
@@ -521,7 +1231,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
-  it("streams reasoning content as blockquote before answer", async () => {
+  it("streams reasoning content into the live thinking panel before the answer", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
       allowReasoningPreview: true,
@@ -538,24 +1248,37 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "answer part final" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(1);
-    const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) =>
-      String(c[0] ?? ""),
+    const thinkingCalls = streamingInstances[0].updateThinking.mock.calls.map(
+      (call: unknown[]) => call[0] as string,
     );
-    const reasoningUpdate = updateCalls.find((c) => c.includes("Thinking"));
-    expect(reasoningUpdate).toContain("> 💭 **Thinking**");
-    // formatReasoningPrefix strips "Reasoning:" prefix and italic markers
-    expect(reasoningUpdate).toContain("> thinking step");
-    expect(reasoningUpdate).not.toContain("Reasoning:");
-    expect(reasoningUpdate).not.toMatch(/> _.*_/);
+    expect(thinkingCalls.at(-1)).toContain("thinking step 1");
+    expect(thinkingCalls.at(-1)).toContain("step 2");
+    expect(thinkingCalls.at(-1)).not.toContain("Reasoning:");
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("answer part final", {
+      note: "Agent: agent",
+    });
+  });
 
-    const combinedUpdate = updateCalls.find((c) => c.includes("Thinking") && c.includes("---"));
-    expect(combinedUpdate).toBeDefined();
+  it("accumulates fragmented reasoning payloads in the live thinking panel", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
 
-    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
-    expect(closeArg).toContain("> 💭 **Thinking**");
-    expect(closeArg).toContain("---");
-    expect(closeArg).toContain("answer part final");
+    await options.onReplyStart?.();
+    result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_step one_" });
+    result.replyOptions.onReasoningStream?.({ text: "step two" });
+    result.replyOptions.onReasoningStream?.({ text: "step three" });
+    result.replyOptions.onPartialReply?.({ text: "answer part" });
+    result.replyOptions.onReasoningEnd?.();
+    await options.deliver({ text: "answer part final" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    const thinkingCalls = streamingInstances[0].updateThinking.mock.calls.map(
+      (call: unknown[]) => call[0] as string,
+    );
+    expect(thinkingCalls.at(-1)).toContain("step one");
+    expect(thinkingCalls.at(-1)).toContain("step two");
+    expect(thinkingCalls.at(-1)).toContain("step three");
   });
 
   it("provides onReasoningStream and onReasoningEnd when reasoning previews are allowed", () => {
@@ -568,16 +1291,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(result.replyOptions.onReasoningEnd).toBeTypeOf("function");
   });
 
-  it("omits reasoning callbacks unless reasoning previews are allowed", () => {
-    const { result } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
-    });
-
-    expect(result.replyOptions.onReasoningStream).toBeUndefined();
-    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
-  });
-
-  it("omits reasoning callbacks when streaming is disabled", () => {
+  it("keeps reasoning callbacks when streaming is disabled so final cards can include thinking", () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -593,11 +1307,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
 
-    expect(result.replyOptions.onReasoningStream).toBeUndefined();
-    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
+    expect(result.replyOptions.onReasoningStream).toBeTypeOf("function");
+    expect(result.replyOptions.onReasoningEnd).toBeTypeOf("function");
   });
 
-  it("renders reasoning-only card when no answer text arrives", async () => {
+  it("preserves reasoning-only streaming cards when no answer text arrives", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
       allowReasoningPreview: true,
@@ -609,12 +1323,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
-    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
-    const closeArg = streamingInstances[0].close.mock.calls[0][0] as string;
-    expect(closeArg).toContain("> 💭 **Thinking**");
-    expect(closeArg).toContain("> deep thought");
-    expect(closeArg).not.toContain("Reasoning:");
-    expect(closeArg).not.toContain("---");
+    expect(streamingInstances[0].updateThinking).toHaveBeenCalledWith("deep thought", {
+      title: "💭 Thinking",
+    });
+    expect(streamingInstances[0].discard).not.toHaveBeenCalled();
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("", {
+      note: "Agent: agent",
+    });
   });
 
   it("ignores empty reasoning payloads", async () => {
@@ -693,6 +1408,264 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         replyInThread: true,
       }),
     );
+  });
+
+  it("keeps thinking as a collapsible panel for non-streaming card replies", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      threadReply: true,
+      rootId: "om_root_topic",
+    });
+
+    await result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_step one_\n_step two_" });
+    await result.replyOptions.onReasoningEnd?.();
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "final answer",
+        thinkingTitle: "💭 Thinking",
+        thinkingText: "step one\nstep two",
+        thinkingExpanded: false,
+      }),
+    );
+  });
+
+  it("accumulates fragmented reasoning payloads for non-streaming card replies", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      threadReply: true,
+      rootId: "om_root_topic",
+    });
+
+    await result.replyOptions.onReasoningStream?.({ text: "Reasoning:\n_step one_" });
+    await result.replyOptions.onReasoningStream?.({ text: "step two" });
+    await result.replyOptions.onReasoningStream?.({ text: "step three" });
+    await result.replyOptions.onReasoningEnd?.();
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "final answer",
+        thinkingTitle: "💭 Thinking",
+        thinkingText: "step one\n\nstep two\n\nstep three",
+        thinkingExpanded: false,
+      }),
+    );
+  });
+
+  it("deduplicates identical final card sends in non-streaming mode", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      threadReply: true,
+      rootId: "om_root_topic",
+    });
+
+    await options.deliver({ text: "same final text" }, { kind: "final" });
+    await options.deliver({ text: "same final text" }, { kind: "final" });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates streaming final card sends when mention tag syntax differs", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+    });
+
+    await options.deliver(
+      { text: '<at user_id="ou_trent">Trent</at> same final text' },
+      { kind: "final" },
+    );
+    await options.deliver({ text: "<at id=ou_trent></at> same final text" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates a duplicate final after streaming card already closed on idle", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+    });
+
+    await options.onReplyStart?.();
+    await result.replyOptions.onPartialReply?.({ text: "same final text" });
+    await options.onIdle?.();
+    await options.deliver({ text: "same final text" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates a post-idle final that only differs by an auto-appended reply mention", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+    getFeishuRuntimeMock.mockReturnValue({
+      channel: {
+        text: {
+          resolveTextChunkLimit: vi.fn(() => 4000),
+          resolveChunkMode: vi.fn(() => "line"),
+          resolveMarkdownTableMode: vi.fn(() => "preserve"),
+          convertMarkdownTables: vi.fn((text) => text),
+          chunkTextWithMode: vi.fn((text) => [text]),
+        },
+        reply: {
+          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+          resolveHumanDelayConfig: vi.fn(() => undefined),
+        },
+      },
+      hooks: {
+        hasMessageSendingHooks: () => true,
+        runMessageSending: runMessageSendingMock,
+        emitMessageSent: emitMessageSentMock,
+      },
+    });
+    runMessageSendingMock.mockResolvedValueOnce({
+      content: 'same final text <at user_id="ou_lukin">Lukin</at>',
+    });
+
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      replyToMessageId: "om_parent",
+    });
+
+    await options.onReplyStart?.();
+    await result.replyOptions.onPartialReply?.({ text: "same final text" });
+    await options.onIdle?.();
+    await options.deliver({ text: "same final text" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves reasoning/tool cards when no final assistant text arrives", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    await dispatcher.replyOptions.onReasoningStream?.({ text: "thinking", isReasoning: true });
+    await flushAsyncTasks();
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith(
+      "thinking\n\n🔧 Tool calls (1)",
+      { title: "💭 Thinking" },
+    );
+    expect(streamingInstances[0].discard).not.toHaveBeenCalled();
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("discards reasoning/tool cards on error when no final assistant text arrives", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.onReplyStart?.();
+    await result.replyOptions.onReasoningStream?.({ text: "thinking", isReasoning: true });
+    await flushAsyncTasks();
+    await result.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+    await options.onError?.(new Error("boom"), { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].discard).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).not.toHaveBeenCalled();
   });
 
   it("passes replyInThread to media attachments", async () => {

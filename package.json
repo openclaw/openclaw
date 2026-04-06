@@ -491,6 +491,10 @@
       "types": "./dist/plugin-sdk/channel-contract.d.ts",
       "default": "./dist/plugin-sdk/channel-contract.js"
     },
+    "./plugin-sdk/cli-backend": {
+      "types": "./dist/plugin-sdk/cli-backend.d.ts",
+      "default": "./dist/plugin-sdk/cli-backend.js"
+    },
     "./plugin-sdk/channel-feedback": {
       "types": "./dist/plugin-sdk/channel-feedback.d.ts",
       "default": "./dist/plugin-sdk/channel-feedback.js"

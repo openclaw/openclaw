@@ -9,6 +9,67 @@ export type McpToolSchemaEntry = {
   inputSchema: Record<string, unknown>;
 };
 
+function extractEnumValues(schema: unknown): unknown[] | undefined {
+  if (!schema || typeof schema !== "object") {
+    return undefined;
+  }
+  const record = schema as Record<string, unknown>;
+  if (Array.isArray(record.enum)) {
+    return record.enum;
+  }
+  if ("const" in record) {
+    return [record.const];
+  }
+  const variants = Array.isArray(record.anyOf)
+    ? record.anyOf
+    : Array.isArray(record.oneOf)
+      ? record.oneOf
+      : null;
+  if (!variants) {
+    return undefined;
+  }
+  const values = variants.flatMap((variant) => extractEnumValues(variant) ?? []);
+  return values.length > 0 ? values : undefined;
+}
+
+function mergeEnumLikePropertySchema(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const existingEnum = extractEnumValues(existing);
+  const incomingEnum = extractEnumValues(incoming);
+  if (!existingEnum && !incomingEnum) {
+    return undefined;
+  }
+
+  const merged: Record<string, unknown> = {};
+  for (const source of [existing, incoming]) {
+    for (const key of ["title", "description", "default"]) {
+      if (!(key in merged) && key in source) {
+        merged[key] = source[key];
+      }
+    }
+  }
+
+  const values = [...new Set([...(existingEnum ?? []), ...(incomingEnum ?? [])])];
+  const valueTypes = new Set(
+    values.map((value) => {
+      if (value === null) {
+        return "null";
+      }
+      if (Array.isArray(value)) {
+        return "array";
+      }
+      return typeof value;
+    }),
+  );
+  if (valueTypes.size === 1) {
+    merged.type = [...valueTypes][0];
+  }
+  merged.enum = values;
+  return merged;
+}
+
 function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknown> {
   const variants = (raw.anyOf ?? raw.oneOf) as Record<string, unknown>[] | undefined;
   if (!Array.isArray(variants) || variants.length === 0) {
@@ -26,35 +87,12 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
         }
         const existing = mergedProps[key] as Record<string, unknown>;
         const incoming = schema as Record<string, unknown>;
-        if (Array.isArray(existing.enum) && Array.isArray(incoming.enum)) {
-          mergedProps[key] = {
-            ...existing,
-            enum: [...new Set([...(existing.enum as unknown[]), ...(incoming.enum as unknown[])])],
-          };
+        const mergedEnumLike = mergeEnumLikePropertySchema(existing, incoming);
+        if (mergedEnumLike) {
+          mergedProps[key] = mergedEnumLike;
           continue;
         }
-        if ("const" in existing && "const" in incoming && existing.const !== incoming.const) {
-          const merged: Record<string, unknown> = {
-            ...existing,
-            enum: [existing.const, incoming.const],
-          };
-          delete merged.const;
-          mergedProps[key] = merged;
-          continue;
-        }
-        // enum + const: append the const value to the existing enum array.
-        if (Array.isArray(existing.enum) && "const" in incoming) {
-          mergedProps[key] = {
-            ...existing,
-            enum: [...new Set([...(existing.enum as unknown[]), incoming.const])],
-          };
-          continue;
-        }
-        if ("const" in existing && Array.isArray(incoming.enum)) {
-          mergedProps[key] = {
-            ...incoming,
-            enum: [...new Set([existing.const, ...(incoming.enum as unknown[])])],
-          };
+        if (JSON.stringify(existing) === JSON.stringify(incoming)) {
           continue;
         }
         // Same base type with different description/metadata — compatible, keep first.

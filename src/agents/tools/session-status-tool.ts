@@ -14,7 +14,6 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -442,33 +441,9 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      const runtimeModelIdentity = resolveSessionModelIdentityRef(
-        cfg,
-        resolved.entry,
-        agentId,
-        `${configured.provider}/${configured.model}`,
-      );
-      const hasExplicitModelOverride = Boolean(
-        resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim(),
-      );
-      const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
-      const runtimeModelForCard = runtimeModelIdentity.model.trim();
-      const defaultProviderForCard = hasExplicitModelOverride
-        ? configured.provider
-        : (runtimeProviderForCard ?? "");
-      const defaultModelForCard = hasExplicitModelOverride
-        ? configured.model
-        : runtimeModelForCard || configured.model;
-      const statusSessionEntry =
-        !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
-          ? { ...resolved.entry, providerOverride: "" }
-          : resolved.entry;
-      const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
-      const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
-      const primaryModelLabel =
-        providerForCard && defaultModelForCard
-          ? `${providerForCard}/${defaultModelForCard}`
-          : defaultModelForCard;
+      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
+      const modelForCard = resolved.entry.modelOverride?.trim() || configured.model;
+      const statusSessionEntry = resolved.entry;
       const isGroup =
         statusSessionEntry.chatType === "group" ||
         statusSessionEntry.chatType === "channel" ||
@@ -491,7 +466,7 @@ export function createSessionStatusTool(opts?: {
           statusSessionEntry.origin?.provider ??
           "unknown",
         provider: providerForCard,
-        model: defaultModelForCard,
+        model: modelForCard,
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
         resolvedFastMode: statusSessionEntry.fastMode,
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
@@ -502,8 +477,6 @@ export function createSessionStatusTool(opts?: {
         defaultGroupActivation: () => "mention",
         taskLineOverride: taskLine,
         skipDefaultTaskLookup: true,
-        primaryModelLabelOverride: primaryModelLabel,
-        ...(providerForCard ? {} : { modelAuthOverride: undefined }),
         includeTranscriptUsage: true,
       });
       const fullStatusText =

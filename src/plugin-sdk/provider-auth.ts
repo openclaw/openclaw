@@ -55,6 +55,7 @@ export {
 } from "../secrets/provider-env-vars.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export { generatePkceVerifierChallenge, toFormUrlEncoded } from "./oauth-utils.js";
+export { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 
 export function isProviderApiKeyConfigured(params: {
   provider: string;

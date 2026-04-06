@@ -107,15 +107,16 @@ describe("runModelAwareAgent", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     const cliCallArg = runCliAgentMock.mock.calls[0]?.[0] as
-      | { messageChannel?: string; extraSystemPrompt?: string }
+      | { messageChannel?: string; extraSystemPrompt?: string; disableTools?: boolean }
       | undefined;
     expect(cliCallArg?.messageChannel).toBe("feishu");
+    expect(cliCallArg?.disableTools).toBe(true);
     expect(cliCallArg?.extraSystemPrompt).toContain("BASE_SYSTEM");
     expect(cliCallArg?.extraSystemPrompt).toContain("Tools are disabled in this session.");
 
     expect(onPartialReply).toHaveBeenCalledWith({ text: "assistant text" });
     expect(onReasoningStream).toHaveBeenCalledWith({ text: "thinking text" });
-    expect(onToolResult).toHaveBeenCalledWith({ text: "tool done" });
+    expect(onToolResult).toHaveBeenCalledWith({ text: "tool done", toolCallId: "tool_1" });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "assistant",
       data: { text: "assistant text", delta: "assistant text" },

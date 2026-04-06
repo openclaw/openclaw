@@ -1,4 +1,9 @@
 import { resolveStateDir } from "../../config/paths.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import {
+  buildCanonicalSentMessageHookContext,
+  toInternalMessageSentContext,
+} from "../../hooks/message-hook-mappers.js";
 import {
   generateImage as generateRuntimeImage,
   listRuntimeImageGenerationProviders,
@@ -19,6 +24,7 @@ import {
   listRuntimeVideoGenerationProviders,
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
+import { getGlobalHookRunner } from "../hook-runner-global.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -37,6 +43,12 @@ const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
 );
 const loadModelAuthRuntime = createLazyRuntimeModule(
   () => import("./runtime-model-auth.runtime.js"),
+);
+const loadEmbeddedPiRuntime = createLazyRuntimeModule(
+  () => import("./runtime-embedded-pi.runtime.js"),
+);
+const loadModelAwareRuntime = createLazyRuntimeModule(
+  () => import("./runtime-model-aware.runtime.js"),
 );
 
 function createRuntimeTts(): PluginRuntime["tts"] {
@@ -81,6 +93,15 @@ function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
   return {
     generate: (params) => generateRuntimeMusic(params),
     listProviders: (params) => listRuntimeMusicGenerationProviders(params),
+  };
+}
+
+function createRuntimeAgents(): PluginRuntime["agents"] {
+  const bindEmbeddedPi = createLazyRuntimeMethodBinder(loadEmbeddedPiRuntime);
+  const bindModelAware = createLazyRuntimeMethodBinder(loadModelAwareRuntime);
+  return {
+    runEmbeddedPiAgent: bindEmbeddedPi((runtime) => runtime.runEmbeddedPiAgent),
+    runModelAwareAgent: bindModelAware((runtime) => runtime.runModelAwareAgent),
   };
 }
 
@@ -202,6 +223,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    agents: createRuntimeAgents(),
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(
@@ -216,6 +238,53 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     },
     channel: createRuntimeChannel(),
     events: createRuntimeEvents(),
+    hooks: {
+      hasMessageSendingHooks: () => {
+        const hookRunner = getGlobalHookRunner();
+        return hookRunner?.hasHooks("message_sending") ?? false;
+      },
+      runMessageSending: async (event, context) => {
+        const hookRunner = getGlobalHookRunner();
+        if (!hookRunner?.hasHooks("message_sending")) {
+          return undefined;
+        }
+        return await hookRunner.runMessageSending(event, context);
+      },
+      emitMessageSent: (event, context) => {
+        const hookRunner = getGlobalHookRunner();
+        if (!hookRunner?.hasHooks("message_sent")) {
+          if (!context.sessionKey) {
+            return;
+          }
+        } else {
+          void hookRunner.runMessageSent(event, context);
+        }
+        if (!context.sessionKey) {
+          return;
+        }
+        const canonical = buildCanonicalSentMessageHookContext({
+          to: event.to,
+          content: event.content,
+          success: event.success,
+          error: event.error,
+          channelId: context.channelId,
+          accountId: context.accountId,
+          conversationId: context.conversationId ?? event.to,
+          messageId: event.messageId,
+          metadata: event.metadata,
+          isGroup: context.isGroup,
+          groupId: context.groupId,
+        });
+        void triggerInternalHook(
+          createInternalHookEvent(
+            "message",
+            "sent",
+            context.sessionKey,
+            toInternalMessageSentContext(canonical),
+          ),
+        ).catch(() => {});
+      },
+    },
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
     tasks,

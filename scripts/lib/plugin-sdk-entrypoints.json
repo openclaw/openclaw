@@ -112,6 +112,7 @@
   "channel-core",
   "channel-entry-contract",
   "channel-contract",
+  "cli-backend",
   "channel-feedback",
   "channel-inbound",
   "channel-lifecycle",

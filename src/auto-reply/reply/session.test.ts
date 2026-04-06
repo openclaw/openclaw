@@ -1126,6 +1126,7 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
       sessionKey,
       previousSessionId: existingSessionId,
@@ -2251,6 +2252,68 @@ describe("persistSessionUsageUpdate", () => {
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].estimatedCostUsd).toBe(0);
+  });
+
+  it("persists CLI binding metadata and prompt-load status for auto-reply sessions", async () => {
+    const storePath = await createStorePath("openclaw-cli-binding-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      providerUsed: "claude-cli",
+      modelUsed: "sonnet",
+      cliSessionId: "existing-claude-session",
+      cliSessionBinding: {
+        sessionId: "existing-claude-session",
+        systemPromptFile: "/tmp/session.claude-system-prompt.txt",
+        systemPromptHash: "abc123",
+        systemPromptCompactionCount: 1,
+      },
+      cliPromptLoad: {
+        sessionPromptFile: "/tmp/session.claude-system-prompt.txt",
+        currentSessionPromptFile: "/tmp/session.part002.claude-system-prompt.txt",
+        sessionPromptFiles: [
+          "/tmp/session.claude-system-prompt.txt",
+          "/tmp/session.part002.claude-system-prompt.txt",
+        ],
+        loaderMode: "normal",
+        verifiedRead: true,
+        chunkCount: 2,
+        verifiedChunkCount: 2,
+      },
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].cliSessionIds).toEqual({
+      "claude-cli": "existing-claude-session",
+    });
+    expect(stored[sessionKey].claudeCliSessionId).toBe("existing-claude-session");
+    expect(stored[sessionKey].cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "existing-claude-session",
+        systemPromptFile: "/tmp/session.claude-system-prompt.txt",
+        systemPromptHash: "abc123",
+        systemPromptCompactionCount: 1,
+      },
+    });
+    expect(stored[sessionKey].cliPromptLoad).toEqual({
+      sessionPromptFile: "/tmp/session.claude-system-prompt.txt",
+      currentSessionPromptFile: "/tmp/session.part002.claude-system-prompt.txt",
+      sessionPromptFiles: [
+        "/tmp/session.claude-system-prompt.txt",
+        "/tmp/session.part002.claude-system-prompt.txt",
+      ],
+      loaderMode: "normal",
+      verifiedRead: true,
+      chunkCount: 2,
+      verifiedChunkCount: 2,
+    });
   });
 });
 

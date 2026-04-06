@@ -680,7 +680,7 @@ describe("session_status tool", () => {
     );
   });
 
-  it("uses the runtime session model as the selected card model when no override is set", async () => {
+  it("uses the configured session model as the selected card model when no override is set", async () => {
     resetSessionStore({
       main: {
         sessionId: "runtime-model",
@@ -698,8 +698,12 @@ describe("session_status tool", () => {
       expect.objectContaining({
         agent: expect.objectContaining({
           model: expect.objectContaining({
-            primary: "anthropic/claude-opus-4-6",
+            primary: "openai/gpt-5.4",
           }),
+        }),
+        sessionEntry: expect.objectContaining({
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
         }),
       }),
     );

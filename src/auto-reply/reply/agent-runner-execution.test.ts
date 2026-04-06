@@ -11,12 +11,17 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 const state = vi.hoisted(() => ({
   runEmbeddedPiAgentMock: vi.fn(),
+  runCliAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
+}));
+
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
 vi.mock("../../agents/model-fallback.js", () => ({
@@ -36,6 +41,7 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
   isCompactionFailureError: () => false,
   isContextOverflowError: () => false,
   isBillingErrorMessage: () => false,
+  isTimeoutErrorMessage: () => false,
   isLikelyContextOverflowError: () => false,
   isRateLimitErrorMessage: () => false,
   isTransientHttpError: () => false,
@@ -200,6 +206,7 @@ function createMockReplyOperation(): {
 describe("runAgentTurnWithFallback", () => {
   beforeEach(() => {
     state.runEmbeddedPiAgentMock.mockReset();
+    state.runCliAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
     state.isInternalMessageChannelMock.mockReset();
     state.isInternalMessageChannelMock.mockReturnValue(false);
@@ -260,6 +267,58 @@ describe("runAgentTurnWithFallback", () => {
       mediaUrls: ["/tmp/generated.png"],
     });
     expect(onToolResult.mock.calls[0]?.[0]?.text).toBeUndefined();
+  });
+
+  it("forwards the persisted skills snapshot into CLI runs", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "sonnet"),
+      provider: "claude-cli",
+      model: "sonnet",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "cli-ok" }], meta: {} });
+
+    const followupRun = createFollowupRun();
+    const snapshot = {
+      prompt: "<available_skills></available_skills>",
+      skills: [{ name: "env-skill", primaryEnv: "ENV_KEY" }],
+    };
+    followupRun.run.skillsSnapshot = snapshot as never;
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "sonnet";
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {} satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      pendingToolTasks: new Set(),
+      runId: "run-cli-skills",
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      setActiveSessionEntry: vi.fn(),
+      replyOperation: createMockReplyOperation().replyOperation,
+      handleLifecycleError: vi.fn(),
+      signalTextDelta: vi.fn(async () => {}),
+      signalReasoningDelta: vi.fn(async () => {}),
+      flushBufferedBlocks: vi.fn(async () => {}),
+      flushStreamingState: vi.fn(async () => {}),
+      markRunComplete: vi.fn(),
+      signalCompletion: vi.fn(async () => {}),
+    } as never);
+
+    expect(state.runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillsSnapshot: snapshot,
+      }),
+    );
   });
 
   it("forwards item lifecycle events to reply options", async () => {

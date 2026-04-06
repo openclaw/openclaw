@@ -116,6 +116,15 @@ function createGptAliasIndex(): ModelAliasIndex {
   };
 }
 
+function createCliSonnetAliasIndex(): ModelAliasIndex {
+  return {
+    byAlias: new Map([
+      ["cli-sonnet", { alias: "cli-sonnet", ref: { provider: "claude-cli", model: "sonnet" } }],
+    ]),
+    byKey: new Map([["claude-cli/sonnet", ["cli-sonnet"]]]),
+  };
+}
+
 function resolveModelSelectionForCommand(params: {
   command: string;
   allowedModelKeys: Set<string>;
@@ -435,6 +444,17 @@ describe("/model chat UX", () => {
     expect(sessionEntry.providerOverride).toBe("custom");
     expect(sessionEntry.modelOverride).toBe(`vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}`);
     expect(sessionEntry.authProfileOverride).toBe("work");
+  });
+
+  it("persists explicit claude-cli model selections into session overrides", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model cli-sonnet hello",
+      aliasIndex: createCliSonnetAliasIndex(),
+      allowedModelKeys: ["claude-cli/sonnet"],
+    });
+
+    expect(sessionEntry.providerOverride).toBe("claude-cli");
+    expect(sessionEntry.modelOverride).toBe("sonnet");
   });
 
   it("ignores invalid mixed-content model directives during persistence", async () => {

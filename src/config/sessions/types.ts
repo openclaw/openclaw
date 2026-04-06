@@ -80,8 +80,12 @@ export type CliSessionBinding = {
 
 export type CliPromptLoadStatus = {
   sessionPromptFile?: string;
+  currentSessionPromptFile?: string;
+  sessionPromptFiles?: string[];
   loaderMode: "normal" | "strict" | "disabled";
   verifiedRead: boolean;
+  chunkCount?: number;
+  verifiedChunkCount?: number;
   fallbackReason?:
     | "write_failed"
     | "verification_retry"
