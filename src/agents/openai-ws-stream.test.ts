@@ -1061,7 +1061,7 @@ describe("buildAssistantMessageFromResponse", () => {
     } as unknown as ResponseObject;
 
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
-    const tc = msg.content.find((c) => c.type === "toolCall") as {
+    const tc = msg.content.find((c) => c.type === "toolCall") as unknown as {
       type: string;
       id: string;
       name: string;

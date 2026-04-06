@@ -519,7 +519,7 @@ export function buildAssistantMessageFromResponse(
             // Preserve the raw string when OpenAI returns malformed JSON so replay
             // can round-trip the original tool call payload instead of silently
             // substituting an empty object.
-            return item.arguments as Record<string, unknown>;
+            return item.arguments as unknown as Record<string, unknown>;
           }
         })(),
       });
