@@ -6,6 +6,12 @@ import {
   resolveGatewayProbeCredentialsFromConfig,
 } from "./credentials.js";
 
+export type GatewayProbeTargetResolution = {
+  gatewayMode: "local" | "remote";
+  mode: "local" | "remote";
+  remoteUrlMissing: boolean;
+};
+
 function buildGatewayProbeCredentialPolicy(params: {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
@@ -20,6 +26,42 @@ function buildGatewayProbeCredentialPolicy(params: {
     modeOverride: params.mode,
     mode: params.mode,
     remoteTokenFallback: "remote-only" as const,
+  };
+}
+
+function resolveExplicitProbeAuth(explicitAuth?: ExplicitGatewayAuth): {
+  token?: string;
+  password?: string;
+} {
+  const token = explicitAuth?.token?.trim() || undefined;
+  const password = explicitAuth?.password?.trim() || undefined;
+  return { token, password };
+}
+
+function hasExplicitProbeAuth(auth: { token?: string; password?: string }): boolean {
+  return Boolean(auth.token || auth.password);
+}
+
+function buildUnresolvedProbeAuthWarning(path: string): string {
+  return `${path} SecretRef is unresolved in this command path; probing without configured auth credentials.`;
+}
+
+function resolveGatewayProbeWarning(error: unknown): string | undefined {
+  if (!isGatewaySecretRefUnavailableError(error)) {
+    throw error;
+  }
+  return buildUnresolvedProbeAuthWarning(error.path);
+}
+
+export function resolveGatewayProbeTarget(cfg: OpenClawConfig): GatewayProbeTargetResolution {
+  const gatewayMode = cfg.gateway?.mode === "remote" ? "remote" : "local";
+  const remoteUrlRaw =
+    typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url.trim() : "";
+  const remoteUrlMissing = gatewayMode === "remote" && !remoteUrlRaw;
+  return {
+    gatewayMode,
+    mode: gatewayMode === "remote" && !remoteUrlMissing ? "remote" : "local",
+    remoteUrlMissing,
   };
 }
 
@@ -57,14 +99,10 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
   auth: { token?: string; password?: string };
   warning?: string;
 }> {
-  const explicitToken = params.explicitAuth?.token?.trim();
-  const explicitPassword = params.explicitAuth?.password?.trim();
-  if (explicitToken || explicitPassword) {
+  const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
+  if (hasExplicitProbeAuth(explicitAuth)) {
     return {
-      auth: {
-        ...(explicitToken ? { token: explicitToken } : {}),
-        ...(explicitPassword ? { password: explicitPassword } : {}),
-      },
+      auth: explicitAuth,
     };
   }
 
@@ -72,12 +110,9 @@ export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
     const auth = await resolveGatewayProbeAuthWithSecretInputs(params);
     return { auth };
   } catch (error) {
-    if (!isGatewaySecretRefUnavailableError(error)) {
-      throw error;
-    }
     return {
       auth: {},
-      warning: `${error.path} SecretRef is unresolved in this command path; probing without configured auth credentials.`,
+      warning: resolveGatewayProbeWarning(error),
     };
   }
 }
@@ -91,26 +126,19 @@ export function resolveGatewayProbeAuthSafe(params: {
   auth: { token?: string; password?: string };
   warning?: string;
 } {
-  const explicitToken = params.explicitAuth?.token?.trim();
-  const explicitPassword = params.explicitAuth?.password?.trim();
-  if (explicitToken || explicitPassword) {
+  const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
+  if (hasExplicitProbeAuth(explicitAuth)) {
     return {
-      auth: {
-        ...(explicitToken ? { token: explicitToken } : {}),
-        ...(explicitPassword ? { password: explicitPassword } : {}),
-      },
+      auth: explicitAuth,
     };
   }
 
   try {
     return { auth: resolveGatewayProbeAuth(params) };
   } catch (error) {
-    if (!isGatewaySecretRefUnavailableError(error)) {
-      throw error;
-    }
     return {
       auth: {},
-      warning: `${error.path} SecretRef is unresolved in this command path; probing without configured auth credentials.`,
+      warning: resolveGatewayProbeWarning(error),
     };
   }
 }

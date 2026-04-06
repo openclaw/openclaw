@@ -12,7 +12,7 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
+import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
@@ -65,7 +65,7 @@ export type {
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
 let conversationRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/conversation-runtime")>
+  | Promise<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>
   | undefined;
 let pluralkitRuntimePromise: Promise<typeof import("../pluralkit.js")> | undefined;
 let discordSendRuntimePromise: Promise<typeof import("../send.js")> | undefined;
@@ -74,7 +74,7 @@ let systemEventsRuntimePromise: Promise<typeof import("./system-events.js")> | u
 let discordThreadingRuntimePromise: Promise<typeof import("./threading.js")> | undefined;
 
 async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-runtime");
+  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-binding-runtime");
   return await conversationRuntimePromise;
 }
 
@@ -120,6 +120,56 @@ function isBoundThreadBotSystemMessage(params: {
     return false;
   }
   return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
+}
+
+type BoundThreadLookupRecordLike = {
+  webhookId?: string | null;
+  metadata?: {
+    webhookId?: string | null;
+  };
+};
+
+function isDiscordThreadChannelType(type: ChannelType | undefined): boolean {
+  return (
+    type === ChannelType.PublicThread ||
+    type === ChannelType.PrivateThread ||
+    type === ChannelType.AnnouncementThread
+  );
+}
+
+function isDiscordThreadChannelMessage(params: {
+  isGuildMessage: boolean;
+  message: Message;
+  channelInfo: import("./message-utils.js").DiscordChannelInfo | null;
+}): boolean {
+  if (!params.isGuildMessage) {
+    return false;
+  }
+  const channel =
+    "channel" in params.message ? (params.message as { channel?: unknown }).channel : undefined;
+  return Boolean(
+    (channel &&
+      typeof channel === "object" &&
+      "isThread" in channel &&
+      typeof (channel as { isThread?: unknown }).isThread === "function" &&
+      (channel as { isThread: () => boolean }).isThread()) ||
+    isDiscordThreadChannelType(params.channelInfo?.type),
+  );
+}
+
+function resolveInjectedBoundThreadLookupRecord(params: {
+  threadBindings: DiscordMessagePreflightParams["threadBindings"];
+  threadId: string;
+}): BoundThreadLookupRecordLike | undefined {
+  const getByThreadId = (params.threadBindings as { getByThreadId?: (threadId: string) => unknown })
+    .getByThreadId;
+  if (typeof getByThreadId !== "function") {
+    return undefined;
+  }
+  const binding = getByThreadId(params.threadId);
+  return binding && typeof binding === "object"
+    ? (binding as BoundThreadLookupRecordLike)
+    : undefined;
 }
 
 function resolveDiscordMentionState(params: {
@@ -180,16 +230,18 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
   accountId?: string;
   threadId?: string;
   webhookId?: string | null;
-  threadBinding?: SessionBindingRecord;
+  threadBinding?: BoundThreadLookupRecordLike;
 }): boolean {
   const webhookId = params.webhookId?.trim() || "";
   if (!webhookId) {
     return false;
   }
   const boundWebhookId =
-    typeof params.threadBinding?.metadata?.webhookId === "string"
-      ? params.threadBinding.metadata.webhookId.trim()
-      : "";
+    typeof params.threadBinding?.webhookId === "string"
+      ? params.threadBinding.webhookId.trim()
+      : typeof params.threadBinding?.metadata?.webhookId === "string"
+        ? params.threadBinding.metadata.webhookId.trim()
+        : "";
   if (!boundWebhookId) {
     const threadId = params.threadId?.trim() || "";
     if (!threadId) {
@@ -371,6 +423,43 @@ export async function preflightDiscordMessage(
   }
   const isDirectMessage = channelInfo?.type === ChannelType.DM;
   const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
+  const messageText = resolveDiscordMessageText(message, {
+    includeForwarded: true,
+  });
+  const injectedBoundThreadBinding =
+    !isDirectMessage && !isGroupDm
+      ? resolveInjectedBoundThreadLookupRecord({
+          threadBindings: params.threadBindings,
+          threadId: messageChannelId,
+        })
+      : undefined;
+  if (
+    shouldIgnoreBoundThreadWebhookMessage({
+      accountId: params.accountId,
+      threadId: messageChannelId,
+      webhookId,
+      threadBinding: injectedBoundThreadBinding,
+    })
+  ) {
+    logVerbose(`discord: drop bound-thread webhook echo message ${message.id}`);
+    return null;
+  }
+  if (
+    isBoundThreadBotSystemMessage({
+      isBoundThreadSession:
+        Boolean(injectedBoundThreadBinding) &&
+        isDiscordThreadChannelMessage({
+          isGuildMessage,
+          message,
+          channelInfo,
+        }),
+      isBotAuthor: Boolean(author.bot),
+      text: messageText,
+    })
+  ) {
+    logVerbose(`discord: drop bound-thread bot system message ${message.id}`);
+    return null;
+  }
   const data = message === params.data.message ? params.data : { ...params.data, message };
   logDebug(
     `[discord-preflight] channelId=${messageChannelId} guild_id=${params.data.guild_id} channelType=${channelInfo?.type} isGuild=${isGuildMessage} isDM=${isDirectMessage} isGroupDm=${isGroupDm}`,
@@ -460,9 +549,6 @@ export async function preflightDiscordMessage(
   const botId = params.botUserId;
   const baseText = resolveDiscordMessageText(message, {
     includeForwarded: false,
-  });
-  const messageText = resolveDiscordMessageText(message, {
-    includeForwarded: true,
   });
 
   // Intercept text-only slash commands (e.g. user typing "/reset" instead of using Discord's slash command picker)

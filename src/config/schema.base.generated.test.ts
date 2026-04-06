@@ -40,4 +40,25 @@ describe("generated base config schema", () => {
     expect(hooksInternalProperties?.handlers).toBeUndefined();
     expect(uiHints["hooks.internal.handlers"]).toBeUndefined();
   });
+
+  it("includes videoGenerationModel in the public schema payload", () => {
+    const agentDefaultsProperties = (
+      GENERATED_BASE_CONFIG_SCHEMA.schema as {
+        properties?: {
+          agents?: {
+            properties?: {
+              defaults?: {
+                properties?: Record<string, unknown>;
+              };
+            };
+          };
+        };
+      }
+    ).properties?.agents?.properties?.defaults?.properties;
+    const uiHints = GENERATED_BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
+
+    expect(agentDefaultsProperties?.videoGenerationModel).toBeDefined();
+    expect(uiHints["agents.defaults.videoGenerationModel.primary"]).toBeDefined();
+    expect(uiHints["agents.defaults.videoGenerationModel.fallbacks"]).toBeDefined();
+  });
 });

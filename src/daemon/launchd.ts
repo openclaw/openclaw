@@ -568,6 +568,27 @@ export async function installLaunchAgent(
   return { plistPath };
 }
 
+async function ensureLaunchAgentLoadedAfterFailure(params: {
+  domain: string;
+  serviceTarget: string;
+  plistPath: string;
+}): Promise<void> {
+  const probe = await execLaunchctl(["print", params.serviceTarget]);
+  if (probe.code === 0) {
+    return;
+  }
+  try {
+    await bootstrapLaunchAgentOrThrow({
+      domain: params.domain,
+      serviceTarget: params.serviceTarget,
+      plistPath: params.plistPath,
+      actionHint: "openclaw gateway start",
+    });
+  } catch {
+    // Best-effort only. Preserve the original kickstart failure below.
+  }
+}
+
 export async function restartLaunchAgent({
   stdout,
   env,
@@ -606,6 +627,7 @@ export async function restartLaunchAgent({
   }
 
   if (!isLaunchctlNotLoaded(start)) {
+    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
@@ -619,6 +641,7 @@ export async function restartLaunchAgent({
 
   const retry = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (retry.code !== 0) {
+    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
     throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
   }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);

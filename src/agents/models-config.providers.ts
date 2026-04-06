@@ -10,4 +10,4 @@ export type {
 } from "./models-config.providers.secrets.js";
 export { applyNativeStreamingUsageCompat } from "./models-config.providers.policy.js";
 export { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
-export { resolveOllamaApiBase } from "../../extensions/ollama/api.js";
+export { resolveOllamaApiBase } from "../plugin-sdk/ollama.js";

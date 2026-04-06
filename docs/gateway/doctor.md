@@ -307,10 +307,17 @@ Doctor checks:
 
 Doctor inspects OAuth profiles in the auth store, warns when tokens are
 expiring/expired, and can refresh them when safe. If the Anthropic
-OAuth/token profile is stale, it suggests migrating to Claude CLI or an
-Anthropic API key.
+OAuth/token profile is stale, it suggests an Anthropic API key or the legacy
+Anthropic setup-token path.
 Refresh prompts only appear when running interactively (TTY); `--non-interactive`
 skips refresh attempts.
+
+Doctor also detects stale removed Anthropic Claude CLI state. If old
+`anthropic:claude-cli` credential bytes still exist in `auth-profiles.json`,
+doctor converts them back into Anthropic token/OAuth profiles and rewrites
+stale `claude-cli/...` model refs.
+If the bytes are gone, doctor removes the stale config and prints recovery
+commands instead.
 
 Doctor also reports auth profiles that are temporarily unusable due to:
 

@@ -1,9 +1,9 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { installPackageDir } from "./install-package-dir.js";
 
 vi.mock("../process/exec.js", async () => {
@@ -93,18 +93,18 @@ async function withInstallBaseReboundOnRealpathCall<T>(params: {
 }
 
 describe("installPackageDir", () => {
-  let fixtureRoot = "";
+  const fixtureRootTracker = createSuiteTempRootTracker({
+    prefix: "openclaw-install-package-dir-",
+  });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-      fixtureRoot = "";
-    }
+    await fixtureRootTracker.cleanup();
   });
 
   it("keeps the existing install in place when staged validation fails", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const installBaseDir = path.join(fixtureRoot, "plugins");
     const sourceDir = path.join(fixtureRoot, "source");
     const targetDir = path.join(installBaseDir, "demo");
@@ -144,7 +144,8 @@ describe("installPackageDir", () => {
   });
 
   it("restores the original install if publish rename fails", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const installBaseDir = path.join(fixtureRoot, "plugins");
     const sourceDir = path.join(fixtureRoot, "source");
     const targetDir = path.join(installBaseDir, "demo");
@@ -186,7 +187,8 @@ describe("installPackageDir", () => {
   });
 
   it("aborts without outside writes when the install base is rebound before publish", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
     const installBaseDir = path.join(fixtureRoot, "plugins");
     const preservedInstallRoot = path.join(fixtureRoot, "plugins-preserved");
@@ -233,7 +235,8 @@ describe("installPackageDir", () => {
   });
 
   it("warns and leaves the backup in place when the install base changes before backup cleanup", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
     const installBaseDir = path.join(fixtureRoot, "plugins");
     const preservedInstallRoot = path.join(fixtureRoot, "plugins-preserved");
@@ -279,7 +282,8 @@ describe("installPackageDir", () => {
   });
 
   it("installs peer dependencies for isolated plugin package installs", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
     const targetDir = path.join(fixtureRoot, "plugins", "demo");
     await fs.mkdir(sourceDir, { recursive: true });
@@ -324,7 +328,8 @@ describe("installPackageDir", () => {
   });
 
   it("hides the staged project .npmrc while npm install runs and restores it afterward", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
     const targetDir = path.join(fixtureRoot, "plugins", "demo");
     const npmrcContent = "git=calc.exe\n";

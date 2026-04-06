@@ -38,21 +38,21 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
       throw new Error(`Invalid URL: ${validatedUrl.error}`);
     }
 
-    let allowPrivateNetwork = resolved.allowPrivateNetwork ?? false;
+    let dangerouslyAllowPrivateNetwork = resolved.dangerouslyAllowPrivateNetwork ?? false;
     if (isBlockedUrbitHostname(validatedUrl.hostname)) {
-      allowPrivateNetwork = await prompter.confirm({
+      dangerouslyAllowPrivateNetwork = await prompter.confirm({
         message:
           "Ship URL looks like a private/internal host. Allow private network access? (SSRF risk)",
-        initialValue: allowPrivateNetwork,
+        initialValue: dangerouslyAllowPrivateNetwork,
       });
-      if (!allowPrivateNetwork) {
+      if (!dangerouslyAllowPrivateNetwork) {
         throw new Error("Refusing private/internal ship URL without explicit network opt-in");
       }
     }
     next = applyTlonSetupConfig({
       cfg: next,
       accountId,
-      input: { allowPrivateNetwork },
+      input: { dangerouslyAllowPrivateNetwork },
     });
 
     const currentGroups = resolved.groupChannels;

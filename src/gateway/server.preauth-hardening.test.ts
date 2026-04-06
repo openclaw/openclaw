@@ -6,7 +6,7 @@ import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { testState } from "./test-helpers.mocks.js";
+import { testState } from "./test-helpers.runtime-state.js";
 import {
   createGatewaySuiteHarness,
   installGatewayTestHooks,

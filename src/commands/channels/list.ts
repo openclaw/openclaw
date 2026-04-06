@@ -1,4 +1,5 @@
 import { loadAuthProfileStore } from "../../agents/auth-profiles.js";
+import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -47,7 +48,7 @@ function formatLinked(value: boolean): string {
 }
 
 function shouldShowConfigured(channel: ChannelPlugin): boolean {
-  return channel.meta.showConfigured !== false;
+  return isChannelVisibleInConfiguredLists(channel.meta);
 }
 
 function formatAccountLine(params: {

@@ -37,10 +37,6 @@ export const TalkSpeakParamsSchema = Type.Object(
 );
 
 const talkProviderFieldSchemas = {
-  voiceId: Type.Optional(Type.String()),
-  voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
-  modelId: Type.Optional(Type.String()),
-  outputFormat: Type.Optional(Type.String()),
   apiKey: Type.Optional(SecretInputSchema),
 };
 

@@ -39,12 +39,12 @@ describe("resolveOpenAiCompatModelOverride", () => {
   it("rejects CLI model overrides outside the configured allowlist", async () => {
     await expect(
       resolveOpenAiCompatModelOverride({
-        req: createReq({ "x-openclaw-model": "claude-cli/opus" }),
+        req: createReq({ "x-openclaw-model": "codex-cli/gpt-5.4" }),
         agentId: "main",
         model: "openclaw",
       }),
     ).resolves.toEqual({
-      errorMessage: "Model 'claude-cli/opus' is not allowed for agent 'main'.",
+      errorMessage: "Model 'codex-cli/gpt-5.4' is not allowed for agent 'main'.",
     });
   });
 });

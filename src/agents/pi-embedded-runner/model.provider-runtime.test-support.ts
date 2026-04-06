@@ -337,13 +337,13 @@ function buildDynamicModel(
         template,
         modelId,
         {
-          provider: "anthropic",
+          provider: params.provider,
           api: "anthropic-messages",
           baseUrl: ANTHROPIC_BASE_URL,
           reasoning: true,
         },
         {
-          provider: "anthropic",
+          provider: params.provider,
           api: "anthropic-messages",
           baseUrl: ANTHROPIC_BASE_URL,
           reasoning: true,
@@ -363,14 +363,14 @@ function buildDynamicModel(
         modelId,
         {
           provider: "google-antigravity",
-          api: "google-gemini-cli",
+          api: "google-generative-ai",
           baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
           reasoning: true,
           input: ["text", "image"],
         },
         {
           provider: "google-antigravity",
-          api: "google-gemini-cli",
+          api: "google-generative-ai",
           baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
           reasoning: true,
           input: ["text", "image"],

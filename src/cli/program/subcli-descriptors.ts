@@ -69,6 +69,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: false,
   },
   {
+    name: "qa",
+    description: "Run QA scenarios and launch the private QA debugger UI",
+    hasSubcommands: true,
+  },
+  {
     name: "hooks",
     description: "Manage internal agent hooks",
     hasSubcommands: true,

@@ -1,6 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  namedAccountPromotionKeys as matrixNamedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget as resolveMatrixSingleAccountPromotionTarget,
+  singleAccountKeysToMove as matrixSingleAccountKeysToMove,
+} from "../../../extensions/matrix/contract-api.js";
+import { singleAccountKeysToMove as telegramSingleAccountKeysToMove } from "../../../extensions/telegram/contract-api.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   applySetupAccountConfigPatch,
   clearSetupPromotionRuntimeModuleCache,
@@ -14,8 +25,38 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          setup: {
+            singleAccountKeysToMove: matrixSingleAccountKeysToMove,
+            namedAccountPromotionKeys: matrixNamedAccountPromotionKeys,
+            resolveSingleAccountPromotionTarget: resolveMatrixSingleAccountPromotionTarget,
+          },
+        },
+      },
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          setup: {
+            singleAccountKeysToMove: telegramSingleAccountKeysToMove,
+          },
+        },
+      },
+    ]),
+  );
+});
+
 afterEach(() => {
   clearSetupPromotionRuntimeModuleCache();
+  resetPluginRuntimeStateForTest();
 });
 
 describe("applySetupAccountConfigPatch", () => {

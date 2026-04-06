@@ -316,7 +316,9 @@ export async function refreshRemoteNodeBins(params: {
   }
 }
 
-export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] | undefined {
+export function getRemoteSkillEligibility(options?: {
+  advertiseExecNode?: boolean;
+}): SkillEligibilityContext["remote"] | undefined {
   const macNodes = [...remoteNodes.values()].filter(
     (node) => isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands),
   );
@@ -331,14 +333,16 @@ export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] |
   }
   const labels = macNodes.map((node) => node.displayName ?? node.nodeId).filter(Boolean);
   const note =
-    labels.length > 0
-      ? `Remote macOS node available (${labels.join(", ")}). Run macOS-only skills via exec host=node on that node.`
-      : "Remote macOS node available. Run macOS-only skills via exec host=node on that node.";
+    options?.advertiseExecNode === false
+      ? undefined
+      : labels.length > 0
+        ? `Remote macOS node available (${labels.join(", ")}). Run macOS-only skills via exec host=node on that node.`
+        : "Remote macOS node available. Run macOS-only skills via exec host=node on that node.";
   return {
     platforms: ["darwin"],
     hasBin: (bin) => bins.has(bin),
     hasAnyBin: (required) => required.some((bin) => bins.has(bin)),
-    note,
+    ...(note ? { note } : {}),
   };
 }
 

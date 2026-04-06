@@ -166,41 +166,6 @@ describe("web search provider config", () => {
   });
 });
 
-describe("talk.voiceAliases", () => {
-  it("accepts a string map of voice aliases via legacy talk migration", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        talk: {
-          voiceAliases: {
-            Clawd: "EXAVITQu4vr4xnSDxMaL",
-            Roger: "CwhRBWXzGAHq8TQ4Fs17",
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "talk")).toBe(true);
-      expect(snap.sourceConfig.talk?.providers?.elevenlabs?.voiceAliases).toEqual({
-        Clawd: "EXAVITQu4vr4xnSDxMaL",
-        Roger: "CwhRBWXzGAHq8TQ4Fs17",
-      });
-    });
-  });
-
-  it("rejects non-string voice alias values", () => {
-    const res = validateConfigObject({
-      talk: {
-        voiceAliases: {
-          Clawd: 123,
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-});
-
 describe("gateway.remote.transport", () => {
   it("accepts direct transport", () => {
     const res = validateConfigObject({
@@ -748,12 +713,23 @@ describe("config strict validation", () => {
         channels: {
           telegram: {
             streamMode: "block",
+            chunkMode: "newline",
+            blockStreaming: true,
+            draftChunk: {
+              minChars: 120,
+            },
           },
           discord: {
             streaming: false,
+            blockStreamingCoalesce: {
+              idleMs: 250,
+            },
             accounts: {
               work: {
                 streamMode: "block",
+                draftChunk: {
+                  maxChars: 900,
+                },
               },
             },
           },
@@ -767,6 +743,7 @@ describe("config strict validation", () => {
           },
           slack: {
             streaming: true,
+            nativeStreaming: false,
           },
         },
       });
@@ -785,16 +762,41 @@ describe("config strict validation", () => {
       );
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
       expect(snap.sourceConfig.channels?.telegram).toMatchObject({
-        streaming: "block",
+        streaming: {
+          mode: "block",
+          chunkMode: "newline",
+          block: {
+            enabled: true,
+          },
+          preview: {
+            chunk: {
+              minChars: 120,
+            },
+          },
+        },
       });
       expect(
         (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
       ).toBeUndefined();
       expect(snap.sourceConfig.channels?.discord).toMatchObject({
-        streaming: "off",
+        streaming: {
+          mode: "off",
+          block: {
+            coalesce: {
+              idleMs: 250,
+            },
+          },
+        },
       });
       expect(snap.sourceConfig.channels?.discord?.accounts?.work).toMatchObject({
-        streaming: "block",
+        streaming: {
+          mode: "block",
+          preview: {
+            chunk: {
+              maxChars: 900,
+            },
+          },
+        },
       });
       expect(
         (snap.sourceConfig.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
@@ -807,8 +809,10 @@ describe("config strict validation", () => {
         )?.streamMode,
       ).toBeUndefined();
       expect(snap.sourceConfig.channels?.slack).toMatchObject({
-        streaming: "partial",
-        nativeStreaming: true,
+        streaming: {
+          mode: "partial",
+          nativeTransport: false,
+        },
       });
     });
   });

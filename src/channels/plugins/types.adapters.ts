@@ -734,6 +734,17 @@ export type ChannelApprovalRenderAdapter = {
   };
 };
 
+export type ChannelApprovalAdapter = {
+  delivery?: ChannelApprovalDeliveryAdapter;
+  render?: ChannelApprovalRenderAdapter;
+  native?: ChannelApprovalNativeAdapter;
+  describeExecApprovalSetup?: (params: {
+    channel: string;
+    channelLabel: string;
+    accountId?: string;
+  }) => string | null | undefined;
+};
+
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
   authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
   getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
@@ -743,12 +754,6 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     senderId?: string | null;
     approvalKind: ChannelApprovalKind;
   }) => ChannelApproveCommandBehavior | undefined;
-};
-
-export type ChannelApprovalAdapter = {
-  delivery?: ChannelApprovalDeliveryAdapter;
-  render?: ChannelApprovalRenderAdapter;
-  native?: ChannelApprovalNativeAdapter;
 };
 
 export type ChannelAllowlistAdapter = {

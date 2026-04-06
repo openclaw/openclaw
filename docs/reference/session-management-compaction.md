@@ -297,6 +297,8 @@ Convention:
 - OpenClaw strips/suppresses this in the delivery layer.
 - Exact silent-token suppression is case-insensitive, so `NO_REPLY` and
   `no_reply` both count when the whole payload is just the silent token.
+- This is for true background/no-delivery turns only; it is not a shortcut for
+  ordinary actionable user requests.
 
 As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a
 partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial
@@ -330,7 +332,7 @@ Notes:
 - The default prompt/system prompt include a `NO_REPLY` hint to suppress
   delivery.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
-- The flush runs only for embedded Pi sessions (CLI backends skip it).
+- The flush runs only for embedded Pi sessions.
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
 - See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 

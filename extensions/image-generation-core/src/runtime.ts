@@ -1,13 +1,15 @@
 import {
+  buildNoCapabilityModelConfiguredMessage,
+  resolveCapabilityModelCandidates,
+  throwCapabilityGenerationFailure,
+} from "openclaw/plugin-sdk/media-generation-runtime-shared";
+import {
   createSubsystemLogger,
   describeFailoverError,
   getImageGenerationProvider,
-  getProviderEnvVars,
   isFailoverError,
   listImageGenerationProviders,
   parseImageGenerationModelRef,
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
   type AuthProfileStore,
   type FallbackAttempt,
   type GeneratedImageAsset,
@@ -40,73 +42,13 @@ export type GenerateImageRuntimeResult = {
   metadata?: Record<string, unknown>;
 };
 
-function resolveImageGenerationCandidates(params: {
-  cfg: OpenClawConfig;
-  modelOverride?: string;
-}): Array<{ provider: string; model: string }> {
-  const candidates: Array<{ provider: string; model: string }> = [];
-  const seen = new Set<string>();
-  const add = (raw: string | undefined) => {
-    const parsed = parseImageGenerationModelRef(raw);
-    if (!parsed) {
-      return;
-    }
-    const key = `${parsed.provider}/${parsed.model}`;
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    candidates.push(parsed);
-  };
-
-  add(params.modelOverride);
-  add(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.imageGenerationModel));
-  for (const fallback of resolveAgentModelFallbackValues(
-    params.cfg.agents?.defaults?.imageGenerationModel,
-  )) {
-    add(fallback);
-  }
-  return candidates;
-}
-
-function throwImageGenerationFailure(params: {
-  attempts: FallbackAttempt[];
-  lastError: unknown;
-}): never {
-  if (params.attempts.length <= 1 && params.lastError) {
-    throw params.lastError;
-  }
-  const summary =
-    params.attempts.length > 0
-      ? params.attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
-  throw new Error(`All image generation models failed (${params.attempts.length}): ${summary}`, {
-    cause: params.lastError instanceof Error ? params.lastError : undefined,
-  });
-}
-
 function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
-  const providers = listImageGenerationProviders(cfg);
-  const sampleModel =
-    providers.find((provider) => provider.defaultModel) ??
-    ({ id: "google", defaultModel: "gemini-3-pro-image-preview" } as const);
-  const authHints = providers
-    .flatMap((provider) => {
-      const envVars = getProviderEnvVars(provider.id);
-      if (envVars.length === 0) {
-        return [];
-      }
-      return [`${provider.id}: ${envVars.join(" / ")}`];
-    })
-    .slice(0, 3);
-  return [
-    `No image-generation model configured. Set agents.defaults.imageGenerationModel.primary to a provider/model like "${sampleModel.id}/${sampleModel.defaultModel}".`,
-    authHints.length > 0
-      ? `If you want a specific provider, also configure that provider's auth/API key first (${authHints.join("; ")}).`
-      : "If you want a specific provider, also configure that provider's auth/API key first.",
-  ].join(" ");
+  return buildNoCapabilityModelConfiguredMessage({
+    capabilityLabel: "image-generation",
+    modelConfigKey: "imageGenerationModel",
+    providers: listImageGenerationProviders(cfg),
+    fallbackSampleRef: "google/gemini-3-pro-image-preview",
+  });
 }
 
 export function listRuntimeImageGenerationProviders(params?: { config?: OpenClawConfig }) {
@@ -116,9 +58,11 @@ export function listRuntimeImageGenerationProviders(params?: { config?: OpenClaw
 export async function generateImage(
   params: GenerateImageParams,
 ): Promise<GenerateImageRuntimeResult> {
-  const candidates = resolveImageGenerationCandidates({
+  const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
+    modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
     modelOverride: params.modelOverride,
+    parseModelRef: parseImageGenerationModelRef,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg));
@@ -179,5 +123,9 @@ export async function generateImage(
     }
   }
 
-  throwImageGenerationFailure({ attempts, lastError });
+  throwCapabilityGenerationFailure({
+    capabilityLabel: "image generation",
+    attempts,
+    lastError,
+  });
 }

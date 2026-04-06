@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
@@ -10,6 +9,7 @@ import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transport-stream-shared.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const GOOGLE_PROMPT_CACHE_CUSTOM_TYPE = "openclaw.google-prompt-cache";
 const GOOGLE_PROMPT_CACHE_RETRY_BACKOFF_MS = 10 * 60_000;
@@ -19,7 +19,10 @@ const GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS = 5 * 60_000;
 type CacheRetention = "short" | "long";
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
-type GooglePromptCacheSessionManager = Pick<SessionManager, "appendCustomEntry" | "getEntries">;
+type GooglePromptCacheSessionManager = {
+  appendCustomEntry(customType: string, data?: unknown): unknown;
+  getEntries(): CustomEntryLike[];
+};
 type GooglePromptCacheModel = Model<Api> & {
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -116,7 +119,7 @@ function readLatestGooglePromptCacheEntry(
   try {
     const entries = sessionManager.getEntries();
     for (let i = entries.length - 1; i >= 0; i -= 1) {
-      const entry = entries[i] as CustomEntryLike;
+      const entry = entries[i];
       if (entry?.type !== "custom" || entry?.customType !== GOOGLE_PROMPT_CACHE_CUSTOM_TYPE) {
         continue;
       }
@@ -382,8 +385,13 @@ export async function prepareGooglePromptCacheStreamFn(
 
   const inner = params.streamFn;
   return (model, context, options) =>
-    inner(model, buildManagedContextWithoutSystemPrompt(context), {
-      ...options,
-      cachedContent,
-    });
+    streamWithPayloadPatch(
+      inner,
+      model,
+      buildManagedContextWithoutSystemPrompt(context),
+      options,
+      (payload) => {
+        payload.cachedContent = cachedContent;
+      },
+    );
 }

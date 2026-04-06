@@ -83,14 +83,6 @@ vi.mock("../infra/exec-inline-eval.js", () => ({
   detectInterpreterInlineEvalArgv: vi.fn(() => null),
 }));
 
-vi.mock("../infra/exec-obfuscation-detect.js", () => ({
-  detectCommandObfuscation: vi.fn(() => ({
-    detected: false,
-    reasons: [],
-    matchedPatterns: [],
-  })),
-}));
-
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
 
 describe("processGatewayAllowlist", () => {

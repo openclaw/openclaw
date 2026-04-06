@@ -8,7 +8,7 @@ import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
   removePluginFromConfig,
-} from "openclaw/plugin-sdk/runtime";
+} from "openclaw/plugin-sdk/runtime-doctor";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
@@ -195,31 +195,31 @@ const MATRIX_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "matrix"],
     message:
-      "channels.matrix.allowPrivateNetwork is legacy; use channels.matrix.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.matrix.allowPrivateNetwork is legacy; use channels.matrix.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(isRecord(value) ? value : {}),
   },
   {
     path: ["channels", "matrix", "accounts"],
     message:
-      "channels.matrix.accounts.<id>.allowPrivateNetwork is legacy; use channels.matrix.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead (auto-migrated on load).",
+      'channels.matrix.accounts.<id>.allowPrivateNetwork is legacy; use channels.matrix.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
     match: hasLegacyMatrixAccountPrivateNetworkAliases,
   },
   {
     path: ["channels", "matrix", "groups"],
     message:
-      "channels.matrix.groups.<room>.allow is legacy; use channels.matrix.groups.<room>.enabled instead (auto-migrated on load).",
+      'channels.matrix.groups.<room>.allow is legacy; use channels.matrix.groups.<room>.enabled instead. Run "openclaw doctor --fix".',
     match: hasLegacyMatrixRoomMapAllowAliases,
   },
   {
     path: ["channels", "matrix", "rooms"],
     message:
-      "channels.matrix.rooms.<room>.allow is legacy; use channels.matrix.rooms.<room>.enabled instead (auto-migrated on load).",
+      'channels.matrix.rooms.<room>.allow is legacy; use channels.matrix.rooms.<room>.enabled instead. Run "openclaw doctor --fix".',
     match: hasLegacyMatrixRoomMapAllowAliases,
   },
   {
     path: ["channels", "matrix", "accounts"],
     message:
-      "channels.matrix.accounts.<id>.{groups,rooms}.<room>.allow is legacy; use channels.matrix.accounts.<id>.{groups,rooms}.<room>.enabled instead (auto-migrated on load).",
+      'channels.matrix.accounts.<id>.{groups,rooms}.<room>.allow is legacy; use channels.matrix.accounts.<id>.{groups,rooms}.<room>.enabled instead. Run "openclaw doctor --fix".',
     match: hasLegacyMatrixAccountRoomAllowAliases,
   },
 ];

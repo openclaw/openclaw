@@ -379,6 +379,19 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expectMainScopedDmClassification(prepared, { includeFromCheck: true });
   });
 
+  it("uses the concrete DM channel as the live reply target while keeping user-scoped routing", async () => {
+    const prepared = await prepareMessageWith(
+      createDmScopeMainSlackCtx(),
+      createSlackAccount(),
+      createMainScopedDmMessage({}),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.replyTarget).toBe("channel:D0ACP6B1T8V");
+    expect(prepared!.ctxPayload.To).toBe("user:U1");
+    expect(prepared!.ctxPayload.NativeChannelId).toBe("D0ACP6B1T8V");
+  });
+
   it("classifies D-prefix DMs when channel_type is missing", async () => {
     const message = createMainScopedDmMessage({});
     delete message.channel_type;
