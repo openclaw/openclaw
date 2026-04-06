@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 
 /** Cap embedded audio size to avoid multi‑MB payloads on the chat WebSocket. */
@@ -51,6 +52,9 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
 function resolveLocalAudioFileForEmbedding(raw: string): string | null {
   const resolved = resolveLocalMediaPathForEmbedding(raw);
   if (!resolved) {
+    return null;
+  }
+  if (!isAudioFileName(resolved)) {
     return null;
   }
   try {

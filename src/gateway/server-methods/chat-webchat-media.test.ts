@@ -43,6 +43,16 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     expect(blocks).toHaveLength(0);
   });
 
+  it("skips non-audio local files", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
+    const imagePath = path.join(tmpDir, "clip.png");
+    fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrl: imagePath }]);
+
+    expect(blocks).toHaveLength(0);
+  });
+
   it("dedupes repeated paths", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
     const audioPath = path.join(tmpDir, "clip.mp3");

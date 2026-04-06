@@ -1805,7 +1805,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               if (combinedReply) {
                 assistantContent.push({ type: "text", text: combinedReply });
               } else if (audioBlocks.length > 0) {
-                assistantContent.push({ type: "text", text: "TTS audio" });
+                assistantContent.push({ type: "text", text: "Audio reply" });
               }
               assistantContent.push(...audioBlocks);
 
@@ -1815,7 +1815,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   loadSessionEntry(sessionKey);
                 const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
                 const transcriptFallbackText =
-                  combinedReply || (audioBlocks.length > 0 ? "TTS audio" : "");
+                  combinedReply || (audioBlocks.length > 0 ? "Audio reply" : "");
                 const appended = appendAssistantTranscriptMessage({
                   message: transcriptFallbackText,
                   content: assistantContent,
