@@ -159,6 +159,10 @@ export type CompactEmbeddedPiSessionParams = {
   spawnedBy?: string | null;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Original message platform (e.g. "slack", "discord", "telegram"). */
+  sourceProvider?: string;
+  /** Human-readable sender display name. */
+  senderName?: string | null;
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
