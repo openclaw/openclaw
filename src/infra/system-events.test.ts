@@ -18,6 +18,7 @@ import {
   isSystemEventContextChanged,
   peekSystemEventEntries,
   peekSystemEvents,
+  removeExecEventsForSession,
   resetSystemEventsForTest,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
@@ -347,6 +348,70 @@ describe("drainWakeRequestedEvents", () => {
     const peeked = peekSystemEventEntries(key);
     expect(peeked[0].wakeRequested).toBe(true);
     expect(peeked[1].wakeRequested).toBeUndefined();
+  });
+});
+
+describe("removeExecEventsForSession", () => {
+  beforeEach(() => {
+    resetSystemEventsForTest();
+  });
+
+  it("removes exec-completion events matching the session id prefix", () => {
+    const key = "agent:main:test-remove-exec";
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    enqueueSystemEvent(`Exec completed (${sessionId.slice(0, 8)}, code 0)`, { sessionKey: key });
+    enqueueSystemEvent("Model switched to sonnet-4.6", { sessionKey: key });
+
+    const removed = removeExecEventsForSession(key, sessionId);
+    expect(removed).toBe(1);
+    expect(peekSystemEvents(key)).toEqual(["Model switched to sonnet-4.6"]);
+  });
+
+  it("returns 0 when no matching events exist", () => {
+    const key = "agent:main:test-remove-no-match";
+    enqueueSystemEvent("Model switched to sonnet-4.6", { sessionKey: key });
+
+    const removed = removeExecEventsForSession(key, "deadbeef-0000-0000-0000-000000000000");
+    expect(removed).toBe(0);
+    expect(peekSystemEvents(key)).toEqual(["Model switched to sonnet-4.6"]);
+  });
+
+  it("cleans up queue entry when all events are removed", () => {
+    const key = "agent:main:test-remove-cleanup";
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    enqueueSystemEvent(`Exec completed (${sessionId.slice(0, 8)}, code 0)`, { sessionKey: key });
+
+    removeExecEventsForSession(key, sessionId);
+    expect(hasSystemEvents(key)).toBe(false);
+  });
+
+  it("handles empty queue gracefully", () => {
+    const removed = removeExecEventsForSession("agent:main:test-empty", "abcdef12-0000");
+    expect(removed).toBe(0);
+  });
+
+  it("removes multiple events for the same session", () => {
+    const key = "agent:main:test-remove-multi";
+    const sessionId = "abcdef12-3456-7890-abcd-ef1234567890";
+    const prefix = sessionId.slice(0, 8);
+    enqueueSystemEvent(`Exec completed (${prefix}, code 0) :: output line`, { sessionKey: key });
+    enqueueSystemEvent("Unrelated event", { sessionKey: key });
+    enqueueSystemEvent(`Exec failed (${prefix}, signal SIGTERM)`, { sessionKey: key });
+
+    const removed = removeExecEventsForSession(key, sessionId);
+    expect(removed).toBe(2);
+    expect(peekSystemEvents(key)).toEqual(["Unrelated event"]);
+  });
+
+  it("does not affect events from other sessions", () => {
+    const key = "agent:main:test-remove-isolation";
+    const sessionA = "aaaaaaaa-0000-0000-0000-000000000000";
+    const sessionB = "bbbbbbbb-0000-0000-0000-000000000000";
+    enqueueSystemEvent(`Exec completed (${sessionA.slice(0, 8)}, code 0)`, { sessionKey: key });
+    enqueueSystemEvent(`Exec completed (${sessionB.slice(0, 8)}, code 1)`, { sessionKey: key });
+
+    removeExecEventsForSession(key, sessionA);
+    expect(peekSystemEvents(key)).toEqual([`Exec completed (${sessionB.slice(0, 8)}, code 1)`]);
   });
 });
 
