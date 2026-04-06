@@ -28,6 +28,6 @@
 
 void onboarding_check_and_show(void);
 void onboarding_show(void);
+void onboarding_refresh(void);
 void onboarding_reset(void);
 int onboarding_get_seen_version(void);
-

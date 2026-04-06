@@ -23,6 +23,7 @@
 typedef enum {
     STATE_NEEDS_SETUP,
     STATE_NEEDS_GATEWAY_INSTALL,
+    STATE_NEEDS_ONBOARDING,
     STATE_USER_SYSTEMD_UNAVAILABLE,
     STATE_SYSTEM_UNSUPPORTED,
     STATE_CONFIG_INVALID,
@@ -68,16 +69,26 @@ typedef struct {
     gboolean auth_ok;       /* Auth handshake succeeded */
     gboolean config_valid;  /* Config loaded successfully */
 
-    char *endpoint_host;
+    gchar *endpoint_host;
     int endpoint_port;
-    char *gateway_version;
-    char *auth_source;
-    char *last_error;
+    gchar *gateway_version;
+    gchar *auth_source;
+    gchar *last_error;
 
     gboolean setup_detected;
 
     gboolean config_audit_ok;
     int config_issues_count;
+
+    gboolean has_model_config; /* diagnostic only: config has model/provider for runtime */
+
+    /* Feature B: Wizard onboard marker fields */
+    gboolean has_wizard_onboard_marker;
+    gboolean wizard_is_local;
+    gchar *wizard_last_run_command;
+    gchar *wizard_last_run_at;
+    gchar *wizard_last_run_mode;
+    gchar *wizard_marker_fail_reason;
 } HealthState;
 
 /* ---------- Runtime Mode (proof-oriented) ----------

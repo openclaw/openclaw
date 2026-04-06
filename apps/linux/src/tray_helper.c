@@ -51,9 +51,9 @@ static GtkWidget *open_dashboard_item = NULL;
 static GtkWidget *start_item = NULL;
 static GtkWidget *stop_item = NULL;
 static GtkWidget *restart_item = NULL;
+static GtkWidget *refresh_item = NULL;
 
 /* App navigation */
-static GtkWidget *diagnostics_item = NULL;
 static GtkWidget *settings_item = NULL;
 
 static void send_action(const char *action) {
@@ -67,7 +67,6 @@ static void on_start_clicked(GtkMenuItem *item, gpointer data) { (void)item; (vo
 static void on_stop_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("STOP"); }
 static void on_restart_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("RESTART"); }
 static void on_refresh_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("REFRESH"); }
-static void on_diagnostics_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("DIAGNOSTICS"); }
 static void on_settings_clicked(GtkMenuItem *item, gpointer data) { (void)item; (void)data; send_action("OPEN_SETTINGS"); }
 static void on_quit_clicked(GtkMenuItem *item, gpointer data) { 
     (void)item; (void)data;
@@ -179,17 +178,13 @@ int main(int argc, char **argv) {
     gtk_widget_set_sensitive(restart_item, FALSE);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), restart_item);
 
-    GtkWidget *refresh_item = gtk_menu_item_new_with_label("Refresh Status");
+    refresh_item = gtk_menu_item_new_with_label("Refresh Status");
     g_signal_connect(refresh_item, "activate", G_CALLBACK(on_refresh_clicked), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), refresh_item);
 
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 
     /* ── App navigation ── */
-    diagnostics_item = gtk_menu_item_new_with_label("Diagnostics");
-    g_signal_connect(diagnostics_item, "activate", G_CALLBACK(on_diagnostics_clicked), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), diagnostics_item);
-
     settings_item = gtk_menu_item_new_with_label("Settings");
     g_signal_connect(settings_item, "activate", G_CALLBACK(on_settings_clicked), NULL);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), settings_item);

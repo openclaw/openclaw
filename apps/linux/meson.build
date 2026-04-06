@@ -103,8 +103,20 @@ test_runtime_mode_pres_exe = executable('test_runtime_mode_presentation',
   dependencies : [glib_dep])
 test('runtime_mode_presentation', test_runtime_mode_pres_exe)
 
+test_config_exe = executable('test_config',
+  ['tests/test_config.c', 'src/gateway_config.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('config', test_config_exe)
+
+test_seams_exe = executable('test_seams',
+  ['tests/test_seams.c', 'src/test_seams.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('seams', test_seams_exe)
+
 test_gateway_exe = executable('test_gateway',
-  ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c', 'src/log.c'],
+  ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c',
+   'src/state.c', 'src/runtime_mode.c', 'src/readiness.c', 'src/log.c',
+   'src/test_seams.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('gateway', test_gateway_exe)
 

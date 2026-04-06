@@ -248,6 +248,51 @@ static gboolean validate_auth(GatewayConfig *config) {
     return TRUE;
 }
 
+/*
+ * Detect if the config has the baseline model/provider configuration
+ * that indicates onboarding has established runtime selections.
+ * Feature B: onboarding detection based on agents.default.model or
+ * agents.default.modelProvider presence.
+ */
+static gboolean detect_has_model_config(JsonObject *root_obj) {
+    if (!root_obj) return FALSE;
+
+    /* Check agents.default object for model or modelProvider */
+    if (json_object_has_member(root_obj, "agents")) {
+        JsonNode *agents_node = json_object_get_member(root_obj, "agents");
+        if (JSON_NODE_HOLDS_OBJECT(agents_node)) {
+            JsonObject *agents_obj = json_node_get_object(agents_node);
+            if (json_object_has_member(agents_obj, "default")) {
+                JsonNode *default_node = json_object_get_member(agents_obj, "default");
+                if (JSON_NODE_HOLDS_OBJECT(default_node)) {
+                    JsonObject *default_obj = json_node_get_object(default_node);
+                    /* Presence of model or modelProvider indicates onboarding completed */
+                    if (json_object_has_member(default_obj, "model")) {
+                        JsonNode *model_node = json_object_get_member(default_obj, "model");
+                        if (json_node_get_value_type(model_node) == G_TYPE_STRING) {
+                            const gchar *model = json_node_get_string(model_node);
+                            if (model && model[0] != '\0') {
+                                return TRUE;
+                            }
+                        }
+                    }
+                    if (json_object_has_member(default_obj, "modelProvider")) {
+                        JsonNode *provider_node = json_object_get_member(default_obj, "modelProvider");
+                        if (json_node_get_value_type(provider_node) == G_TYPE_STRING) {
+                            const gchar *provider = json_node_get_string(provider_node);
+                            if (provider && provider[0] != '\0') {
+                                return TRUE;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return FALSE;
+}
+
 GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
     GatewayConfig *config = g_new0(GatewayConfig, 1);
     config->host = g_strdup(GATEWAY_DEFAULT_HOST);
@@ -435,7 +480,11 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
                                     g_strcmp0(bind_str, "::") == 0 ||
                                     g_strcmp0(bind_str, "::0") == 0);
             if (bind_str && bind_str[0] != '\0' && !is_wildcard) {
-                config->host = g_strdup(bind_str);
+                if (g_strcmp0(bind_str, "loopback") == 0) {
+                    config->host = g_strdup("127.0.0.1");
+                } else {
+                    config->host = g_strdup(bind_str);
+                }
             }
         }
     }
@@ -516,9 +565,63 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
 
     config->valid = TRUE;
     config->error_code = GW_CFG_OK;
+
+    /* Feature B: Detect if config has model/provider (diagnostic only) */
+    config->has_model_config = detect_has_model_config(root_obj);
+
+    /* Feature B: Detect if wizard onboarding is complete */
+    if (json_object_has_member(root_obj, "wizard")) {
+        JsonNode *wizard_node = json_object_get_member(root_obj, "wizard");
+        if (JSON_NODE_HOLDS_OBJECT(wizard_node)) {
+            JsonObject *wizard_obj = json_node_get_object(wizard_node);
+            
+            const gchar *cmd = NULL;
+            if (json_object_has_member(wizard_obj, "lastRunCommand")) {
+                JsonNode *cmd_node = json_object_get_member(wizard_obj, "lastRunCommand");
+                if (json_node_get_value_type(cmd_node) == G_TYPE_STRING) {
+                    cmd = json_node_get_string(cmd_node);
+                    config->wizard_last_run_command = g_strdup(cmd);
+                }
+            }
+            
+            const gchar *at = NULL;
+            if (json_object_has_member(wizard_obj, "lastRunAt")) {
+                JsonNode *at_node = json_object_get_member(wizard_obj, "lastRunAt");
+                if (json_node_get_value_type(at_node) == G_TYPE_STRING) {
+                    at = json_node_get_string(at_node);
+                    config->wizard_last_run_at = g_strdup(at);
+                }
+            }
+            
+            if (json_object_has_member(wizard_obj, "lastRunMode")) {
+                JsonNode *mode_node = json_object_get_member(wizard_obj, "lastRunMode");
+                if (json_node_get_value_type(mode_node) == G_TYPE_STRING) {
+                    const gchar *mode = json_node_get_string(mode_node);
+                    config->wizard_last_run_mode = g_strdup(mode);
+                    if (g_strcmp0(mode, "local") == 0) {
+                        config->wizard_is_local = TRUE;
+                    }
+                }
+            }
+            
+            if (!cmd || g_strcmp0(cmd, "onboard") != 0) {
+                config->wizard_marker_fail_reason = g_strdup("lastRunCommand is not 'onboard'");
+            } else if (!at || at[0] == '\0') {
+                config->wizard_marker_fail_reason = g_strdup("lastRunAt missing or empty");
+            } else {
+                config->has_wizard_onboard_marker = TRUE;
+            }
+        } else {
+            config->wizard_marker_fail_reason = g_strdup("wizard object missing");
+        }
+    } else {
+        config->wizard_marker_fail_reason = g_strdup("wizard object missing");
+    }
+
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
-              "gateway_config_load valid host=%s port=%d auth_mode=%s has_token=%d basePath=%s",
+              "gateway_config_load valid host=%s port=%d auth_mode=%s has_token=%d has_model_config=%d has_wizard=%d basePath=%s",
               config->host, config->port, config->auth_mode, config->token != NULL,
+              config->has_model_config, config->has_wizard_onboard_marker,
               config->control_ui_base_path ? config->control_ui_base_path : "(default)");
     return config;
 }
@@ -534,6 +637,12 @@ void gateway_config_free(GatewayConfig *config) {
     g_free(config->control_ui_base_path);
     g_free(config->config_path);
     g_free(config->error);
+
+    g_free(config->wizard_last_run_command);
+    g_free(config->wizard_last_run_at);
+    g_free(config->wizard_last_run_mode);
+    g_free(config->wizard_marker_fail_reason);
+
     g_free(config);
 }
 
@@ -595,7 +704,24 @@ gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *
     /* controlUi.basePath */
     if (g_strcmp0(a->control_ui_base_path, b->control_ui_base_path) != 0) return FALSE;
 
+    /* Feature B: Wizard fields */
+    if (a->has_model_config != b->has_model_config) return FALSE;
+    if (a->has_wizard_onboard_marker != b->has_wizard_onboard_marker) return FALSE;
+    if (a->wizard_is_local != b->wizard_is_local) return FALSE;
+    if (g_strcmp0(a->wizard_last_run_command, b->wizard_last_run_command) != 0) return FALSE;
+    if (g_strcmp0(a->wizard_last_run_at, b->wizard_last_run_at) != 0) return FALSE;
+    if (g_strcmp0(a->wizard_last_run_mode, b->wizard_last_run_mode) != 0) return FALSE;
+    if (g_strcmp0(a->wizard_marker_fail_reason, b->wizard_marker_fail_reason) != 0) return FALSE;
+
     return TRUE;
+}
+
+gchar* gateway_config_resolve_path(const GatewayConfigContext *ctx) {
+    return resolve_config_path(ctx);
+}
+
+void gateway_config_free_resolved_path(gchar *path) {
+    g_free(path);
 }
 
 /*

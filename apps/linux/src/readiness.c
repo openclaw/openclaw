@@ -25,13 +25,19 @@ void readiness_evaluate(AppState state, const HealthState *health,
     case STATE_NEEDS_SETUP:
         out->classification = "Setup Required";
         out->missing = "No OpenClaw configuration or state directory detected.";
-        out->next_action = "Run 'openclaw setup' to initialize the OpenClaw environment.";
+        out->next_action = "Run 'openclaw onboard --install-daemon' to set up OpenClaw.";
         break;
 
     case STATE_NEEDS_GATEWAY_INSTALL:
-        out->classification = "Gateway Not Installed";
-        out->missing = "OpenClaw is configured, but no gateway service is installed.";
-        out->next_action = "Run 'openclaw gateway install' to install the gateway service.";
+        out->classification = "Gateway Service Missing";
+        out->missing = "The expected user systemd service path is not active and the unit file is missing.";
+        out->next_action = "The gateway service is not installed. Run 'openclaw onboard --install-daemon' to set up OpenClaw.";
+        break;
+
+    case STATE_NEEDS_ONBOARDING:
+        out->classification = "Bootstrap Incomplete";
+        out->missing = "OpenClaw bootstrap is incomplete. The onboarding wizard has not been run.";
+        out->next_action = "Run 'openclaw onboard --install-daemon' to complete setup.";
         break;
 
     case STATE_USER_SYSTEMD_UNAVAILABLE:
@@ -43,7 +49,7 @@ void readiness_evaluate(AppState state, const HealthState *health,
     case STATE_SYSTEM_UNSUPPORTED:
         out->classification = "System Service (Unsupported)";
         out->missing = "A system-scope gateway unit was found, but only user-scope services are supported.";
-        out->next_action = "Run 'openclaw gateway install' to install a user-scope service.";
+        out->next_action = "Use a user-scope OpenClaw service instead of a system-scope unit.";
         break;
 
     case STATE_CONFIG_INVALID:

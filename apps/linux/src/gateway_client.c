@@ -19,7 +19,9 @@
 #include "gateway_ws.h"
 #include "state.h"
 #include "log.h"
+#include "test_seams.h"
 #include <string.h>
+#include <gio/gio.h>
 
 typedef struct {
     guint generation;
@@ -37,7 +39,17 @@ static gboolean current_setup_detected = FALSE;
 static guint health_poll_timer_id = 0;
 #define HEALTH_POLL_INTERVAL_S 10
 
+/* Config monitor state for live config discovery/reload (Feature A) */
+static GFileMonitor *config_dir_monitor = NULL;
+static GFileMonitor *config_file_monitor = NULL;
+static gchar *monitored_config_path = NULL;
+static gchar *monitored_config_dir = NULL;
+static guint config_monitor_refresh_source_id = 0;
+#define CONFIG_MONITOR_DEBOUNCE_MS 250
+
 static void do_health_check(void);
+static void config_monitor_clear(void);
+static void config_monitor_rearm(void);
 
 static GatewayConfig* load_config_with_context(void) {
     GatewayConfigContext ctx = {0};
@@ -81,6 +93,15 @@ static void publish_health_state(gboolean http_ok, HttpProbeResult http_probe_re
     hs.auth_ok = auth_ok;
     hs.config_valid = current_config ? current_config->valid : FALSE;
     hs.setup_detected = current_setup_detected;
+    hs.has_model_config = current_config ? current_config->has_model_config : FALSE;
+    
+    /* Feature B: Wizard onboard marker fields */
+    hs.has_wizard_onboard_marker = current_config ? current_config->has_wizard_onboard_marker : FALSE;
+    hs.wizard_is_local = current_config ? current_config->wizard_is_local : FALSE;
+    hs.wizard_last_run_command = current_config ? current_config->wizard_last_run_command : NULL;
+    hs.wizard_last_run_at = current_config ? current_config->wizard_last_run_at : NULL;
+    hs.wizard_last_run_mode = current_config ? current_config->wizard_last_run_mode : NULL;
+    hs.wizard_marker_fail_reason = current_config ? current_config->wizard_marker_fail_reason : NULL;
 
     /* TODO(MVP deferral): We do not populate config_audit_ok or config_issues_count 
      * here because those are not yet extracted or tracked in the Linux MVP.
@@ -296,12 +317,263 @@ static void detect_setup_presence(const GatewayConfig *config) {
     }
 }
 
+/* ── Config monitor helpers (Feature A) ── */
+
+static gboolean on_config_monitor_debounced_refresh(gpointer user_data) {
+    (void)user_data;
+    config_monitor_refresh_source_id = 0;
+    /* Rearm first to ensure path watch state stays correct, then refresh */
+    config_monitor_rearm();
+    gateway_client_refresh();
+    return G_SOURCE_REMOVE;
+}
+
+static void config_monitor_schedule_refresh(void) {
+    if (config_monitor_refresh_source_id > 0) {
+        /* Already scheduled, do nothing (debounce) */
+        return;
+    }
+    config_monitor_refresh_source_id = g_timeout_add(CONFIG_MONITOR_DEBOUNCE_MS,
+                                                      on_config_monitor_debounced_refresh, NULL);
+}
+
+static void on_config_dir_changed(GFileMonitor *monitor, GFile *file, GFile *other_file,
+                                   GFileMonitorEvent event_type, gpointer user_data) {
+    (void)monitor;
+    (void)other_file;
+    (void)user_data;
+
+    /* Only react if we have a target config basename to compare against */
+    if (!monitored_config_path || !monitored_config_dir) {
+        config_monitor_schedule_refresh();
+        return;
+    }
+
+    gchar *changed_path = g_file_get_path(file);
+    if (!changed_path) return;
+
+    gchar *target_dir = g_path_get_dirname(monitored_config_path);
+    gboolean relevant = FALSE;
+
+    /* Feature A: Ancestor fallback monitoring
+     * If we are monitoring an ancestor (e.g. /home/user) because the target dir
+     * (e.g. /home/user/.openclaw) didn't exist, we must react to the creation
+     * of the target dir or any intermediate dir.
+     */
+    if (g_strcmp0(monitored_config_dir, target_dir) != 0) {
+        /* We are monitoring an ancestor. React if the changed path is a prefix
+         * of our ultimate target config path. */
+        if (g_str_has_prefix(monitored_config_path, changed_path)) {
+            relevant = TRUE;
+        }
+    } else {
+        /* We are monitoring the actual config dir. React only to the target config file. */
+        if (g_strcmp0(changed_path, monitored_config_path) == 0) {
+            relevant = TRUE;
+        }
+    }
+
+    g_free(target_dir);
+    g_free(changed_path);
+
+    if (relevant) {
+        switch (event_type) {
+        case G_FILE_MONITOR_EVENT_CREATED:
+        case G_FILE_MONITOR_EVENT_DELETED:
+        case G_FILE_MONITOR_EVENT_CHANGED:
+        case G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT:
+        case G_FILE_MONITOR_EVENT_RENAMED:
+        case G_FILE_MONITOR_EVENT_MOVED_IN:
+        case G_FILE_MONITOR_EVENT_MOVED_OUT:
+        case G_FILE_MONITOR_EVENT_ATTRIBUTE_CHANGED:
+            OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY, "Config dir monitor event %d triggered refresh", event_type);
+            config_monitor_schedule_refresh();
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+static void on_config_file_changed(GFileMonitor *monitor, GFile *file, GFile *other_file,
+                                    GFileMonitorEvent event_type, gpointer user_data) {
+    (void)monitor;
+    (void)file;
+    (void)other_file;
+    (void)user_data;
+
+    switch (event_type) {
+    case G_FILE_MONITOR_EVENT_CHANGED:
+    case G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT:
+    case G_FILE_MONITOR_EVENT_DELETED:
+    case G_FILE_MONITOR_EVENT_RENAMED:
+    case G_FILE_MONITOR_EVENT_ATTRIBUTE_CHANGED:
+        OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY, "Config file monitor event %d triggered refresh", event_type);
+        config_monitor_schedule_refresh();
+        break;
+    default:
+        break;
+    }
+}
+
+static void config_monitor_clear(void) {
+    /* Remove pending debounce source */
+    if (config_monitor_refresh_source_id > 0) {
+        g_source_remove(config_monitor_refresh_source_id);
+        config_monitor_refresh_source_id = 0;
+    }
+
+    /* Disconnect and unref monitors */
+    if (config_dir_monitor) {
+        g_file_monitor_cancel(config_dir_monitor);
+        g_object_unref(config_dir_monitor);
+        config_dir_monitor = NULL;
+    }
+    if (config_file_monitor) {
+        g_file_monitor_cancel(config_file_monitor);
+        g_object_unref(config_file_monitor);
+        config_file_monitor = NULL;
+    }
+
+    /* Free tracked strings */
+    g_free(monitored_config_path);
+    monitored_config_path = NULL;
+    g_free(monitored_config_dir);
+    monitored_config_dir = NULL;
+}
+
+static void config_monitor_rearm(void) {
+    /* Resolve effective config path using same logic as load */
+    gchar *new_config_path = NULL;
+    gchar *new_config_dir = NULL;
+
+    /* Build context from current runtime */
+    GatewayConfigContext ctx = {0};
+    gchar *derived_state_dir = NULL;
+    gchar *derived_profile = NULL;
+    gchar *derived_config_path = NULL;
+    systemd_get_runtime_context(&derived_profile, &derived_state_dir, &derived_config_path);
+    if (derived_config_path) ctx.explicit_config_path = derived_config_path;
+    if (derived_state_dir) ctx.effective_state_dir = derived_state_dir;
+    if (derived_profile) ctx.profile = derived_profile;
+
+    new_config_path = gateway_config_resolve_path(&ctx);
+    g_free(derived_config_path);
+    g_free(derived_state_dir);
+    g_free(derived_profile);
+
+    if (!new_config_path) {
+        gateway_config_free_resolved_path(new_config_path);
+        return;
+    }
+
+    new_config_dir = g_path_get_dirname(new_config_path);
+
+    /* Feature A: Ancestor fallback monitoring
+     * If the config dir doesn't exist (e.g. fresh machine pre-onboarding),
+     * walk up to the nearest existing ancestor and monitor that.
+     */
+    gchar *effective_monitor_dir = new_config_dir;
+    gchar *ancestor_dir = NULL;
+    if (!g_file_test(new_config_dir, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_DIR)) {
+        ancestor_dir = find_nearest_existing_ancestor(new_config_dir);
+        if (ancestor_dir) {
+            effective_monitor_dir = ancestor_dir;
+        }
+    }
+
+    /* Check if we need to rearm (path changed or first setup) */
+    gboolean dir_changed = g_strcmp0(effective_monitor_dir, monitored_config_dir) != 0;
+    gboolean file_changed = g_strcmp0(new_config_path, monitored_config_path) != 0;
+
+    /* Feature A: Fix rearm logic bug - must account for file creation/deletion
+     * Same paths are NOT enough to skip rearm if file existence changed.
+     * We need to ensure file monitor state matches current file existence.
+     */
+    gboolean file_exists = g_file_test(new_config_path, G_FILE_TEST_EXISTS);
+    gboolean need_file_monitor = file_exists;
+    gboolean have_file_monitor = (config_file_monitor != NULL);
+    gboolean have_dir_monitor = (config_dir_monitor != NULL);
+
+    /* Use pure helper for skip decision - shared with tests */
+    if (config_monitor_can_skip_rearm(
+            effective_monitor_dir, monitored_config_dir,
+            new_config_path, monitored_config_path,
+            have_dir_monitor, need_file_monitor, have_file_monitor)) {
+        /* Same paths, dir monitor exists, and file monitor state matches need -
+         * avoid unnecessary churn */
+        g_free(new_config_path);
+        g_free(new_config_dir);
+        g_free(ancestor_dir);
+        return;
+    }
+
+    /* Clear old monitors */
+    if (dir_changed || !have_dir_monitor) {
+        if (config_dir_monitor) {
+            g_file_monitor_cancel(config_dir_monitor);
+            g_object_unref(config_dir_monitor);
+            config_dir_monitor = NULL;
+        }
+        g_free(monitored_config_dir);
+        monitored_config_dir = g_strdup(effective_monitor_dir);
+
+        /* Set up new dir monitor */
+        if (monitored_config_dir) {
+            GFile *dir_file = g_file_new_for_path(monitored_config_dir);
+            GError *error = NULL;
+            config_dir_monitor = g_file_monitor_directory(dir_file, G_FILE_MONITOR_WATCH_MOVES, NULL, &error);
+            if (config_dir_monitor) {
+                g_signal_connect(config_dir_monitor, "changed", G_CALLBACK(on_config_dir_changed), NULL);
+            } else {
+                OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "Failed to monitor config dir: %s", error ? error->message : "unknown");
+                g_clear_error(&error);
+            }
+            g_object_unref(dir_file);
+        }
+    }
+
+    g_free(new_config_dir);
+    g_free(ancestor_dir);
+
+    /* Use same decision logic as helper for consistency */
+    gboolean need_file_reconfig = file_changed || (need_file_monitor != have_file_monitor);
+    if (need_file_reconfig) {
+        if (config_file_monitor) {
+            g_file_monitor_cancel(config_file_monitor);
+            g_object_unref(config_file_monitor);
+            config_file_monitor = NULL;
+        }
+        g_free(monitored_config_path);
+        monitored_config_path = new_config_path;
+
+        /* Set up new file monitor only if file exists */
+        if (need_file_monitor && monitored_config_path) {
+            GFile *file = g_file_new_for_path(monitored_config_path);
+            GError *error = NULL;
+            config_file_monitor = g_file_monitor_file(file, G_FILE_MONITOR_WATCH_MOVES, NULL, &error);
+            if (config_file_monitor) {
+                g_signal_connect(config_file_monitor, "changed", G_CALLBACK(on_config_file_changed), NULL);
+            } else {
+                OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "Failed to monitor config file: %s", error ? error->message : "unknown");
+                g_clear_error(&error);
+            }
+            g_object_unref(file);
+        }
+    } else {
+        g_free(new_config_path);
+    }
+}
+
 void gateway_client_init(void) {
     if (initialized) return;
     initialized = TRUE;
 
     gateway_http_init();
     gateway_ws_init();
+
+    /* Start monitoring config file for live reload (Feature A) */
+    config_monitor_rearm();
 
     /* Load config and detect setup presence */
     current_config = load_config_with_context();
@@ -369,6 +641,9 @@ void gateway_client_refresh(void) {
 void gateway_client_shutdown(void) {
     if (!initialized) return;
     initialized = FALSE;
+
+    /* Stop monitoring config file (Feature A) */
+    config_monitor_clear();
 
     teardown_transport();
     gateway_ws_shutdown();

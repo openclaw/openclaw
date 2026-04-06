@@ -42,4 +42,24 @@ gint session_target_to_index(const gchar *target);
 int web_login_start_payload_has_qr(JsonObject *payload_obj,
                                       const gchar **out_qr_data_url);
 
+/* ── Config monitor rearm decision logic (from gateway_client.c) ──── */
+
+/* Pure helper for testing rearm decision logic without GFileMonitor machinery.
+ * Returns TRUE if rearm can be skipped given the current state.
+ */
+gboolean config_monitor_can_skip_rearm(
+    const gchar *new_dir,
+    const gchar *old_dir,
+    const gchar *new_path,
+    const gchar *old_path,
+    gboolean have_dir_monitor,
+    gboolean need_file_monitor,
+    gboolean have_file_monitor);
+
+/* Pure helper to find the nearest existing ancestor directory.
+ * Used for fallback monitoring when the config directory doesn't exist yet.
+ * Returns a newly allocated string with the path, or NULL if none found.
+ */
+gchar* find_nearest_existing_ancestor(const gchar *path);
+
 #endif /* TEST_SEAMS_H */

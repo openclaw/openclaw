@@ -1180,8 +1180,37 @@ static void populate_env_checks(GtkWidget *container) {
     g_autofree gchar *profile = NULL;
     systemd_get_runtime_context(&profile, &state_dir, &config_path);
 
+    GatewayConfig *cfg = gateway_client_get_config();
+
+    GatewayConfigContext ctx = {0};
+    ctx.explicit_config_path = config_path;
+    ctx.effective_state_dir = state_dir;
+    ctx.profile = profile;
+
+    g_autofree gchar *resolved_config_path = gateway_config_resolve_path(&ctx);
+
+    const gchar *effective_config_path = NULL;
+    if (cfg && cfg->config_path && cfg->config_path[0] != '\0') {
+        effective_config_path = cfg->config_path;
+    } else if (resolved_config_path && resolved_config_path[0] != '\0') {
+        effective_config_path = resolved_config_path;
+    } else if (config_path && config_path[0] != '\0') {
+        effective_config_path = config_path;
+    }
+
+    g_autofree gchar *derived_state_dir = NULL;
+    const gchar *effective_state_dir = NULL;
+    if (state_dir && state_dir[0] != '\0') {
+        effective_state_dir = state_dir;
+    } else if (effective_config_path && effective_config_path[0] != '\0') {
+        derived_state_dir = g_path_get_dirname(effective_config_path);
+        if (derived_state_dir && derived_state_dir[0] != '\0') {
+            effective_state_dir = derived_state_dir;
+        }
+    }
+
     EnvironmentCheckResult ecr;
-    environment_check_build(sys, config_path, state_dir, &ecr);
+    environment_check_build(sys, effective_config_path, effective_state_dir, &ecr);
 
     for (int i = 0; i < ecr.count; i++) {
         GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -1476,6 +1505,7 @@ static gboolean on_refresh_tick(gpointer user_data) {
         refresh_debug_content();
         /* RPC-backed sections refresh on activation + TTL, not every tick */
         refresh_active_rpc_section(active_section);
+        
         return G_SOURCE_CONTINUE;
     }
     refresh_timer_id = 0;
@@ -1597,7 +1627,17 @@ void app_window_show(void) {
 
     /* Content pane */
     GtkWidget *stack = build_content_stack();
-    AdwNavigationPage *content_page = adw_navigation_page_new(stack, "Dashboard");
+    
+    /* Keep the headerbar but remove the custom close button */
+    GtkWidget *header_bar = adw_header_bar_new();
+    
+    GtkWidget *content_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(content_vbox), header_bar);
+    gtk_widget_set_vexpand(stack, TRUE);
+    gtk_box_append(GTK_BOX(content_vbox), stack);
+    
+    AdwNavigationPage *content_page = adw_navigation_page_new(content_vbox, "Dashboard");
+    
     adw_navigation_split_view_set_content(split, content_page);
 
     adw_application_window_set_content(ADW_APPLICATION_WINDOW(main_window), GTK_WIDGET(split));

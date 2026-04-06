@@ -13,6 +13,9 @@
 
 #include <gtk/gtk.h>
 #include <adwaita.h>
+#include "gateway_client.h"
+#include "gateway_config.h"
+#include "diagnostics.h"
 #include "state.h"
 #include "readiness.h"
 
@@ -98,8 +101,29 @@ gchar* build_diagnostics_text(void) {
 
     /* Configuration */
     g_string_append_printf(out, "\n=== Configuration ===\n");
-    g_string_append_printf(out, "Config Valid: %s\n", health->config_valid ? "Yes" : "No");
+    const GatewayConfig *cfg = gateway_client_get_config();
+    g_string_append_printf(out, "Config Path: %s\n", 
+        cfg && cfg->config_path ? cfg->config_path : "N/A");
+    
+    gboolean config_file_exists = FALSE;
+    if (cfg && cfg->config_path) {
+        config_file_exists = g_file_test(cfg->config_path, G_FILE_TEST_EXISTS);
+    }
+    g_string_append_printf(out, "Config Exists: %s\n", config_file_exists ? "Yes" : "No");
     g_string_append_printf(out, "Setup Detected: %s\n", health->setup_detected ? "Yes" : "No");
+    g_string_append_printf(out, "Config Valid: %s\n", health->config_valid ? "Yes" : "No");
+    
+    g_string_append_printf(out, "Wizard Onboard Marker: %s\n", health->has_wizard_onboard_marker ? "Yes" : "No");
+    if (!health->has_wizard_onboard_marker) {
+        g_string_append_printf(out, "  Reason: %s\n", health->wizard_marker_fail_reason ? health->wizard_marker_fail_reason : "N/A");
+    }
+    
+    g_string_append_printf(out, "wizard.lastRunCommand: %s\n", health->wizard_last_run_command ? health->wizard_last_run_command : "N/A");
+    g_string_append_printf(out, "wizard.lastRunAt: %s\n", health->wizard_last_run_at ? health->wizard_last_run_at : "N/A");
+    g_string_append_printf(out, "wizard.lastRunMode: %s\n", health->wizard_last_run_mode ? health->wizard_last_run_mode : "N/A");
+    g_string_append_printf(out, "Has Model Config: %s (diagnostic only)\n", health->has_model_config ? "Yes" : "No");
+    
+    g_string_append_printf(out, "Service Installed: %s\n", sys->installed ? "Yes" : "No");
     g_string_append_printf(out, "Config Issues: %d\n", health->config_issues_count);
     g_string_append_printf(out, "Last Error: %s\n", health->last_error ? health->last_error : "None");
 
@@ -146,14 +170,6 @@ static void on_copy_clicked(GtkButton *btn, gpointer user_data) {
     }
 }
 
-static void on_close_clicked(GtkButton *btn, gpointer user_data) {
-    (void)btn;
-    (void)user_data;
-    if (diag_window) {
-        gtk_window_destroy(GTK_WINDOW(diag_window));
-    }
-}
-
 static void on_diag_window_close(GtkWindow *window, gpointer user_data) {
     (void)window;
     (void)user_data;
@@ -183,12 +199,24 @@ void diagnostics_show_window(void) {
     gtk_window_set_title(GTK_WINDOW(diag_window), "OpenClaw Diagnostics");
     gtk_window_set_default_size(GTK_WINDOW(diag_window), 550, 550);
 
+    GtkWidget *content_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    
+    GtkWidget *header_bar = adw_header_bar_new();
+    GtkWidget *close_header_btn = gtk_button_new_from_icon_name("window-close-symbolic");
+    gtk_widget_set_valign(close_header_btn, GTK_ALIGN_CENTER);
+    g_signal_connect_swapped(close_header_btn, "clicked", G_CALLBACK(gtk_window_destroy), diag_window);
+    adw_header_bar_pack_end(ADW_HEADER_BAR(header_bar), close_header_btn);
+    gtk_box_append(GTK_BOX(content_vbox), header_bar);
+
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_set_margin_start(vbox, 20);
     gtk_widget_set_margin_end(vbox, 20);
     gtk_widget_set_margin_top(vbox, 20);
     gtk_widget_set_margin_bottom(vbox, 20);
-    adw_window_set_content(ADW_WINDOW(diag_window), vbox);
+    gtk_widget_set_vexpand(vbox, TRUE);
+    gtk_box_append(GTK_BOX(content_vbox), vbox);
+
+    adw_window_set_content(ADW_WINDOW(diag_window), content_vbox);
 
     gchar *info_text = build_diagnostics_text();
     
@@ -216,7 +244,7 @@ void diagnostics_show_window(void) {
     g_signal_connect(copy_btn, "clicked", G_CALLBACK(on_copy_clicked), NULL);
     
     GtkWidget *close_btn = gtk_button_new_with_label("Close");
-    g_signal_connect(close_btn, "clicked", G_CALLBACK(on_close_clicked), NULL);
+    g_signal_connect_swapped(close_btn, "clicked", G_CALLBACK(gtk_window_destroy), diag_window);
 
     gtk_box_append(GTK_BOX(action_row), copy_btn);
     gtk_box_append(GTK_BOX(action_row), close_btn);

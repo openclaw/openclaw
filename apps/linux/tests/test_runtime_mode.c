@@ -25,6 +25,9 @@ void tray_update_from_state(AppState state) {
     (void)state;
 }
 void state_on_gateway_refresh_requested(void) {}
+void onboarding_refresh(void) {
+    /* No-op in tests */
+}
 
 /* ── Scenario A: Fresh machine, no data ── */
 
@@ -51,6 +54,7 @@ static void test_runtime_mode_setup_done_no_unit(void) {
     hs.last_updated = 12345;
     hs.setup_detected = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_NONE);
@@ -103,6 +107,8 @@ static void test_runtime_mode_expected_service_healthy(void) {
     hs.rpc_ok = TRUE;
     hs.auth_ok = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.has_wizard_onboard_marker = TRUE; /* Required for STATE_RUNNING */
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_EXPECTED_SERVICE_HEALTHY);
@@ -127,6 +133,8 @@ static void test_runtime_mode_healthy_outside_service_inactive(void) {
     hs.rpc_ok = TRUE;
     hs.auth_ok = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
@@ -150,6 +158,8 @@ static void test_runtime_mode_healthy_outside_service_not_installed(void) {
     hs.rpc_ok = TRUE;
     hs.auth_ok = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
@@ -172,6 +182,7 @@ static void test_runtime_mode_listener_unresponsive(void) {
     hs.http_probe_result = HTTP_PROBE_TIMED_OUT_AFTER_CONNECT;
     hs.ws_connected = FALSE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_LISTENER_PRESENT_UNRESPONSIVE);
@@ -194,6 +205,7 @@ static void test_runtime_mode_listener_unverified(void) {
     hs.http_probe_result = HTTP_PROBE_INVALID_RESPONSE;
     hs.ws_connected = FALSE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_LISTENER_PRESENT_UNVERIFIED);
@@ -216,6 +228,7 @@ static void test_runtime_mode_service_active_connect_refused(void) {
     hs.http_probe_result = HTTP_PROBE_CONNECT_REFUSED;
     hs.ws_connected = FALSE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_SERVICE_ACTIVE_NOT_PROVEN);
@@ -261,6 +274,7 @@ static void test_runtime_mode_reset_on_init(void) {
     hs.rpc_ok = TRUE;
     hs.auth_ok = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     state_update_health(&hs);
     g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_EXPECTED_SERVICE_HEALTHY);
 

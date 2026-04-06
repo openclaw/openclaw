@@ -37,6 +37,7 @@ static void test_dashboard_running_expected_service(void) {
     hs.http_ok = TRUE; hs.ws_connected = TRUE;
     hs.rpc_ok = TRUE; hs.auth_ok = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     hs.endpoint_host = "127.0.0.1"; hs.endpoint_port = 18789;
     hs.gateway_version = "1.2.3";
 
@@ -81,9 +82,15 @@ static void test_dashboard_running_expected_service(void) {
 static void test_dashboard_healthy_outside_expected_service(void) {
     ReadinessInfo ri;
     HealthState hs = {0};
-    hs.http_ok = TRUE; hs.ws_connected = TRUE;
-    hs.rpc_ok = TRUE; hs.auth_ok = TRUE;
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.http_probe_result = HTTP_PROBE_OK;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.has_wizard_onboard_marker = TRUE; /* Required for STATE_RUNNING */
 
     SystemdState sys = {0};
     sys.installed = TRUE; sys.active = FALSE;
@@ -115,6 +122,7 @@ static void test_dashboard_listener_unresponsive(void) {
     hs.http_ok = FALSE;
     hs.http_probe_result = HTTP_PROBE_TIMED_OUT_AFTER_CONNECT;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     hs.last_updated = 1;
 
     SystemdState sys = {0};
@@ -143,6 +151,7 @@ static void test_dashboard_listener_unverified(void) {
     hs.http_ok = FALSE;
     hs.http_probe_result = HTTP_PROBE_INVALID_RESPONSE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     hs.last_updated = 1;
 
     SystemdState sys = {0};
@@ -184,20 +193,44 @@ static void test_dashboard_needs_setup(void) {
     ReadinessInfo ri;
     HealthState hs = {0};
     SystemdState sys = {0};
-
     readiness_evaluate(STATE_NEEDS_SETUP, &hs, &sys, &ri);
 
     DashboardDisplayModel dm;
-    dashboard_display_model_build(STATE_NEEDS_SETUP, RUNTIME_NONE,
-                                  &ri, &hs, &sys, &dm);
+    dashboard_display_model_build(STATE_NEEDS_SETUP, RUNTIME_NONE, &ri, &hs, &sys, &dm);
 
     g_assert_cmpstr(dm.headline, ==, "Setup Required");
-    g_assert_cmpint(dm.headline_color, ==, STATUS_COLOR_GRAY);
-    g_assert_false(dm.can_start);
-    g_assert_false(dm.can_stop);
-    g_assert_false(dm.can_restart);
-    g_assert_nonnull(dm.next_action);
-    assert_contains(dm.next_action, "openclaw setup", "setup.next_action");
+    g_assert_cmpint(dm.headline_color, ==, STATUS_COLOR_RED);
+    assert_contains(dm.guidance_text, "No OpenClaw configuration", "needs_setup.guidance");
+    assert_contains(dm.next_action, "openclaw onboard --install-daemon", "needs_setup.next_action");
+}
+
+static void test_dashboard_needs_install(void) {
+    ReadinessInfo ri;
+    HealthState hs = {0};
+    SystemdState sys = {0};
+    readiness_evaluate(STATE_NEEDS_GATEWAY_INSTALL, &hs, &sys, &ri);
+
+    DashboardDisplayModel dm;
+    dashboard_display_model_build(STATE_NEEDS_GATEWAY_INSTALL, RUNTIME_NONE, &ri, &hs, &sys, &dm);
+
+    g_assert_cmpstr(dm.headline, ==, "Gateway Service Missing");
+    g_assert_cmpint(dm.headline_color, ==, STATUS_COLOR_RED);
+    assert_contains(dm.guidance_text, "expected user systemd service", "needs_install.guidance");
+    assert_contains(dm.next_action, "onboard --install-daemon", "needs_install.next_action");
+}
+
+static void test_dashboard_needs_onboarding(void) {
+    ReadinessInfo ri;
+    HealthState hs = {0};
+    SystemdState sys = {0};
+    readiness_evaluate(STATE_NEEDS_ONBOARDING, &hs, &sys, &ri);
+
+    DashboardDisplayModel dm;
+    dashboard_display_model_build(STATE_NEEDS_ONBOARDING, RUNTIME_NONE, &ri, &hs, &sys, &dm);
+
+    g_assert_cmpstr(dm.headline, ==, "Bootstrap Incomplete");
+    g_assert_cmpint(dm.headline_color, ==, STATUS_COLOR_ORANGE);
+    assert_contains(dm.next_action, "openclaw onboard --install-daemon", "needs_onboarding.next_action");
 }
 
 static void test_dashboard_starting(void) {
@@ -231,6 +264,7 @@ static void test_dashboard_null_output(void) {
 static void test_tray_running(void) {
     HealthState hs = {0};
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     TrayDisplayModel tm;
     tray_display_model_build(STATE_RUNNING, RUNTIME_EXPECTED_SERVICE_HEALTHY, &hs, &tm);
 
@@ -286,6 +320,7 @@ static void test_tray_null_output(void) {
 static void test_config_valid(void) {
     HealthState hs = {0};
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     hs.config_issues_count = 0;
 
     ConfigDisplayModel cm;
@@ -300,6 +335,7 @@ static void test_config_valid(void) {
 static void test_config_valid_with_warnings(void) {
     HealthState hs = {0};
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
     hs.config_issues_count = 3;
 
     ConfigDisplayModel cm;
@@ -346,17 +382,21 @@ static void test_env_all_ok(void) {
     /* Use /tmp as a writable dir and /dev/null as a readable file */
     environment_check_build(&sys, "/dev/null", "/tmp", &ecr);
 
-    g_assert_cmpint(ecr.count, >=, 5);
+    g_assert_cmpint(ecr.count, >=, 7);
     /* systemd session */
     g_assert_true(ecr.rows[0].passed);
     /* D-Bus */
     g_assert_true(ecr.rows[1].passed);
-    /* Config file readable */
+    /* Config path resolved */
     g_assert_true(ecr.rows[2].passed);
-    /* State dir writable */
+    /* Config exists */
     g_assert_true(ecr.rows[3].passed);
-    /* Unit present */
+    /* State dir resolved */
     g_assert_true(ecr.rows[4].passed);
+    /* State dir exists */
+    g_assert_true(ecr.rows[5].passed);
+    /* Unit present */
+    g_assert_true(ecr.rows[6].passed);
 }
 
 static void test_env_systemd_unavailable(void) {
@@ -375,8 +415,30 @@ static void test_env_no_config_path(void) {
     EnvironmentCheckResult ecr;
     environment_check_build(&sys, NULL, NULL, &ecr);
 
-    g_assert_false(ecr.rows[2].passed); /* config */
-    g_assert_false(ecr.rows[3].passed); /* state dir */
+    g_assert_false(ecr.rows[2].passed); /* config path resolved */
+    g_assert_false(ecr.rows[3].passed); /* config exists */
+    g_assert_false(ecr.rows[4].passed); /* state dir resolved */
+    g_assert_false(ecr.rows[5].passed); /* state dir exists */
+
+    g_assert_cmpstr(ecr.rows[2].detail, ==, "No config path resolved.");
+    g_assert_cmpstr(ecr.rows[3].detail, ==, "No (path unresolved)");
+    g_assert_cmpstr(ecr.rows[4].detail, ==, "No state directory resolved.");
+    g_assert_cmpstr(ecr.rows[5].detail, ==, "No (path unresolved)");
+}
+
+static void test_env_resolved_but_missing_targets(void) {
+    SystemdState sys = {0};
+    EnvironmentCheckResult ecr;
+
+    environment_check_build(&sys,
+                            "/tmp/openclaw-missing-config-for-test.json",
+                            "/tmp/openclaw-missing-state-dir-for-test",
+                            &ecr);
+
+    g_assert_true(ecr.rows[2].passed);  /* config path resolved */
+    g_assert_false(ecr.rows[3].passed); /* config exists */
+    g_assert_true(ecr.rows[4].passed);  /* state dir resolved */
+    g_assert_false(ecr.rows[5].passed); /* state dir exists */
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -565,6 +627,10 @@ int main(int argc, char **argv) {
                     test_dashboard_stopped);
     g_test_add_func("/display_model/dashboard/needs_setup",
                     test_dashboard_needs_setup);
+    g_test_add_func("/display_model/dashboard/needs_install",
+                    test_dashboard_needs_install);
+    g_test_add_func("/display_model/dashboard/needs_onboarding",
+                    test_dashboard_needs_onboarding);
     g_test_add_func("/display_model/dashboard/starting",
                     test_dashboard_starting);
     g_test_add_func("/display_model/dashboard/null_output",
@@ -587,6 +653,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/display_model/env/all_ok", test_env_all_ok);
     g_test_add_func("/display_model/env/systemd_unavailable", test_env_systemd_unavailable);
     g_test_add_func("/display_model/env/no_config_path", test_env_no_config_path);
+    g_test_add_func("/display_model/env/resolved_but_missing_targets", test_env_resolved_but_missing_targets);
 
     /* Onboarding routing */
     g_test_add_func("/display_model/onboarding/first_run_healthy",

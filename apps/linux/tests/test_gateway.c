@@ -12,6 +12,25 @@
 #include <json-glib/json-glib.h>
 #include "../src/gateway_config.h"
 #include "../src/gateway_protocol.h"
+#include "../src/state.h"
+#include "../src/test_seams.h"
+
+/* Test stubs for state.c dependencies */
+void notify_on_transition(AppState old_state, AppState new_state) {
+    (void)old_state;
+    (void)new_state;
+}
+
+void tray_update_from_state(AppState state) {
+    (void)state;
+}
+
+void onboarding_refresh(void) {
+    /* No-op in tests */
+}
+
+void state_on_gateway_refresh_requested(void) {
+}
 
 /*
  * Note on Health Lifecycle Testing:
@@ -149,16 +168,17 @@ static void test_config_valid_json_with_auth_token(void) {
     clear_env();
     g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
 
-    GatewayConfig *config = gateway_config_load(NULL);
-    g_assert_nonnull(config);
-    g_assert_true(config->valid);
-    g_assert_cmpint(config->error_code, ==, GW_CFG_OK);
-    g_assert_cmpint(config->port, ==, 12345);
-    g_assert_cmpstr(config->auth_mode, ==, "token");
-    g_assert_cmpstr(config->token, ==, "my-token");
-    g_assert_null(config->password);
-    g_assert_true(gateway_config_is_local(config));
-    gateway_config_free(config);
+    GatewayConfig *cfg = gateway_config_load(NULL);
+    g_assert_nonnull(cfg);
+    g_assert_true(cfg->valid);
+    g_assert_cmpint(cfg->error_code, ==, GW_CFG_OK);
+    g_assert_cmpint(cfg->port, ==, 12345);
+    g_assert_cmpstr(cfg->auth_mode, ==, "token");
+    g_assert_cmpstr(cfg->token, ==, "my-token");
+    g_assert_null(cfg->password);
+    g_assert_true(gateway_config_is_local(cfg));
+    g_assert_false(cfg->has_wizard_onboard_marker);
+    gateway_config_free(cfg);
 
     g_unlink(config_path);
     g_rmdir(tmpdir);
@@ -976,6 +996,29 @@ static void test_config_bind_fallback_ignores_0_0_0_0(void) {
     clear_env();
 }
 
+static void test_config_bind_normalizes_loopback(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    /* loopback should be normalized to 127.0.0.1 */
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"loopback\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
 static void test_config_tls_object_form(void) {
     g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
     g_assert_nonnull(tmpdir);
@@ -1626,6 +1669,339 @@ static void test_config_bind_ipv6_unspecified_rejected(void) {
     clear_env();
 }
 
+/* ── Feature A: Config path resolution helper tests ── */
+
+static void test_config_resolve_path_env_override(void) {
+    /* OPENCLAW_CONFIG_PATH env should be returned directly */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_autofree gchar *custom_path = g_build_filename(tmpdir, "custom.json", NULL);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", custom_path, TRUE);
+    
+    gchar *resolved = gateway_config_resolve_path(NULL);
+    g_assert_cmpstr(resolved, ==, custom_path);
+    
+    gateway_config_free_resolved_path(resolved);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_resolve_path_default(void) {
+    /* Without env override, should return default ~/.openclaw/openclaw.json path */
+    clear_env();
+    g_setenv("OPENCLAW_HOME", "/test/home", TRUE);
+    
+    gchar *resolved = gateway_config_resolve_path(NULL);
+    g_assert_cmpstr(resolved, ==, "/test/home/.openclaw/openclaw.json");
+    
+    gateway_config_free_resolved_path(resolved);
+    clear_env();
+}
+
+static void test_config_resolve_path_with_context(void) {
+    /* Context explicit_config_path should be respected */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_autofree gchar *explicit = g_build_filename(tmpdir, "explicit.json", NULL);
+    
+    clear_env();
+    GatewayConfigContext ctx = { .explicit_config_path = explicit };
+    
+    gchar *resolved = gateway_config_resolve_path(&ctx);
+    g_assert_cmpstr(resolved, ==, explicit);
+    
+    gateway_config_free_resolved_path(resolved);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+/* ── Feature B: Model config detection tests ── */
+
+static void test_config_has_model_config_with_model(void) {
+    /* Config with agents.default.model should have has_model_config=TRUE */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"}},"
+        "\"agents\":{\"default\":{\"model\":\"claude-3-sonnet\"}}}", -1, NULL);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+    
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_true(config->has_model_config);
+    
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_has_model_config_with_provider(void) {
+    /* Config with agents.default.modelProvider should have has_model_config=TRUE */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"}},"
+        "\"agents\":{\"default\":{\"modelProvider\":\"anthropic\"}}}", -1, NULL);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+    
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_true(config->has_model_config);
+    
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_has_model_config_missing(void) {
+    /* Config without agents.default.model/modelProvider should have has_model_config=FALSE */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"}},"
+        "\"agents\":{\"default\":{\"workspace\":\"/tmp\"}}}", -1, NULL);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+    
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_false(config->has_model_config);
+    
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_has_model_config_no_agents(void) {
+    /* Config without agents section should have has_model_config=FALSE */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"}}}", -1, NULL);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+    
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_false(config->has_model_config);
+    
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+/* ── Feature A: Config monitor rearm decision tests ── */
+
+static void test_rearm_skip_file_created_needs_rearm(void) {
+    /* Scenario: same paths, no file before, file now exists
+     * Must NOT skip - need to arm file monitor
+     */
+    gboolean skip = config_monitor_can_skip_rearm(
+        "/home/user/.openclaw", "/home/user/.openclaw",
+        "/home/user/.openclaw/openclaw.json", "/home/user/.openclaw/openclaw.json",
+        TRUE,    /* have_dir_monitor */
+        TRUE,    /* need_file_monitor (file now exists) */
+        FALSE);  /* have_file_monitor (didn't have one before) */
+    g_assert_false(skip);
+}
+
+static void test_rearm_skip_file_still_exists_may_skip(void) {
+    /* Scenario: same paths, file existed before, still exists
+     * May skip - file monitor state matches need
+     */
+    gboolean skip = config_monitor_can_skip_rearm(
+        "/home/user/.openclaw", "/home/user/.openclaw",
+        "/home/user/.openclaw/openclaw.json", "/home/user/.openclaw/openclaw.json",
+        TRUE,   /* have_dir_monitor */
+        TRUE,   /* need_file_monitor (file exists) */
+        TRUE);  /* have_file_monitor (already have one) */
+    g_assert_true(skip);
+}
+
+static void test_rearm_skip_file_deleted_needs_rearm(void) {
+    /* Scenario: same paths, file existed before, now deleted
+     * Must NOT skip - need to tear down file monitor
+     */
+    gboolean skip = config_monitor_can_skip_rearm(
+        "/home/user/.openclaw", "/home/user/.openclaw",
+        "/home/user/.openclaw/openclaw.json", "/home/user/.openclaw/openclaw.json",
+        TRUE,    /* have_dir_monitor */
+        FALSE,   /* need_file_monitor (file no longer exists) */
+        TRUE);   /* have_file_monitor (still have one) */
+    g_assert_false(skip);
+}
+
+static void test_rearm_skip_no_file_still_none_may_skip(void) {
+    /* Scenario: same paths, no file before, still no file
+     * May skip - dir monitor already exists, no file monitor needed
+     */
+    gboolean skip = config_monitor_can_skip_rearm(
+        "/home/user/.openclaw", "/home/user/.openclaw",
+        "/home/user/.openclaw/openclaw.json", "/home/user/.openclaw/openclaw.json",
+        TRUE,    /* have_dir_monitor */
+        FALSE,   /* need_file_monitor (file doesn't exist) */
+        FALSE);  /* have_file_monitor (don't have one) */
+    g_assert_true(skip);
+}
+
+static void test_rearm_skip_dir_changed_needs_rearm(void) {
+    /* Scenario: dir path changed - must rearm regardless of file state */
+    gboolean skip = config_monitor_can_skip_rearm(
+        "/new/path", "/old/path",
+        "/new/path/openclaw.json", "/old/path/openclaw.json",
+        TRUE,   /* have_dir_monitor */
+        TRUE,   /* need_file_monitor */
+        TRUE);  /* have_file_monitor */
+    g_assert_false(skip);
+}
+
+static void test_rearm_skip_path_changed_needs_rearm(void) {
+    /* Scenario: file path changed (different filename) - must rearm */
+    gboolean skip = config_monitor_can_skip_rearm(
+        "/home/user/.openclaw", "/home/user/.openclaw",
+        "/home/user/.openclaw/new.json", "/home/user/.openclaw/old.json",
+        TRUE,   /* have_dir_monitor */
+        TRUE,   /* need_file_monitor */
+        TRUE);  /* have_file_monitor */
+    g_assert_false(skip);
+}
+
+static void test_rearm_skip_no_dir_monitor_needs_rearm(void) {
+    /* Scenario: no dir monitor yet - must rearm even if paths match */
+    gboolean skip = config_monitor_can_skip_rearm(
+        "/home/user/.openclaw", "/home/user/.openclaw",
+        "/home/user/.openclaw/openclaw.json", "/home/user/.openclaw/openclaw.json",
+        FALSE,  /* have_dir_monitor - no dir monitor yet! */
+        TRUE,   /* need_file_monitor */
+        FALSE); /* have_file_monitor */
+    g_assert_false(skip);
+}
+
+/* ── Feature B: Onboarding state priority tests ── */
+
+/* Helper to set up minimal state for testing compute_state logic
+ * Since compute_state is static, we need to test via state_update_health()
+ * which is the public entry point that populates the HealthState.
+ */
+extern void state_update_health(const HealthState *health_state);
+extern AppState state_get_current(void);
+
+static void test_state_priority_no_setup_needs_setup(void) {
+    /* No setup detected + no config valid -> STATE_NEEDS_SETUP */
+    clear_env();
+    
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+    
+    HealthState hs = {0};
+    hs.last_updated = g_get_real_time();
+    hs.config_valid = FALSE;
+    hs.setup_detected = FALSE;
+    hs.has_model_config = FALSE;
+    
+    state_update_health(&hs);
+    
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_SETUP);
+    
+    clear_env();
+}
+
+static void test_state_priority_setup_no_model_needs_onboarding(void) {
+    /* Setup present + config valid + no wizard marker -> STATE_NEEDS_ONBOARDING */
+    clear_env();
+    
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    state_update_systemd(&sys);
+    
+    HealthState hs = {0};
+    hs.last_updated = g_get_real_time();
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = FALSE;
+    
+    state_update_health(&hs);
+    
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_ONBOARDING);
+    
+    clear_env();
+}
+
+static void test_state_priority_setup_with_model_not_onboarding(void) {
+    /* Setup present + config valid + wizard marker -> NOT STATE_NEEDS_ONBOARDING */
+    clear_env();
+    
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    state_update_systemd(&sys);
+    
+    HealthState hs = {0};
+    hs.last_updated = g_get_real_time();
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    /* No HTTP connectivity, so we won't be READY, but shouldn't be ONBOARDING */
+    hs.http_ok = FALSE;
+    
+    state_update_health(&hs);
+    
+    AppState current = state_get_current();
+    g_assert_cmpint(current, !=, STATE_NEEDS_ONBOARDING);
+    /* With valid config + setup but no connectivity, we expect AUTH_NEEDED or similar */
+    
+    clear_env();
+}
+
+static void test_state_priority_setup_gateway_not_installed(void) {
+    /* Setup detected but gateway not installed takes priority over onboarding
+     * (This tests the existing priority order)
+     */
+    clear_env();
+    
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+    
+    HealthState hs = {0};
+    hs.last_updated = g_get_real_time();
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    /* Note: has_wizard_onboard_marker irrelevant if gateway not installed - 
+     * STATE_NEEDS_GATEWAY_INSTALL should win */
+    hs.has_wizard_onboard_marker = FALSE;
+    
+    state_update_health(&hs);
+    
+    AppState current = state_get_current();
+    /* When gateway is not installed, that takes priority over onboarding */
+    g_assert_cmpint(current, ==, STATE_NEEDS_GATEWAY_INSTALL);
+    
+    clear_env();
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
 
@@ -1702,6 +2078,7 @@ int main(int argc, char **argv) {
     g_test_add_func("/gateway/config/tls_enabled_uses_https_wss", test_config_tls_enabled_uses_https_wss);
     g_test_add_func("/gateway/config/host_from_config", test_config_host_from_config);
     g_test_add_func("/gateway/config/bind_fallback_ignores_0_0_0_0", test_config_bind_fallback_ignores_0_0_0_0);
+    g_test_add_func("/gateway/config/bind_normalizes_loopback", test_config_bind_normalizes_loopback);
     g_test_add_func("/gateway/config/tls_object_form", test_config_tls_object_form);
     g_test_add_func("/gateway/config/tls_from_security_block", test_config_tls_from_security_block);
 
@@ -1716,6 +2093,32 @@ int main(int argc, char **argv) {
     /* gateway.bind safety tests */
     g_test_add_func("/gateway/config/bind_ipv4_literal_used", test_config_bind_ipv4_literal_used);
     g_test_add_func("/gateway/config/bind_ipv6_unspecified_rejected", test_config_bind_ipv6_unspecified_rejected);
+
+    /* Feature A: Config path resolution tests */
+    g_test_add_func("/gateway/config/resolve_path_env_override", test_config_resolve_path_env_override);
+    g_test_add_func("/gateway/config/resolve_path_default", test_config_resolve_path_default);
+    g_test_add_func("/gateway/config/resolve_path_with_context", test_config_resolve_path_with_context);
+
+    /* Feature B: Model config detection tests */
+    g_test_add_func("/gateway/config/has_model_config_with_model", test_config_has_model_config_with_model);
+    g_test_add_func("/gateway/config/has_model_config_with_provider", test_config_has_model_config_with_provider);
+    g_test_add_func("/gateway/config/has_model_config_missing", test_config_has_model_config_missing);
+    g_test_add_func("/gateway/config/has_model_config_no_agents", test_config_has_model_config_no_agents);
+
+    /* Feature A: Config monitor rearm decision tests */
+    g_test_add_func("/gateway/monitor/rearm_file_created_needs_rearm", test_rearm_skip_file_created_needs_rearm);
+    g_test_add_func("/gateway/monitor/rearm_file_still_exists_may_skip", test_rearm_skip_file_still_exists_may_skip);
+    g_test_add_func("/gateway/monitor/rearm_file_deleted_needs_rearm", test_rearm_skip_file_deleted_needs_rearm);
+    g_test_add_func("/gateway/monitor/rearm_no_file_still_none_may_skip", test_rearm_skip_no_file_still_none_may_skip);
+    g_test_add_func("/gateway/monitor/rearm_dir_changed_needs_rearm", test_rearm_skip_dir_changed_needs_rearm);
+    g_test_add_func("/gateway/monitor/rearm_path_changed_needs_rearm", test_rearm_skip_path_changed_needs_rearm);
+    g_test_add_func("/gateway/monitor/rearm_no_dir_monitor_needs_rearm", test_rearm_skip_no_dir_monitor_needs_rearm);
+
+    /* Feature B: Onboarding state priority tests */
+    g_test_add_func("/gateway/state/priority_no_setup_needs_setup", test_state_priority_no_setup_needs_setup);
+    g_test_add_func("/gateway/state/priority_setup_no_model_needs_onboarding", test_state_priority_setup_no_model_needs_onboarding);
+    g_test_add_func("/gateway/state/priority_setup_with_model_not_onboarding", test_state_priority_setup_with_model_not_onboarding);
+    g_test_add_func("/gateway/state/priority_setup_gateway_not_installed", test_state_priority_setup_gateway_not_installed);
 
     return g_test_run();
 }
