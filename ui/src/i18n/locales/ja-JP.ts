@@ -451,7 +451,7 @@ export const ja_JP: TranslationMap = {
       throughput: "スループット",
       throughputHint:
         "スループットは、アクティブ時間あたりの 1 分ごとのトークン数を示します。高いほど良好です。",
-      tokensPerMinute: "tok/min",
+      tokensPerMinute: "tok/分",
       perMinute: "/ 分",
       errorRate: "エラー率",
       errorHint: "エラー率 = エラー数 / メッセージ総数。低いほど良好です。",
@@ -661,7 +661,7 @@ export const ja_JP: TranslationMap = {
       fieldName: "名前",
       description: "説明",
       agentId: "エージェント ID",
-      namePlaceholder: "Morning brief",
+      namePlaceholder: "朝のブリーフ",
       descriptionPlaceholder: "このジョブの任意のコンテキスト",
       agentPlaceholder: "main または ops",
       agentHelp: "入力を始めると既知のエージェントを選択でき、カスタム値を入力することもできます。",

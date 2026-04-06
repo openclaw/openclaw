@@ -295,7 +295,7 @@ export const ko: TranslationMap = {
     },
     stats: {
       shortTerm: "단기",
-      signals: "Signals",
+      signals: "신호",
       phaseHits: "단계 적중",
     },
     diary: {
@@ -724,7 +724,7 @@ export const ko: TranslationMap = {
       model: "모델",
       modelPlaceholder: "openai/gpt-5.2",
       modelHelp: "입력하여 알려진 모델을 선택하거나 사용자 지정 값을 입력하세요.",
-      thinking: "Thinking",
+      thinking: "생각 수준",
       thinkingPlaceholder: "low",
       thinkingHelp: "권장 수준을 사용하거나 provider별 값을 입력하세요.",
       bestEffortDelivery: "최선형 전달",
