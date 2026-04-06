@@ -4,6 +4,32 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Plugins/webhooks: add a bundled webhook ingress plugin so external automation can create and drive bound TaskFlows through per-route shared-secret endpoints. (#61892) Thanks @mbelinky.
+
+### Fixes
+
+- Providers/Google: recognize Gemma model ids in native Google forward-compat resolution, keep the requested provider when cloning fallback templates, and force Gemma reasoning off so Gemma 4 routes stop failing through the Google catalog fallback. (#61507) Thanks @eyjohn.
+- Providers/Anthropic: skip `service_tier` injection for OAuth-authenticated stream wrapper requests so Claude OAuth requests stop failing with HTTP 401. (#60356) thanks @openperf.
+- Agents/exec: preserve explicit `host=node` routing under elevated defaults when `tools.exec.host=auto`, and fail loud on invalid elevated cross-host overrides. (#61739) Thanks @obviyus.
+- Agents/history: suppress commentary-only visible-text leaks in streaming and chat history views, and keep sanitized SSE history sequence numbers monotonic after transcript-only refreshes. (#61829) Thanks @100yenadmin.
+- Plugins/Windows: load plugin entrypoints through `file://` import specifiers on Windows without breaking plugin SDK alias resolution, fixing `ERR_UNSUPPORTED_ESM_URL_SCHEME` for absolute plugin paths. (#61832) Thanks @Zeesejo.
+- Discord/forwarding: recover forwarded referenced message text and attachments when Discord omits snapshot payloads, so forwarded-message relays keep the original content. (#61670) Thanks @artwalker.
+- Plugins/install: preserve plugin-schema defaults during fresh-install raw config validation so bundled plugin installs stop failing when required fields rely on schema defaults. (#61856) Thanks @SuperMarioYL.
+- Slack/threading: keep legacy thread stickiness for real replies when older callers omit `isThreadReply`, while still honoring `replyToMode` for Slack's auto-created top-level `thread_ts`. (#61835) Thanks @kaonash.
+- Agents/message tool: add a `read` plus `threadId` discoverability hint when the configured channel actions support threaded message reads.
+- Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
+- Agents/heartbeat: stop truncating live session transcripts after no-op heartbeat acks, move heartbeat cleanup to prompt assembly and compaction, and keep post-filter context-engine ingestion aligned with the real session baseline. (#60998) Thanks @nxmxbbd.
+- macOS/gateway version: strip trailing commit metadata from CLI version output before semver parsing so the Mac app recognizes installed gateway versions like `OpenClaw 2026.4.2 (d74a122)` again. (#61111) Thanks @oliviareid-svg.
+- Memory/dreaming: strip managed Light Sleep and REM blocks before daily-note ingestion so dreaming summaries stop re-ingesting their own staged output into new candidates. (#61720) Thanks @MonkeyLeeT.
+- Plugins/Windows: disable native Jiti loading for setup and doctor contract registries on Windows so onboarding and config-doctor plugin probes stop crashing with `ERR_UNSUPPORTED_ESM_URL_SCHEME`. (#61836, #61853)
+- Agents/context overflow: combine oversized and aggregate tool-result recovery in one repair pass, and restore a total-context overflow backstop during tool loops so recoverable sessions retry instead of failing early. (#61651) Thanks @Takhoffman.
+- Gateway/containers: auto-bind to `0.0.0.0` during container startup for Docker and Podman compatibility, while keeping host-side status and doctor checks on the hardened loopback default when `gateway.bind` is unset. (#61818) Thanks @openperf.
+- TUI/status: route `/status` through the shared session-status command and move the old gateway-wide diagnostic summary to `/gateway-status` (`/gwstatus`). Thanks @vincentkoc.
+- Agents/history: use one shared assistant-visible sanitizer across embedded delivery and chat-history extraction so leaked `<tool_call>` and `<tool_result>` XML blocks stay hidden from user-facing replies. (#61729) Thanks @openperf.
+- Gateway/TUI: defer terminal chat finalization for per-attempt lifecycle errors so fallback retries keep streaming before the run is marked failed. (#60043) Thanks @jwchmodx.
+
 ## 2026.4.5
 
 ### Breaking
@@ -43,16 +69,19 @@ Docs: https://docs.openclaw.ai
 - Agents/cache: stabilize cache-relevant system prompt fingerprints by normalizing equivalent structured prompt whitespace, line endings, hook-added system context, and runtime capability ordering so semantically unchanged prompts reuse KV/cache more reliably. Thanks @vincentkoc.
 - Agents/tool prompts: remove the duplicate in-band tool inventory from agent system prompts so tool-calling models rely on the structured tool definitions as the single source of truth, improving prompt stability and reducing stale tool guidance.
 - Config/schema: enrich the exported `openclaw config schema` JSON Schema with field titles and descriptions so editors, agents, and other schema consumers receive the same config help metadata. (#60067) Thanks @solavrc.
-- Providers/CLI: remove bundled CLI text-provider backends and the `agents.defaults.cliBackends` surface, while keeping ACP harness sessions and Gemini media understanding on the native bundled providers.
 - Matrix/exec approvals: clarify unavailable-approval replies so Matrix no longer claims chat approvals are unsupported when native exec approvals are merely unconfigured. (#61424) Thanks @gumadeiras.
+- Providers/OpenAI Codex: add forward-compat `openai-codex/gpt-5.4-mini` synthesis across provider runtime, model catalog, and model listing so Codex mini works before bundled Pi catalog updates land.
+- Providers/OpenAI: add an opt-in GPT personality and move GPT-5 prompt tuning onto provider-owned system-prompt contributions so cache-stable guidance stays above the prompt cache boundary and embedded runner paths reuse the same provider-specific prompt behavior.
 - Docs/IRC: replace public IRC hostname examples with `irc.example.com` and recommend private servers for bot coordination while listing common public networks for intentional use.
 - Memory/dreaming: group nearby daily-note lines into short coherent chunks before staging them for dreaming, so one-off context from recent notes reaches REM/deep with better evidence and less line-level noise.
 - Memory/dreaming: drop generic date/day headings from daily-note chunk prefixes while keeping meaningful section labels, so staged snippets stay cleaner and more reusable. (#61597) Thanks @mbelinky.
 - Plugins/Lobster: run bundled Lobster workflows in process instead of spawning the external CLI, reducing transport overhead and unblocking native runtime integration. (#61523) Thanks @mbelinky.
 - Plugins/Lobster: harden managed resume validation so invalid TaskFlow resume calls fail earlier, and memoize embedded runtime loading per runner while keeping failed loads retryable. (#61566) Thanks @mbelinky.
+- Agents/bootstrap: add opt-in `agents.defaults.contextInjection: "continuation-skip"` so safe continuation turns can skip workspace bootstrap re-injection, while heartbeat runs and post-compaction retries still rebuild context when needed. Fixes #9157. Thanks @cgdusek.
 
 ### Fixes
 
+- Control UI/chat: show `/tts` and other local audio-only slash replies in webchat by embedding local audio in the assistant message and rendering `<audio>` controls instead of dropping empty-text finals. Fixes #61564. (#61598) Thanks @neeravmakwana.
 - Security: preserve restrictive plugin-only tool allowlists, require owner access for `/allowlist add` and `/allowlist remove`, fail closed when `before_tool_call` hooks crash, block browser SSRF redirect bypasses earlier, and keep non-interactive auth-choice inference scoped to bundled and already-trusted plugins. (#58476, #59836, #59822, #58771, #59120) Thanks @eleqtrizit and @pgondhi987.
 - Providers/OpenAI: make GPT-5 and Codex runs act sooner with lower-verbosity defaults, visible progress during tool work, and a one-shot retry when a turn only narrates the plan instead of taking action.
 - Providers/OpenAI and reply delivery: preserve native `reasoning.effort: "none"` and strict schemas where supported, add GPT-5.4 assistant `phase` metadata across replay and the Gateway `/v1/responses` layer, and keep commentary buffered until `final_answer` so web chat, session previews, embedded replies, and Telegram partials stop leaking planning text. Fixes #59150, #59643, #61282.
@@ -60,6 +89,8 @@ Docs: https://docs.openclaw.ai
 - Telegram: restore DM voice-note preflight transcription so direct-message audio stops arriving as raw `<media:audio>` placeholders. (#61008) Thanks @manueltarouca.
 - Telegram/reasoning: only create a Telegram reasoning preview lane when the session is explicitly `reasoning:stream`, so hidden `<think>` traces from streamed replies stop surfacing as chat previews on normal sessions. Thanks @vincentkoc.
 - Telegram/native command menu: trim long menu descriptions before dropping commands so sub-100 command sets can still fit Telegram's payload budget and keep more `/` entries visible. (#61129) Thanks @neeravmakwana.
+- Telegram/startup: bound `deleteWebhook`, `getMe`, and `setWebhook` startup requests while keeping the longer `getUpdates` poll timeout, so wedged Telegram control-plane calls stop hanging startup indefinitely. (#61601) Thanks @neeravmakwana.
+- Agents/failover: classify Anthropic "extra usage" exhaustion as billing so same-turn model fallback still triggers when Claude blocks long-context requests on usage limits. (#61608) Thanks @neeravmakwana.
 - Discord: keep REST, webhook, and monitor traffic on the configured proxy, preserve component-only media sends, honor `@everyone` and `@here` mention gates, keep ACK reactions on the active account, and split voice connect/playback timeouts so auto-join is more reliable. (#57465, #60361, #60345) Thanks @geekhuashan.
 - Discord/reply tags: strip leaked `[[reply_to_current]]` control tags from preview text and honor explicit reply-tag threading during final delivery, so Discord replies stay attached to the triggering message instead of printing reply metadata into chat.
 - Discord/replies: replace the unshipped `replyToOnlyWhenBatched` flag with `replyToMode: "batched"` so native reply references only attach on debounced multi-message turns while explicit reply tags still work.
@@ -236,11 +267,95 @@ Docs: https://docs.openclaw.ai
 - Plugins: suppress trust-warning noise during non-activating snapshot and CLI metadata loads. (#61427) Thanks @gumadeiras.
 - Agents/video generation: accept `agents.defaults.videoGenerationModel` in strict config validation and `openclaw config set/get`, so gateways using `video_generate` no longer fail to boot after enabling a video model.
 - Matrix/streaming: add a quiet preview mode for streamed Matrix replies, keep legacy `partial` preview-first behavior, and finalize quiet media captions correctly so previews stop notifying early without dropping final text semantics. (#61450) Thanks @gumadeiras.
+- Agents/compaction: skip redundant partial summarization when no messages were oversized, so the same transcript is not summarized twice after a full summarization failure. Fixes #61465. (#61603) Thanks @neeravmakwana.
 - Gateway/shutdown: bound websocket-server shutdown even when no tracked clients remain, so gateway restarts stop hanging until the watchdog kills the process. (#61565) Thanks @mbelinky.
 - Control UI/multilingual: localize the remaining shared channel, instances, nodes, and gateway-confirmation strings so the dashboard stops mixing translated UI with hardcoded English labels. Thanks @vincentkoc.
 - Discord/media: raise the default inbound and outbound media cap to `100MB` so Discord matches Telegram more closely and larger attachments stop failing on the old low default.
 - Matrix: keep direct transport requests on the pinned dispatcher by routing them through undici runtime fetch, so Matrix clients resume syncing on newer runtimes without dropping the validated address binding. (#61595) Thanks @gumadeiras.
 - Plugins/facades: resolve globally installed bundled-plugin runtime facades from registry roots so bundled channels like LINE still boot when the winning plugin install lives under the global extensions directory with an encoded scoped folder name. (#61297) Thanks @openperf.
+- Matrix: avoid failing startup when token auth already knows the user ID but still needs optional device metadata, retry transient auth bootstrap requests, and backfill missing device IDs after startup while keeping unknown-device storage reuse conservative until metadata is repaired. (#61383) Thanks @gumadeiras.
+- Agents/exec: stop streaming `tool_execution_update` events after an exec session backgrounds, preventing delayed background output from hitting a stale listener and crashing the gateway while keeping the output available through `process poll/log`. (#61627) Thanks @openperf.
+- Matrix: pass configured `deviceId` through health probes and keep probe-only client setup out of durable Matrix storage, so health checks preserve the correct device identity without rewriting `storage-meta.json` or related probe state on disk. (#61581) Thanks @MoerAI.
+  ||||||| parent of b4694a4ac7 (Telegram: add outbound chunker regression coverage)
+- Image generation/build: write stable runtime alias files into `dist/` and route provider-auth runtime lookups through those aliases so image-generation providers keep resolving auth/runtime modules after rebuilds instead of crashing on missing hashed chunk files.
+- Config/runtime: pin the first successful config load in memory for the running process and refresh that snapshot on successful writes/reloads, so hot paths stop reparsing `openclaw.json` between watcher-driven swaps.
+- Config/legacy cleanup: stop probing obsolete alternate legacy config names and service labels during local config/service detection, while keeping the active `~/.openclaw/openclaw.json` path canonical.
+- ACP/sessions_spawn: register ACP child runs for completion tracking and lifecycle cleanup, and make registration-failure cleanup explicitly best-effort so callers do not assume an already-started ACP turn was fully aborted. (#40885) Thanks @xaeon2026 and @vincentkoc.
+- ACP/tasks: mark cleanly exited ACP runs as blocked when they end on deterministic write or authorization blockers, and wake the parent session with a follow-up instead of falsely reporting success.
+- ACPX/runtime: derive the bundled ACPX expected version from the extension package metadata instead of hardcoding a separate literal, so plugin-local ACPX installs stop drifting out of health-check parity after version bumps. (#49089) Thanks @jiejiesks and @vincentkoc.
+- Gateway/auth: make local-direct `trusted-proxy` fallback require the configured shared token instead of silently authenticating same-host callers, while keeping same-host reverse proxy identity-header flows on the normal trusted-proxy path. Thanks @zhangning-agent and @vincentkoc.
+- Memory/QMD: send MCP `query` collection filters as the upstream `collections` array instead of the legacy singular `collection` field, so mcporter-backed QMD 1.1+ searches still scope correctly after the unified `query` tool migration. (#54728) Thanks @armanddp and @vincentkoc.
+- Memory/QMD: keep `qmd embed` active in `search` mode too, so BM25-first setups still build a complete index for later vector and hybrid retrieval. (#54509) Thanks @hnshah and @vincentkoc.
+- Memory/QMD: point `QMD_CONFIG_DIR` at the nested `xdg-config/qmd` directory so per-agent collection config resolves correctly. (#39078) Thanks @smart-tinker and @vincentkoc.
+- Memory/QMD: include deduplicated default plus per-agent `memorySearch.extraPaths` when building QMD custom collections, so shared and agent-specific extra roots both get indexed consistently. (#57315) Thanks @Vitalcheffe and @vincentkoc.
+- Memory/session indexer: include `.jsonl.reset.*` and `.jsonl.deleted.*` transcripts in the memory host session scan while still excluding `.jsonl.bak.*` compaction backups and lock files, so memory search sees archived session history without duplicating stale snapshots. Thanks @hclsys and @vincentkoc.
+- Agents/sandbox: honor `tools.sandbox.tools.alsoAllow`, let explicit sandbox re-allows remove matching built-in default-deny tools, and keep sandbox explain/error guidance aligned with the effective sandbox tool policy. (#54492) Thanks @ngutman.
+- LINE/ACP: add current-conversation binding and inbound binding-routing parity so `/acp spawn ... --thread here`, configured ACP bindings, and active conversation-bound ACP sessions work on LINE like the other conversation channels.
+- LINE/markdown: preserve underscores inside Latin, Cyrillic, and CJK words when stripping markdown, while still removing standalone `_italic_` markers on the shared text-runtime path used by LINE and TTS. (#47465) Thanks @jackjin1997.
+- TTS/Microsoft: auto-switch the default Edge voice to Chinese for CJK-dominant text without overriding explicitly selected Microsoft voices. (#52355) Thanks @extrasmall0.
+- Agents/context pruning: count supplementary-plane CJK characters with the shared code-point-aware estimator so context pruning stops underestimating Japanese and Chinese text that uses Extension B ideographs. (#39985) Thanks @Edward-Qiang-2024.
+- Slack/status reactions: add a reaction lifecycle for queued, thinking, tool, done, and error phases in Slack monitors, with safer cleanup so queued ack reactions stay correct across silent runs, pre-reply failures, and delayed transitions. (#56430) Thanks @hsiaoa.
+- macOS/local gateway: stop OpenClaw.app from killing healthy local gateway listeners after startup by recognizing the current `openclaw-gateway` process title and using the current `openclaw gateway` launch shape.
+- Gateway/OpenAI compatibility: accept flat Responses API function tool definitions on `/v1/responses` and preserve `strict` when normalizing hosted tools into the embedded runner, so spec-compliant clients like Codex no longer fail validation or silently lose strict tool enforcement. Thanks @malaiwah and @vincentkoc.
+- Memory/QMD: resolve slugified `memory_search` file hints back to the indexed filesystem path before returning search hits, so `memory_get` works again for mixed-case and spaced paths. (#50313) Thanks @erra9x.
+- OpenAI/Codex fast mode: map `/fast` to priority processing on native OpenAI and Codex Responses endpoints instead of rewriting reasoning settings, and document the exact endpoint and override behavior.
+- Memory/QMD: weight CJK-heavy text correctly when estimating chunk sizes, preserve surrogate-pair characters during fine splits, and keep long Latin lines on the old chunk boundaries so memory indexing produces better-sized chunks for CJK notes. (#40271) Thanks @AaronLuo00.
+- Security/LINE: make webhook signature validation run the timing-safe compare even when the supplied signature length is wrong, closing a small timing side-channel. (#55663) Thanks @gavyngong.
+- LINE/status: stop `openclaw status` from warning about missing credentials when sanitized LINE snapshots are already configured, while still surfacing whether the missing field is the token or secret. (#45701) Thanks @tamaosamu.
+- Gateway/health: carry webhook-vs-polling account mode from channel descriptors into runtime snapshots so passive channels like LINE and BlueBubbles skip false stale-socket health failures. (#47488) Thanks @karesansui-u.
+- Agents/MCP: reuse bundled MCP runtimes across turns in the same session, while recreating them when MCP config changes and disposing stale runtimes cleanly on session rollover. (#55090) Thanks @allan0509.
+- Memory/QMD: honor `memory.qmd.update.embedInterval` even when regular QMD update cadence is disabled or slower by arming a dedicated embed-cadence maintenance timer, while avoiding redundant timers when regular updates are already frequent enough. (#37326) Thanks @barronlroth.
+- Memory/QMD: add `memory.qmd.searchTool` as an exact mcporter tool override, so custom QMD MCP tools such as `hybrid_search` can be used without weakening the validated `searchMode` config surface. (#27801) Thanks @keramblock.
+- Memory/QMD: keep reset and deleted session transcripts in QMD session export so daily session resets do not silently drop most historical recall from `memory_search`. (#30220) Thanks @pushkarsingh32.
+- Memory/QMD: rebind collections when QMD reports a changed pattern but omits path metadata, so config pattern changes stop being silently ignored on restart. (#49897) Thanks @Madruru.
+- Memory/QMD: warn explicitly when `memory.backend=qmd` is configured but the `qmd` binary is missing, so doctor and runtime fallback no longer fail as a silent builtin downgrade. (#50439) Thanks @Jimmy-xuzimo and @vincentkoc.
+- Memory/QMD: pass a direct-session key on `openclaw memory search` so CLI QMD searches no longer get denied as `session=<none>` under direct-only scope defaults. (#43517) Thanks @waynecc-at and @vincentkoc.
+- Memory/QMD: keep `memory_search` session-hit paths roundtrip-safe when exported session markdown lives under the workspace `qmd/` directory, so `memory_get` can read the exact returned path instead of failing on the generic `qmd/sessions/...` alias. (#43519) Thanks @holgergruenhagen and @vincentkoc.
+- Agents/memory flush: keep daily memory flush files append-only during embedded attempts so compaction writes do not overwrite earlier notes. (#53725) Thanks @HPluseven.
+- Web UI/markdown: stop bare auto-links from swallowing adjacent CJK text while preserving valid mixed-script path and query characters in rendered links. (#48410) Thanks @jnuyao.
+- BlueBubbles/iMessage: coalesce URL-only inbound messages with their link-preview balloon again so sharing a bare link no longer drops the URL from agent context. Thanks @vincentkoc.
+- Sandbox/browser: install `fonts-noto-cjk` in the sandbox browser image so screenshots render Chinese, Japanese, and Korean text correctly instead of tofu boxes. Fixes #35597. Thanks @carrotRakko and @vincentkoc.
+- Memory/FTS: add configurable trigram tokenization plus short-CJK substring fallback so memory search can find Chinese, Japanese, and Korean text without breaking mixed long-and-short queries. Thanks @carrotRakko.
+- Hooks/config: accept runtime channel plugin ids in `hooks.mappings[].channel` (for example `feishu`) instead of rejecting non-core channels during config validation. (#56226) Thanks @AiKrai001.
+- TUI/chat: keep optimistic outbound user messages visible during active runs by deferring local-run binding until the first gateway chat event reveals the real run id, preventing premature history reloads from wiping pending local sends. (#54722) Thanks @seanturner001.
+- TUI/model picker: keep searchable `/model` and `/models` input mode from hijacking `j`/`k` as navigation keys, and harden width bounds under `m`-filtered model lists so search no longer crashes on long rows. (#30156) Thanks @briannicholls.
+- Agents/Kimi: preserve already-valid Anthropic-compatible tool call argument objects while still clearing cached repairs when later trailing junk exceeds the repair allowance. (#54491) Thanks @yuanaichi.
+- Docker/setup: force BuildKit for local image builds (including sandbox image builds) so `./docker-setup.sh` no longer fails on `RUN --mount=...` when hosts default to Docker's legacy builder. (#56681) Thanks @zhanghui-china.
+- Control UI/agents: auto-load agent workspace files on initial Files panel open, and populate overview model/workspace/fallbacks from effective runtime agent metadata so defaulted models no longer show as `Not set`. (#56637) Thanks @dxsx84.
+- Control UI/slash commands: make `/steer` and `/redirect` work from the chat command palette with visible pending state for active-run `/steer`, correct redirected-run tracking, and a single canonical `/steer` entry in the command menu. (#54625) Thanks @fuller-stack-dev.
+- Exec/runtime: default implicit exec to `host=auto`, resolve that target to sandbox only when a sandbox runtime exists, keep explicit `host=sandbox` fail-closed without sandbox, and show `/exec` effective host state in runtime status/docs.
+- Exec: fail closed when the implicit sandbox host has no sandbox runtime, and stop denied async approval followups from reusing prior command output from the same session. (#56800) Thanks @scoootscooob.
+- Exec/approvals: infer Discord and Telegram exec approvers from existing owner config when `execApprovals.approvers` is unset, extend the default approval window to 30 minutes, and clarify approval-unavailable guidance so approvals do not appear to silently disappear.
+- Exec/node: stop gateway-side workdir fallback from rewriting explicit `host=node` cwd values to the gateway filesystem, so remote node exec approval and runs keep using the intended node-local directory. (#50961) Thanks @openperf.
+- Plugins/ClawHub: sanitize temporary archive filenames for scoped package names and slash-containing skill slugs so `openclaw plugins install @scope/name` no longer fails with `ENOENT` during archive download. (#56452) Thanks @soimy.
+- Telegram/polling: keep the watchdog from aborting long-running reply delivery by treating recent non-polling API activity as bounded liveness instead of a hard stall. (#56343) Thanks @openperf.
+- Memory/FTS: keep provider-less keyword hits visible at the default memory-search threshold, so FTS-only recall works without requiring `--min-score 0`. (#56473) Thanks @opriz.
+- Memory/LanceDB: resolve runtime dependency manifest lookup from the bundled `extensions/memory-lancedb` path (including flattened dist chunks) so startup no longer fails with a missing `@lancedb/lancedb` dependency error. (#56623) Thanks @LUKSOAgent.
+- Tools/web_search: localize the shared search cache to module scope so same-process global symbol lookups can no longer inspect or mutate cached web-search responses. Thanks @vincentkoc.
+- Agents/silent turns: fail closed on silent memory-flush runs so narrated `NO_REPLY` self-talk cannot stream or finalize into external replies even when block streaming is enabled. (#52593)
+- Browser/plugins: auto-enable the bundled browser plugin when browser config or browser tool policy already references it, and show a clearer CLI error when `plugins.allow` excludes `browser`.
+- Matrix/plugin loading: ship and source-load the crypto bootstrap runtime sidecar correctly so current `main` stops warning about failed Matrix bootstrap loads and `matrix/index` plugin-id mismatches on every invocation. (#53298) thanks @keithce.
+- iOS/Live Activities: mark the `ActivityKit` import in `LiveActivityManager.swift` as `@preconcurrency` so Xcode 26.4 / Swift 6 builds stop failing on strict concurrency checks. (#57180) Thanks @ngutman.
+- Plugins/Matrix: mirror the Matrix crypto WASM runtime dependency into the root packaged install and enforce root/plugin dependency parity so bundled Matrix E2EE crypto resolves correctly in shipped builds. (#57163) Thanks @gumadeiras.
+- Plugins/CLI: add descriptor-backed lazy plugin CLI registration so Matrix can keep its CLI module lazy-loaded without dropping `openclaw matrix ...` from parse-time command registration. (#57165) Thanks @gumadeiras.
+- Plugins/CLI: collect root-help plugin descriptors through a dedicated non-activating CLI metadata path so enabled plugins keep validated config semantics without triggering runtime-only plugin registration work, while preserving runtime CLI command registration for legacy channel plugins that still wire commands from full registration. (#57294) thanks @gumadeiras.
+- Anthropic/OAuth: inject `/fast` `service_tier` hints for direct `sk-ant-oat-*` requests so OAuth-authenticated Anthropic runs stop missing the same overload-routing signal as API-key traffic. Fixes #55758. Thanks @Cypherm and @vincentkoc.
+- Anthropic/service tiers: support explicit `serviceTier` model params for direct Anthropic requests and let them override `/fast` defaults when both are set. (#45453) Thanks @vincentkoc.
+- Auto-reply/fast: accept `/fast status` on the directive-only path, align help/status text with the documented `status|on|off` syntax, and keep current-state replies consistent across command surfaces. Fixes #46095. Thanks @weissfl and @vincentkoc.
+- Telegram/native commands: prefix native command menu callback payloads and preserve `CommandSource: "native"` when Telegram replays them through callback queries, so `/fast` and other native command menus keep working even when text-command routing is disabled. Thanks @vincentkoc.
+- Docs/anchors: fix broken English docs links and make Mint anchor audits run against the English-source docs tree. (#57039) thanks @velvet-shark.
+- Cron/announce: preserve all deliverable text payloads for announce mode instead of collapsing to the last chunk, so multi-line cron reports deliver in full to Telegram forum topics.
+- Harden async approval followup delivery in webchat-only sessions (#57359) Thanks @joshavant.
+- Status: fix cache hit rate exceeding 100% by deriving denominator from prompt-side token fields instead of potentially undersized totalTokens. Fixes #26643.
+- Config/update: stop `openclaw doctor` write-backs from persisting plugin-injected channel defaults, so `openclaw update` no longer seeds config keys that later break service refresh validation. (#56834) Thanks @openperf.
+- Agents/Anthropic failover: treat Anthropic `api_error` payloads with `An unexpected error occurred while processing the response` as transient so retry/fallback can engage instead of surfacing a terminal failure. (#57441) Thanks @zijiess and @vincentkoc.
+- Agents/compaction: keep late compaction-retry rejections handled after the aggregate timeout path wins without swallowing real pre-timeout wait failures, so timed-out retries no longer surface an unhandled rejection on later unsubscribe. (#57451) Thanks @mpz4life and @vincentkoc.
+- Matrix/delivery recovery: treat Synapse `User not in room` replay failures as permanent during startup recovery so poisoned queued messages move to `failed/` instead of crash-looping Matrix after restart. (#57426) thanks @dlardo.
+- Plugins/facades: guard bundled plugin facade loads with a cache-first sentinel so circular re-entry stops crashing `xai`, `sglang`, and `vllm` during gateway plugin startup. (#57508) Thanks @openperf.
+- Agents/MCP: dispose bundled MCP runtimes after one-shot `openclaw agent --local` runs finish, while preserving bundled MCP state across in-run retries so local JSON runs exit cleanly without restarting stateful MCP tools mid-run.
+- Gateway/OpenAI HTTP: restore default operator scopes for bearer-authenticated requests that omit `x-openclaw-scopes`, so headless `/v1/chat/completions` and session-history callers work again after the recent method-scope hardening. (#57596) Thanks @openperf.
+- Gateway/attachments: offload large inbound images without leaking `media://` markers into text-only runs, preserve mixed attachment order for model input/transcripts, and fail closed when model image capability cannot be resolved. (#55513) Thanks @Syysean.
+- Telegram/outbound chunking: use static markdown chunking when Telegram runtime state is unavailable so long outbound Telegram messages still split correctly after cold starts. (#57816) Thanks @ForestDengHK.
 
 ## 2026.4.2
 

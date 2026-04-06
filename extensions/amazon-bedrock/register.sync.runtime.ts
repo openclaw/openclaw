@@ -40,7 +40,9 @@ function createGuardrailWrapStreamFn(
 ): (ctx: { modelId: string; streamFn?: StreamFn }) => StreamFn | null | undefined {
   return (ctx) => {
     const inner = innerWrapStreamFn(ctx);
-    if (!inner) return inner;
+    if (!inner) {
+      return inner;
+    }
     return (model, context, options) => {
       return streamWithPayloadPatch(inner, model, context, options, (payload) => {
         const gc: Record<string, unknown> = {
@@ -88,7 +90,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
 
   /** Extract the AWS region from a bedrock-runtime baseUrl. */
   function extractRegionFromBaseUrl(baseUrl: string | undefined): string | undefined {
-    if (!baseUrl) return undefined;
+    if (!baseUrl) {
+      return undefined;
+    }
     return bedrockRegionRe.exec(baseUrl)?.[1];
   }
 
@@ -108,13 +112,19 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const exact = (providers[providerId] as { baseUrl?: string } | undefined)?.baseUrl;
       if (exact) {
         const region = extractRegionFromBaseUrl(exact);
-        if (region) return region;
+        if (region) {
+          return region;
+        }
       }
       // Fall back to alias matches (e.g. "bedrock" instead of "amazon-bedrock").
       for (const [key, value] of Object.entries(providers)) {
-        if (key === providerId || normalizeProviderId(key) !== providerId) continue;
+        if (key === providerId || normalizeProviderId(key) !== providerId) {
+          continue;
+        }
         const region = extractRegionFromBaseUrl((value as { baseUrl?: string }).baseUrl);
-        if (region) return region;
+        if (region) {
+          return region;
+        }
       }
     }
     return config?.models?.bedrockDiscovery?.region;

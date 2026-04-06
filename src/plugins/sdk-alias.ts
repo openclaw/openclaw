@@ -250,6 +250,7 @@ export function resolvePluginSdkAliasFile(params: {
 
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
+const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 
 export function listPluginSdkExportedSubpaths(
   params: {
@@ -318,7 +319,9 @@ export function resolvePluginSdkScopedAliasMap(
     for (const kind of orderedKinds) {
       const candidate = candidateMap[kind];
       if (fs.existsSync(candidate)) {
-        aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+        for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+          aliasMap[`${packageName}/${subpath}`] = candidate;
+        }
         break;
       }
     }
@@ -376,7 +379,12 @@ export function buildPluginLoaderAliasMap(
       ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
       : {}),
     ...(pluginSdkAlias
-      ? { "openclaw/plugin-sdk": normalizeJitiAliasTargetPath(pluginSdkAlias) }
+      ? Object.fromEntries(
+          PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [
+            packageName,
+            normalizeJitiAliasTargetPath(pluginSdkAlias),
+          ]),
+        )
       : {}),
     ...Object.fromEntries(
       Object.entries(

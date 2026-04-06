@@ -196,9 +196,9 @@ export function resolveFoundryApi(
 
 export function buildFoundryProviderBaseUrl(
   endpoint: string,
-  modelId: string,
-  modelNameHint?: string | null,
-  configuredApi?: ModelApi | string | null,
+  _modelId: string,
+  _modelNameHint?: string | null,
+  _configuredApi?: ModelApi | string | null,
 ): string {
   return buildFoundryV1BaseUrl(endpoint);
 }

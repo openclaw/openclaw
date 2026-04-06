@@ -1,4 +1,4 @@
-import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "../../api.js";
+import type { ReplyPayload, RuntimeEnv } from "../../api.js";
 import { createLoggerBackedRuntime } from "../../api.js";
 import { getTlonRuntime } from "../runtime.js";
 import { createSettingsManager, type TlonSettingsStore } from "../settings.js";
@@ -6,21 +6,20 @@ import { normalizeShip, parseChannelNest } from "../targets.js";
 import { resolveTlonAccount } from "../types.js";
 import { authenticate } from "../urbit/auth.js";
 import { ssrfPolicyFromDangerouslyAllowPrivateNetwork } from "../urbit/context.js";
-import type { Foreigns, DmInvite } from "../urbit/foreigns.js";
+import type { DmInvite, Foreigns } from "../urbit/foreigns.js";
 import { sendDm, sendGroupMessage } from "../urbit/send.js";
 import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { createTlonApprovalRuntime } from "./approval-runtime.js";
 import {
-  type PendingApproval,
-  type AdminCommand,
   createPendingApproval,
-  isApprovalResponse,
   isAdminCommand,
+  isApprovalResponse,
+  type PendingApproval,
 } from "./approval.js";
 import { resolveChannelAuthorization } from "./authorization.js";
 import { createTlonCitationResolver } from "./cites.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
-import { cacheMessage, getChannelHistory, fetchThreadHistory } from "./history.js";
+import { cacheMessage, fetchThreadHistory, getChannelHistory } from "./history.js";
 import { downloadMessageImages } from "./media.js";
 import { createProcessedMessageTracker } from "./processed-messages.js";
 import {
@@ -31,15 +30,13 @@ import {
 } from "./settings-helpers.js";
 import {
   extractMessageText,
-  extractCites,
   formatModelName,
   isBotMentioned,
-  stripBotMention,
   isDmAllowed,
   isGroupInviteAllowed,
   isSummarizationRequest,
   resolveAuthorizedMessageText,
-  type ParsedCite,
+  stripBotMention,
 } from "./utils.js";
 
 export type MonitorTlonOpts = {
@@ -50,7 +47,7 @@ export type MonitorTlonOpts = {
 
 export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<void> {
   const core = getTlonRuntime();
-  const cfg = core.config.loadConfig() as OpenClawConfig;
+  const cfg = core.config.loadConfig();
   if (cfg.channels?.tlon?.enabled === false) {
     return;
   }
@@ -90,7 +87,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       try {
         runtime.log?.(`[tlon] Attempting authentication to ${accountUrl}...`);
         return await authenticate(accountUrl, accountCode, { ssrfPolicy });
-      } catch (error: any) {
+      } catch (error: unknown) {
         runtime.error?.(
           `[tlon] Failed to authenticate (attempt ${attempt}): ${error?.message ?? String(error)}`,
         );
@@ -171,7 +168,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         runtime.log?.(`[tlon] Bot nickname: ${botNickname}`);
       }
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     runtime.log?.(`[tlon] Could not fetch nickname: ${error?.message ?? String(error)}`);
   }
 
@@ -238,7 +235,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         groupChannels = initData.channels;
       }
       initForeigns = initData.foreigns;
-    } catch (error: any) {
+    } catch (error: unknown) {
       runtime.error?.(`[tlon] Auto-discovery failed: ${error?.message ?? String(error)}`);
     }
   }
@@ -305,8 +302,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       senderShip,
       isGroup,
       channelNest,
-      hostShip,
-      channelName,
+      _hostShip,
+      _channelName,
       timestamp,
       parentId,
       isThreadReply,
@@ -323,7 +320,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         if (attachments.length > 0) {
           runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         runtime.log?.(`[tlon] Failed to download images: ${error?.message ?? String(error)}`);
       }
     }
@@ -346,7 +343,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             `[tlon] Added thread context (${threadHistory.length} replies) to message`,
           );
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         runtime?.log?.(`[tlon] Could not fetch thread context: ${error?.message ?? String(error)}`);
         // Continue without thread context - not critical
       }
@@ -393,7 +390,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           "2. Key decisions or conclusions\n" +
           "3. Action items if any\n" +
           "4. Notable participants";
-      } catch (error: any) {
+      } catch (error: unknown) {
         const errorMsg = `Sorry, I encountered an error while fetching the channel history: ${error?.message ?? String(error)}`;
         if (isGroup && groupChannel) {
           const parsed = parseChannelNest(groupChannel);
@@ -569,10 +566,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               extPayload.model ||
               extRoute.model ||
               (typeof defaultModel === "string" ? defaultModel : defaultModel?.primary);
-            extPayload.metadata?.model ||
-              extPayload.model ||
-              extRoute.model ||
-              (typeof defaultModel === "string" ? defaultModel : defaultModel?.primary);
             replyText = `${replyText}\n\n_[Generated by ${formatModelName(modelInfo)}]_`;
           }
 
@@ -613,7 +606,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const _watchedDMs = new Set<string>();
 
   const refreshWatchedChannels = async (): Promise<number> => {
-    const discoveredChannels = await fetchAllChannels(api!, runtime);
+    const discoveredChannels = await fetchAllChannels(api, runtime);
     let newCount = 0;
     for (const channelNest of discoveredChannels) {
       if (!watchedChannels.has(channelNest)) {
@@ -625,15 +618,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   };
 
   const { resolveAllCites } = createTlonCitationResolver({
-    api: { scry: (path) => api!.scry(path) },
+    api: { scry: (path) => api.scry(path) },
     runtime,
   });
 
   const { queueApprovalRequest, handleApprovalResponse, handleAdminCommand } =
     createTlonApprovalRuntime({
       api: {
-        poke: (payload) => api!.poke(payload),
-        scry: (path) => api!.scry(path),
+        poke: (payload) => api.poke(payload),
+        scry: (path) => api.scry(path),
       },
       runtime,
       botShipName,

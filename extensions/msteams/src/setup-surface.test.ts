@@ -145,9 +145,15 @@ describe("msteams setup surface", () => {
     const note = vi.fn(async () => {});
     const confirm = vi.fn(async () => false);
     const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") return "app-id";
-      if (message === "Enter MS Teams App Password") return "app-password";
-      if (message === "Enter MS Teams Tenant ID") return "tenant-id";
+      if (message === "Enter MS Teams App ID") {
+        return "app-id";
+      }
+      if (message === "Enter MS Teams App Password") {
+        return "app-password";
+      }
+      if (message === "Enter MS Teams Tenant ID") {
+        return "tenant-id";
+      }
       throw new Error(`Unexpected prompt: ${message}`);
     });
 

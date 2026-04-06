@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import "./accounts.test-mocks.js";
-import "./zalo-js.test-mocks.js";
 import { zalouserPlugin } from "./channel.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
+import "./zalo-js.test-mocks.js";
 import { listZaloGroupMembersMock } from "./zalo-js.test-mocks.js";
 
 const runtimeStub = createZalouserRuntimeEnv();

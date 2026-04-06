@@ -227,7 +227,7 @@ export async function discoverMantleModels(params: {
         contextWindow: DEFAULT_CONTEXT_WINDOW,
         maxTokens: DEFAULT_MAX_TOKENS,
       }))
-      .sort((a, b) => a.id.localeCompare(b.id));
+      .toSorted((a, b) => a.id.localeCompare(b.id));
 
     discoveryCache.set(cacheKey, { models, fetchedAt: now() });
     return models;

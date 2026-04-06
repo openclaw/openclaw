@@ -93,4 +93,34 @@ describe("models-config provider auth provenance", () => {
       profileId: "openai:default",
     });
   });
+
+  it("resolves plugin-owned synthetic auth through the provider hook", () => {
+    const auth = createProviderAuthResolver(
+      {} as NodeJS.ProcessEnv,
+      {
+        version: 1,
+        profiles: {},
+      },
+      {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key",
+                },
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(auth("xai")).toEqual({
+      apiKey: NON_ENV_SECRETREF_MARKER,
+      discoveryApiKey: "xai-plugin-key",
+      mode: "api_key",
+      source: "none",
+    });
+  });
 });

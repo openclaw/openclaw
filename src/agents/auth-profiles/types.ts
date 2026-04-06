@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 
 export type OAuthProvider = string;
+export type ExternalOAuthManager = "codex-cli" | "minimax-cli";
 
 export type OAuthCredentials = {
   access: string;
@@ -47,9 +48,13 @@ export type OAuthCredential = OAuthCredentials & {
   email?: string;
   displayName?: string;
   /**
-   * Legacy metadata preserved for backwards compatibility with older stores.
+   * Compatibility/runtime metadata for CLI-managed OAuth entries.
+   *
+   * Core routing should prefer external-auth overlay contracts over direct
+   * branching on this field. Persisted stores may still carry it while older
+   * CLI sync paths remain supported.
    */
-  managedBy?: string;
+  managedBy?: ExternalOAuthManager;
 };
 
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
@@ -79,9 +84,7 @@ export type ProfileUsageStats = {
   lastFailureAt?: number;
 };
 
-export type AuthProfileStore = {
-  version: number;
-  profiles: Record<string, AuthProfileCredential>;
+export type AuthProfileState = {
   /**
    * Optional per-agent preferred profile order overrides.
    * This lets you lock/override auth rotation for a specific agent without
@@ -92,6 +95,17 @@ export type AuthProfileStore = {
   /** Usage statistics per profile for round-robin rotation */
   usageStats?: Record<string, ProfileUsageStats>;
 };
+
+export type AuthProfileSecretsStore = {
+  version: number;
+  profiles: Record<string, AuthProfileCredential>;
+};
+
+export type AuthProfileStateStore = {
+  version: number;
+} & AuthProfileState;
+
+export type AuthProfileStore = AuthProfileSecretsStore & AuthProfileState;
 
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;

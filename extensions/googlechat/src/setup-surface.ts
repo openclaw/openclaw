@@ -10,14 +10,8 @@ import {
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-  type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import {
-  listGoogleChatAccountIds,
-  resolveDefaultGoogleChatAccountId,
-  resolveGoogleChatAccount,
-} from "./accounts.js";
-import { googlechatSetupAdapter } from "./setup-core.js";
+import { resolveDefaultGoogleChatAccountId, resolveGoogleChatAccount } from "./accounts.js";
 
 const channel = "googlechat" as const;
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
@@ -41,7 +35,7 @@ const promptAllowFrom = createPromptParsedAllowFromForAccount({
       accountId,
       patch: {
         dm: {
-          ...(resolveGoogleChatAccount({ cfg, accountId }).config.dm ?? {}),
+          ...resolveGoogleChatAccount({ cfg, accountId }).config.dm,
           allowFrom,
         },
       },

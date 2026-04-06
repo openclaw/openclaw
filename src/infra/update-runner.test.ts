@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -12,6 +12,7 @@ import { runGatewayUpdate } from "./update-runner.js";
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
 const WHATSAPP_LIGHT_RUNTIME_API = bundledDistPluginFile("whatsapp", "light-runtime-api.js");
+const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-" });
 
 function toCommandResult(response?: CommandResponse): CommandResult {
   return {
@@ -32,23 +33,18 @@ function createRunner(responses: Record<string, CommandResponse>) {
 }
 
 describe("runGatewayUpdate", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
   let tempDir: string;
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
+    await fixtureRootTracker.setup();
   });
 
   afterAll(async () => {
-    if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-    }
+    await fixtureRootTracker.cleanup();
   });
 
   beforeEach(async () => {
-    tempDir = path.join(fixtureRoot, `case-${caseId++}`);
-    await fs.mkdir(tempDir, { recursive: true });
+    tempDir = await fixtureRootTracker.make("case");
     await fs.writeFile(path.join(tempDir, "openclaw.mjs"), "export {};\n", "utf-8");
   });
 
@@ -571,6 +567,120 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain("pnpm lint");
     expect(calls).toContain("pnpm ui:build");
     expect(pnpmEnvPaths.some((value) => value.includes("openclaw-update-pnpm-"))).toBe(true);
+  });
+
+  it("retries windows pnpm git installs with --ignore-scripts for dev updates", async () => {
+    await setupGitPackageManagerFixture();
+    const calls: string[] = [];
+    const upstreamSha = "upstream123";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    let preflightInstallAttempts = 0;
+    let finalInstallAttempts = 0;
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      const runCommand = async (
+        argv: string[],
+        options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
+      ) => {
+        const key = argv.join(" ");
+        calls.push(key);
+
+        if (key === `git -C ${tempDir} rev-parse --show-toplevel`) {
+          return { stdout: tempDir, stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse HEAD`) {
+          return { stdout: "abc123", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
+          return { stdout: "main", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
+          return { stdout: "origin/main", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
+          return { stdout: upstreamSha, stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`) {
+          return { stdout: `${upstreamSha}\n`, stderr: "", code: 0 };
+        }
+        if (key === "pnpm --version") {
+          return { stdout: "10.0.0", stderr: "", code: 0 };
+        }
+        if (
+          key.startsWith(
+            `git -C ${tempDir} worktree add --detach /tmp/openclaw-update-preflight-`,
+          ) &&
+          key.endsWith(` /worktree ${upstreamSha}`)
+        ) {
+          return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
+        }
+        if (
+          key.startsWith("git -C /tmp/openclaw-update-preflight-") &&
+          key.includes("/worktree checkout --detach ") &&
+          key.endsWith(upstreamSha)
+        ) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === "pnpm install") {
+          if (options?.cwd?.includes(`${path.sep}openclaw-update-preflight-`)) {
+            preflightInstallAttempts += 1;
+            return preflightInstallAttempts === 1
+              ? { stdout: "", stderr: "sharp: Please add node-gyp to your dependencies", code: 1 }
+              : { stdout: "", stderr: "", code: 0 };
+          }
+          if (options?.cwd === tempDir) {
+            finalInstallAttempts += 1;
+            return finalInstallAttempts === 1
+              ? { stdout: "", stderr: "sharp: Please add node-gyp to your dependencies", code: 1 }
+              : { stdout: "", stderr: "", code: 0 };
+          }
+        }
+        if (key === "pnpm install --ignore-scripts") {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === "pnpm build" || key === "pnpm lint" || key === "pnpm ui:build") {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (
+          key.startsWith(
+            `git -C ${tempDir} worktree remove --force /tmp/openclaw-update-preflight-`,
+          )
+        ) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} worktree prune`) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === `git -C ${tempDir} rebase ${upstreamSha}`) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        if (key === doctorCommand) {
+          return { stdout: "", stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      };
+
+      const result = await runWithCommand(runCommand, { channel: "dev" });
+
+      expect(result.status).toBe("ok");
+      expect(preflightInstallAttempts).toBe(1);
+      expect(finalInstallAttempts).toBe(1);
+      expect(result.steps.map((step) => step.name)).toContain(
+        "preflight deps install (ignore scripts) (upstream)",
+      );
+      expect(result.steps.map((step) => step.name)).toContain("deps install (ignore scripts)");
+      expect(calls).toContain("pnpm install --ignore-scripts");
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("does not fall back to npm scripts when a pnpm repo cannot bootstrap pnpm", async () => {

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -319,7 +320,7 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   if (parsed.length <= 1) {
     return 0.2;
   }
-  const spanDays = Math.max(0, (parsed.at(-1)! - parsed[0]!) / DAY_MS);
+  const spanDays = Math.max(0, (parsed.at(-1)! - parsed[0]) / DAY_MS);
   const spacing = clampScore(Math.log1p(parsed.length - 1) / Math.log1p(4));
   const span = clampScore(spanDays / 7);
   return clampScore(0.55 * spacing + 0.45 * span);
@@ -436,7 +437,7 @@ function toFiniteNonNegativeInt(value: unknown, fallback: number): number {
 function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights {
   const merged = {
     ...DEFAULT_PROMOTION_WEIGHTS,
-    ...(weights ?? {}),
+    ...weights,
   };
   const frequency = Math.max(0, merged.frequency);
   const relevance = Math.max(0, merged.relevance);
@@ -593,7 +594,9 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
       }
 
       if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
-        throw new Error(`Timed out waiting for short-term promotion lock at ${lockPath}`);
+        throw new Error(`Timed out waiting for short-term promotion lock at ${lockPath}`, {
+          cause: err,
+        });
       }
 
       await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
@@ -796,6 +799,18 @@ export async function recordShortTermRecalls(params: {
 
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.recorded",
+      timestamp: nowIso,
+      query,
+      resultCount: relevant.length,
+      results: relevant.map((result) => ({
+        path: normalizeMemoryPath(result.path),
+        startLine: Math.max(1, Math.floor(result.startLine)),
+        endLine: Math.max(1, Math.floor(result.endLine)),
+        score: clampScore(result.score),
+      })),
+    });
   });
 }
 
@@ -1297,6 +1312,20 @@ export async function applyShortTermPromotions(
     }
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.promotion.applied",
+      timestamp: nowIso,
+      memoryPath,
+      applied: rehydratedSelected.length,
+      candidates: rehydratedSelected.map((candidate) => ({
+        key: candidate.key,
+        path: candidate.path,
+        startLine: candidate.startLine,
+        endLine: candidate.endLine,
+        score: candidate.score,
+        recallCount: candidate.recallCount,
+      })),
+    });
 
     return {
       memoryPath,

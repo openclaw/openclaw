@@ -1,9 +1,7 @@
-import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
-import os from "node:os";
-import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,6 +26,9 @@ vi.mock("./server.runtime.js", () => {
 
 let startMediaServer: typeof import("./server.js").startMediaServer;
 let realFetch: typeof import("undici").fetch;
+const mediaRootTracker = createSuiteTempRootTracker({
+  prefix: "openclaw-media-outside-workspace-",
+});
 const LOOPBACK_FETCH_ENV = {
   HTTP_PROXY: undefined,
   HTTPS_PROXY: undefined,
@@ -56,7 +57,8 @@ describe("media server outside-workspace mapping", () => {
     const require = createRequire(import.meta.url);
     ({ startMediaServer } = await import("./server.js"));
     ({ fetch: realFetch } = require("undici") as typeof import("undici"));
-    mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-outside-workspace-"));
+    await mediaRootTracker.setup();
+    mediaDir = await mediaRootTracker.make("case");
     try {
       server = await startMediaServer(0, 1_000);
     } catch (error) {
@@ -87,7 +89,7 @@ describe("media server outside-workspace mapping", () => {
     if (boundServer) {
       await new Promise((resolve) => boundServer.close(resolve));
     }
-    await fs.rm(mediaDir, { recursive: true, force: true });
+    await mediaRootTracker.cleanup();
     mediaDir = "";
   });
 

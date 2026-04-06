@@ -744,7 +744,11 @@ async function deliverZalouserReply(params: {
       statusSink?.({ lastOutboundAt: Date.now() });
     },
     onMediaError: (error) => {
-      runtime.error(`Zalouser media send failed: ${String(error)}`);
+      runtime.error(
+        `Zalouser media send failed: ${
+          error instanceof Error ? error.message : JSON.stringify(error)
+        }`,
+      );
     },
   });
 }

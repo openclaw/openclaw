@@ -424,8 +424,8 @@ export function resolveContextTokensForModel(params: {
 
   // When provider is explicitly given and the model ID is bare (no slash),
   // try the provider-qualified cache key BEFORE the bare key.  Discovery
-  // entries are stored under qualified IDs (e.g. "google/
-  // gemini-3.1-pro-preview" → 1M), while the bare key may hold a cross-
+  // entries are stored under qualified IDs (e.g. "google-gemini-cli/
+  // gemini-3.1-pro-preview → 1M"), while the bare key may hold a cross-
   // provider minimum (128k).  Returning the qualified entry gives the correct
   // provider-specific window for /status and session context-token persistence.
   //
@@ -454,7 +454,7 @@ export function resolveContextTokensForModel(params: {
   }
 
   // When provider is implicit, try qualified as a last resort so inferred
-  // provider/model pairs (e.g. model="google/gemini-3.1-pro")
+  // provider/model pairs (e.g. model="google-gemini-cli/gemini-3.1-pro")
   // still find discovery entries stored under that qualified ID.
   if (!params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(

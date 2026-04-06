@@ -125,14 +125,6 @@
       "destination": "/concepts/context"
     },
     {
-      "source": "/zh-CN",
-      "destination": "/zh-CN/index"
-    },
-    {
-      "source": "/zh-CN/",
-      "destination": "/zh-CN/index"
-    },
-    {
       "source": "/compaction",
       "destination": "/concepts/compaction"
     },
@@ -1116,6 +1108,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/webhooks",
                   "plugins/voice-call",
                   {
                     "group": "Building Plugins",
@@ -1366,6 +1359,7 @@
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
+                      "gateway/cli-backends",
                       "gateway/local-models"
                     ]
                   },

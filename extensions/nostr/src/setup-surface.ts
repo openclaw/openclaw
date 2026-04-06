@@ -1,22 +1,20 @@
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import {
-  createTopLevelChannelParsedAllowFromPrompt,
-  createTopLevelChannelDmPolicy,
   createStandardChannelSetupStatus,
+  createTopLevelChannelDmPolicy,
+  createTopLevelChannelParsedAllowFromPrompt,
+  formatDocsLink,
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
   patchTopLevelChannelConfigSection,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-bus.js";
 import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";

@@ -12,16 +12,16 @@ import {
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildCloudflareAiGatewayCatalogProvider } from "./catalog-provider.js";
-import {
-  buildCloudflareAiGatewayModelDefinition,
-  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
-  resolveCloudflareAiGatewayBaseUrl,
-} from "./models.js";
+import { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "./models.js";
 import { applyCloudflareAiGatewayConfig, buildCloudflareAiGatewayConfigPatch } from "./onboard.js";
 
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
 const PROFILE_ID = "cloudflare-ai-gateway:default";
+
+function readRequiredTextInput(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 async function resolveCloudflareGatewayMetadataInteractive(ctx: {
   accountId?: string;
@@ -38,16 +38,16 @@ async function resolveCloudflareGatewayMetadataInteractive(ctx: {
   if (!accountId) {
     const value = await ctx.prompter.text({
       message: "Enter Cloudflare Account ID",
-      validate: (val) => (String(val ?? "").trim() ? undefined : "Account ID is required"),
+      validate: (val) => (readRequiredTextInput(val) ? undefined : "Account ID is required"),
     });
-    accountId = String(value ?? "").trim();
+    accountId = readRequiredTextInput(value);
   }
   if (!gatewayId) {
     const value = await ctx.prompter.text({
       message: "Enter Cloudflare AI Gateway ID",
-      validate: (val) => (String(val ?? "").trim() ? undefined : "Gateway ID is required"),
+      validate: (val) => (readRequiredTextInput(val) ? undefined : "Gateway ID is required"),
     });
-    gatewayId = String(value ?? "").trim();
+    gatewayId = readRequiredTextInput(value);
   }
   return { accountId, gatewayId };
 }

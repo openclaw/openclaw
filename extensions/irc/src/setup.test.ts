@@ -275,7 +275,7 @@ describe("irc setup", () => {
     ).toBeNull();
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: { channels: { irc: {} } },
         accountId: "default",
         input: {

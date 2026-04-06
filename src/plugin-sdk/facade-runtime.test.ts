@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -13,15 +12,15 @@ import {
   resetFacadeRuntimeStateForTest,
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
+import { createPluginSdkTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
+const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const FACADE_RUNTIME_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
 
 function createBundledPluginDir(prefix: string, marker: string): string {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(rootDir);
+  const rootDir = createTempDirSync(prefix);
   fs.mkdirSync(path.join(rootDir, "demo"), { recursive: true });
   fs.writeFileSync(
     path.join(rootDir, "demo", "api.js"),
@@ -32,8 +31,7 @@ function createBundledPluginDir(prefix: string, marker: string): string {
 }
 
 function createThrowingPluginDir(prefix: string): string {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(rootDir);
+  const rootDir = createTempDirSync(prefix);
   fs.mkdirSync(path.join(rootDir, "bad"), { recursive: true });
   fs.writeFileSync(
     path.join(rootDir, "bad", "api.js"),
@@ -44,8 +42,7 @@ function createThrowingPluginDir(prefix: string): string {
 }
 
 function createCircularPluginDir(prefix: string): string {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(rootDir);
+  const rootDir = createTempDirSync(prefix);
   fs.mkdirSync(path.join(rootDir, "demo"), { recursive: true });
   fs.writeFileSync(
     path.join(rootDir, "facade.mjs"),
@@ -91,9 +88,6 @@ afterEach(() => {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
-  }
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
-    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -267,11 +261,9 @@ describe("plugin-sdk facade runtime", () => {
   });
 
   it("resolves a globally-installed plugin whose rootDir basename matches the dirName", () => {
-    const emptyBundled = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-facade-empty-bundled-"));
-    tempDirs.push(emptyBundled);
+    const emptyBundled = createTempDirSync("openclaw-facade-empty-bundled-");
 
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-facade-state-"));
-    tempDirs.push(stateDir);
+    const stateDir = createTempDirSync("openclaw-facade-state-");
     const lineDir = path.join(stateDir, "extensions", "line");
     fs.mkdirSync(lineDir, { recursive: true });
     fs.writeFileSync(
@@ -325,11 +317,9 @@ describe("plugin-sdk facade runtime", () => {
   });
 
   it("resolves a globally-installed plugin with an encoded scoped rootDir basename", () => {
-    const emptyBundled = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-facade-empty-bundled-"));
-    tempDirs.push(emptyBundled);
+    const emptyBundled = createTempDirSync("openclaw-facade-empty-bundled-");
 
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-facade-state-"));
-    tempDirs.push(stateDir);
+    const stateDir = createTempDirSync("openclaw-facade-state-");
     const encodedDir = path.join(stateDir, "extensions", "@openclaw+line");
     fs.mkdirSync(encodedDir, { recursive: true });
     fs.writeFileSync(

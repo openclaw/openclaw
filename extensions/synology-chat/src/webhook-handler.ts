@@ -175,19 +175,25 @@ function firstNonEmptyString(value: unknown): string | undefined {
   if (Array.isArray(value)) {
     for (const item of value) {
       const normalized = firstNonEmptyString(item);
-      if (normalized) return normalized;
+      if (normalized) {
+        return normalized;
+      }
     }
     return undefined;
   }
-  if (value === null || value === undefined) return undefined;
-  const str = String(value).trim();
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  const str = typeof value === "string" ? value.trim() : "";
   return str.length > 0 ? str : undefined;
 }
 
 function pickAlias(record: Record<string, unknown>, aliases: string[]): string | undefined {
   for (const alias of aliases) {
     const normalized = firstNonEmptyString(record[alias]);
-    if (normalized) return normalized;
+    if (normalized) {
+      return normalized;
+    }
   }
   return undefined;
 }
@@ -210,7 +216,9 @@ function parseFormBody(body: string): Record<string, unknown> {
 }
 
 function parseJsonBody(body: string): Record<string, unknown> {
-  if (!body.trim()) return {};
+  if (!body.trim()) {
+    return {};
+  }
   const parsed = JSON.parse(body);
   if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
     throw new Error("Invalid JSON body");
@@ -227,13 +235,19 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
     headerValue(req.headers["x-synology-token"]) ??
     headerValue(req.headers["x-webhook-token"]) ??
     headerValue(req.headers["x-openclaw-token"]);
-  if (explicit) return explicit;
+  if (explicit) {
+    return explicit;
+  }
 
   const auth = headerValue(req.headers.authorization);
-  if (!auth) return undefined;
+  if (!auth) {
+    return undefined;
+  }
 
   const bearerMatch = auth.match(/^Bearer\s+(.+)$/i);
-  if (bearerMatch?.[1]) return bearerMatch[1].trim();
+  if (bearerMatch?.[1]) {
+    return bearerMatch[1].trim();
+  }
   return auth.trim();
 }
 
@@ -279,7 +293,9 @@ function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayloa
     pickAlias(bodyFields, ["text", "message", "content"]) ??
     pickAlias(queryFields, ["text", "message", "content"]);
 
-  if (!token || !userId || !text) return null;
+  if (!token || !userId || !text) {
+    return null;
+  }
 
   return {
     token,

@@ -11,13 +11,13 @@ import {
   expectImageLifecycleDelivery,
   postWebhookReplay,
 } from "../test-support/lifecycle-test-support.js";
+import { handleZaloWebhookRequest } from "./monitor.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
-  handleZaloWebhookRequest,
   registerZaloWebhookTarget,
-} from "./monitor.js";
+} from "./monitor.webhook.js";
 import type { ResolvedZaloAccount } from "./types.js";
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",

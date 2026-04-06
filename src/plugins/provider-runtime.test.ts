@@ -8,6 +8,7 @@ import {
 } from "./provider-runtime.test-support.js";
 import type {
   AnyAgentTool,
+  ProviderExternalAuthProfile,
   ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
   ProviderRuntimeModel,
@@ -49,6 +50,7 @@ let resolveProviderDefaultThinkingLevel: typeof import("./provider-runtime.js").
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
 let resolveProviderReplayPolicyWithPlugin: typeof import("./provider-runtime.js").resolveProviderReplayPolicyWithPlugin;
+let resolveExternalAuthProfilesWithPlugins: typeof import("./provider-runtime.js").resolveExternalAuthProfilesWithPlugins;
 let resolveProviderSyntheticAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderSyntheticAuthWithPlugin;
 let shouldDeferProviderSyntheticProfileAuthWithPlugin: typeof import("./provider-runtime.js").shouldDeferProviderSyntheticProfileAuthWithPlugin;
 let sanitizeProviderReplayHistoryWithPlugin: typeof import("./provider-runtime.js").sanitizeProviderReplayHistoryWithPlugin;
@@ -256,6 +258,7 @@ describe("provider-runtime", () => {
       resolveProviderModernModelRef,
       resolveProviderReasoningOutputModeWithPlugin,
       resolveProviderReplayPolicyWithPlugin,
+      resolveExternalAuthProfilesWithPlugins,
       resolveProviderSyntheticAuthWithPlugin,
       shouldDeferProviderSyntheticProfileAuthWithPlugin,
       sanitizeProviderReplayHistoryWithPlugin,
@@ -303,16 +306,16 @@ describe("provider-runtime", () => {
   it("matches providers by hook alias for runtime hook lookup", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {
-        id: "openai-codex",
-        label: "OpenAI Codex",
-        hookAliases: ["codex-cli"],
+        id: "anthropic",
+        label: "Anthropic",
+        hookAliases: ["claude-cli"],
         auth: [],
       },
     ]);
 
     expectProviderRuntimePluginLoad({
-      provider: "codex-cli",
-      expectedPluginId: "openai-codex",
+      provider: "claude-cli",
+      expectedPluginId: "anthropic",
     });
   });
 
@@ -644,6 +647,22 @@ describe("provider-runtime", () => {
           },
           createEmbeddingProvider,
           resolveSyntheticAuth,
+          resolveExternalAuthProfiles: ({ store }): ProviderExternalAuthProfile[] =>
+            store.profiles["demo:managed"]
+              ? []
+              : [
+                  {
+                    persistence: "runtime-only",
+                    profileId: "demo:managed",
+                    credential: {
+                      type: "oauth",
+                      provider: DEMO_PROVIDER_ID,
+                      access: "external-access",
+                      refresh: "external-refresh",
+                      expires: Date.now() + 60_000,
+                    },
+                  },
+                ],
           shouldDeferSyntheticProfileAuth,
           normalizeResolvedModel: ({ model }) => ({
             ...model,
@@ -1034,6 +1053,29 @@ describe("provider-runtime", () => {
             }),
           }),
         expected: true,
+      },
+      {
+        actual: () =>
+          resolveExternalAuthProfilesWithPlugins({
+            env: process.env,
+            context: {
+              env: process.env,
+              store: { version: 1, profiles: {} },
+            },
+          }),
+        expected: [
+          {
+            persistence: "runtime-only",
+            profileId: "demo:managed",
+            credential: {
+              type: "oauth",
+              provider: DEMO_PROVIDER_ID,
+              access: "external-access",
+              refresh: "external-refresh",
+              expires: expect.any(Number),
+            },
+          },
+        ],
       },
       {
         actual: () =>

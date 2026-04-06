@@ -99,7 +99,7 @@ function getMessageContentType(
 
 function extractMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
   if (typeof extractMessageContent === "function") {
-    return extractMessageContent(message) as proto.IMessage | undefined;
+    return extractMessageContent(message);
   }
   const normalized = fallbackNormalizeMessageContent(message);
   const contentType = fallbackGetContentType(normalized);

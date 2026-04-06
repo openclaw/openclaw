@@ -77,7 +77,7 @@ describe.skipIf(!LIVE)("music generation provider live", () => {
           testCase.providerId,
           "music provider",
         );
-        const providerModel = resolveProviderModelForLiveTest(testCase.providerId, modelRef!);
+        const providerModel = resolveProviderModelForLiveTest(testCase.providerId, modelRef);
 
         const result = await provider.generateMusic({
           provider: testCase.providerId,

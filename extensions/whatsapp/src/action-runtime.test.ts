@@ -200,7 +200,7 @@ describe("handleWhatsAppAction", () => {
           reactionConfig(reactionLevel),
         ),
       ).rejects.toThrow(
-        new RegExp(`WhatsApp agent reactions disabled \\(reactionLevel=\"${reactionLevel}\"\\)`),
+        new RegExp(`WhatsApp agent reactions disabled \\(reactionLevel="${reactionLevel}"\\)`),
       );
       expect(sendReactionWhatsApp).not.toHaveBeenCalled();
     },

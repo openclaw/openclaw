@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 type StageBundledPluginRuntimeDeps = (params?: { cwd?: string; repoRoot?: string }) => void;
 
@@ -16,9 +16,7 @@ async function loadStageBundledPluginRuntimeDeps(): Promise<StageBundledPluginRu
 const tempDirs: string[] = [];
 
 function makeRepoRoot(prefix: string): string {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(repoRoot);
-  return repoRoot;
+  return makeTrackedTempDir(prefix, tempDirs);
 }
 
 function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
@@ -28,9 +26,7 @@ function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("stageBundledPluginRuntimeDeps", () => {

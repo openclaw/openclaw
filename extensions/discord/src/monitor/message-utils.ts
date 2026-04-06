@@ -1,5 +1,10 @@
 import type { ChannelType, Client, Message } from "@buape/carbon";
-import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
+import {
+  MessageReferenceType,
+  StickerFormatType,
+  type APIAttachment,
+  type APIStickerItem,
+} from "discord-api-types/v10";
 import { fetchRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -253,35 +258,61 @@ export async function resolveForwardedMediaList(
   options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
   const snapshots = resolveDiscordMessageSnapshots(message);
-  if (snapshots.length === 0) {
-    return [];
-  }
   const out: DiscordMediaInfo[] = [];
   const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(options?.ssrfPolicy);
-  for (const snapshot of snapshots) {
-    await appendResolvedMediaFromAttachments({
-      attachments: snapshot.message?.attachments,
-      maxBytes,
-      out,
-      errorPrefix: "discord: failed to download forwarded attachment",
-      fetchImpl: options?.fetchImpl,
-      ssrfPolicy: resolvedSsrFPolicy,
-      readIdleTimeoutMs: options?.readIdleTimeoutMs,
-      totalTimeoutMs: options?.totalTimeoutMs,
-      abortSignal: options?.abortSignal,
-    });
-    await appendResolvedMediaFromStickers({
-      stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
-      maxBytes,
-      out,
-      errorPrefix: "discord: failed to download forwarded sticker",
-      fetchImpl: options?.fetchImpl,
-      ssrfPolicy: resolvedSsrFPolicy,
-      readIdleTimeoutMs: options?.readIdleTimeoutMs,
-      totalTimeoutMs: options?.totalTimeoutMs,
-      abortSignal: options?.abortSignal,
-    });
+  if (snapshots.length > 0) {
+    for (const snapshot of snapshots) {
+      await appendResolvedMediaFromAttachments({
+        attachments: snapshot.message?.attachments,
+        maxBytes,
+        out,
+        errorPrefix: "discord: failed to download forwarded attachment",
+        fetchImpl: options?.fetchImpl,
+        ssrfPolicy: resolvedSsrFPolicy,
+        readIdleTimeoutMs: options?.readIdleTimeoutMs,
+        totalTimeoutMs: options?.totalTimeoutMs,
+        abortSignal: options?.abortSignal,
+      });
+      await appendResolvedMediaFromStickers({
+        stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
+        maxBytes,
+        out,
+        errorPrefix: "discord: failed to download forwarded sticker",
+        fetchImpl: options?.fetchImpl,
+        ssrfPolicy: resolvedSsrFPolicy,
+        readIdleTimeoutMs: options?.readIdleTimeoutMs,
+        totalTimeoutMs: options?.totalTimeoutMs,
+        abortSignal: options?.abortSignal,
+      });
+    }
+    return out;
   }
+  const referencedForward = resolveDiscordReferencedForwardMessage(message);
+  if (!referencedForward) {
+    return out;
+  }
+  await appendResolvedMediaFromAttachments({
+    attachments: referencedForward.attachments,
+    maxBytes,
+    out,
+    errorPrefix: "discord: failed to download forwarded attachment",
+    fetchImpl: options?.fetchImpl,
+    ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs: options?.readIdleTimeoutMs,
+    totalTimeoutMs: options?.totalTimeoutMs,
+    abortSignal: options?.abortSignal,
+  });
+  await appendResolvedMediaFromStickers({
+    stickers: resolveDiscordMessageStickers(referencedForward),
+    maxBytes,
+    out,
+    errorPrefix: "discord: failed to download forwarded sticker",
+    fetchImpl: options?.fetchImpl,
+    ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs: options?.readIdleTimeoutMs,
+    totalTimeoutMs: options?.totalTimeoutMs,
+    abortSignal: options?.abortSignal,
+  });
   return out;
 }
 
@@ -635,7 +666,21 @@ function resolveDiscordMentions(text: string, message: Message): string {
 }
 
 function resolveDiscordForwardedMessagesText(message: Message): string {
-  return resolveDiscordForwardedMessagesTextFromSnapshots(resolveDiscordMessageSnapshots(message));
+  const snapshots = resolveDiscordMessageSnapshots(message);
+  if (snapshots.length > 0) {
+    return resolveDiscordForwardedMessagesTextFromSnapshots(snapshots);
+  }
+  const referencedForward = resolveDiscordReferencedForwardMessage(message);
+  if (!referencedForward) {
+    return "";
+  }
+  const referencedText = resolveDiscordMessageText(referencedForward);
+  if (!referencedText) {
+    return "";
+  }
+  const authorLabel = formatDiscordSnapshotAuthor(referencedForward.author);
+  const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
+  return `${heading}\n${referencedText}`;
 }
 
 function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
@@ -679,6 +724,12 @@ function buildDiscordForwardedMessageBlock(
   const authorLabel = formatDiscordSnapshotAuthor(snapshotMessage.author);
   const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
   return `${heading}\n${text}`;
+}
+
+function resolveDiscordReferencedForwardMessage(message: Message): Message | null {
+  return message.messageReference?.type === MessageReferenceType.Forward
+    ? message.referencedMessage
+    : null;
 }
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {

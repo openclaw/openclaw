@@ -43,7 +43,7 @@ function createApi() {
     registerGatewayMethod,
     registerService,
     registerTool,
-  }) as OpenClawPluginApi;
+  });
   return { api, registerCli, registerGatewayMethod, registerService, registerTool };
 }
 

@@ -181,7 +181,7 @@ async function resolveRealtimeProvider(params: {
   const provider = resolution.provider;
   return {
     provider,
-    providerConfig: resolution.providerConfig as RealtimeVoiceProviderConfig,
+    providerConfig: resolution.providerConfig,
   };
 }
 
@@ -223,7 +223,7 @@ export async function createVoiceCallRuntime(params: {
   const realtimeProvider = config.realtime.enabled
     ? await resolveRealtimeProvider({
         config,
-        fullConfig: (fullConfig ?? (coreConfig as OpenClawConfig)) as OpenClawConfig,
+        fullConfig: fullConfig ?? (coreConfig as OpenClawConfig),
       })
     : null;
   const webhookServer = new VoiceCallWebhookServer(
@@ -231,7 +231,7 @@ export async function createVoiceCallRuntime(params: {
     manager,
     provider,
     coreConfig,
-    (fullConfig ?? (coreConfig as OpenClawConfig)) as OpenClawConfig,
+    fullConfig ?? (coreConfig as OpenClawConfig),
     agentRuntime,
   );
   if (realtimeProvider) {

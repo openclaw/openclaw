@@ -206,6 +206,27 @@ async function runMainAgent(message: string, idempotencyKey: string) {
   return respond;
 }
 
+async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
+  const loaded = mocks.loadSessionEntry();
+  const canonicalKey = loaded?.canonicalKey ?? "agent:main:main";
+  const existingEntry = structuredClone(loaded?.entry ?? buildExistingMainStoreEntry());
+  let capturedEntry: Record<string, unknown> | undefined;
+  mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+    const store: Record<string, unknown> = {
+      [canonicalKey]: existingEntry,
+    };
+    const result = await updater(store);
+    capturedEntry = result as Record<string, unknown>;
+    return result;
+  });
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+  await runMainAgent("hi", idempotencyKey);
+  return capturedEntry;
+}
+
 function readLastAgentCommandCall():
   | {
       message?: string;
@@ -431,6 +452,20 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("preserves cliSessionIds from existing session entry", async () => {
+    const existingCliSessionIds = { "claude-cli": "abc-123-def" };
+    const existingClaudeCliSessionId = "abc-123-def";
+
+    mockMainSessionEntry({
+      cliSessionIds: existingCliSessionIds,
+      claudeCliSessionId: existingClaudeCliSessionId,
+    });
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem");
+    expect(capturedEntry).toBeDefined();
+    expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
+    expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
+  });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
     const completedRun = {
@@ -939,6 +974,15 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("handles missing cliSessionIds gracefully", async () => {
+    mockMainSessionEntry({});
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-2");
+    expect(capturedEntry).toBeDefined();
+    // Should be undefined, not cause an error
+    expect(capturedEntry?.cliSessionIds).toBeUndefined();
+    expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
+  });
   it("prunes legacy main alias keys when writing a canonical session entry", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {

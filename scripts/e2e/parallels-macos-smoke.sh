@@ -41,6 +41,7 @@ RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-smoke.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_INSTALL_S=900
+TIMEOUT_UPDATE_DEV_S=1500
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=60
@@ -708,13 +709,24 @@ run_dev_channel_update() {
   update_entry="$update_root/openclaw.mjs"
   ensure_guest_pnpm_for_dev_update
   printf 'update-dev: run\n'
-  guest_current_user_exec /bin/rm -rf "$update_root"
-  guest_current_user_exec_path "$bootstrap_bin:$GUEST_EXEC_PATH" \
-    "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" update --channel dev --yes --json
+  guest_current_user_sh "$(cat <<EOF
+rm -rf $(shell_quote "$update_root")
+export PATH=$(shell_quote "$bootstrap_bin:$GUEST_EXEC_PATH")
+$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY update --channel dev --yes --json
+EOF
+)"
   printf 'update-dev: git-version\n'
-  guest_current_user_node_cli "$update_entry" --version
+  guest_current_user_sh "$(cat <<EOF
+export PATH=$(shell_quote "$GUEST_EXEC_PATH")
+$GUEST_NODE_BIN $(shell_quote "$update_entry") --version
+EOF
+)"
   printf 'update-dev: git-status\n'
-  guest_current_user_node_cli "$update_entry" update status --json
+  guest_current_user_sh "$(cat <<EOF
+export PATH=$(shell_quote "$GUEST_EXEC_PATH")
+$GUEST_NODE_BIN $(shell_quote "$update_entry") update status --json
+EOF
+)"
 }
 
 verify_dev_channel_update() {
@@ -1358,7 +1370,7 @@ run_upgrade_lane() {
     phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
     phase_run "upgrade.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   else
-    phase_run "upgrade.update-dev" "$TIMEOUT_INSTALL_S" run_dev_channel_update
+    phase_run "upgrade.update-dev" "$TIMEOUT_UPDATE_DEV_S" run_dev_channel_update
     UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.update-dev)")"
     phase_run "upgrade.verify-dev-channel" "$TIMEOUT_VERIFY_S" verify_dev_channel_update
   fi

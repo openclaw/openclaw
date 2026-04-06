@@ -13,11 +13,7 @@ import {
 } from "./completion-fish.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry.js";
 import { getProgramContext } from "./program/program-context.js";
-import {
-  getSubCliEntries,
-  loadValidatedConfigForPluginRegistration,
-  registerSubCliByName,
-} from "./program/register.subclis.js";
+import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
 
 const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 type CompletionShell = (typeof COMPLETION_SHELLS)[number];
@@ -277,11 +273,10 @@ export function registerCompletionCli(program: Command) {
         await registerSubCliByName(program, entry.name);
       }
 
-      const config = await loadValidatedConfigForPluginRegistration();
-      if (config) {
-        const { registerPluginCliCommands } = await import("../plugins/cli.js");
-        await registerPluginCliCommands(program, config, undefined, undefined, { mode: "eager" });
-      }
+      const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
+      await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+        mode: "eager",
+      });
 
       if (options.writeState) {
         const writeShells = options.shell ? [shell] : [...COMPLETION_SHELLS];

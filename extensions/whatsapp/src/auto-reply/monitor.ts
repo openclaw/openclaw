@@ -89,7 +89,7 @@ export async function monitorWebChannel(
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
   const statusController = createWebChannelStatusController(tuning.statusSink);
-  const status = statusController.snapshot();
+  const _status = statusController.snapshot();
   statusController.emit();
 
   const baseCfg = loadConfig();

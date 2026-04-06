@@ -27,7 +27,7 @@ export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableP
     missingConfiguredProvider: false,
     provider:
       configuredProvider ??
-      [...params.listProviders()].sort(
+      [...params.listProviders()].toSorted(
         (left, right) =>
           (left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER) -
           (right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER),
@@ -53,7 +53,7 @@ export function resolveProviderRawConfig(params: {
       : undefined;
 
   return {
-    ...(canonicalProviderConfig ?? {}),
-    ...(selectedProviderConfig ?? {}),
+    ...canonicalProviderConfig,
+    ...selectedProviderConfig,
   };
 }

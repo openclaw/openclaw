@@ -32,15 +32,19 @@ const doctorContractCache = new Map<string, PluginDoctorContractEntry[]>();
 
 function getJiti(modulePath: string) {
   const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
+  const tryNative = shouldPreferNativeJiti(modulePath);
   const cacheKey = JSON.stringify({
-    tryNative: shouldPreferNativeJiti(modulePath),
+    tryNative,
     aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
   });
   const cached = jitiLoaders.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const loader = createJiti(modulePath, buildPluginLoaderJitiOptions(aliasMap));
+  const loader = createJiti(modulePath, {
+    ...buildPluginLoaderJitiOptions(aliasMap),
+    tryNative,
+  });
   jitiLoaders.set(cacheKey, loader);
   return loader;
 }

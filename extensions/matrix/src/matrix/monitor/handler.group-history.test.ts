@@ -23,7 +23,7 @@ import {
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
-import { EventType, type MatrixRawEvent } from "./types.js";
+import { type MatrixRawEvent } from "./types.js";
 
 const DEFAULT_ROOM = "!room:example.org";
 
@@ -313,7 +313,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
           body: "",
           url: "mxc://example.org/media-a",
         },
-      }) as MatrixRawEvent,
+      }),
     );
     expect(finalizeInboundContext).not.toHaveBeenCalled();
 

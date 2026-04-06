@@ -40,7 +40,7 @@ export function parseMattermostApiStatus(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const msg = "message" in err ? String((err as { message?: unknown }).message ?? "") : "";
+  const msg = "message" in err && typeof err.message === "string" ? err.message : "";
   const match = /Mattermost API (\d{3})\b/.exec(msg);
   if (!match) {
     return undefined;

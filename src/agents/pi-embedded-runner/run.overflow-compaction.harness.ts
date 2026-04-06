@@ -70,6 +70,11 @@ export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
 export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
+type MockTruncateOversizedToolResultsResult = {
+  truncated: boolean;
+  truncatedCount: number;
+  reason?: string;
+};
 export const mockedTruncateOversizedToolResultsInSession = vi.fn<
   () => Promise<MockTruncateOversizedToolResultsResult>
 >(async () => ({
@@ -91,12 +96,6 @@ type MockCoerceToFailoverError = (
 ) => unknown;
 type MockDescribeFailoverError = (err: unknown) => MockFailoverErrorDescription;
 type MockResolveFailoverStatus = (reason: string) => number | undefined;
-type MockTruncateOversizedToolResultsResult = {
-  truncated: boolean;
-  truncatedCount: number;
-  reason?: string;
-};
-
 export class MockedFailoverError extends Error {
   constructor(message: string) {
     super(message);
@@ -397,6 +396,11 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     runEmbeddedAttempt: mockedRunEmbeddedAttempt,
   }));
 
+  vi.doMock("./tool-result-truncation.js", () => ({
+    sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
+    truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
+  }));
+
   vi.doMock("./context-engine-maintenance.js", () => ({
     runContextEngineMaintenance: mockedRunContextEngineMaintenance,
   }));
@@ -473,11 +477,6 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("./run/payloads.js", () => ({
     buildEmbeddedRunPayloads: vi.fn(() => []),
-  }));
-
-  vi.doMock("./tool-result-truncation.js", () => ({
-    truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
-    sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
   }));
 
   vi.doMock("./compact.js", () => ({

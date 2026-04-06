@@ -1,15 +1,12 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup-runtime";
 import { createStandardChannelSetupStatus } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   inspectDiscordSetupAccount,
-  listDiscordSetupAccountIds,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
-import { discordSetupAdapter } from "./setup-adapter.js";
 import {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,

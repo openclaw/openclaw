@@ -1117,7 +1117,7 @@ export abstract class MemoryManagerSyncOps {
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id as EmbeddingProviderId;
+    const fallbackFrom = this.provider.id;
 
     const fallbackModel = resolveEmbeddingProviderFallbackModel(
       fallback,

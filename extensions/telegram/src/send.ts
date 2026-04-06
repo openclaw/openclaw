@@ -1,12 +1,11 @@
 import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
-import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import * as grammy from "grammy";
+import { type ApiClientOptions, Bot, HttpError } from "grammy";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
@@ -14,13 +13,13 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
-import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
+import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
   isRecoverableTelegramNetworkError,
-  isTelegramRateLimitError,
   isSafeToRetrySendError,
+  isTelegramRateLimitError,
   isTelegramServerError,
 } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
@@ -32,9 +31,9 @@ import {
   kindFromMime,
   loadConfig,
   loadWebMedia,
+  type MediaKind,
   normalizePollInput,
   type PollInput,
-  type MediaKind,
   resolveMarkdownTableMode,
 } from "./send.runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";

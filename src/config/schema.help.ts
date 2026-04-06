@@ -826,6 +826,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+  "agents.defaults.contextInjection":
+    'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
@@ -1104,6 +1106,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum number of PDF pages to process for the PDF tool (default: 20).",
   "agents.defaults.imageMaxDimensionPx":
     "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
+  "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":

@@ -13,7 +13,6 @@ import {
   extractFoundryEndpoint,
   isFoundryProviderApi,
   normalizeFoundryEndpoint,
-  resolveFoundryApi,
   resolveFoundryModelCapabilities,
   resolveFoundryTargetProfileId,
 } from "./shared.js";

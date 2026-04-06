@@ -42,7 +42,9 @@ function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
     process.env.HTTPS_PROXY ||
     process.env.http_proxy ||
     process.env.HTTP_PROXY;
-  if (!proxyUrl) return undefined;
+  if (!proxyUrl) {
+    return undefined;
+  }
   return new httpsProxyAgentCtor(proxyUrl);
 }
 

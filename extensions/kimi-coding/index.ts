@@ -28,7 +28,7 @@ function findExplicitProviderConfig(
   return isRecord(match?.[1]) ? match[1] : undefined;
 }
 
-function buildKimiReplayPolicy() {
+function _buildKimiReplayPolicy() {
   return {
     preserveSignatures: false,
   };

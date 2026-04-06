@@ -508,7 +508,9 @@ const DEFAULT_CALLBACK_PATH = "/api/channels/mattermost/command";
  */
 function normalizeCallbackPath(path: string): string {
   const trimmed = path.trim();
-  if (!trimmed) return DEFAULT_CALLBACK_PATH;
+  if (!trimmed) {
+    return DEFAULT_CALLBACK_PATH;
+  }
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
@@ -564,7 +566,9 @@ export function resolveCallbackUrl(params: {
 
   const isWildcardBindHost = (rawHost: string): boolean => {
     const trimmed = rawHost.trim();
-    if (!trimmed) return false;
+    if (!trimmed) {
+      return false;
+    }
     const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
 
     // NOTE: Wildcard listen hosts are valid bind addresses but are not routable callback

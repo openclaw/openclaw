@@ -181,7 +181,7 @@ function createSendContext(params: {
           : {}),
       } as Parameters<
         typeof apiClient.conversations.activities extends (id: string) => {
-          create: (a: infer T) => unknown;
+          create: (a: infer _T) => unknown;
         }
           ? never
           : never
@@ -411,7 +411,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
       }
     },
 
-    async updateActivity(_context, activity) {
+    async updateActivity(_context, _activity) {
       // No-op: updateActivity is handled via REST in streaming-message.ts
     },
 

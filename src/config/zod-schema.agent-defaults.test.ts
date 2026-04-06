@@ -22,4 +22,18 @@ describe("agent defaults schema", () => {
       }),
     ).not.toThrow();
   });
+
+  it("accepts contextInjection: always", () => {
+    const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
+    expect(result.contextInjection).toBe("always");
+  });
+
+  it("accepts contextInjection: continuation-skip", () => {
+    const result = AgentDefaultsSchema.parse({ contextInjection: "continuation-skip" })!;
+    expect(result.contextInjection).toBe("continuation-skip");
+  });
+
+  it("rejects invalid contextInjection values", () => {
+    expect(() => AgentDefaultsSchema.parse({ contextInjection: "never" })).toThrow();
+  });
 });

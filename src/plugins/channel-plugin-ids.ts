@@ -11,6 +11,7 @@ import { hasKind } from "./slots.js";
 function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
   return Boolean(
     plugin.providers.length > 0 ||
+    plugin.cliBackends.length > 0 ||
     plugin.contracts?.speechProviders?.length ||
     plugin.contracts?.mediaUnderstandingProviders?.length ||
     plugin.contracts?.imageGenerationProviders?.length ||

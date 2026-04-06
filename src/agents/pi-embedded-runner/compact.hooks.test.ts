@@ -238,17 +238,28 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(applyExtraParamsToAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         streamFn: resolvedStreamFn,
+        transport: "sse",
+        state: expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: "user",
+              content: "hello",
+            }),
+          ]),
+        }),
       }),
       undefined,
       "openai",
       "gpt-5.4",
       undefined,
-      undefined,
+      "off",
       "main",
       "/tmp/workspace",
       expect.objectContaining({
         provider: "openai",
         id: "fake",
+        api: "responses",
+        contextWindow: 128_000,
       }),
       "/tmp",
     );
