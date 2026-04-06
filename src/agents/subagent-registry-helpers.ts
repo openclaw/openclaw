@@ -27,6 +27,13 @@ const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
 export type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
 
+/**
+ * Grace period (ms) after a run is created before it can be pruned as an orphan.
+ * Protects against false positives when the process crashes between the `agent` RPC
+ * start and the `runs.json` / session-store write completing. (#49004)
+ */
+export const ORPHAN_GRACE_MS = 5 * 60_000;
+
 export function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
   if (!trimmed) {
@@ -197,10 +204,18 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   storeCache?: Map<string, Record<string, SessionEntry>>;
+  now?: number;
 }): SubagentRunOrphanReason | null {
   const childSessionKey = params.entry.childSessionKey?.trim();
   if (!childSessionKey) {
     return "missing-session-entry";
+  }
+  // Skip runs created within the grace window to avoid pruning legitimate
+  // in-flight sessions whose session-store entry has not been written yet.
+  const now = params.now ?? Date.now();
+  const createdAt = params.entry.createdAt;
+  if (typeof createdAt === "number" && now - createdAt < ORPHAN_GRACE_MS) {
+    return null;
   }
   try {
     const cfg = loadConfig();

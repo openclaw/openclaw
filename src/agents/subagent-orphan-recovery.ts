@@ -24,6 +24,16 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { replaceSubagentRunAfterSteer } from "./subagent-registry-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+export type OrphanRecoveryDeps = {
+  loadConfig: typeof loadConfig;
+  callGateway: typeof callGateway;
+};
+
+const defaultOrphanRecoveryDeps: OrphanRecoveryDeps = {
+  loadConfig,
+  callGateway,
+};
+
 const log = createSubsystemLogger("subagent-orphan-recovery");
 
 /** Delay before attempting recovery to let the gateway finish bootstrapping. */
@@ -83,6 +93,7 @@ async function resumeOrphanedSession(params: {
   configChangeHint?: string;
   originalRunId: string;
   originalRun: SubagentRunRecord;
+  deps: OrphanRecoveryDeps;
 }): Promise<boolean> {
   let resumeMessage = buildResumeMessage(params.task, params.lastHumanMessage);
   if (params.configChangeHint) {
@@ -90,7 +101,7 @@ async function resumeOrphanedSession(params: {
   }
 
   try {
-    const result = await callGateway<{ runId: string }>({
+    const result = await params.deps.callGateway<{ runId: string }>({
       method: "agent",
       params: {
         message: resumeMessage,
@@ -135,7 +146,9 @@ export async function recoverOrphanedSubagentSessions(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
   /** Persisted across retries so already-resumed sessions are not resumed again. */
   resumedSessionKeys?: Set<string>;
+  deps?: OrphanRecoveryDeps;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
+  const deps = params.deps ?? defaultOrphanRecoveryDeps;
   const result = { recovered: 0, failed: 0, skipped: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
   const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
@@ -146,7 +159,7 @@ export async function recoverOrphanedSubagentSessions(params: {
       return result;
     }
 
-    const cfg = loadConfig();
+    const cfg = deps.loadConfig();
     const storeCache = new Map<string, Record<string, SessionEntry>>();
 
     for (const [runId, runRecord] of activeRuns.entries()) {
@@ -213,6 +226,7 @@ export async function recoverOrphanedSubagentSessions(params: {
             : undefined,
           originalRunId: runId,
           originalRun: runRecord,
+          deps,
         });
 
         if (resumed) {
@@ -276,6 +290,7 @@ export function scheduleOrphanRecovery(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
   delayMs?: number;
   maxRetries?: number;
+  deps?: OrphanRecoveryDeps;
 }): void {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
