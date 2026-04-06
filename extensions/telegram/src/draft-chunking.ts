@@ -23,9 +23,7 @@ export function resolveTelegramDraftStreamingChunking(
   const accountCfg = resolveAccountEntry(cfg?.channels?.telegram?.accounts, normalizedAccountId);
   const draftCfg =
     resolveChannelStreamingPreviewChunk(accountCfg) ??
-    resolveChannelStreamingPreviewChunk(cfg?.channels?.telegram) ??
-    accountCfg?.draftChunk ??
-    cfg?.channels?.telegram?.draftChunk;
+    resolveChannelStreamingPreviewChunk(cfg?.channels?.telegram);
 
   const maxRequested = Math.max(
     1,
