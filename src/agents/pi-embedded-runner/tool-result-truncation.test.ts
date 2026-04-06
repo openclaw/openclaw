@@ -388,7 +388,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     const result = await truncateOversizedToolResultsInSession({
       sessionFile,
-      contextWindowTokens: 128_000,
+      contextWindowTokens: 100,
     });
 
     expect(result.truncated).toBe(true);
@@ -419,6 +419,33 @@ describe("truncateOversizedToolResultsInSession", () => {
           : false,
       ),
     ).toBe(false);
+  });
+
+  it("allows persisted-session recovery truncation to shrink below the old 2k floor", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage(makeUserMessage("hello"));
+    sm.appendMessage(makeAssistantMessage("calling tools"));
+    sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
+    const sessionFile = sm.getSessionFile()!;
+
+    const result = await truncateOversizedToolResultsInSession({
+      sessionFile,
+      contextWindowTokens: 100,
+    });
+
+    expect(result.truncated).toBe(true);
+    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const toolResult = afterBranch.find(
+      (entry) => entry.type === "message" && entry.message.role === "toolResult",
+    );
+    expect(toolResult?.type).toBe("message");
+    if (!toolResult || toolResult.type !== "message") {
+      throw new Error("expected truncated tool result");
+    }
+    const text = getFirstToolResultText(toolResult.message);
+    expect(text.length).toBeLessThan(2_000);
+    expect(text).toContain("truncated");
   });
 });
 
