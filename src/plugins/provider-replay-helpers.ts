@@ -70,22 +70,20 @@ export function buildStrictAnthropicReplayPolicy(
  *
  * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
  */
-function shouldPreserveThinkingBlocks(modelId?: string): boolean {
+export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   const id = (modelId ?? "").toLowerCase();
   if (!id.includes("claude")) return false;
 
-  // Models that preserve thinking blocks natively:
-  // - claude-opus-4-5, claude-opus-4-6 (and any future opus-4.x+)
-  // - claude-sonnet-4-5, claude-sonnet-4-6 (and any future sonnet-4.x+)
-  // - claude-haiku-4-5 (and any future haiku-4.x+)
+  // Models that preserve thinking blocks natively (Claude 4.5+):
+  // - claude-opus-4-x (opus-4-5, opus-4-6, ...)
+  // - claude-sonnet-4-x (sonnet-4-5, sonnet-4-6, ...)
+  //   Note: "sonnet-4" is safe — legacy "claude-3-5-sonnet" does not contain "sonnet-4"
+  // - claude-haiku-4-x (haiku-4-5, ...)
   // Models that require dropping thinking blocks:
   // - claude-3-7-sonnet, claude-3-5-sonnet, and earlier
   if (
     id.includes("opus-4") ||
-    id.includes("sonnet-4-5") ||
-    id.includes("sonnet-4-6") ||
-    id.includes("sonnet-4.5") ||
-    id.includes("sonnet-4.6") ||
+    id.includes("sonnet-4") ||
     id.includes("haiku-4")
   ) {
     return true;

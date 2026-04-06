@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-runtime.js";
 import type { ProviderReplayPolicy, ProviderRuntimeModel } from "../plugins/types.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -46,34 +47,6 @@ function isAnthropicApi(modelApi?: string | null): boolean {
   return modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream";
 }
 
-/**
- * Returns true for Claude models that preserve thinking blocks in context
- * natively (Opus 4.5+, Sonnet 4.5+, Haiku 4.5+). For these models, dropping
- * thinking blocks from prior turns breaks prompt cache prefix matching.
- *
- * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
- */
-function shouldPreserveThinkingBlocksForModel(modelId: string): boolean {
-  if (!modelId.includes("claude")) return false;
-
-  if (
-    modelId.includes("opus-4") ||
-    modelId.includes("sonnet-4-5") ||
-    modelId.includes("sonnet-4-6") ||
-    modelId.includes("sonnet-4.5") ||
-    modelId.includes("sonnet-4.6") ||
-    modelId.includes("haiku-4")
-  ) {
-    return true;
-  }
-
-  // Future-proofing: claude-5-x, claude-6-x etc.
-  if (/claude-[5-9]/.test(modelId) || /claude-\d{2,}/.test(modelId)) {
-    return true;
-  }
-
-  return false;
-}
 
 /**
  * Provides a narrow replay-policy fallback for providers that do not have an
@@ -122,7 +95,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
           },
         }
       : {}),
-    ...(isAnthropic && modelId.includes("claude") ? { dropThinkingBlocks: !shouldPreserveThinkingBlocksForModel(modelId) } : {}),
+    ...(isAnthropic && modelId.includes("claude") ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
     ...(isAnthropic || isStrictOpenAiCompatible ? { validateAnthropicTurns: true } : {}),
