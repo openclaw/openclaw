@@ -251,6 +251,17 @@ describe("qa mock openai server", () => {
     expect(await image.json()).toMatchObject({
       data: [{ b64_json: expect.any(String) }],
     });
+
+    const imageRequests = await fetch(`${server.baseUrl}/debug/image-generations`);
+    expect(imageRequests.status).toBe(200);
+    expect(await imageRequests.json()).toMatchObject([
+      {
+        model: "gpt-image-1",
+        prompt: "Draw a QA lighthouse",
+        n: 1,
+        size: "1024x1024",
+      },
+    ]);
   });
 
   it("returns exact markers for visible and hot-installed skills", async () => {
