@@ -204,6 +204,10 @@ function toStableJsonWithoutKeys(value: unknown, keysToOmit: ReadonlySet<string>
 
 const HOOK_MAPPING_FINGERPRINT_OMIT_KEYS = new Set<string>(["id"]);
 const HOOK_MAPPING_LEGACY_IDENTITY_OMIT_KEYS = new Set<string>([
+  // Omit id so that gaining an id (or changing an existing id) does not shift the legacy
+  // identity of an already-dangerous mapping. The id-match step in takeMatchingDangerousFlag
+  // takes precedence for id-vs-id comparisons, so omitting id here does not enable a bypass.
+  "id",
   "allowUnsafeExternalContent",
   "deliver",
   "messageTemplate",
@@ -236,15 +240,20 @@ function createDangerousConfigFlagToken(
   }
 
   let idIdentity: string | undefined;
-  let legacyMappingIdentity: string | undefined;
   const id = (mapping as Record<string, unknown>).id;
   if (typeof id === "string" && id.trim()) {
     idIdentity = `hooks.mappings[id=${id}].${suffix}`;
     identities.unshift(idIdentity);
-  } else {
-    legacyMappingIdentity = `hooks.mappings[legacy=${JSON.stringify(toStableJsonWithoutKeys(mapping, HOOK_MAPPING_LEGACY_IDENTITY_OMIT_KEYS))}].${suffix}`;
-    identities.unshift(legacyMappingIdentity);
   }
+  // Always compute legacyMappingIdentity for all hook mappings, not only id-less ones.
+  // When a legacy (id-less) mapping gains an id in the same write that also changes a
+  // non-routing field (e.g. textTemplate), the old token has legacyMappingIdentity but no
+  // idIdentity, and the new token has idIdentity. Without legacyMappingIdentity on the new
+  // token, neither the id-match nor the legacy-match steps in takeMatchingDangerousFlag fire;
+  // fingerprint matching then fails (textTemplate changed), and the write is incorrectly
+  // blocked as a newly enabled dangerous flag.
+  const legacyMappingIdentity = `hooks.mappings[legacy=${JSON.stringify(toStableJsonWithoutKeys(mapping, HOOK_MAPPING_LEGACY_IDENTITY_OMIT_KEYS))}].${suffix}`;
+  identities.push(legacyMappingIdentity);
   const fingerprintIdentity = `hooks.mappings[fingerprint=${JSON.stringify(toStableJsonWithoutKeys(mapping, HOOK_MAPPING_FINGERPRINT_OMIT_KEYS))}].${suffix}`;
   identities.unshift(fingerprintIdentity);
   return { fingerprintIdentity, legacyMappingIdentity, idIdentity, identities, renderedFlag: flag };

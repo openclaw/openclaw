@@ -1061,6 +1061,61 @@ describe("gateway tool", () => {
     });
   });
 
+  it("allows config.apply when a dangerous legacy hook mapping gains an id and changes a non-routing field", async () => {
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            hooks: {
+              mappings: [
+                {
+                  channel: "gmail",
+                  allowUnsafeExternalContent: true,
+                  textTemplate: "old template",
+                },
+              ],
+            },
+            tools: {
+              exec: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool(sessionKey);
+    const raw = `{
+      hooks: {
+        mappings: [
+          {
+            id: "gmail-a",
+            channel: "gmail",
+            allowUnsafeExternalContent: true,
+            textTemplate: "updated template"
+          }
+        ]
+      },
+      tools: { exec: { ask: "on-miss", security: "allowlist" } }
+    }`;
+
+    await tool.execute("call-legacy-mapping-add-id-and-safe-edit", {
+      action: "config.apply",
+      raw,
+    });
+
+    expectConfigMutationCall({
+      callGatewayTool: vi.mocked(callGatewayTool),
+      action: "config.apply",
+      raw,
+      sessionKey,
+    });
+  });
+
   it("allows config.apply when an id-less dangerous hook mapping only changes non-routing fields", async () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
