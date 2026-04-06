@@ -10,7 +10,7 @@ import {
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 
-export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+export type ToolProfileId = "minimal" | "readonly" | "coding" | "messaging" | "full";
 
 type ToolProfilePolicy = {
   allow?: string[];
@@ -56,7 +56,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "read",
     description: "Read file contents",
     sectionId: "fs",
-    profiles: ["coding"],
+    profiles: ["readonly", "coding"],
   },
   {
     id: "write",
@@ -106,7 +106,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_search",
     description: "Search the web",
     sectionId: "web",
-    profiles: ["coding"],
+    profiles: ["readonly", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -114,7 +114,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_fetch",
     description: "Fetch web content",
     sectionId: "web",
-    profiles: ["coding"],
+    profiles: ["readonly", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -122,7 +122,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "x_search",
     description: "Search X posts",
     sectionId: "web",
-    profiles: ["coding"],
+    profiles: ["readonly", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -130,7 +130,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "memory_search",
     description: "Semantic search",
     sectionId: "memory",
-    profiles: ["coding"],
+    profiles: ["readonly", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -138,7 +138,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "memory_get",
     description: "Read memory files",
     sectionId: "memory",
-    profiles: ["coding"],
+    profiles: ["readonly", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -146,7 +146,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_list",
     description: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
-    profiles: ["coding", "messaging"],
+    profiles: ["readonly", "coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -154,7 +154,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_history",
     description: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
-    profiles: ["coding", "messaging"],
+    profiles: ["readonly", "coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -194,7 +194,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "session_status",
     description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
-    profiles: ["minimal", "coding", "messaging"],
+    profiles: ["minimal", "readonly", "coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -250,7 +250,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "agents_list",
     description: "List agents",
     sectionId: "agents",
-    profiles: [],
+    profiles: ["readonly"],
     includeInOpenClawGroup: true,
   },
   {
@@ -266,7 +266,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "image",
     description: "Image understanding",
     sectionId: "media",
-    profiles: ["coding"],
+    profiles: ["readonly", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -317,6 +317,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   minimal: {
     allow: listCoreToolIdsForProfile("minimal"),
   },
+  readonly: {
+    allow: listCoreToolIdsForProfile("readonly"),
+  },
   coding: {
     allow: listCoreToolIdsForProfile("coding"),
   },
@@ -347,6 +350,7 @@ export const CORE_TOOL_GROUPS = buildCoreToolGroupMap();
 
 export const PROFILE_OPTIONS = [
   { id: "minimal", label: "Minimal" },
+  { id: "readonly", label: "Read-only" },
   { id: "coding", label: "Coding" },
   { id: "messaging", label: "Messaging" },
   { id: "full", label: "Full" },
