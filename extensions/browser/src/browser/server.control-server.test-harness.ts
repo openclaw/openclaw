@@ -191,8 +191,9 @@ async function loadBrowserServerModule(): Promise<BrowserServerModule> {
   if (browserServerModule) {
     return browserServerModule;
   }
-  vi.resetModules();
-  browserServerModule = await import("../server.js");
+  // Keep the browser server module warm across cases so the agent-contract
+  // suites do not pay the full import/reset cost in every beforeEach.
+  browserServerModule = await import("./server.js");
   return browserServerModule;
 }
 
@@ -322,7 +323,6 @@ export async function startBrowserControlServerFromConfig() {
 
 export async function stopBrowserControlServer(): Promise<void> {
   const server = browserServerModule;
-  browserServerModule = null;
   if (!server) {
     return;
   }

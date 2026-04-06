@@ -860,6 +860,62 @@ describe("createClawMissionService", () => {
     expect(resumed?.mission?.currentStep).toBe("Advance the next task.");
   });
 
+  it("resumes verifier recovery after the operator confirms continuation", async () => {
+    const runEmbeddedPiAgent = vi
+      .fn()
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "verify",
+            summary: "Runner completed the requested work and asked for verification.",
+            currentStep: "Ready for verification.",
+            nextStep: "Run the required verifier pass.",
+            progress: true,
+            evidence: ["Prepared verification-ready repository state before restart."],
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        agentResult(
+          JSON.stringify({
+            outcome: "done",
+            summary: "Verifier completed successfully after operator-confirmed recovery.",
+            evidence: ["Verifier confirmed the done criteria after recovery."],
+          }),
+        ),
+      );
+
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+      runEmbeddedPiAgent,
+    });
+
+    const created = await service.createMission({
+      goal: "Resume interrupted verification only after operator confirmation.",
+    });
+    const missionId = created.mission!.id;
+    await service.approveMissionStart(missionId);
+    await service.runNextMissionCycle();
+
+    const recovered = (await service.recoverInterruptedMissions())[0];
+    const decision = recovered?.mission?.decisions.find(
+      (entry) => entry.kind === "recovery_uncertain" && entry.status === "pending",
+    );
+    expect(decision?.id).toBeTruthy();
+    expect(recovered?.mission?.status).toBe("blocked");
+
+    const continued = await service.replyDecision({
+      missionId,
+      decisionId: decision!.id,
+      action: "continue",
+    });
+    expect(continued.mission?.status).toBe("queued");
+
+    const resumed = await service.runNextMissionCycle();
+    expect(resumed?.mission?.status).toBe("done");
+  });
+
   it("lets the operator pause an uncertain recovery", async () => {
     const runEmbeddedPiAgent = vi.fn().mockResolvedValueOnce(
       agentResult(

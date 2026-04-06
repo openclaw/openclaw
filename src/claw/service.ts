@@ -2905,12 +2905,25 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
   }
 
   async function claimQueuedMission(queued: ClawMissionStateRecord): Promise<void> {
-    moveMissionToRunning(queued, "Mission execution cycle started.");
-    await recordAudit(queued, {
-      actor: "system",
-      type: "mission.started",
-      summary: "Mission execution runner started.",
-    });
+    if (queued.recoveryTargetStatus) {
+      moveMissionToRecovering(
+        queued,
+        queued.recoveryTargetStatus,
+        "Mission recovery cycle started after operator confirmation.",
+      );
+      await recordAudit(queued, {
+        actor: "system",
+        type: "mission.recovering",
+        summary: "Mission recovery runner resumed after operator confirmation.",
+      });
+    } else {
+      moveMissionToRunning(queued, "Mission execution cycle started.");
+      await recordAudit(queued, {
+        actor: "system",
+        type: "mission.started",
+        summary: "Mission execution runner started.",
+      });
+    }
     await persistRuntimeState(queued);
   }
 
@@ -2944,6 +2957,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
         continue;
       }
       if (!isRecoverySafeToResumeAutomatically(mission)) {
+        const recoveryTargetStatus = mission.status === "verifying" ? "verifying" : "running";
         const summary = buildRecoveryUncertainSummary(mission);
         moveMissionToWaiting({
           state: mission,
@@ -2952,6 +2966,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
           waitKind: "recovery_uncertain",
           blockedSummary: summary,
         });
+        mission.recoveryTargetStatus = recoveryTargetStatus;
         ensurePendingRecoveryDecision(mission, nowIso, summary);
         await recordAudit(mission, {
           actor: "system",
@@ -3330,6 +3345,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       }
       if (decision.kind === "recovery_uncertain" && params.action === "continue") {
         const control = await loadControlState(state.workspaceDir);
+        const recoveryTargetStatus = state.recoveryTargetStatus;
         requireMissionStatus(state, ["blocked", "recovering"], "continue");
         decision.status = "resolved";
         decision.response = {
@@ -3343,6 +3359,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
             ? "Queued after operator confirmed recovery continuation."
             : resolveQueuedCurrentStep(control),
         );
+        state.recoveryTargetStatus = recoveryTargetStatus;
         await recordAudit(state, {
           actor: "operator",
           type: "decision.resolved",
