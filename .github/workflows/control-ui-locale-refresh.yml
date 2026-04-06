@@ -140,7 +140,7 @@ jobs:
           OPENCLAW_CONTROL_UI_I18N_MODEL: gpt-5.4
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           LOCALE: ${{ matrix.locale }}
-        run: node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
+        run: node --import tsx scripts/control-ui-i18n.ts sync --locale "$LOCALE" --write
 
       - name: Commit and push locale updates
         env:
