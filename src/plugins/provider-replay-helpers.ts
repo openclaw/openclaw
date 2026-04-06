@@ -72,7 +72,9 @@ export function buildStrictAnthropicReplayPolicy(
  */
 export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   const id = (modelId ?? "").toLowerCase();
-  if (!id.includes("claude")) return false;
+  if (!id.includes("claude")) {
+    return false;
+  }
 
   // Models that preserve thinking blocks natively (Claude 4.5+):
   // - claude-opus-4-x (opus-4-5, opus-4-6, ...)
@@ -81,11 +83,7 @@ export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   // - claude-haiku-4-x (haiku-4-5, ...)
   // Models that require dropping thinking blocks:
   // - claude-3-7-sonnet, claude-3-5-sonnet, and earlier
-  if (
-    id.includes("opus-4") ||
-    id.includes("sonnet-4") ||
-    id.includes("haiku-4")
-  ) {
+  if (id.includes("opus-4") || id.includes("sonnet-4") || id.includes("haiku-4")) {
     return true;
   }
 

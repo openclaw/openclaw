@@ -47,7 +47,6 @@ function isAnthropicApi(modelApi?: string | null): boolean {
   return modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream";
 }
 
-
 /**
  * Provides a narrow replay-policy fallback for providers that do not have an
  * owning runtime plugin.
@@ -95,7 +94,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
           },
         }
       : {}),
-    ...(isAnthropic && modelId.includes("claude") ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) } : {}),
+    ...(isAnthropic && modelId.includes("claude")
+      ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
+      : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
     ...(isAnthropic || isStrictOpenAiCompatible ? { validateAnthropicTurns: true } : {}),
