@@ -159,8 +159,30 @@ if command -v git >/dev/null 2>&1 && [[ -d "$REPO_ROOT/.git" ]]; then
 fi
 
 (
-  cd "$stage"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 shasum -a 256 > SHA256SUMS
+  python3 - "$stage" <<'PY'
+import hashlib
+import os
+import sys
+
+stage = sys.argv[1]
+entries = []
+for root, dirs, files in os.walk(stage):
+    dirs.sort()
+    files.sort()
+    for name in files:
+        rel = os.path.relpath(os.path.join(root, name), stage)
+        if rel == "SHA256SUMS":
+            continue
+        entries.append(rel)
+
+with open(os.path.join(stage, "SHA256SUMS"), "w", encoding="utf-8") as out:
+    for rel in sorted(entries):
+        digest = hashlib.sha256()
+        with open(os.path.join(stage, rel), "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+        out.write(f"{digest.hexdigest()}  ./{rel}\n")
+PY
 )
 
 archive_path="$OUTPUT_DIR/${BACKUP_NAME}.tar.gz"
