@@ -28,6 +28,15 @@ import { DisconnectReason, isJidGroup, saveMediaBuffer } from "./runtime-api.js"
 import { createWebSendApi } from "./send-api.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 
+export type HealthProbeState = {
+  lastProbeAt: number | null;
+  ok: boolean;
+  error?: string;
+};
+
+const HEALTH_PROBE_INTERVAL_MS = 60_000;
+const HEALTH_PROBE_TIMEOUT_MS = 10_000;
+
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
 
@@ -608,6 +617,36 @@ export async function monitorWebInbox(options: {
     handleConnectionUpdate as unknown as (...args: unknown[]) => void,
   );
 
+  // Application-level health probe: periodically call fetchStatus(selfJid)
+  // to verify the WA server is responding, not just that the socket is alive.
+  const healthProbeState: HealthProbeState = { lastProbeAt: null, ok: true };
+  const selfJid = self.jid ?? sock.user?.id ?? null;
+  let healthProbeInterval: ReturnType<typeof setInterval> | null = null;
+
+  if (selfJid) {
+    const doProbe = async () => {
+      try {
+        const timeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("probe timeout")), HEALTH_PROBE_TIMEOUT_MS),
+        );
+        await Promise.race([sock.fetchStatus(selfJid), timeout]);
+        healthProbeState.lastProbeAt = Date.now();
+        healthProbeState.ok = true;
+        healthProbeState.error = undefined;
+        if (shouldLogVerbose()) {
+          logVerbose("WA health probe: ok");
+        }
+      } catch (err) {
+        healthProbeState.lastProbeAt = Date.now();
+        healthProbeState.ok = false;
+        healthProbeState.error = String(err);
+        inboundLogger.warn({ error: String(err) }, "WA health probe failed");
+      }
+    };
+    void doProbe();
+    healthProbeInterval = setInterval(() => void doProbe(), HEALTH_PROBE_INTERVAL_MS);
+  }
+
   void (async () => {
     try {
       const groups = await sock.groupFetchAllParticipating();
@@ -639,6 +678,10 @@ export async function monitorWebInbox(options: {
   return {
     close: async () => {
       try {
+        if (healthProbeInterval) {
+          clearInterval(healthProbeInterval);
+          healthProbeInterval = null;
+        }
         detachMessagesUpsert();
         detachConnectionUpdate();
         closeInboundMonitorSocket(sock);
@@ -650,6 +693,7 @@ export async function monitorWebInbox(options: {
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
+    getHealthProbeState: (): HealthProbeState => ({ ...healthProbeState }),
     // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
     ...sendApi,
   } as const;
