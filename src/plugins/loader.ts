@@ -998,7 +998,7 @@ function warnWhenAllowlistIsOpen(params: {
     .join(", ");
   const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
   openAllowlistWarningCache.add(params.warningCacheKey);
-  params.logger.warn(
+  params.logger.info(
     `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
   );
 }
@@ -1038,7 +1038,7 @@ function warnAboutUntrackedLoadedPlugins(params: {
       message,
     });
     if (params.emitWarning) {
-      params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+      params.logger.info(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
     }
   }
 }
