@@ -302,13 +302,20 @@ export async function handleSessionHistoryHttpRequest(
         return;
       }
     }
+    // Transcript-only updates can advance the raw transcript without carrying
+    // an inline message payload. Resync the raw seq counter before the next
+    // fast-path append so later messageSeq values stay monotonic.
+    const refreshedRawMessages = readSessionMessages(
+      entry.sessionId,
+      target.storePath,
+      entry.sessionFile,
+    );
+    rawTranscriptSeq =
+      resolveMessageSeq(refreshedRawMessages.at(-1)) ?? refreshedRawMessages.length;
     // Bounded SSE history refreshes: apply sanitizeChatHistoryMessages before
     // pagination, consistent with the unbounded path.
     sentHistory = paginateSessionMessages(
-      sanitizeChatHistoryMessages(
-        readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile),
-        effectiveMaxChars,
-      ),
+      sanitizeChatHistoryMessages(refreshedRawMessages, effectiveMaxChars),
       limit,
       cursor,
     );
