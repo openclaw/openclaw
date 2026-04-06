@@ -122,6 +122,60 @@ describe("provider-usage.load", () => {
     }
   });
 
+  it("isolates fetch errors so one broken provider does not crash the rest", async () => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("chatgpt.com/backend-api/wham/usage")) {
+        return makeResponse(200, {
+          rate_limit: { primary_window: { used_percent: 30, limit_window_seconds: 10800 } },
+          plan_type: "Plus",
+        });
+      }
+      // Anthropic returns HTTP 200 but with an invalid (non-JSON) body.
+      if (url.includes("api.anthropic.com")) {
+        return new Response("not json", { status: 200 });
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [
+        { provider: "anthropic", token: "token-a" },
+        { provider: "openai-codex", token: "token-c", accountId: "acc-1" },
+      ],
+      mockFetch,
+    );
+
+    // Codex should still succeed despite Anthropic's invalid response.
+    const codex = summary.providers.find((p) => p.provider === "openai-codex");
+    expect(codex).toBeDefined();
+    expect(codex?.windows[0]?.usedPercent).toBe(30);
+
+    // Anthropic should be reported as a fetch error, not crash the whole batch.
+    const anthropic = summary.providers.find((p) => p.provider === "anthropic");
+    expect(anthropic?.error).toBe("Fetch failed");
+  });
+
+  it("reports aborted provider fetches as timeouts rather than fetch failures", async () => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("api.anthropic.com")) {
+        // Simulate an AbortError from fetchJson's internal AbortController.
+        const err = new DOMException("The operation was aborted", "AbortError");
+        throw err;
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [{ provider: "anthropic", token: "token-a" }],
+      mockFetch,
+    );
+
+    const anthropic = summary.providers.find((p) => p.provider === "anthropic");
+    expect(anthropic?.error).toBe("Timeout");
+  });
+
   it("throws when fetch is unavailable", async () => {
     const previousFetch = globalThis.fetch;
     vi.stubGlobal("fetch", undefined);
