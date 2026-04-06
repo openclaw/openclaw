@@ -1,11 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
-type WebProviderUnderTest = "brave" | "gemini";
+type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
@@ -60,7 +59,7 @@ function createTestProvider(params: {
     getCredentialValue: readSearchConfigKey,
     setCredentialValue: (searchConfigTarget, value) => {
       const providerConfig =
-        params.id === "brave"
+        params.id === "brave" || params.id === "firecrawl"
           ? searchConfigTarget
           : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
       providerConfig.apiKey = value;
@@ -76,6 +75,12 @@ function createTestProvider(params: {
       const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
       webSearch.apiKey = value;
     },
+    resolveRuntimeMetadata:
+      params.id === "perplexity"
+        ? () => ({
+            perplexityTransport: "search_api" as const,
+          })
+        : undefined,
     createTool: () => null,
   };
 }
@@ -84,6 +89,10 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
   return [
     createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
     createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
+    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
+    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
+    createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
   ];
 }
 
@@ -91,15 +100,9 @@ let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
+const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
-
-describe("secrets runtime snapshot inactive surfaces", () => {
+describe("secrets runtime snapshot legacy x_search", () => {
   beforeAll(async () => {
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
@@ -117,89 +120,90 @@ describe("secrets runtime snapshot inactive surfaces", () => {
     clearConfigCache();
   });
 
-  it("skips inactive-surface refs and emits diagnostics", async () => {
-    const config = asConfig({
-      agents: {
-        defaults: {
-          memorySearch: {
-            enabled: false,
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "DISABLED_MEMORY_API_KEY" },
-            },
-          },
-        },
-      },
-      gateway: {
-        auth: {
-          mode: "token",
-          password: { source: "env", provider: "default", id: "DISABLED_GATEWAY_PASSWORD" },
-        },
-      },
-      channels: {
-        telegram: {
-          botToken: { source: "env", provider: "default", id: "DISABLED_TELEGRAM_BASE_TOKEN" },
-          accounts: {
-            disabled: {
-              enabled: false,
-              botToken: {
-                source: "env",
-                provider: "default",
-                id: "DISABLED_TELEGRAM_ACCOUNT_TOKEN",
-              },
-            },
-          },
-        },
-      },
-      tools: {
-        web: {
-          search: {
-            enabled: false,
-            apiKey: { source: "env", provider: "default", id: "DISABLED_WEB_SEARCH_API_KEY" },
-          },
-        },
-      },
-      plugins: {
-        entries: {
-          google: {
-            config: {
-              webSearch: {
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
+  it("keeps legacy x_search SecretRefs in place until doctor repairs them", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
-    expect(snapshot.config.channels?.telegram?.botToken).toEqual({
-      source: "env",
-      provider: "default",
-      id: "DISABLED_TELEGRAM_BASE_TOKEN",
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      apiKey: "xai-runtime-key",
+      enabled: true,
+      model: "grok-4-1-fast",
     });
-    const ignoredInactiveWarnings = snapshot.warnings.filter(
-      (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-    );
-    expect(ignoredInactiveWarnings.length).toBeGreaterThanOrEqual(6);
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "agents.defaults.memorySearch.remote.apiKey",
-        "gateway.auth.password",
-        "channels.telegram.botToken",
-        "channels.telegram.accounts.disabled.botToken",
-        "plugins.entries.brave.config.webSearch.apiKey",
-        "plugins.entries.google.config.webSearch.apiKey",
-      ]),
-    );
+    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("still resolves legacy x_search auth in place even when unrelated legacy config is present", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
+              enabled: true,
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            groupMentionsOnly: true,
+            groups: [],
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_KEY_REF: "xai-runtime-key-invalid-config",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      apiKey: "xai-runtime-key-invalid-config",
+      enabled: true,
+    });
+    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not force-enable xai at runtime for knob-only x_search config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              enabled: true,
+              model: "grok-4-1-fast",
+            },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 });
