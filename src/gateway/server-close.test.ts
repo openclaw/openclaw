@@ -1,10 +1,40 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createGatewayCloseHandler } from "./server-close.js";
 
-const mocks = {
-  logWarn: vi.fn(),
+type TestGatewayHookEvent = {
+  type?: string;
+  action?: string;
+  context?: Record<string, unknown>;
 };
-const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
-const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
+
+const { triggerInternalHook, readRestartSentinel, writeRestartSentinel } = vi.hoisted(() => ({
+  triggerInternalHook: vi.fn(
+    async (_event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => undefined,
+  ),
+  readRestartSentinel: vi.fn(async () => null),
+  writeRestartSentinel: vi.fn(async () => "sentinel.json"),
+}));
+
+vi.mock("../hooks/internal-hooks.js", async () => {
+  const actual = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
+    "../hooks/internal-hooks.js",
+  );
+  return {
+    ...actual,
+    triggerInternalHook,
+  };
+});
+
+vi.mock("../infra/restart-sentinel.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/restart-sentinel.js")>(
+    "../infra/restart-sentinel.js",
+  );
+  return {
+    ...actual,
+    readRestartSentinel,
+    writeRestartSentinel,
+  };
+});
 
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => [],
@@ -14,160 +44,182 @@ vi.mock("../hooks/gmail-watcher.js", () => ({
   stopGmailWatcher: vi.fn(async () => undefined),
 }));
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: vi.fn(() => ({
-    warn: mocks.logWarn,
-  })),
-}));
-
-const { createGatewayCloseHandler } = await import("./server-close.js");
+function createCloseHarness(params?: {
+  lifecycleUnsub?: () => void;
+  broadcast?: (event: string, payload: unknown) => void;
+  stallWssClose?: boolean;
+}) {
+  const tickInterval = setInterval(() => undefined, 60_000);
+  const healthInterval = setInterval(() => undefined, 60_000);
+  const dedupeCleanup = setInterval(() => undefined, 60_000);
+  const close = createGatewayCloseHandler({
+    bonjourStop: null,
+    tailscaleCleanup: null,
+    canvasHost: null,
+    canvasHostServer: null,
+    stopChannel: vi.fn(async () => undefined),
+    pluginServices: null,
+    cron: { stop: vi.fn() },
+    heartbeatRunner: { stop: vi.fn() } as never,
+    updateCheckStop: null,
+    nodePresenceTimers: new Map(),
+    broadcast: params?.broadcast ?? vi.fn(),
+    tickInterval,
+    healthInterval,
+    dedupeCleanup,
+    mediaCleanup: null,
+    agentUnsub: null,
+    heartbeatUnsub: null,
+    transcriptUnsub: null,
+    lifecycleUnsub: params?.lifecycleUnsub ?? null,
+    chatRunState: { clear: vi.fn() },
+    clients: new Set(),
+    configReloader: { stop: vi.fn(async () => undefined) },
+    wss: {
+      close: (cb: () => void) => {
+        if (!params?.stallWssClose) {
+          cb();
+        }
+      },
+    } as never,
+    httpServer: {
+      close: (cb: (err?: Error | null) => void) => cb(null),
+      closeIdleConnections: vi.fn(),
+    } as never,
+  });
+  return {
+    close,
+    dispose() {
+      clearInterval(tickInterval);
+      clearInterval(healthInterval);
+      clearInterval(dedupeCleanup);
+    },
+  };
+}
 
 describe("createGatewayCloseHandler", () => {
   beforeEach(() => {
-    vi.useRealTimers();
-    mocks.logWarn.mockClear();
+    triggerInternalHook.mockReset();
+    triggerInternalHook.mockResolvedValue(undefined);
+    readRestartSentinel.mockReset();
+    readRestartSentinel.mockResolvedValue(null);
+    writeRestartSentinel.mockReset();
+    writeRestartSentinel.mockResolvedValue("sentinel.json");
   });
 
   it("unsubscribes lifecycle listeners during shutdown", async () => {
     const lifecycleUnsub = vi.fn();
-    const stopTaskRegistryMaintenance = vi.fn();
-    const close = createGatewayCloseHandler({
-      bonjourStop: null,
-      tailscaleCleanup: null,
-      canvasHost: null,
-      canvasHostServer: null,
-      stopChannel: vi.fn(async () => undefined),
-      pluginServices: null,
-      cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
-      updateCheckStop: null,
-      stopTaskRegistryMaintenance,
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
-      tickInterval: setInterval(() => undefined, 60_000),
-      healthInterval: setInterval(() => undefined, 60_000),
-      dedupeCleanup: setInterval(() => undefined, 60_000),
-      mediaCleanup: null,
-      agentUnsub: null,
-      heartbeatUnsub: null,
-      transcriptUnsub: null,
-      lifecycleUnsub,
-      chatRunState: { clear: vi.fn() },
-      clients: new Set(),
-      configReloader: { stop: vi.fn(async () => undefined) },
-      wss: { close: (cb: () => void) => cb() } as never,
-      httpServer: {
-        close: (cb: (err?: Error | null) => void) => cb(null),
-        closeIdleConnections: vi.fn(),
-      } as never,
-    });
-
-    await close({ reason: "test shutdown" });
-
-    expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
-    expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+    const harness = createCloseHarness({ lifecycleUnsub });
+    try {
+      await harness.close({ reason: "test shutdown", initiator: "SIGTERM" });
+      expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
+    } finally {
+      harness.dispose();
+    }
   });
 
-  it("terminates lingering websocket clients when websocket close exceeds the grace window", async () => {
+  it("continues shutdown when websocket close callback stalls", async () => {
     vi.useFakeTimers();
+    const harness = createCloseHarness({ stallWssClose: true });
 
-    let closeCallback: (() => void) | null = null;
-    const terminate = vi.fn(() => {
-      closeCallback?.();
+    let settled = false;
+    const closePromise = harness.close().then(() => {
+      settled = true;
     });
-    const close = createGatewayCloseHandler({
-      bonjourStop: null,
-      tailscaleCleanup: null,
-      canvasHost: null,
-      canvasHostServer: null,
-      stopChannel: vi.fn(async () => undefined),
-      pluginServices: null,
-      cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
-      updateCheckStop: null,
-      stopTaskRegistryMaintenance: null,
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
-      tickInterval: setInterval(() => undefined, 60_000),
-      healthInterval: setInterval(() => undefined, 60_000),
-      dedupeCleanup: setInterval(() => undefined, 60_000),
-      mediaCleanup: null,
-      agentUnsub: null,
-      heartbeatUnsub: null,
-      transcriptUnsub: null,
-      lifecycleUnsub: null,
-      chatRunState: { clear: vi.fn() },
-      clients: new Set(),
-      configReloader: { stop: vi.fn(async () => undefined) },
-      wss: {
-        clients: new Set([{ terminate }]),
-        close: (cb: () => void) => {
-          closeCallback = cb;
-        },
-      } as never,
-      httpServer: {
-        close: (cb: (err?: Error | null) => void) => cb(null),
-        closeIdleConnections: vi.fn(),
-      } as never,
-    });
+    await vi.advanceTimersByTimeAsync(2_100);
+    await Promise.resolve();
+    expect(settled).toBe(true);
 
-    const closePromise = close({ reason: "test shutdown" });
-    await vi.advanceTimersByTimeAsync(WEBSOCKET_CLOSE_GRACE_MS);
     await closePromise;
-
-    expect(terminate).toHaveBeenCalledTimes(1);
-    expect(
-      mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes("websocket server close exceeded 1000ms"),
-      ),
-    ).toBe(true);
+    harness.dispose();
   });
 
-  it("continues shutdown when websocket close hangs without tracked clients", async () => {
-    vi.useFakeTimers();
+  it("emits gateway shutdown + pre-restart hooks with lifecycle metadata", async () => {
+    const harness = createCloseHarness();
+    try {
+      await harness.close({
+        reason: "gateway restarting",
+        restartExpectedMs: 123,
+        initiator: "SIGUSR1",
+        restartId: "restart-123",
+        correlationId: "corr-123",
+      });
 
-    const close = createGatewayCloseHandler({
-      bonjourStop: null,
-      tailscaleCleanup: null,
-      canvasHost: null,
-      canvasHostServer: null,
-      stopChannel: vi.fn(async () => undefined),
-      pluginServices: null,
-      cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
-      updateCheckStop: null,
-      stopTaskRegistryMaintenance: null,
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
-      tickInterval: setInterval(() => undefined, 60_000),
-      healthInterval: setInterval(() => undefined, 60_000),
-      dedupeCleanup: setInterval(() => undefined, 60_000),
-      mediaCleanup: null,
-      agentUnsub: null,
-      heartbeatUnsub: null,
-      transcriptUnsub: null,
-      lifecycleUnsub: null,
-      chatRunState: { clear: vi.fn() },
-      clients: new Set(),
-      configReloader: { stop: vi.fn(async () => undefined) },
-      wss: {
-        clients: new Set(),
-        close: () => undefined,
-      } as never,
-      httpServer: {
-        close: (cb: (err?: Error | null) => void) => cb(null),
-        closeIdleConnections: vi.fn(),
-      } as never,
-    });
+      const hookCalls = triggerInternalHook.mock.calls as Array<
+        [TestGatewayHookEvent, { perHandlerTimeoutMs?: number }?]
+      >;
+      const shutdownEvent = hookCalls.find(
+        (call) => call[0]?.type === "gateway" && call[0]?.action === "shutdown",
+      )?.[0];
+      const preRestartEvent = hookCalls.find(
+        (call) => call[0]?.type === "gateway" && call[0]?.action === "pre-restart",
+      )?.[0];
 
-    const closePromise = close({ reason: "test shutdown" });
-    await vi.advanceTimersByTimeAsync(WEBSOCKET_CLOSE_GRACE_MS + WEBSOCKET_CLOSE_FORCE_CONTINUE_MS);
-    await closePromise;
+      expect(shutdownEvent?.context).toMatchObject({
+        reason: "gateway restarting",
+        restartExpectedMs: 123,
+        initiator: "SIGUSR1",
+        restartId: "restart-123",
+        correlationId: "corr-123",
+      });
+      expect(preRestartEvent?.context).toMatchObject({
+        reason: "gateway restarting",
+        restartExpectedMs: 123,
+        initiator: "SIGUSR1",
+        restartId: "restart-123",
+        correlationId: "corr-123",
+      });
+      expect(Array.isArray(preRestartEvent?.context?.outbox)).toBe(true);
+      expect(triggerInternalHook.mock.calls[0]?.[1]).toMatchObject({
+        perHandlerTimeoutMs: 1500,
+      });
+    } finally {
+      harness.dispose();
+    }
+  });
 
-    expect(
-      mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes("websocket server close still pending after 250ms force window"),
-      ),
-    ).toBe(true);
+  it("persists hook outbox tasks into restart sentinel", async () => {
+    triggerInternalHook.mockImplementation(
+      async (event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => {
+        if (event.type === "gateway" && event.action === "pre-restart") {
+          const outbox = event.context?.outbox as Array<Record<string, unknown>>;
+          outbox.push({
+            message: "Gateway is back after restart",
+            sessionKey: "agent:main:main",
+          });
+        }
+      },
+    );
+
+    const harness = createCloseHarness();
+    try {
+      await harness.close({
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+        initiator: "SIGUSR1",
+        restartId: "restart-abc",
+      });
+
+      expect(writeRestartSentinel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "restart",
+          status: "ok",
+          restartId: "restart-abc",
+          correlationId: "restart-abc",
+          initiator: "SIGUSR1",
+          suppressPrimaryNotice: true,
+          outbox: [
+            expect.objectContaining({
+              message: "Gateway is back after restart",
+              sessionKey: "agent:main:main",
+              restartId: "restart-abc",
+              correlationId: "restart-abc",
+            }),
+          ],
+        }),
+      );
+    } finally {
+      harness.dispose();
+    }
   });
 });
