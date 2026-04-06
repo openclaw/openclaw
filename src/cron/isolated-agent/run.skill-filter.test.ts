@@ -392,4 +392,70 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       await expectPrimaryOverridePreservesDefaults({ primary: "anthropic/claude-sonnet-4-5" });
     });
   });
+
+  describe("sandbox config clobber regression (#40285)", () => {
+    it("does not clobber agents.defaults.sandbox when per-agent config has sandbox.mode", async () => {
+      // agents.defaults.sandbox has docker.binds set; per-agent config only sets sandbox.mode.
+      // Before the fix, Object.assign would spread agentOverrideRest (which included sandbox)
+      // into agentCfg, clobbering the defaults docker.binds entirely.
+      const defaultBinds = ["/var/run/docker.sock:/var/run/docker.sock:ro"];
+      resolveAgentConfigMock.mockReturnValue({ sandbox: { mode: "docker" } });
+
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: {
+            agents: {
+              defaults: {
+                sandbox: {
+                  mode: "off",
+                  docker: { binds: defaultBinds },
+                },
+              },
+              list: [{ id: "worker", sandbox: { mode: "docker" } }],
+            },
+          },
+          agentId: "worker",
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+      const callCfg = runWithModelFallbackMock.mock.calls[0][0].cfg;
+      // agents.defaults.sandbox must be preserved intact — the per-agent sandbox
+      // must NOT have been spread into defaults via Object.assign, clobbering docker.binds.
+      const defaultsSandbox = callCfg?.agents?.defaults?.sandbox as
+        | { mode?: string; docker?: { binds?: string[] } }
+        | undefined;
+      expect(defaultsSandbox?.docker?.binds).toEqual(defaultBinds);
+    });
+
+    it("resolveSandboxConfigForAgent reads both defaults binds and per-agent mode independently", async () => {
+      const { resolveSandboxConfigForAgent } = await import("../../agents/sandbox.js");
+
+      const defaultBinds = ["/mnt/data:/mnt/data:ro"];
+      const cfg = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off" as const,
+              docker: { binds: defaultBinds },
+            },
+          },
+          list: [{ id: "cron-worker", sandbox: { mode: "docker" as const } }],
+        },
+      };
+
+      // resolveAgentConfig is mocked at the module level; configure it to return the
+      // per-agent sandbox so resolveSandboxConfigForAgent sees both defaults and agent config.
+      resolveAgentConfigMock.mockReturnValue({ sandbox: { mode: "docker" } });
+
+      const resolved = resolveSandboxConfigForAgent(cfg as never, "cron-worker");
+
+      // Per-agent mode should win
+      expect(resolved.mode).toBe("docker");
+      // Defaults docker.binds must still be present — resolveSandboxConfigForAgent reads
+      // agents.defaults.sandbox independently from the per-agent entry in agents.list.
+      expect(resolved.docker.binds).toEqual(defaultBinds);
+    });
+  });
 });
