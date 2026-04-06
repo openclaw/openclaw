@@ -1028,9 +1028,10 @@ Time format in system prompt. Default: `auto` (OS preference).
 }
 ```
 
-- `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+- `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks, tasks }`).
   - String form sets only the primary model.
-  - Object form sets primary plus ordered failover models.
+  - Object form sets primary plus ordered failover models, and optional task-specific model overrides.
+  - `tasks.messageRouting`: keyword-based pre-turn routing — select a model based on message content before the LLM call. See [Message routing](#message-routing) below.
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `image` tool path as its vision-model config.
   - Also used as fallback routing when the selected/default model cannot accept image input.
@@ -1058,6 +1059,41 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
+
+#### Message routing
+
+Route messages to different models based on keyword matching before the LLM call:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "vllm/qwen35",
+        tasks: {
+          messageRouting: {
+            rules: [
+              {
+                match: ["code review", "PR", "diff", "refactor"],
+                model: "github-copilot/claude-sonnet-4.6",
+              },
+              {
+                match: ["research", "search", "find", "what is"],
+                model: "google-gemini-cli/gemini-3-flash-preview",
+              },
+              { match: ["patent", "legal", "prior art"], model: "anthropic/claude-opus-4-6" },
+            ],
+            default: "vllm/qwen35", // fallback if no rule matches
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Rules are evaluated in order; first match wins. Keywords are case-insensitive substring matches. Supports any model alias or provider/model string. If no rule matches and `default` is omitted, the agent's primary model is used.
+
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.

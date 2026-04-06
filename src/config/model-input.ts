@@ -37,7 +37,7 @@ export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLi
 
 export function resolveAgentTaskModelValue(
   model: AgentModelConfig | undefined,
-  task: "chat" | "systemPrompt" | "simpleCompletion",
+  task: "chat" | "systemPrompt" | "simpleCompletion" | "messageRouting",
 ): string | undefined {
   if (!model || typeof model !== "object") {
     return undefined;

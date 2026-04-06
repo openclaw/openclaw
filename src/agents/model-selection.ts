@@ -454,7 +454,7 @@ export function resolveConfiguredModelRef(params: {
 export function resolveDefaultModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId?: string;
-  task?: "chat" | "systemPrompt" | "simpleCompletion";
+  task?: "chat" | "systemPrompt" | "simpleCompletion" | "messageRouting";
 }): ModelRef {
   const task = params.task ?? "chat";
   const agentModelOverride = params.agentId
