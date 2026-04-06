@@ -457,7 +457,7 @@ function getCompatibleActivePluginRegistry(
     const gatewayBindableContext = resolvePluginLoadCacheContext({
       ...options,
       runtimeOptions: {
-        ...(options.runtimeOptions ?? {}),
+        ...options.runtimeOptions,
         allowGatewaySubagentBinding: true,
       },
     });
