@@ -102,6 +102,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       mediaUnderstandingProviderIds: [...entry.mediaUnderstandingProviderIds],
       imageGenerationProviderIds: [...entry.imageGenerationProviderIds],
       videoGenerationProviderIds: [...entry.videoGenerationProviderIds],
+      musicGenerationProviderIds: [...entry.musicGenerationProviderIds],
       webFetchProviderIds: [...entry.webFetchProviderIds],
       webSearchProviderIds: [...entry.webSearchProviderIds],
       toolNames: [...entry.toolNames],

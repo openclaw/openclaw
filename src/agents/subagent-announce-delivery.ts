@@ -2,7 +2,11 @@ import type { ConversationRef } from "../infra/outbound/session-binding-service.
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
-import { resolveConversationDeliveryTarget } from "../utils/delivery-context.js";
+import {
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+  resolveConversationDeliveryTarget,
+} from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayMessageChannel,

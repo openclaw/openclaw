@@ -77,6 +77,9 @@ const VITEST_CONTRACT_PLUGIN_IDS = {
   videoGenerationProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
     (entry) => entry.videoGenerationProviderIds.length > 0,
   ).map((entry) => entry.pluginId),
+  musicGenerationProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.musicGenerationProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
 } satisfies Record<ManifestContractKey, string[]>;
 
 function loadVitestVideoGenerationFallbackEntries(
