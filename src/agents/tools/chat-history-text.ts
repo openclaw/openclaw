@@ -1,5 +1,5 @@
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import { sanitizeAssistantVisibleTextWithOptions } from "../../shared/text/assistant-visible-text.js";
+import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import { extractAssistantVisibleText } from "../pi-embedded-utils.js";
 
@@ -18,7 +18,7 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
  * This ensures user-facing text doesn't leak internal tool representations.
  */
 export function sanitizeTextContent(text: string): string {
-  return sanitizeAssistantVisibleTextWithOptions(text, { trim: "none" });
+  return sanitizeAssistantVisibleTextWithProfile(text, "history");
 }
 
 export function hasAssistantPhaseMetadata(message: unknown): boolean {

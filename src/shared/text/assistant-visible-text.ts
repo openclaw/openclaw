@@ -1,6 +1,10 @@
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
-import { stripReasoningTagsFromText } from "./reasoning-tags.js";
+import {
+  stripReasoningTagsFromText,
+  type ReasoningTagMode,
+  type ReasoningTagTrim,
+} from "./reasoning-tags.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -466,12 +470,98 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
+export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
+
+type AssistantVisibleTextPipelineOptions = {
+  finalTrim: ReasoningTagTrim;
+  preserveDowngradedToolText?: boolean;
+  preserveMinimaxToolXml?: boolean;
+  reasoningMode: ReasoningTagMode;
+  reasoningTrim: ReasoningTagTrim;
+  stageOrder: "reasoning-first" | "reasoning-last";
+};
+
+const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
+  AssistantVisibleTextSanitizerProfile,
+  AssistantVisibleTextPipelineOptions
+> = {
+  delivery: {
+    finalTrim: "both",
+    reasoningMode: "strict",
+    reasoningTrim: "both",
+    stageOrder: "reasoning-last",
+  },
+  history: {
+    finalTrim: "none",
+    reasoningMode: "strict",
+    reasoningTrim: "none",
+    stageOrder: "reasoning-last",
+  },
+  "internal-scaffolding": {
+    finalTrim: "start",
+    preserveDowngradedToolText: true,
+    preserveMinimaxToolXml: true,
+    reasoningMode: "preserve",
+    reasoningTrim: "start",
+    stageOrder: "reasoning-first",
+  },
+};
+
+function applyAssistantVisibleTextStagePipeline(
+  text: string,
+  options: AssistantVisibleTextPipelineOptions,
+): string {
+  if (!text) {
+    return text;
+  }
+
+  const stripReasoning = (value: string) =>
+    stripReasoningTagsFromText(value, {
+      mode: options.reasoningMode,
+      trim: options.reasoningTrim,
+    });
+  const applyFinalTrim = (value: string) => {
+    if (options.finalTrim === "none") {
+      return value;
+    }
+    if (options.finalTrim === "start") {
+      return value.trimStart();
+    }
+    return value.trim();
+  };
+  const stripNonReasoningStages = (value: string) => {
+    let cleaned = value;
+    if (!options.preserveMinimaxToolXml) {
+      cleaned = stripMinimaxToolCallXml(cleaned);
+    }
+    cleaned = stripModelSpecialTokens(cleaned);
+    cleaned = stripRelevantMemoriesTags(cleaned);
+    cleaned = stripToolCallXmlTags(cleaned);
+    if (!options.preserveDowngradedToolText) {
+      cleaned = stripDowngradedToolCallText(cleaned);
+    }
+    return cleaned;
+  };
+
+  if (options.stageOrder === "reasoning-first") {
+    return applyFinalTrim(stripNonReasoningStages(stripReasoning(text)));
+  }
+
+  return applyFinalTrim(stripReasoning(stripNonReasoningStages(text)));
+}
+
+export function sanitizeAssistantVisibleTextWithProfile(
+  text: string,
+  profile: AssistantVisibleTextSanitizerProfile = "delivery",
+): string {
+  return applyAssistantVisibleTextStagePipeline(
+    text,
+    ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS[profile],
+  );
+}
+
 export function stripAssistantInternalScaffolding(text: string): string {
-  const withoutReasoning = stripReasoningTagsFromText(text, { mode: "preserve", trim: "start" });
-  const withoutMemories = stripRelevantMemoriesTags(withoutReasoning);
-  const withoutToolCalls = stripToolCallXmlTags(withoutMemories);
-  const withoutSpecialTokens = stripModelSpecialTokens(withoutToolCalls);
-  return withoutSpecialTokens.trimStart();
+  return sanitizeAssistantVisibleTextWithProfile(text, "internal-scaffolding");
 }
 
 /**
@@ -479,26 +569,17 @@ export function stripAssistantInternalScaffolding(text: string): string {
  * extraction paths. Keeps prose, removes internal scaffolding.
  */
 export function sanitizeAssistantVisibleText(text: string): string {
-  return sanitizeAssistantVisibleTextWithOptions(text, { trim: "both" });
+  return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
 }
 
+/**
+ * Backwards-compatible trim wrapper.
+ * Prefer sanitizeAssistantVisibleTextWithProfile for new call sites.
+ */
 export function sanitizeAssistantVisibleTextWithOptions(
   text: string,
   options?: { trim?: "none" | "both" },
 ): string {
-  if (!text) {
-    return text;
-  }
-  const trimMode = options?.trim ?? "both";
-
-  const withoutMinimaxToolXml = stripMinimaxToolCallXml(text);
-  const withoutSpecialTokens = stripModelSpecialTokens(withoutMinimaxToolXml);
-  const withoutMemories = stripRelevantMemoriesTags(withoutSpecialTokens);
-  const withoutToolCallXml = stripToolCallXmlTags(withoutMemories);
-  const withoutDowngradedToolText = stripDowngradedToolCallText(withoutToolCallXml);
-  const sanitized = stripReasoningTagsFromText(withoutDowngradedToolText, {
-    mode: "strict",
-    trim: trimMode,
-  });
-  return trimMode === "both" ? sanitized.trim() : sanitized;
+  const profile = options?.trim === "none" ? "history" : "delivery";
+  return sanitizeAssistantVisibleTextWithProfile(text, profile);
 }
