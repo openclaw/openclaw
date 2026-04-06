@@ -658,6 +658,9 @@ Current behavior is intentionally conservative:
 - the worker submission still uses the existing `heavy_task` runtime-plane contract
 - manager task intent is carried through structured task payload fields
 - `task_payload` is included in the executor report so the manager can see exactly what was launched
+- after a successful main `run_runtime_task`, the executor performs one post-task evaluation pass through the existing manager classifier and policy
+- post-task evaluation is one-shot only; it does not recursively execute the returned candidate
+- if post-task confidence is below threshold or policy resolves to the same action/step again, the executor stops at evaluation and reports the candidate as blocked
 
 Execution report shape includes:
 
@@ -665,6 +668,7 @@ Execution report shape includes:
 - `main_action`
 - `secondary_action`
 - `task_payload`
+- `post_task_evaluation`
 - `secondary_gate_decision`
 - `secondary_gate_reason`
 - `secondary_gate_warning`
@@ -682,6 +686,14 @@ Execution report shape includes:
 - `secondary_exit_code`
 
 If `confidence_gate_applied == true` or the plan resolves to a non-executing action such as `manual_review` or `stop_and_surface_diff`, the executor stops without calling runtime remediation.
+
+Current post-task evaluation safety rules are:
+
+- only after `main_action == run_runtime_task`
+- only when the main task exits with `exit_code == 0`
+- skipped for `failed` / `stopped` / non-zero exit cases
+- confidence below threshold stops candidate promotion
+- identical action/step output is blocked to avoid self-loops
 
 Current confidence gate is intentionally small:
 

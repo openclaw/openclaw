@@ -8,6 +8,8 @@ import sys
 import time
 from pathlib import Path
 
+from sense_runtime_manager_signal_classifier import classify_manager_signal
+
 
 NON_EXECUTING_ACTIONS = {'manual_review', 'stop_and_surface_diff'}
 
@@ -241,6 +243,134 @@ def collect_main_warnings(step_result: dict) -> list[str]:
     return deduped
 
 
+def derive_post_task_final_state(result: dict) -> str:
+    provider_status = result.get('provider_status')
+    gpu_status = result.get('gpu_status')
+    nim_status_info = result.get('nim_status_info')
+    model_status = result.get('model_status')
+
+    if isinstance(provider_status, dict) and provider_status.get('provider_ready') is False:
+        return 'provider_not_ready'
+    if isinstance(nim_status_info, dict) and nim_status_info.get('nim_ready') is False:
+        return 'nim_not_ready'
+    if isinstance(gpu_status, dict) and gpu_status.get('gpu_ready') is False:
+        return 'gpu_not_ready'
+    if isinstance(model_status, dict):
+        if model_status.get('selected_model_match') is False:
+            return 'selected_model_mismatch'
+        if model_status.get('selected_model_present') is False:
+            return 'selected_model_missing'
+        if model_status.get('default_model_present') is False:
+            return 'default_model_missing'
+        if model_status.get('model_ready') is False:
+            return 'model_not_ready'
+    if result.get('readiness') == 'degraded':
+        return 'manager_action_required'
+    return 'ready_for_runtime_task'
+
+
+def build_post_task_policy_payload(task_result: dict) -> dict:
+    result = task_result.get('result')
+    normalized_result = result if isinstance(result, dict) else {}
+    policy_input = (
+        normalized_result.get('policy_input')
+        if isinstance(normalized_result.get('policy_input'), dict)
+        else {}
+    )
+    merged_policy_input = dict(policy_input)
+    for key in (
+        'provider_status',
+        'gpu_status',
+        'nim_status_info',
+        'model_status',
+        'provider',
+        'provider_runtime_recognized',
+        'selected_model_expected',
+        'selected_model_runtime',
+        'selected_model_runtime_recognized',
+        'selected_model_diff_reason',
+    ):
+        if key in normalized_result and key not in merged_policy_input:
+            merged_policy_input[key] = normalized_result.get(key)
+
+    retry = normalized_result.get('retry')
+    return {
+        'final_state': str(
+            normalized_result.get('final_state') or derive_post_task_final_state(normalized_result)
+        ),
+        'next_step': str(
+            normalized_result.get('next_step')
+            or normalized_result.get('suggested_next_action')
+            or 'manual_review'
+        ),
+        'retry': retry if isinstance(retry, dict) else {},
+        'policy_input': merged_policy_input,
+    }
+
+
+def run_post_task_policy(script_dir: Path, payload: dict) -> dict:
+    cmd = [
+        str(script_dir / 'sense-runtime-manager-policy.sh'),
+        '--input-json',
+        json.dumps(payload, ensure_ascii=False),
+    ]
+    completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        error_text = (
+            completed.stderr.strip()
+            or completed.stdout.strip()
+            or f'policy command failed with exit code {completed.returncode}'
+        )
+        return {
+            'error': error_text,
+            'exit_code': completed.returncode,
+        }
+    return json.loads(completed.stdout)
+
+
+def evaluate_post_task_followup(
+    script_dir: Path,
+    task_result: dict,
+    current_action: str | None,
+    current_step: str | None,
+) -> dict:
+    payload = build_post_task_policy_payload(task_result)
+    classification = classify_manager_signal(payload)
+    confidence = classification.get('confidence')
+    same_action = False
+    policy_output = run_post_task_policy(script_dir, payload)
+    next_action = None
+    next_step = None
+    stop_reason = None
+    if isinstance(policy_output, dict) and not policy_output.get('error'):
+        proposed_action = policy_output.get('manager_action')
+        proposed_step = policy_output.get('next_step')
+        same_action = proposed_action == current_action and proposed_step == current_step
+        if isinstance(confidence, (int, float)) and confidence < 0.5:
+            stop_reason = 'post-task evaluation confidence is below threshold'
+        elif policy_output.get('confidence_gate_applied') is True:
+            stop_reason = 'post-task evaluation requested fallback handling'
+        elif same_action:
+            stop_reason = 'post-task evaluation produced the same action and step, so executor will not loop'
+        else:
+            next_action = proposed_action
+            next_step = proposed_step
+    else:
+        stop_reason = str(policy_output.get('error') or 'post-task policy evaluation failed')
+
+    return {
+        'reclassified_issue': classification.get('primary_issue') or classification.get('classified_issue'),
+        'secondary_issues': classification.get('secondary_issues', []),
+        'next_action': next_action,
+        'next_step': next_step,
+        'confidence': confidence,
+        'priority': classification.get('priority'),
+        'stop_reason': stop_reason,
+        'same_action_blocked': same_action,
+        'policy_output': policy_output,
+    }
+
+
 def main() -> int:
     started_at = time.monotonic()
     args = build_parser().parse_args()
@@ -436,6 +566,18 @@ def main() -> int:
         'exit_summary': build_exit_summary(main_result, secondary_result),
         'policy_trace': policy.get('policy_trace', {}),
     }
+    if manager_action == 'run_runtime_task' and main_exit_code == 0:
+        post_task_evaluation = evaluate_post_task_followup(
+            script_dir,
+            main_result,
+            manager_action,
+            next_step,
+        )
+        output['post_task_evaluation'] = post_task_evaluation
+        if post_task_evaluation.get('next_action'):
+            output['executor_state'] = 'completed_with_followup_candidate'
+        else:
+            output['executor_state'] = 'completed_resolved'
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
 
