@@ -6,10 +6,8 @@ import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
-import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
-import { applyPathPrepend } from "./path-prepend.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import {
@@ -32,6 +30,12 @@ import {
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
 } from "./update-global.js";
+import {
+  managerInstallArgs,
+  managerScriptArgs,
+  resolveUpdateBuildManager,
+  type UpdatePackageManagerFailureReason,
+} from "./update-package-manager.js";
 
 export type UpdateStepResult = {
   name: string;
@@ -87,15 +91,11 @@ type UpdateRunnerOptions = {
   progress?: UpdateStepProgress;
 };
 
-type BuildManager = "pnpm" | "bun" | "npm";
-type ResolvedBuildManager = {
-  manager: BuildManager;
-  fallback: boolean;
-  preferred: BuildManager;
-  env?: NodeJS.ProcessEnv;
-  cleanup?: () => Promise<void>;
-  requiredPreferredMissing?: boolean;
-};
+function mapManagerResolutionFailure(
+  reason: UpdatePackageManagerFailureReason,
+): UpdateRunResult["reason"] {
+  return reason;
+}
 
 const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const MAX_LOG_CHARS = 8000;
@@ -256,167 +256,6 @@ async function findPackageRoot(candidates: string[]) {
   return null;
 }
 
-async function detectPackageManager(root: string): Promise<BuildManager> {
-  return (await detectPackageManagerImpl(root)) ?? "npm";
-}
-
-function managerPreferenceOrder(preferred: BuildManager): BuildManager[] {
-  if (preferred === "pnpm") {
-    return ["pnpm", "npm", "bun"];
-  }
-  if (preferred === "bun") {
-    return ["bun", "npm", "pnpm"];
-  }
-  return ["npm", "pnpm", "bun"];
-}
-
-function managerVersionArgs(manager: BuildManager): string[] {
-  if (manager === "pnpm") {
-    return ["pnpm", "--version"];
-  }
-  if (manager === "bun") {
-    return ["bun", "--version"];
-  }
-  return ["npm", "--version"];
-}
-
-async function isManagerAvailable(
-  runCommand: CommandRunner,
-  manager: BuildManager,
-  timeoutMs: number,
-  env?: NodeJS.ProcessEnv,
-): Promise<boolean> {
-  try {
-    const res = await runCommand(managerVersionArgs(manager), { timeoutMs, env });
-    return res.code === 0;
-  } catch {
-    return false;
-  }
-}
-
-async function isCommandAvailable(
-  runCommand: CommandRunner,
-  argv: string[],
-  timeoutMs: number,
-  env?: NodeJS.ProcessEnv,
-): Promise<boolean> {
-  try {
-    const res = await runCommand(argv, { timeoutMs, env });
-    return res.code === 0;
-  } catch {
-    return false;
-  }
-}
-
-async function ensurePnpmAvailable(
-  runCommand: CommandRunner,
-  timeoutMs: number,
-  env?: NodeJS.ProcessEnv,
-): Promise<boolean> {
-  if (await isManagerAvailable(runCommand, "pnpm", timeoutMs, env)) {
-    return true;
-  }
-  if (!(await isCommandAvailable(runCommand, ["corepack", "--version"], timeoutMs, env))) {
-    return false;
-  }
-  try {
-    const res = await runCommand(["corepack", "enable"], { timeoutMs, env });
-    if (res.code !== 0) {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-  return await isManagerAvailable(runCommand, "pnpm", timeoutMs, env);
-}
-
-function cloneCommandEnv(env?: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(env ?? process.env)
-      .filter(([, value]) => value != null)
-      .map(([key, value]) => [key, String(value)]),
-  ) as Record<string, string>;
-}
-
-async function bootstrapPnpmViaNpm(params: {
-  runCommand: CommandRunner;
-  timeoutMs: number;
-  baseEnv?: NodeJS.ProcessEnv;
-}): Promise<{ env: NodeJS.ProcessEnv; cleanup: () => Promise<void> } | null> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pnpm-"));
-  const cleanup = async () => {
-    await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
-  };
-  try {
-    const installResult = await params.runCommand(
-      ["npm", "install", "--prefix", tempRoot, "pnpm@10"],
-      {
-        timeoutMs: params.timeoutMs,
-        env: params.baseEnv,
-      },
-    );
-    if (installResult.code !== 0) {
-      await cleanup();
-      return null;
-    }
-    const env = cloneCommandEnv(params.baseEnv);
-    applyPathPrepend(env, [path.join(tempRoot, "node_modules", ".bin")]);
-    if (!(await isManagerAvailable(params.runCommand, "pnpm", params.timeoutMs, env))) {
-      await cleanup();
-      return null;
-    }
-    return { env, cleanup };
-  } catch {
-    await cleanup();
-    return null;
-  }
-}
-
-async function resolveAvailableManager(
-  runCommand: CommandRunner,
-  root: string,
-  timeoutMs: number,
-  baseEnv?: NodeJS.ProcessEnv,
-  opts?: {
-    requirePreferred?: boolean;
-  },
-): Promise<ResolvedBuildManager> {
-  const preferred = await detectPackageManager(root);
-  if (preferred === "pnpm" && (await ensurePnpmAvailable(runCommand, timeoutMs, baseEnv))) {
-    return { manager: "pnpm", fallback: false, preferred };
-  }
-  if (preferred === "pnpm" && (await isManagerAvailable(runCommand, "npm", timeoutMs, baseEnv))) {
-    const pnpmBootstrap = await bootstrapPnpmViaNpm({
-      runCommand,
-      timeoutMs,
-      baseEnv,
-    });
-    if (pnpmBootstrap) {
-      return {
-        manager: "pnpm",
-        fallback: false,
-        preferred,
-        env: pnpmBootstrap.env,
-        cleanup: pnpmBootstrap.cleanup,
-      };
-    }
-  }
-  if (preferred === "pnpm" && opts?.requirePreferred) {
-    return {
-      manager: "pnpm",
-      fallback: false,
-      preferred,
-      requiredPreferredMissing: true,
-    };
-  }
-  for (const manager of managerPreferenceOrder(preferred)) {
-    if (await isManagerAvailable(runCommand, manager, timeoutMs, baseEnv)) {
-      return { manager, fallback: manager !== preferred, preferred };
-    }
-  }
-  return { manager: "npm", fallback: preferred !== "npm", preferred };
-}
-
 type RunStepOptions = {
   runCommand: CommandRunner;
   name: string;
@@ -464,34 +303,6 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
     stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
     stderrTail: trimLogTail(result.stderr, MAX_LOG_CHARS),
   };
-}
-
-function managerScriptArgs(manager: BuildManager, script: string, args: string[] = []) {
-  if (manager === "pnpm") {
-    return ["pnpm", script, ...args];
-  }
-  if (manager === "bun") {
-    return ["bun", "run", script, ...args];
-  }
-  if (args.length > 0) {
-    return ["npm", "run", script, "--", ...args];
-  }
-  return ["npm", "run", script];
-}
-
-function managerInstallArgs(manager: BuildManager, opts?: { compatFallback?: boolean }) {
-  if (manager === "pnpm") {
-    return ["pnpm", "install"];
-  }
-  if (manager === "bun") {
-    return ["bun", "install"];
-  }
-  if (opts?.compatFallback) {
-    // pnpm/bun workspaces can hit npm-only peer resolution conflicts and should not create
-    // a package-lock.json when npm is only acting as a compatibility fallback.
-    return ["npm", "install", "--no-package-lock", "--legacy-peer-deps"];
-  }
-  return ["npm", "install"];
 }
 
 function normalizeTag(tag?: string) {
@@ -729,19 +540,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const manager = await resolveAvailableManager(
-        runCommand,
+      const manager = await resolveUpdateBuildManager(
+        (argv, options) => runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
         gitRoot,
         timeoutMs,
         defaultCommandEnv,
-        { requirePreferred: true },
+        "require-preferred",
       );
-      if (manager.requiredPreferredMissing) {
+      if (manager.kind === "missing-required") {
         return {
           status: "error",
           mode: "git",
           root: gitRoot,
-          reason: "required-manager-unavailable",
+          reason: mapManagerResolutionFailure(manager.reason),
           before: { sha: beforeSha, version: beforeVersion },
           steps,
           durationMs: Date.now() - startedAt,
@@ -930,19 +741,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
     }
 
-    const manager = await resolveAvailableManager(
-      runCommand,
+    const manager = await resolveUpdateBuildManager(
+      (argv, options) => runCommand(argv, { timeoutMs: options.timeoutMs, env: options.env }),
       gitRoot,
       timeoutMs,
       defaultCommandEnv,
-      { requirePreferred: true },
+      "require-preferred",
     );
-    if (manager.requiredPreferredMissing) {
+    if (manager.kind === "missing-required") {
       return {
         status: "error",
         mode: "git",
         root: gitRoot,
-        reason: "required-manager-unavailable",
+        reason: mapManagerResolutionFailure(manager.reason),
         before: { sha: beforeSha, version: beforeVersion },
         steps,
         durationMs: Date.now() - startedAt,
