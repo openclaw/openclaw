@@ -101,6 +101,11 @@ def main() -> int:
     owner_bucket_actionable_summary: dict[str, dict[str, dict[str, int]]] = defaultdict(
         lambda: defaultdict(lambda: {'total': 0, 'actionable': 0, 'non_actionable': 0})
     )
+    owner_bucket_priority_summary: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(
+            lambda: {'immediate': 0, 'high': 0, 'medium': 0, 'low': 0, 'none': 0}
+        )
+    )
     for record in filtered_records:
         route_signature = record['route_signature']
         aggregate = grouped.setdefault(
@@ -134,6 +139,15 @@ def main() -> int:
             aggregate['actionable_count'] += 1
         else:
             cell['non_actionable'] += 1
+        priority = record.get('recovery_priority')
+        priority_key = priority if isinstance(priority, str) and priority in {
+            'immediate',
+            'high',
+            'medium',
+            'low',
+            'none',
+        } else 'none'
+        owner_bucket_priority_summary[owner_key][bucket_key][priority_key] += 1
         rank = record.get('recovery_rank')
         if isinstance(rank, int) and rank > aggregate['max_recovery_rank']:
             aggregate['max_recovery_rank'] = rank
@@ -191,6 +205,7 @@ def main() -> int:
     ]
     crosstab_output: dict[str, dict[str, int]] = {}
     actionable_summary_output: dict[str, dict[str, dict[str, int]]] = {}
+    priority_summary_output: dict[str, dict[str, dict[str, int]]] = {}
     for owner_key in sorted(owner_bucket_crosstab.keys()):
         row = owner_bucket_crosstab[owner_key]
         ordered_row = {bucket_name: int(row.get(bucket_name, 0)) for bucket_name in ordered_buckets}
@@ -220,11 +235,37 @@ def main() -> int:
             }
         actionable_summary_output[owner_key] = ordered_actionable_row
 
+        priority_row = owner_bucket_priority_summary.get(owner_key, {})
+        ordered_priority_row = {
+            bucket_name: {
+                'immediate': int(priority_row.get(bucket_name, {}).get('immediate', 0)),
+                'high': int(priority_row.get(bucket_name, {}).get('high', 0)),
+                'medium': int(priority_row.get(bucket_name, {}).get('medium', 0)),
+                'low': int(priority_row.get(bucket_name, {}).get('low', 0)),
+                'none': int(priority_row.get(bucket_name, {}).get('none', 0)),
+            }
+            for bucket_name in ordered_buckets
+        }
+        extra_priority_buckets = sorted(
+            bucket for bucket in priority_row.keys() if bucket not in ordered_priority_row
+        )
+        for bucket_name in extra_priority_buckets:
+            bucket_summary = priority_row.get(bucket_name, {})
+            ordered_priority_row[bucket_name] = {
+                'immediate': int(bucket_summary.get('immediate', 0)),
+                'high': int(bucket_summary.get('high', 0)),
+                'medium': int(bucket_summary.get('medium', 0)),
+                'low': int(bucket_summary.get('low', 0)),
+                'none': int(bucket_summary.get('none', 0)),
+            }
+        priority_summary_output[owner_key] = ordered_priority_row
+
     output = {
         'total_records': len(filtered_records),
         'aggregated_routes': aggregated_routes,
         'owner_bucket_crosstab': crosstab_output,
         'owner_bucket_actionable_summary': actionable_summary_output,
+        'owner_bucket_priority_summary': priority_summary_output,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
