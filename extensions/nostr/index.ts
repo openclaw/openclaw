@@ -2,6 +2,7 @@ import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
+import type { PluginRuntime, ResolvedNostrAccount } from "./api.js";
 
 function createNostrProfileHttpHandler() {
   return loadBundledEntryExportSync<
@@ -13,20 +14,19 @@ function createNostrProfileHttpHandler() {
 }
 
 function getNostrRuntime() {
-  return loadBundledEntryExportSync<() => unknown>(import.meta.url, {
+  return loadBundledEntryExportSync<() => PluginRuntime>(import.meta.url, {
     specifier: "./api.js",
     exportName: "getNostrRuntime",
   })();
 }
 
 function resolveNostrAccount(params: { cfg: unknown; accountId: string }) {
-  return loadBundledEntryExportSync<(params: { cfg: unknown; accountId: string }) => unknown>(
-    import.meta.url,
-    {
-      specifier: "./api.js",
-      exportName: "resolveNostrAccount",
-    },
-  )(params);
+  return loadBundledEntryExportSync<
+    (params: { cfg: unknown; accountId: string }) => ResolvedNostrAccount
+  >(import.meta.url, {
+    specifier: "./api.js",
+    exportName: "resolveNostrAccount",
+  })(params);
 }
 
 export default defineBundledChannelEntry({
