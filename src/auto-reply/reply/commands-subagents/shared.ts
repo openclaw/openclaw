@@ -25,7 +25,7 @@ import {
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
-import { extractMessageText } from "../commands-subagents-text.js";
+import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
@@ -60,6 +60,7 @@ export const ACTIONS = new Set([
 ]);
 
 export const RECENT_WINDOW_MINUTES = 30;
+const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 const SUBAGENT_TASK_PREVIEW_MAX = 110;
 export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 

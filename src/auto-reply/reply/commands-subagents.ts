@@ -1,4 +1,5 @@
 import { logVerbose } from "../../globals.js";
+import { handleSubagentsHelpAction } from "./commands-subagents/action-help.js";
 import {
   resolveHandledPrefix,
   resolveRequesterSessionKey,
