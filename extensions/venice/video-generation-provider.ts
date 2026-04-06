@@ -2,7 +2,6 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  fetchWithTimeout,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
@@ -26,7 +25,7 @@ type VeniceQueueVideoResponse = {
 };
 
 type VeniceRetrieveVideoResponse = {
-  status?: "PROCESSING";
+  status?: "PROCESSING" | "QUEUED" | "PENDING";
   average_execution_time?: number;
   execution_duration?: number;
   error?: string;
@@ -55,6 +54,11 @@ function normalizeDuration(durationSeconds?: number): string | undefined {
   return "10s";
 }
 
+function isImageToVideoModel(model: string): boolean {
+  const normalized = model.toLowerCase();
+  return normalized.includes("image-to-video") || normalized.includes("i2v");
+}
+
 async function pollVeniceVideo(params: {
   queueId: string;
   model: string;
@@ -63,7 +67,15 @@ async function pollVeniceVideo(params: {
   baseUrl: string;
   fetchFn: typeof fetch;
 }): Promise<Buffer> {
+  const effectiveTimeout = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const deadline = Date.now() + effectiveTimeout;
+
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+    // Check if we've exceeded the total timeout
+    if (Date.now() >= deadline) {
+      break;
+    }
+
     const body = {
       model: params.model,
       queue_id: params.queueId,
@@ -73,7 +85,7 @@ async function pollVeniceVideo(params: {
       url: `${params.baseUrl}/video/retrieve`,
       headers: params.headers,
       body,
-      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeoutMs: Math.min(DEFAULT_TIMEOUT_MS, deadline - Date.now()),
       fetchFn: params.fetchFn,
       allowPrivateNetwork: false,
     });
@@ -95,17 +107,25 @@ async function pollVeniceVideo(params: {
         throw new Error(`Venice video retrieve failed: HTTP ${response.status}`);
       }
 
-      // Still processing
+      // Parse status
       const statusBody = (await response.json()) as VeniceRetrieveVideoResponse;
-      if (statusBody.status === "PROCESSING") {
+
+      if (statusBody.error) {
+        throw new Error(statusBody.error);
+      }
+
+      // Handle known processing states - wait before retrying
+      if (
+        statusBody.status === "PROCESSING" ||
+        statusBody.status === "QUEUED" ||
+        statusBody.status === "PENDING"
+      ) {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
         continue;
       }
 
-      // Unknown status
-      if (statusBody.error) {
-        throw new Error(statusBody.error);
-      }
+      // Unknown status - still wait before retrying to avoid tight loops
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     } finally {
       await release();
     }
@@ -120,33 +140,44 @@ export function buildVeniceVideoGenerationProvider(): VideoGenerationProvider {
     label: "Venice",
     defaultModel: DEFAULT_VENICE_VIDEO_MODEL,
     models: [
-      // Image-to-video models
+      // WAN models (Image-to-Video)
       "wan-2.5-preview-image-to-video",
       "wan-2.6-720p-image-to-video",
       "wan-2.6-1080p-image-to-video",
+      // Kling models (Image-to-Video)
       "kling-2.1-master-image-to-video",
       "kling-2.1-pro-image-to-video",
       "kling-2.1-standard-image-to-video",
       "kling-1.6-pro-image-to-video",
       "kling-1.6-standard-image-to-video",
       "kling-1.5-pro-image-to-video",
+      // Kling O3 models (Reference-to-Video with elements support)
+      "kling-o3-r2v",
+      // Hunyuan (Image-to-Video)
       "hunyuan-image-to-video",
+      // MiniMax (Image-to-Video and Text-to-Video)
       "minimax-image-to-video",
+      "minimax-text-to-video",
+      // Luma Ray models (Image-to-Video and Text-to-Video)
       "luma-ray-2-image-to-video",
+      "luma-ray-2-text-to-video",
       "luma-ray-flash-2-image-to-video",
+      "luma-ray-flash-2-text-to-video",
+      // Seedance (Image-to-Video and Text-to-Video)
       "seedance-1-image-to-video",
+      "seedance-1-text-to-video",
+      // Vidu (Image-to-Video and Text-to-Video)
       "vidu-2-image-to-video",
-      // Text-to-video models
+      "vidu-2-text-to-video",
+      // Kling models (Text-to-Video)
       "kling-2.1-master-text-to-video",
       "kling-2.1-pro-text-to-video",
       "kling-2.1-standard-text-to-video",
       "kling-1.6-pro-text-to-video",
       "kling-1.6-standard-text-to-video",
-      "minimax-text-to-video",
-      "luma-ray-2-text-to-video",
-      "luma-ray-flash-2-text-to-video",
-      "seedance-1-text-to-video",
-      "vidu-2-text-to-video",
+      // Video upscale models
+      "video-upscale-topaz",
+      "video-upscale-standard",
     ],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
@@ -156,7 +187,7 @@ export function buildVeniceVideoGenerationProvider(): VideoGenerationProvider {
     capabilities: {
       maxVideos: 1,
       maxInputImages: 1,
-      maxInputVideos: 0,
+      maxInputVideos: 1,
       maxDurationSeconds: 10,
       supportedDurationSeconds: [5, 10],
       supportsResolution: true,
@@ -164,10 +195,6 @@ export function buildVeniceVideoGenerationProvider(): VideoGenerationProvider {
       supportsAudio: true,
     },
     async generateVideo(req) {
-      if ((req.inputVideos?.length ?? 0) > 0) {
-        throw new Error("Venice video generation does not support video reference inputs.");
-      }
-
       const auth = await resolveApiKeyForProvider({
         provider: "venice",
         cfg: req.cfg,
@@ -194,14 +221,17 @@ export function buildVeniceVideoGenerationProvider(): VideoGenerationProvider {
 
       // Determine model - use image-to-video if image provided, otherwise text-to-video
       const hasInputImage = (req.inputImages?.length ?? 0) > 0;
+      const hasInputVideo = (req.inputVideos?.length ?? 0) > 0;
       let model = req.model?.trim() || DEFAULT_VENICE_VIDEO_MODEL;
 
-      // Auto-select appropriate model type based on input
-      if (!req.model) {
-        if (!hasInputImage) {
-          // Switch to text-to-video model if no image provided
-          model = "kling-2.1-pro-text-to-video";
-        }
+      // Validate: if an I2V model is explicitly chosen but no image is provided, error early
+      if (!req.model && !hasInputImage && !hasInputVideo) {
+        // Auto-select text-to-video model if no image/video provided
+        model = "kling-2.1-pro-text-to-video";
+      } else if (req.model && isImageToVideoModel(req.model) && !hasInputImage) {
+        throw new Error(
+          `Model "${req.model}" requires a reference image. Either provide an image via inputImages or use a text-to-video model.`,
+        );
       }
 
       // Build request body per Venice API spec
@@ -238,6 +268,20 @@ export function buildVeniceVideoGenerationProvider(): VideoGenerationProvider {
           throw new Error("Venice reference image is missing image data.");
         }
         body.image_url = imageUrl;
+      }
+
+      // Add reference video for video-to-video/upscale models
+      if (hasInputVideo && req.inputVideos?.[0]) {
+        const input = req.inputVideos[0];
+        const videoUrl = input.url?.trim()
+          ? input.url.trim()
+          : input.buffer
+            ? toDataUrl(input.buffer, input.mimeType?.trim() || "video/mp4")
+            : undefined;
+        if (!videoUrl) {
+          throw new Error("Venice reference video is missing video data.");
+        }
+        body.video_url = videoUrl;
       }
 
       // Queue the video generation
@@ -293,9 +337,6 @@ export function buildVeniceVideoGenerationProvider(): VideoGenerationProvider {
         metadata: {
           queueId,
           provider: "venice",
-          normalizedDurationSeconds: normalizeDuration(req.durationSeconds) === "10s" ? 10 : 5,
-          requestedDurationSeconds: req.durationSeconds,
-          supportedDurationSeconds: [5, 10],
         },
       };
     },
