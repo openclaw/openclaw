@@ -148,16 +148,16 @@ describe("music generate background helpers", () => {
           to: "channel:1",
         }),
         expectsCompletionMessage: true,
-        internalEvents: [
+        internalEvents: expect.arrayContaining([
           expect.objectContaining({
             source: "music_generation",
             announceType: "music generation task",
             status: "ok",
             result: expect.stringContaining("MEDIA:/tmp/generated-night-drive.mp3"),
             mediaUrls: ["/tmp/generated-night-drive.mp3"],
-            replyInstruction: expect.stringContaining("include those exact MEDIA: lines"),
+            replyInstruction: expect.stringContaining("Prefer the message tool for delivery"),
           }),
-        ],
+        ]),
       }),
     );
   });

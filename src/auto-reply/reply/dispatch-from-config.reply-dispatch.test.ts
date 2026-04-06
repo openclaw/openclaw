@@ -400,7 +400,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       ctx: createHookCtx(),
       cfg: emptyConfig,
       dispatcher: createDispatcher(),
-      fastAbortResolver: () => ({ handled: false, aborted: false }),
+      fastAbortResolver: async () => ({ handled: false, aborted: false }),
       formatAbortReplyTextResolver: () => "⚙️ Agent was aborted.",
       replyResolver: async () => ({ text: "model reply" }),
     });
@@ -425,7 +425,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       handled: false,
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
-    });
+    } satisfies PluginHookReplyDispatchResult);
 
     const result = await dispatchReplyFromConfig({
       ctx: createHookCtx(),

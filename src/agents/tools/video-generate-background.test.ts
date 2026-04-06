@@ -148,16 +148,16 @@ describe("video generate background helpers", () => {
           to: "channel:1",
         }),
         expectsCompletionMessage: true,
-        internalEvents: [
+        internalEvents: expect.arrayContaining([
           expect.objectContaining({
             source: "video_generation",
             announceType: "video generation task",
             status: "ok",
             result: expect.stringContaining("MEDIA:/tmp/generated-lobster.mp4"),
             mediaUrls: ["/tmp/generated-lobster.mp4"],
-            replyInstruction: expect.stringContaining("include those exact MEDIA: lines"),
+            replyInstruction: expect.stringContaining("Prefer the message tool for delivery"),
           }),
-        ],
+        ]),
       }),
     );
   });
