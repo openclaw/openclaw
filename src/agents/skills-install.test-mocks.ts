@@ -22,9 +22,9 @@ export function scanDirectoryWithSummaryFromMock(...args: unknown[]) {
 }
 
 export async function mockSkillScannerModule(
-  importOriginal: () => Promise<typeof import("../security/skill-scanner.js")>,
+  loadActual: () => Promise<typeof import("../security/skill-scanner.js")>,
 ) {
-  const actual = await importOriginal();
+  const actual = await loadActual();
   return {
     ...actual,
     scanDirectoryWithSummary: scanDirectoryWithSummaryFromMock,

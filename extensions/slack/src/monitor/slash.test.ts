@@ -180,15 +180,11 @@ vi.mock("./slash-commands.runtime.js", () => {
 });
 
 type RegisterFn = (params: { ctx: unknown; account: unknown }) => Promise<void>;
-let registerSlackMonitorSlashCommands: RegisterFn;
+const { registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
+  registerSlackMonitorSlashCommands: RegisterFn;
+};
 
 const { dispatchMock } = getSlackSlashMocks();
-
-beforeAll(async () => {
-  ({ registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
-    registerSlackMonitorSlashCommands: RegisterFn;
-  });
-});
 
 beforeEach(() => {
   resetSlackSlashMocks();
@@ -695,7 +691,7 @@ describe("Slack native command argument menus", () => {
 
 function createPolicyHarness(overrides?: {
   groupPolicy?: "open" | "allowlist";
-  channelsConfig?: Record<string, { allow?: boolean; requireMention?: boolean }>;
+  channelsConfig?: Record<string, { enabled?: boolean; requireMention?: boolean }>;
   channelId?: string;
   channelName?: string;
   allowFrom?: string[];
@@ -864,7 +860,7 @@ describe("slack slash commands channel policy", () => {
   it("blocks explicitly denied channels when groupPolicy is open", async () => {
     const harness = createPolicyHarness({
       groupPolicy: "open",
-      channelsConfig: { C_DENIED: { allow: false } },
+      channelsConfig: { C_DENIED: { enabled: false } },
       channelId: "C_DENIED",
       channelName: "denied",
     });

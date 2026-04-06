@@ -2,7 +2,7 @@ import {
   buildChannelOutboundSessionRoute,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./runtime-api.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
 
 export function resolveWhatsAppOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const normalized = normalizeWhatsAppTarget(params.target);

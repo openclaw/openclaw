@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.4.1-beta.1",
+  "version": "2026.4.5",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
@@ -15,7 +15,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.1-beta.1"
+    "openclaw": ">=2026.4.5"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -35,12 +35,17 @@
       "docsLabel": "matrix",
       "blurb": "open protocol; install the plugin to enable.",
       "order": 70,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "persistedAuthState": {
+        "specifier": "./auth-presence",
+        "exportName": "hasAnyMatrixAuth"
+      }
     },
     "install": {
       "npmSpec": "@openclaw/matrix",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.1"
+      "minHostVersion": ">=2026.4.5",
+      "allowInvalidConfigRecovery": true
     },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [

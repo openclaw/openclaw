@@ -2,12 +2,17 @@ import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  assertOkOrThrowHttpError,
+  resolveProviderHttpRequestConfig,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
   type SsrFPolicy,
-  ssrfPolicyFromAllowPrivateNetwork,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
@@ -81,38 +86,30 @@ function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): bool
   return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
 }
 
-function resolveFalNetworkPolicy(
-  cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
-): FalNetworkPolicy {
-  const baseUrl = resolveFalBaseUrl(cfg);
-  const explicitBaseUrl = cfg?.models?.providers?.fal?.baseUrl?.trim();
+function resolveFalNetworkPolicy(params: {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+}): FalNetworkPolicy {
   let parsedBaseUrl: URL;
   try {
-    parsedBaseUrl = new URL(baseUrl);
+    parsedBaseUrl = new URL(params.baseUrl);
   } catch {
     return {};
   }
 
   const hostSuffix = parsedBaseUrl.hostname.trim().toLowerCase();
-  if (!hostSuffix) {
+  if (!hostSuffix || !params.allowPrivateNetwork) {
     return {};
   }
 
   const hostPolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostSuffix]);
-  const privateNetworkPolicy = explicitBaseUrl
-    ? ssrfPolicyFromAllowPrivateNetwork(true)
-    : undefined;
+  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
   const trustedHostPolicy = mergeSsrFPolicies(hostPolicy, privateNetworkPolicy);
   return {
     apiPolicy: trustedHostPolicy,
-    trustedDownloadHostSuffix: explicitBaseUrl ? hostSuffix : undefined,
-    trustedDownloadPolicy: explicitBaseUrl ? trustedHostPolicy : undefined,
+    trustedDownloadHostSuffix: hostSuffix,
+    trustedDownloadPolicy: trustedHostPolicy,
   };
-}
-
-function resolveFalBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
-  const direct = cfg?.models?.providers?.fal?.baseUrl?.trim();
-  return (direct || DEFAULT_FAL_BASE_URL).replace(/\/+$/u, "");
 }
 
 function ensureFalModelPath(model: string | undefined, hasInputImages: boolean): string {
@@ -298,6 +295,11 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
     label: "fal",
     defaultModel: DEFAULT_FAL_IMAGE_MODEL,
     models: [DEFAULT_FAL_IMAGE_MODEL, `${DEFAULT_FAL_IMAGE_MODEL}/${DEFAULT_FAL_EDIT_SUBPATH}`],
+    isConfigured: ({ agentDir }) =>
+      isProviderApiKeyConfigured({
+        provider: "fal",
+        agentDir,
+      }),
     capabilities: {
       generate: {
         maxCount: 4,
@@ -341,7 +343,21 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         hasInputImages,
       });
       const model = ensureFalModelPath(req.model, hasInputImages);
-      const networkPolicy = resolveFalNetworkPolicy(req.cfg);
+      const explicitBaseUrl = req.cfg?.models?.providers?.fal?.baseUrl?.trim();
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        resolveProviderHttpRequestConfig({
+          baseUrl: explicitBaseUrl,
+          defaultBaseUrl: DEFAULT_FAL_BASE_URL,
+          allowPrivateNetwork: false,
+          defaultHeaders: {
+            Authorization: `Key ${auth.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          provider: "fal",
+          capability: "image",
+          transport: "http",
+        });
+      const networkPolicy = resolveFalNetworkPolicy({ baseUrl, allowPrivateNetwork });
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         num_images: req.count ?? 1,
@@ -358,27 +374,20 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         }
         requestBody.image_url = toDataUri(input.buffer, input.mimeType);
       }
-
       const { response, release } = await falFetchGuard({
-        url: `${resolveFalBaseUrl(req.cfg)}/${model}`,
+        url: `${baseUrl}/${model}`,
         init: {
           method: "POST",
-          headers: {
-            Authorization: `Key ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
+          headers,
           body: JSON.stringify(requestBody),
         },
+        timeoutMs: req.timeoutMs,
         policy: networkPolicy.apiPolicy,
+        dispatcherPolicy,
         auditContext: "fal-image-generate",
       });
       try {
-        if (!response.ok) {
-          const text = await response.text().catch(() => "");
-          throw new Error(
-            `fal image generation failed (${response.status}): ${text || response.statusText}`,
-          );
-        }
+        await assertOkOrThrowHttpError(response, "fal image generation failed");
 
         const payload = (await response.json()) as FalImageGenerationResponse;
         const images: GeneratedImageAsset[] = [];

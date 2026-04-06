@@ -6,12 +6,18 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import {
+  runBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "./pi-tools.before-tool-call.js";
 import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
-vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+vi.mock("../plugins/hook-runner-global.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
+    "../plugins/hook-runner-global.js",
+  );
   return {
     ...actual,
     getGlobalHookRunner: vi.fn(),
@@ -330,26 +336,21 @@ describe("before_tool_call loop detection behavior", () => {
 });
 
 describe("before_tool_call requireApproval handling", () => {
-  let runBeforeToolCallHook: (typeof import("./pi-tools.before-tool-call.js"))["runBeforeToolCallHook"];
   let hookRunner: {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
   };
+  const mockCallGateway = vi.mocked(callGatewayTool);
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ runBeforeToolCallHook } = await import("./pi-tools.before-tool-call.js"));
-
+  beforeEach(() => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
     hookRunner = {
       hasHooks: vi.fn().mockReturnValue(true),
       runBeforeToolCall: vi.fn(),
     };
-    const { getGlobalHookRunner: currentGetGlobalHookRunner } =
-      await import("../plugins/hook-runner-global.js");
     // oxlint-disable-next-line typescript/no-explicit-any
-    vi.mocked(currentGetGlobalHookRunner).mockReturnValue(hookRunner as any);
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
     // Keep the global singleton aligned as a fallback in case another setup path
     // preloads hook-runner-global before this test's module reset/mocks take effect.
     const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
@@ -364,15 +365,10 @@ describe("before_tool_call requireApproval handling", () => {
       };
     }
     hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
-    // Clear gateway mock state between tests to prevent call-count leaks.
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    vi.mocked(callGatewayTool).mockReset();
+    mockCallGateway.mockReset();
   });
 
   it("blocks without triggering approval when both block and requireApproval are set", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
-
     hookRunner.runBeforeToolCall.mockResolvedValue({
       block: true,
       blockReason: "Blocked by security plugin",
@@ -394,10 +390,23 @@ describe("before_tool_call requireApproval handling", () => {
     expect(mockCallGateway).not.toHaveBeenCalled();
   });
 
-  it("calls gateway RPC and unblocks on allow-once", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
+  it("blocks when before_tool_call hook execution throws", async () => {
+    hookRunner.runBeforeToolCall.mockRejectedValueOnce(new Error("hook crashed"));
 
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "ls" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty(
+      "reason",
+      "Tool call blocked because before_tool_call hook failed",
+    );
+  });
+
+  it("calls gateway RPC and unblocks on allow-once", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Sensitive",
@@ -433,9 +442,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("blocks on deny decision", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
-
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Dangerous",
@@ -457,9 +463,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("blocks on timeout with default deny behavior", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
-
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Timeout test",
@@ -481,9 +484,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("allows on timeout when timeoutBehavior is allow and preserves hook params", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
-
     hookRunner.runBeforeToolCall.mockResolvedValue({
       params: { command: "safe-command" },
       requireApproval: {
@@ -509,9 +509,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("falls back to block on gateway error", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
-
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Gateway down",
@@ -532,9 +529,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("blocks when gateway returns no id", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
-
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "No ID",
@@ -555,8 +549,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("blocks on immediate null decision without calling waitDecision even when timeoutBehavior is allow", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -585,9 +577,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("unblocks immediately when abort signal fires during waitDecision", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
-
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Abortable",
@@ -620,9 +609,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("removes abort listener after waitDecision resolves", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
-
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Cleanup listener",
@@ -648,8 +634,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("calls onResolution with allow-once on approval", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -673,8 +657,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("does not await onResolution before returning approval outcome", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
     const onResolution = vi.fn(() => new Promise<void>(() => {}));
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -717,8 +699,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("calls onResolution with deny on denial", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -742,8 +722,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("calls onResolution with timeout when decision is null", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -767,8 +745,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("calls onResolution with cancelled on gateway error", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -793,8 +769,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("calls onResolution with cancelled when abort signal fires", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -827,8 +801,6 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("calls onResolution with cancelled when gateway returns no id", async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    const mockCallGateway = vi.mocked(callGatewayTool);
     const onResolution = vi.fn();
 
     hookRunner.runBeforeToolCall.mockResolvedValue({

@@ -3,7 +3,7 @@ import {
   pluginRegistrationContractRegistry,
   resolveWebSearchProviderContractEntriesForPluginId,
 } from "../../../src/plugins/contracts/registry.js";
-import { installWebSearchProviderContractSuite } from "../../../src/plugins/contracts/suites.js";
+import { installWebSearchProviderContractSuite } from "./provider-contract-suites.js";
 
 export function describeWebSearchProviderContracts(pluginId: string) {
   const providerIds =

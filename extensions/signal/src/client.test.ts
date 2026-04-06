@@ -7,8 +7,10 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   resolveFetch: (...args: unknown[]) => resolveFetchMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/core")>();
+vi.mock("openclaw/plugin-sdk/core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/core")>(
+    "openclaw/plugin-sdk/core",
+  );
   return {
     ...actual,
     generateSecureUuid: () => "test-id",
