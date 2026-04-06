@@ -253,6 +253,31 @@ describe("bundled channel entry shape guards", () => {
     expect(reentered).toBe(true);
   });
 
+  it("keeps bundled channel entry specifiers off src subdirectories", () => {
+    const offenders: string[] = [];
+
+    for (const extensionDir of bundledPluginRoots) {
+      for (const relativePath of ["index.ts", "channel-entry.ts", "setup-entry.ts"]) {
+        const filePath = path.join(extensionDir, relativePath);
+        if (!fs.existsSync(filePath)) {
+          continue;
+        }
+        const source = fs.readFileSync(filePath, "utf8");
+        const usesEntryHelpers =
+          source.includes("defineBundledChannelEntry") ||
+          source.includes("defineBundledChannelSetupEntry");
+        if (!usesEntryHelpers) {
+          continue;
+        }
+        if (/specifier:\s*["']\.\/src\//u.test(source)) {
+          offenders.push(path.relative(process.cwd(), filePath));
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
   it("keeps private src runtime barrels from forwarding to parent runtime barrels that export local plugins", () => {
     const offenders: string[] = [];
 
