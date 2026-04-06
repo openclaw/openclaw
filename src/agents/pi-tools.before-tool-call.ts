@@ -377,6 +377,8 @@ export async function runBeforeToolCallHook(args: {
   return { blocked: false, params };
 }
 
+import { isPlanModeMutationTool, formatPlanModeBlockReason } from "./plan-mode-hook.js";
+
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -389,6 +391,16 @@ export function wrapToolWithBeforeToolCallHook(
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
+      // Plan mode gate: block mutation tools when runtimeMode === "plan"
+      if (ctx?.sessionKey && isPlanModeMutationTool(toolName)) {
+        const { getSessionRuntimeMode } = await import("../config/sessions/runtime-mode.js");
+        const runtimeMode = getSessionRuntimeMode(ctx.sessionKey);
+        if (runtimeMode === "plan") {
+          const reason = formatPlanModeBlockReason({ toolName });
+          throw new Error(reason);
+        }
+      }
+
       const outcome = await runBeforeToolCallHook({
         toolName,
         params,

@@ -3,7 +3,6 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
-  PluginHookRegistration,
   PluginHookToolContext,
 } from "../plugins/types.js";
 
@@ -30,9 +29,7 @@ function normalizeToolName(toolName: string): string {
   return toolName.trim().toLowerCase();
 }
 
-function resolveMutationToolNames(
-  options?: PlanModeMutationToolOptions,
-): ReadonlySet<string> {
+function resolveMutationToolNames(options?: PlanModeMutationToolOptions): ReadonlySet<string> {
   return new Set(
     [...(options?.mutationToolNames ?? DEFAULT_PLAN_MODE_MUTATION_TOOL_NAMES)].map((toolName) =>
       normalizeToolName(toolName),
@@ -88,22 +85,10 @@ export async function runPlanModeBeforeToolCallHook(
 }
 
 export function registerPlanModeBeforeToolCallHook(
-  registry: PluginRegistry,
-  options?: PlanModeMutationToolOptions,
+  _registry: PluginRegistry,
+  _options?: PlanModeMutationToolOptions,
 ): void {
-  const alreadyRegistered = registry.typedHooks.some(
-    (hook) =>
-      hook.pluginId === PLAN_MODE_BUILTIN_PLUGIN_ID && hook.hookName === "before_tool_call",
-  );
-  if (alreadyRegistered) {
-    return;
-  }
-  registry.typedHooks.push({
-    pluginId: PLAN_MODE_BUILTIN_PLUGIN_ID,
-    hookName: "before_tool_call",
-    priority: 1_000,
-    source: "core",
-    handler: ((event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext) =>
-      runPlanModeBeforeToolCallHook(event, ctx, options)) as PluginHookRegistration["handler"],
-  } as PluginHookRegistration);
+  // Plan mode gating is now handled directly in wrapToolWithBeforeToolCallHook
+  // to avoid polluting typedHooks in test environments.
+  // See: src/agents/pi-tools.before-tool-call.ts
 }
