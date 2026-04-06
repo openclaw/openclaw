@@ -215,6 +215,7 @@ img.chat-avatar {
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease-out;
+  z-index: 1;
 }
 
 .chat-bubble:hover .chat-bubble-actions {

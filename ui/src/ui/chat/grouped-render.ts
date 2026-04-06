@@ -697,11 +697,17 @@ function renderGroupedMessage(
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
+  const hasActions = canCopyMarkdown || canExpand;
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
+  const bubbleClasses = [
+    "chat-bubble",
+    opts.isStreaming ? "streaming" : "",
+    "fade-in",
+    hasActions ? "has-copy" : "",
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -723,8 +729,6 @@ function renderGroupedMessage(
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
-
-  const hasActions = canCopyMarkdown || canExpand;
 
   return html`
     <div class="${bubbleClasses}">
