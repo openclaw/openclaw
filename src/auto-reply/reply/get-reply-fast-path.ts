@@ -14,6 +14,12 @@ type ReplyConfigWithMarker = OpenClawConfig & {
   [COMPLETE_REPLY_CONFIG_SYMBOL]?: true;
 };
 
+function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS === "1" || env.OPENCLAW_STRICT_FAST_REPLY_CONFIG === "0"
+  );
+}
+
 function resolveFastSessionKey(ctx: MsgContext): string {
   const existing = ctx.SessionKey?.trim();
   if (existing) {
@@ -33,6 +39,10 @@ export function markCompleteReplyConfig<T extends OpenClawConfig>(config: T): T 
   return config;
 }
 
+export function withFastReplyConfig<T extends OpenClawConfig>(config: T): T {
+  return markCompleteReplyConfig(config);
+}
+
 export function isCompleteReplyConfig(config: unknown): config is OpenClawConfig {
   return Boolean(
     config &&
@@ -49,6 +59,11 @@ export function resolveGetReplyConfig(params: {
   const { configOverride } = params;
   if (configOverride == null) {
     return params.loadConfig();
+  }
+  if (params.isFastTestEnv && !isCompleteReplyConfig(configOverride) && !isSlowReplyTestAllowed()) {
+    throw new Error(
+      "Fast reply tests must pass with withFastReplyConfig()/markCompleteReplyConfig(); set OPENCLAW_ALLOW_SLOW_REPLY_TESTS=1 to opt out.",
+    );
   }
   if (params.isFastTestEnv && isCompleteReplyConfig(configOverride)) {
     return configOverride;

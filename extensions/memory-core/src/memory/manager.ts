@@ -35,6 +35,7 @@ import {
 } from "./manager-cache.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
+import { resolveInitialMemoryDirty, resolveStatusProviderInfo } from "./manager-status-state.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -330,7 +331,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.ensureSessionListener();
       this.ensureIntervalSync();
     }
-    this.dirty = this.sources.has("memory") && (statusOnly ? !meta : true);
+    this.dirty = resolveInitialMemoryDirty({
+      hasMemorySource: this.sources.has("memory"),
+      statusOnly,
+      hasIndexedMeta: Boolean(meta),
+    });
     this.batch = this.resolveBatchConfig();
   }
 
@@ -815,12 +820,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       };
     })();
 
-    const searchMode = this.provider || !this.providerInitialized ? "hybrid" : "fts-only";
-    const providerInfo = this.provider
-      ? { provider: this.provider.id, model: this.provider.model }
-      : this.providerInitialized
-        ? { provider: "none", model: undefined }
-        : { provider: this.requestedProvider, model: this.settings.model || undefined };
+    const providerInfo = resolveStatusProviderInfo({
+      provider: this.provider,
+      providerInitialized: this.providerInitialized,
+      requestedProvider: this.requestedProvider,
+      configuredModel: this.settings.model || undefined,
+    });
 
     return {
       backend: "builtin",
@@ -874,7 +879,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         lastProvider: this.batchFailureLastProvider,
       },
       custom: {
-        searchMode,
+        searchMode: providerInfo.searchMode,
         providerUnavailableReason: this.providerUnavailableReason,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,

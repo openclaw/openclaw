@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  hasLegacyAccountStreamingAliases,
   hasLegacyStreamingAliases,
   normalizeLegacyStreamingAliases,
 } from "openclaw/plugin-sdk/runtime-doctor";
@@ -20,11 +21,7 @@ function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
 }
 
 function hasLegacyTelegramAccountStreamingAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacyTelegramStreamingAliases(account));
+  return hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases);
 }
 
 function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {

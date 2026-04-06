@@ -13,7 +13,7 @@ import {
   loadModelCatalogMock,
   runEmbeddedPiAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
-import { markCompleteReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 type RunPreparedReply = typeof import("./reply/get-reply-run.js").runPreparedReply;
@@ -137,7 +137,7 @@ export function makeWhatsAppDirectiveConfig(
   defaults: Record<string, unknown>,
   extra: Record<string, unknown> = {},
 ) {
-  return markCompleteReplyConfig({
+  return withFastReplyConfig({
     agents: {
       defaults: {
         workspace: path.join(home, "openclaw"),

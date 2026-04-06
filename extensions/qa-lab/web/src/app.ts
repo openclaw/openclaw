@@ -85,6 +85,40 @@ export async function createQaLabApp(root: HTMLDivElement) {
   let chatScrollLocked = true;
   let previousMessageCount = 0;
 
+  /* ---------- Render guards (avoid DOM churn during polling) ---------- */
+
+  let lastFingerprint = "";
+  let renderDeferred = false;
+
+  function stateFingerprint(): string {
+    const msgs = state.snapshot?.messages;
+    const ev = state.snapshot?.events;
+    return JSON.stringify({
+      mc: msgs?.length ?? 0,
+      lm: msgs && msgs.length > 0 ? msgs[msgs.length - 1].id : null,
+      cc: state.snapshot?.conversations.length ?? 0,
+      tc: state.snapshot?.threads.length ?? 0,
+      ec: ev?.length ?? 0,
+      lc: ev && ev.length > 0 ? ev[ev.length - 1].cursor : -1,
+      rs: state.bootstrap?.runner.status,
+      ra: state.bootstrap?.runner.startedAt,
+      rf: state.bootstrap?.runner.finishedAt,
+      re: state.bootstrap?.runner.error,
+      ss: state.scenarioRun?.status,
+      sc: state.scenarioRun?.counts,
+      so: state.scenarioRun?.scenarios.map((o) => o.status).join(","),
+      rp: state.latestReport?.generatedAt,
+      cs: state.bootstrap?.runnerCatalog.status,
+      cl: state.bootstrap?.runnerCatalog.real.length ?? 0,
+      er: state.error,
+    });
+  }
+
+  function isSelectOpen(): boolean {
+    const active = document.activeElement;
+    return !!active && root.contains(active) && active.tagName === "SELECT";
+  }
+
   /* ---------- Data fetching ---------- */
 
   async function refresh() {
@@ -125,7 +159,17 @@ export async function createQaLabApp(root: HTMLDivElement) {
     } catch (error) {
       state.error = error instanceof Error ? error.message : String(error);
     }
-    render();
+
+    /* Only re-render when data actually changed; defer if a <select> is open */
+    const fp = stateFingerprint();
+    if (fp !== lastFingerprint) {
+      lastFingerprint = fp;
+      renderDeferred = true;
+    }
+    if (renderDeferred && !isSelectOpen()) {
+      renderDeferred = false;
+      render();
+    }
   }
 
   /* ---------- Draft mutations ---------- */
@@ -453,16 +497,16 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root.querySelector<HTMLInputElement>("#fast-mode")?.addEventListener("change", (e) => {
       updateRunnerDraft((d) => ({ ...d, fastMode: (e.currentTarget as HTMLInputElement).checked }));
     });
-    root.querySelector<HTMLElement>("#primary-model")?.addEventListener("input", (e) => {
+    root.querySelector<HTMLSelectElement>("#primary-model")?.addEventListener("change", (e) => {
       updateRunnerDraft((d) => ({
         ...d,
-        primaryModel: (e.currentTarget as HTMLInputElement).value,
+        primaryModel: (e.currentTarget as HTMLSelectElement).value,
       }));
     });
-    root.querySelector<HTMLElement>("#alternate-model")?.addEventListener("input", (e) => {
+    root.querySelector<HTMLSelectElement>("#alternate-model")?.addEventListener("change", (e) => {
       updateRunnerDraft((d) => ({
         ...d,
-        alternateModel: (e.currentTarget as HTMLInputElement).value,
+        alternateModel: (e.currentTarget as HTMLSelectElement).value,
       }));
     });
 

@@ -3,6 +3,7 @@ import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
 import { normalizeCompatibilityConfig as normalizeDiscordCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
+import { isDiscordMutableAllowEntry } from "./security-doctor.js";
 
 type DiscordNumericIdHit = { path: string; entry: number; safe: boolean };
 
@@ -20,27 +21,6 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
 
 function sanitizeForLog(value: string): string {
   return value.replace(/\p{Cc}+/gu, " ").trim();
-}
-
-function isDiscordMutableAllowEntry(raw: string): boolean {
-  const text = raw.trim();
-  if (!text || text === "*") {
-    return false;
-  }
-
-  const maybeMentionId = text.replace(/^<@!?/, "").replace(/>$/, "");
-  if (/^\d+$/.test(maybeMentionId)) {
-    return false;
-  }
-
-  for (const prefix of ["discord:", "user:", "pk:"]) {
-    if (!text.startsWith(prefix)) {
-      continue;
-    }
-    return text.slice(prefix.length).trim().length === 0;
-  }
-
-  return true;
 }
 
 function collectDiscordAccountScopes(

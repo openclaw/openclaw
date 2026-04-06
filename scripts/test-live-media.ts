@@ -1,10 +1,10 @@
 #!/usr/bin/env -S node --import tsx
 
+import { spawn, type ChildProcess } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { loadShellEnvFallback } from "../src/infra/shell-env.js";
 import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
-import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 
 export type MediaSuiteId = "image" | "music" | "video";
 
@@ -65,6 +65,23 @@ export type SuiteRunPlan = {
   providers: string[];
   skippedReason?: string;
 };
+
+function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }): ChildProcess {
+  const npmExecPath = process.env.npm_execpath?.trim();
+  if (npmExecPath) {
+    return spawn(process.execPath, [npmExecPath, ...params.pnpmArgs], {
+      stdio: "inherit",
+      env: params.env,
+      shell: false,
+    });
+  }
+
+  return spawn(process.platform === "win32" ? "pnpm.cmd" : "pnpm", params.pnpmArgs, {
+    stdio: "inherit",
+    env: params.env,
+    shell: false,
+  });
+}
 
 function parseCsv(raw: string | undefined): Set<string> | null {
   const trimmed = raw?.trim();
@@ -286,15 +303,11 @@ async function runSuite(params: {
     `[live:media] run ${plan.suite.id}: ${plan.suite.testFile} providers=${plan.providers.join(",")}`,
   );
 
-  const child = spawnPnpmRunner({
-    pnpmArgs: args,
-    stdio: "inherit",
-    env,
-  });
+  const child = spawnLivePnpm({ pnpmArgs: args, env });
 
   return await new Promise<number>((resolve, reject) => {
     child.on("error", reject);
-    child.on("exit", (code, signal) => {
+    child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       if (signal) {
         reject(new Error(`${plan.suite.id} exited via signal ${signal}`));
         return;

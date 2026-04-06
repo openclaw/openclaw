@@ -164,7 +164,25 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("splits untargeted runs into fixed shard configs", () => {
     expect(buildFullSuiteVitestRunPlans([], process.cwd())).toEqual([
       {
-        config: "vitest.full-core-unit.config.ts",
+        config: "vitest.full-core-unit-src.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-unit-security.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-unit-support.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-contracts.config.ts",
         forwardedArgs: [],
         includePatterns: null,
         watchMode: false,

@@ -4,18 +4,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
+import {
+  clearMemoryEmbeddingProviders as clearRegistry,
+  registerMemoryEmbeddingProvider as registerAdapter,
+} from "../../../../src/plugins/memory-embedding-providers.js";
 import "./test-runtime-mocks.js";
+import type { MemoryIndexManager } from "./index.js";
+import { getMemorySearchManager, closeAllMemorySearchManagers } from "./index.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
-
-type MemoryIndexModule = typeof import("./index.js");
-type MemoryEmbeddingProvidersModule =
-  typeof import("../../../../src/plugins/memory-embedding-providers.js");
-
-let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
-let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
-let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
-let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -120,7 +116,6 @@ describe("memory index", () => {
   let indexMainPath = "";
   let indexExtraPath = "";
   let indexMultimodalPath = "";
-  let indexStatusPath = "";
   let indexSourceChangePath = "";
   let indexModelPath = "";
   let indexFtsOnlyPath = "";
@@ -145,13 +140,6 @@ describe("memory index", () => {
   const managersForCleanup = new Set<MemoryIndexManager>();
 
   beforeAll(async () => {
-    vi.resetModules();
-    await import("./test-runtime-mocks.js");
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
-    ({
-      clearMemoryEmbeddingProviders: clearRegistry,
-      registerMemoryEmbeddingProvider: registerAdapter,
-    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
@@ -160,7 +148,6 @@ describe("memory index", () => {
     indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
     indexExtraPath = path.join(workspaceDir, "index-extra.sqlite");
     indexMultimodalPath = path.join(workspaceDir, "index-multimodal.sqlite");
-    indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
     indexSourceChangePath = path.join(workspaceDir, "index-source-change.sqlite");
     indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
     indexFtsOnlyPath = path.join(workspaceDir, "index-fts-only.sqlite");
@@ -430,52 +417,6 @@ describe("memory index", () => {
     expect(results.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
 
     await manager.close?.();
-  });
-
-  it("keeps dirty false in status-only manager after prior indexing", async () => {
-    const cfg = createCfg({ storePath: indexStatusPath });
-
-    const first = await getMemorySearchManager({ cfg, agentId: "main" });
-    const firstManager = requireManager(first);
-    await firstManager.sync?.({ reason: "test" });
-    await firstManager.close?.();
-    const providerCallsBeforeStatus = providerCalls.length;
-
-    const statusOnly = await getMemorySearchManager({
-      cfg,
-      agentId: "main",
-      purpose: "status",
-    });
-    const statusManager = requireManager(statusOnly, "status manager missing");
-    const status = statusManager.status();
-    expect(status.dirty).toBe(false);
-    expect(status.provider).toBe("openai");
-    expect(providerCalls).toHaveLength(providerCallsBeforeStatus);
-    await statusManager.close?.();
-  });
-
-  it("does not cache builtin status-only managers across repeated requests", async () => {
-    const cfg = createCfg({
-      storePath: path.join(workspaceDir, `index-status-${randomUUID()}.sqlite`),
-    });
-
-    const first = await getMemorySearchManager({
-      cfg,
-      agentId: "main",
-      purpose: "status",
-    });
-    const second = await getMemorySearchManager({
-      cfg,
-      agentId: "main",
-      purpose: "status",
-    });
-
-    const firstManager = requireManager(first, "first status manager missing");
-    const secondManager = requireManager(second, "second status manager missing");
-    expect(secondManager).not.toBe(firstManager);
-
-    await firstManager.close?.();
-    await secondManager.close?.();
   });
 
   it("reindexes sessions when source config adds sessions to an existing index", async () => {

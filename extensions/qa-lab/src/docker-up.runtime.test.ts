@@ -35,6 +35,7 @@ describe("runQaDockerUp", () => {
 
       expect(calls).toEqual([
         "pnpm qa:lab:build @/repo/openclaw",
+        `docker compose -f ${outputDir}/docker-compose.qa.yml down --remove-orphans @/repo/openclaw`,
         expect.stringContaining(
           `docker compose -f ${outputDir}/docker-compose.qa.yml up --build -d @/repo/openclaw`,
         ),
@@ -77,6 +78,7 @@ describe("runQaDockerUp", () => {
       );
 
       expect(calls).toEqual([
+        `docker compose -f ${outputDir}/docker-compose.qa.yml down --remove-orphans @/repo/openclaw`,
         `docker compose -f ${outputDir}/docker-compose.qa.yml up -d @/repo/openclaw`,
       ]);
     } finally {

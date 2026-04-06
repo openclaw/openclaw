@@ -6,11 +6,59 @@ import {
   setupCliRunnerTestModule,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
+import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
+import type { PreparedCliRunContext } from "./cli-runner/types.js";
+
+function buildPreparedContext(params?: {
+  sessionKey?: string;
+  cliSessionId?: string;
+  runId?: string;
+}): PreparedCliRunContext {
+  const backend = {
+    command: "codex",
+    args: ["exec", "--json"],
+    output: "text" as const,
+    input: "arg" as const,
+    modelArg: "--model",
+    sessionMode: "existing" as const,
+    serialize: true,
+  };
+  return {
+    params: {
+      sessionId: "s1",
+      sessionKey: params?.sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      timeoutMs: 1_000,
+      runId: params?.runId ?? "run-2",
+    },
+    started: Date.now(),
+    workspaceDir: "/tmp",
+    backendResolved: {
+      id: "codex-cli",
+      config: backend,
+      bundleMcp: false,
+      pluginId: "openai",
+    },
+    preparedBackend: {
+      backend,
+      env: {},
+    },
+    reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
+    modelId: "gpt-5.4",
+    normalizedModel: "gpt-5.4",
+    systemPrompt: "You are a helpful assistant.",
+    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
+    bootstrapPromptWarningLines: [],
+  };
+}
 
 describe("runCliAgent reliability", () => {
   it("fails with timeout when no-output watchdog trips", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "no-output-timeout",
@@ -25,22 +73,14 @@ describe("runCliAgent reliability", () => {
     );
 
     await expect(
-      runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        prompt: "hi",
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-2",
-        cliSessionId: "thread-123",
-      }),
+      executePreparedCliRun(
+        buildPreparedContext({ cliSessionId: "thread-123", runId: "run-2" }),
+        "thread-123",
+      ),
     ).rejects.toThrow("produced no output");
   });
 
   it("enqueues a system event and heartbeat wake on no-output watchdog timeout for session runs", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "no-output-timeout",
@@ -55,18 +95,14 @@ describe("runCliAgent reliability", () => {
     );
 
     await expect(
-      runCliAgent({
-        sessionId: "s1",
-        sessionKey: "agent:main:main",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        prompt: "hi",
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-2b",
-        cliSessionId: "thread-123",
-      }),
+      executePreparedCliRun(
+        buildPreparedContext({
+          sessionKey: "agent:main:main",
+          cliSessionId: "thread-123",
+          runId: "run-2b",
+        }),
+        "thread-123",
+      ),
     ).rejects.toThrow("produced no output");
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
@@ -81,7 +117,6 @@ describe("runCliAgent reliability", () => {
   });
 
   it("fails with timeout when overall timeout trips", async () => {
-    const runCliAgent = await setupCliRunnerTestModule();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "overall-timeout",
@@ -96,17 +131,10 @@ describe("runCliAgent reliability", () => {
     );
 
     await expect(
-      runCliAgent({
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        prompt: "hi",
-        provider: "codex-cli",
-        model: "gpt-5.4",
-        timeoutMs: 1_000,
-        runId: "run-3",
-        cliSessionId: "thread-123",
-      }),
+      executePreparedCliRun(
+        buildPreparedContext({ cliSessionId: "thread-123", runId: "run-3" }),
+        "thread-123",
+      ),
     ).rejects.toThrow("exceeded timeout");
   });
 

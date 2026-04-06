@@ -209,6 +209,23 @@ const AVATAR_COLORS = [
   "#e879f9",
 ];
 
+const MOCK_MODELS: RunnerModelOption[] = [
+  {
+    key: "mock-openai/gpt-5.4",
+    name: "GPT-5.4 (mock)",
+    provider: "mock-openai",
+    input: "text",
+    preferred: true,
+  },
+  {
+    key: "mock-openai/gpt-5.4-alt",
+    name: "GPT-5.4 Alt (mock)",
+    provider: "mock-openai",
+    input: "text",
+    preferred: false,
+  },
+];
+
 function avatarColor(name: string): string {
   let h = 0;
   for (const ch of name) {
@@ -330,7 +347,8 @@ function renderSidebar(state: UiState): string {
   const run = state.scenarioRun;
   const isRunning = runner?.status === "running";
   const realModels = state.bootstrap?.runnerCatalog.real ?? [];
-  const usesRealCatalog = selection?.providerMode === "live-openai" && realModels.length > 0;
+  const modelOptions =
+    selection?.providerMode === "live-openai" && realModels.length > 0 ? realModels : MOCK_MODELS;
   const selectedIds = new Set(selection?.scenarioIds ?? []);
 
   return `
@@ -345,34 +363,20 @@ function renderSidebar(state: UiState): string {
             <option value="live-openai"${selection?.providerMode === "live-openai" ? " selected" : ""}>Real providers</option>
           </select>
         </div>
-        ${
-          usesRealCatalog
-            ? renderModelSelect({
-                id: "primary-model",
-                label: "Primary model",
-                value: selection?.primaryModel ?? "",
-                options: realModels,
-                disabled: isRunning,
-              })
-            : `<div class="config-field">
-                <span class="config-label">Primary model</span>
-                <input id="primary-model" value="${esc(selection?.primaryModel ?? "")}"${isRunning ? " disabled" : ""} />
-              </div>`
-        }
-        ${
-          usesRealCatalog
-            ? renderModelSelect({
-                id: "alternate-model",
-                label: "Alternate model",
-                value: selection?.alternateModel ?? "",
-                options: realModels,
-                disabled: isRunning,
-              })
-            : `<div class="config-field">
-                <span class="config-label">Alternate model</span>
-                <input id="alternate-model" value="${esc(selection?.alternateModel ?? "")}"${isRunning ? " disabled" : ""} />
-              </div>`
-        }
+        ${renderModelSelect({
+          id: "primary-model",
+          label: "Primary model",
+          value: selection?.primaryModel ?? "",
+          options: modelOptions,
+          disabled: isRunning,
+        })}
+        ${renderModelSelect({
+          id: "alternate-model",
+          label: "Alternate model",
+          value: selection?.alternateModel ?? "",
+          options: modelOptions,
+          disabled: isRunning,
+        })}
         <div class="config-row">
           <label><input id="fast-mode" type="checkbox"${selection?.fastMode ? " checked" : ""}${isRunning ? " disabled" : ""} /> Fast mode</label>
         </div>
@@ -489,11 +493,14 @@ function renderTabBar(state: UiState): string {
 
 function renderChatView(state: UiState): string {
   const conversations = state.snapshot?.conversations ?? [];
+  const channels = conversations.filter((c) => c.kind === "channel");
+  const dms = conversations.filter((c) => c.kind === "direct");
   const threads = (state.snapshot?.threads ?? []).filter(
     (t) => !state.selectedConversationId || t.conversationId === state.selectedConversationId,
   );
   const selectedConv = deriveSelectedConversation(state);
   const selectedThread = deriveSelectedThread(state);
+  const activeConversation = conversations.find((c) => c.id === selectedConv);
   const messages = filteredMessages({
     ...state,
     selectedConversationId: selectedConv,
@@ -502,50 +509,104 @@ function renderChatView(state: UiState): string {
 
   return `
     <div class="chat-view">
-      <!-- Conversation / thread chips -->
-      <div class="chat-context-bar">
-        ${conversations
-          .map(
-            (c) =>
-              `<button class="conv-chip${c.id === selectedConv ? " active" : ""}" data-conversation-id="${esc(c.id)}">${esc(c.title || c.id)} <span class="text-dimmed text-sm">${c.kind}</span></button>`,
-          )
-          .join("")}
-        ${conversations.length > 0 && threads.length > 0 ? '<span class="conv-chip-divider"></span>' : ""}
-        <button class="conv-chip${!selectedThread ? " active" : ""}" data-thread-select="root">Main</button>
-        ${threads
-          .map(
-            (t) =>
-              `<button class="conv-chip${t.id === selectedThread ? " active" : ""}" data-thread-select="${esc(t.id)}" data-thread-conv="${esc(t.conversationId)}">${esc(t.title)}</button>`,
-          )
-          .join("")}
-        ${conversations.length === 0 ? '<span class="text-dimmed text-sm">No conversations yet</span>' : ""}
-      </div>
-
-      <!-- Messages -->
-      <div class="chat-messages" id="chat-messages">
-        ${
-          messages.length === 0
-            ? '<div class="chat-empty">No messages yet. Run scenarios or send a message below.</div>'
-            : messages.map((m) => renderMessage(m)).join("")
-        }
-      </div>
-
-      <!-- Composer -->
-      <div class="chat-composer">
-        <div class="composer-context">
-          <select id="conversation-kind">
-            <option value="direct"${state.composer.conversationKind === "direct" ? " selected" : ""}>DM</option>
-            <option value="channel"${state.composer.conversationKind === "channel" ? " selected" : ""}>Channel</option>
-          </select>
-          <span>as</span>
-          <input id="sender-name" value="${esc(state.composer.senderName)}" placeholder="Name" />
-          <span>in</span>
-          <input id="conversation-id" value="${esc(state.composer.conversationId)}" placeholder="Conversation" />
-          <input id="sender-id" type="hidden" value="${esc(state.composer.senderId)}" />
+      <!-- Channel / DM sidebar -->
+      <aside class="chat-sidebar">
+        <div class="chat-sidebar-scroll">
+          <div class="chat-sidebar-section">
+            <div class="chat-sidebar-heading">Channels</div>
+            <div class="chat-sidebar-list">
+              ${
+                channels.length === 0
+                  ? '<div class="chat-sidebar-item" style="color:var(--text-tertiary);font-size:12px;cursor:default">No channels</div>'
+                  : channels
+                      .map(
+                        (c) => `
+                          <button class="chat-sidebar-item${c.id === selectedConv ? " active" : ""}" data-conversation-id="${esc(c.id)}">
+                            <span class="chat-sidebar-icon">#</span>
+                            <span class="chat-sidebar-label">${esc(c.title || c.id)}</span>
+                          </button>`,
+                      )
+                      .join("")
+              }
+            </div>
+          </div>
+          <div class="chat-sidebar-section">
+            <div class="chat-sidebar-heading">Direct Messages</div>
+            <div class="chat-sidebar-list">
+              ${
+                dms.length === 0
+                  ? '<div class="chat-sidebar-item" style="color:var(--text-tertiary);font-size:12px;cursor:default">No DMs</div>'
+                  : dms
+                      .map(
+                        (c) => `
+                          <button class="chat-sidebar-item${c.id === selectedConv ? " active" : ""}" data-conversation-id="${esc(c.id)}">
+                            <span class="chat-sidebar-icon">\u25CF</span>
+                            <span class="chat-sidebar-label">${esc(c.title || c.id)}</span>
+                          </button>`,
+                      )
+                      .join("")
+              }
+            </div>
+          </div>
+          ${
+            threads.length > 0
+              ? `<div class="chat-sidebar-section">
+                  <div class="chat-sidebar-heading">Threads</div>
+                  <div class="chat-sidebar-list">
+                    <button class="chat-sidebar-item${!selectedThread ? " active" : ""}" data-thread-select="root">
+                      <span class="chat-sidebar-icon">\u2302</span>
+                      <span class="chat-sidebar-label">Main timeline</span>
+                    </button>
+                    ${threads
+                      .map(
+                        (t) => `
+                          <button class="chat-sidebar-item${t.id === selectedThread ? " active" : ""}" data-thread-select="${esc(t.id)}" data-thread-conv="${esc(t.conversationId)}">
+                            <span class="chat-sidebar-icon">\u21B3</span>
+                            <span class="chat-sidebar-label">${esc(t.title)}</span>
+                          </button>`,
+                      )
+                      .join("")}
+                  </div>
+                </div>`
+              : ""
+          }
         </div>
-        <div class="composer-input">
-          <textarea id="composer-text" rows="1" placeholder="Type a message\u2026 (Enter to send, Shift+Enter for newline)">${esc(state.composer.text)}</textarea>
-          <button class="btn-primary composer-send" data-action="send"${state.busy ? " disabled" : ""}>Send</button>
+      </aside>
+
+      <!-- Main chat area -->
+      <div class="chat-main">
+        <!-- Channel header -->
+        <div class="chat-channel-header">
+          <span class="chat-channel-name">${esc(activeConversation?.title || selectedConv || "No conversation")}</span>
+          ${activeConversation ? `<span class="chat-channel-kind">${activeConversation.kind}</span>` : ""}
+        </div>
+
+        <!-- Messages -->
+        <div class="chat-messages" id="chat-messages">
+          ${
+            messages.length === 0
+              ? '<div class="chat-empty">No messages yet. Run scenarios or send a message below.</div>'
+              : messages.map((m) => renderMessage(m)).join("")
+          }
+        </div>
+
+        <!-- Composer -->
+        <div class="chat-composer">
+          <div class="composer-context">
+            <select id="conversation-kind">
+              <option value="direct"${state.composer.conversationKind === "direct" ? " selected" : ""}>DM</option>
+              <option value="channel"${state.composer.conversationKind === "channel" ? " selected" : ""}>Channel</option>
+            </select>
+            <span>as</span>
+            <input id="sender-name" value="${esc(state.composer.senderName)}" placeholder="Name" />
+            <span>in</span>
+            <input id="conversation-id" value="${esc(state.composer.conversationId)}" placeholder="Conversation" />
+            <input id="sender-id" type="hidden" value="${esc(state.composer.senderId)}" />
+          </div>
+          <div class="composer-input">
+            <textarea id="composer-text" rows="1" placeholder="Type a message\u2026 (Enter to send, Shift+Enter for newline)">${esc(state.composer.text)}</textarea>
+            <button class="btn-primary composer-send" data-action="send"${state.busy ? " disabled" : ""}>Send</button>
+          </div>
         </div>
       </div>
     </div>`;

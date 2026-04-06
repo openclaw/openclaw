@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  hasLegacyAccountStreamingAliases,
   hasLegacyStreamingAliases,
   normalizeLegacyDmAliases,
   normalizeLegacyStreamingAliases,
@@ -21,11 +22,7 @@ function hasLegacySlackStreamingAliases(value: unknown): boolean {
 }
 
 function hasLegacySlackAccountStreamingAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacySlackStreamingAliases(account));
+  return hasLegacyAccountStreamingAliases(value, hasLegacySlackStreamingAliases);
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [

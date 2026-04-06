@@ -31,6 +31,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
+import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -466,36 +467,36 @@ export async function runPreparedReply(
     queueMode: resolvedQueue.mode,
   });
   if (isActive && activeRunQueueAction === "run-now") {
-    const activeSessionIdBeforeWait = activeSessionId ?? resolveActiveQueueSessionId();
-    if (resolvedQueue.mode === "interrupt" && activeSessionIdBeforeWait) {
-      const aborted = abortEmbeddedPiRun(activeSessionIdBeforeWait);
-      logVerbose(
-        `Interrupting active run for ${sessionKey ?? sessionIdFinal} (aborted=${aborted})`,
-      );
-    }
-    if (activeSessionIdBeforeWait) {
-      await waitForEmbeddedPiRunEnd(activeSessionIdBeforeWait);
-    }
-    preparedSessionState = resolvePreparedSessionState();
-    authProfileId = await resolveSessionAuthProfileOverride({
-      cfg,
-      provider,
-      agentDir,
-      sessionEntry: preparedSessionState.sessionEntry,
-      sessionStore,
+    const queueState = await resolvePreparedReplyQueueState({
+      activeRunQueueAction,
+      activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
+      queueMode: resolvedQueue.mode,
       sessionKey,
-      storePath,
-      isNewSession,
+      sessionId: sessionIdFinal,
+      abortActiveRun: abortEmbeddedPiRun,
+      waitForActiveRunEnd: waitForEmbeddedPiRunEnd,
+      refreshPreparedState: async () => {
+        preparedSessionState = resolvePreparedSessionState();
+        authProfileId = await resolveSessionAuthProfileOverride({
+          cfg,
+          provider,
+          agentDir,
+          sessionEntry: preparedSessionState.sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          isNewSession,
+        });
+        preparedSessionState = resolvePreparedSessionState();
+        ({ prefixedCommandBody, queuedBody } = await rebuildPromptBodies());
+      },
+      resolveBusyState: resolveQueueBusyState,
     });
-    preparedSessionState = resolvePreparedSessionState();
-    ({ prefixedCommandBody, queuedBody } = await rebuildPromptBodies());
-    ({ activeSessionId, isActive, isStreaming } = resolveQueueBusyState());
-    if (isActive) {
+    if (queueState.kind === "reply") {
       typing.cleanup();
-      return {
-        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
-      };
+      return queueState.reply;
     }
+    ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
   }
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
   const followupRun = {

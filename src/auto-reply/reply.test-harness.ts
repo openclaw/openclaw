@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, vi, type Mock } from "vitest";
-import { markCompleteReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
 
 export type ReplyRuntimeMocks = {
   runEmbeddedPiAgent: Mock;
@@ -197,7 +197,7 @@ export function createTempHomeHarness(options: { prefix: string; beforeEachCase?
 }
 
 export function makeReplyConfig(home: string) {
-  return markCompleteReplyConfig({
+  return withFastReplyConfig({
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-6",

@@ -138,13 +138,8 @@ cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
-tar -C /src \
-  --exclude=.git \
-  --exclude=node_modules \
-  --exclude=dist \
-  --exclude=ui/dist \
-  --exclude=ui/node_modules \
-  -cf - . | tar -C "$tmp_dir" -xf -
+source /src/scripts/lib/live-docker-stage.sh
+openclaw_live_stage_source_tree "$tmp_dir"
 # Use a writable node_modules overlay in the temp repo. Vite writes bundled
 # config artifacts under the nearest node_modules/.vite-temp path, and the
 # build-stage /app/node_modules tree is root-owned in this Docker lane.
@@ -152,12 +147,9 @@ mkdir -p "$tmp_dir/node_modules"
 cp -aRs /app/node_modules/. "$tmp_dir/node_modules"
 rm -rf "$tmp_dir/node_modules/.vite-temp"
 mkdir -p "$tmp_dir/node_modules/.vite-temp"
-ln -s /app/dist "$tmp_dir/dist"
-if [ -d /app/dist-runtime/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
-elif [ -d /app/dist/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
-fi
+openclaw_live_link_runtime_tree "$tmp_dir"
+openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
+openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 EOF

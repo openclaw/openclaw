@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
 import "./get-reply.test-runtime-mocks.js";
 
@@ -101,6 +101,7 @@ function createContinueDirectivesResult(resetHookTriggered: boolean) {
 describe("getReplyFromConfig reset-hook fallback", () => {
   beforeEach(async () => {
     await loadFreshGetReplyModuleForTest();
+    vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.resolveReplyDirectives.mockReset();
     mocks.handleInlineActions.mockReset();
     mocks.emitResetCommandHooks.mockReset();
@@ -126,6 +127,10 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     });
 
     mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(false));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("emits reset hooks when inline actions return early without marking resetHookTriggered", async () => {
