@@ -850,6 +850,8 @@ Additional top-level observability fields are also included:
   - short machine-friendly tags such as `handoff`, `triage:use_handoff`, `shortcut`, `bridge`, `executor`, `full_evaluator`, `failed`, or `stopped`
 - `path_codes`
   - short uppercase machine-readable codes such as `HANDOFF`, `TRIAGE_USE`, `SHORTCUT`, `BRIDGE`, `FULL_EVAL`, `EXECUTOR`, `FAILED`, or `STOPPED`
+- `path_signature`
+  - compact string form of path codes using `CODE1>CODE2>CODE3`
 - `error_code`
   - normalized top-level code such as `NONE`, `UNAUTHORIZED`, `TIMEOUT`, `RUNTIME_SUBMIT_FAILED`, `EXECUTOR_STOPPED`, or `EXECUTOR_FAILED`
 - `error_detail_code`
@@ -887,7 +889,7 @@ Additional top-level observability fields are also included:
 
 These fields are for observability and aggregation only. They do not change runtime behavior.
 
-The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, `error_detail_code`, `error_source_layer`, `error_stage`, `recovery_hint`, `recovery_priority`, `recovery_rank`, `recovery_bucket`, `recovery_owner`, `recovery_actionable`, `recovery_vector`, and `recovery_signature` for lightweight aggregation and faster operational triage.
+The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `path_signature`, `error_code`, `error_detail_code`, `error_source_layer`, `error_stage`, `recovery_hint`, `recovery_priority`, `recovery_rank`, `recovery_bucket`, `recovery_owner`, `recovery_actionable`, `recovery_vector`, and `recovery_signature` for lightweight aggregation and faster operational triage.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 

@@ -217,6 +217,12 @@ def build_path_codes(path_tags: list[str]) -> list[str]:
     return codes
 
 
+def build_path_signature(path_codes: list[str] | None) -> str:
+    codes = path_codes if isinstance(path_codes, list) else []
+    normalized = [code for code in codes if isinstance(code, str) and code.strip()]
+    return '>'.join(normalized)
+
+
 def normalize_error_code(runtime_entry_state: str, error_text: str | None) -> str:
     if runtime_entry_state == 'stopped':
         return 'EXECUTOR_STOPPED'
@@ -593,6 +599,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_primary_issue': last_primary_issue,
         'last_success_action': extract_last_success_action(dispatch_result),
         'last_path_codes': manager_handoff.get('path_codes', []),
+        'last_path_signature': manager_handoff.get('path_signature'),
         'last_error_code': manager_handoff.get('error_code'),
         'last_error_detail_code': manager_handoff.get('error_detail_code'),
         'last_error_source_layer': manager_handoff.get('error_source_layer'),
@@ -690,6 +697,7 @@ def main() -> int:
             recovery_actionable,
             recovery_rank,
         )
+        path_codes = build_path_codes(path_tags)
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -702,7 +710,8 @@ def main() -> int:
             'runtime_entry_state': runtime_entry_state,
             'path_taken': path_summary.get('path_taken'),
             'path_tags': path_tags,
-            'path_codes': build_path_codes(path_tags),
+            'path_codes': path_codes,
+            'path_signature': build_path_signature(path_codes),
             'error_code': error_code,
             'error_detail_code': error_detail_code,
             'error_source_layer': error_source_layer,
@@ -731,7 +740,7 @@ def main() -> int:
                 'remaining_issue_count': len((((dispatch_result.get('dispatch_result') or {}).get('loop_convergence') or {}).get('remaining_issues') or []) if isinstance(dispatch_result, dict) else []),
                 'secondary_action_count': 1 if isinstance(((dispatch_result.get('dispatch_result') or {}).get('secondary_action')), dict) and (((dispatch_result.get('dispatch_result') or {}).get('secondary_action') or {}).get('executed') is True) else 0,
                 'followup_executed_count': 1 if ((dispatch_result.get('dispatch_result') or {}).get('post_task_followup_executed') is True if isinstance(dispatch_result, dict) else False) else 0,
-                'path_depth': len(build_path_codes(path_tags)),
+                'path_depth': len(path_codes),
             },
             'bridge_used': bridge_result.get('bridge_used') is True,
             'bridge_mode': bridge_result.get('bridge_mode'),
@@ -774,6 +783,7 @@ def main() -> int:
             recovery_actionable,
             recovery_rank,
         )
+        path_codes = build_path_codes(path_tags)
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -786,7 +796,8 @@ def main() -> int:
             'runtime_entry_state': runtime_entry_state,
             'path_taken': path_summary.get('path_taken'),
             'path_tags': path_tags,
-            'path_codes': build_path_codes(path_tags),
+            'path_codes': path_codes,
+            'path_signature': build_path_signature(path_codes),
             'error_code': error_code,
             'error_detail_code': error_detail_code,
             'error_source_layer': error_source_layer,
@@ -815,7 +826,7 @@ def main() -> int:
                 'remaining_issue_count': 0,
                 'secondary_action_count': 0,
                 'followup_executed_count': 0,
-                'path_depth': len(build_path_codes(path_tags)),
+                'path_depth': len(path_codes),
             },
             'bridge_used': isinstance(bridge_result, dict) and bridge_result.get('bridge_used') is True,
             'bridge_mode': bridge_result.get('bridge_mode') if isinstance(bridge_result, dict) else None,

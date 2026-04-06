@@ -63,6 +63,12 @@ def compact_path_codes(executor_state: str | None, policy: dict) -> list[str]:
     return deduped
 
 
+def build_path_signature(path_codes: list[str] | None) -> str:
+    codes = path_codes if isinstance(path_codes, list) else []
+    normalized = [code for code in codes if isinstance(code, str) and code.strip()]
+    return '>'.join(normalized)
+
+
 def normalize_executor_error_code(output: dict) -> str:
     executor_state = str(output.get('executor_state') or '')
     if executor_state == 'stopped':
@@ -815,18 +821,21 @@ def build_manager_handoff(report: dict) -> dict:
     if not suggested_next_step and report.get('executor_state') in {'failed', 'stopped'}:
         suggested_next_step = None
 
+    handoff_path_codes = compact_path_codes(
+        report.get('executor_state'),
+        {
+            'policy_trace': report.get('policy_trace', {}),
+            'policy_table_version': report.get('policy_table_version'),
+            'manager_action': (report.get('main_action') or {}).get('action') if isinstance(report.get('main_action'), dict) else None,
+        },
+    )
+
     return {
         'handoff_version': 'v1',
         'decision_trace_id': report.get('decision_trace_id'),
         'trace_parent_span_id': report.get('executor_trace_span_id'),
-        'path_codes': compact_path_codes(
-            report.get('executor_state'),
-            {
-                'policy_trace': report.get('policy_trace', {}),
-                'policy_table_version': report.get('policy_table_version'),
-                'manager_action': (report.get('main_action') or {}).get('action') if isinstance(report.get('main_action'), dict) else None,
-            },
-        ),
+        'path_codes': handoff_path_codes,
+        'path_signature': build_path_signature(handoff_path_codes),
         'source': 'sense_runtime_manager_executor',
         'executor_state': report.get('executor_state'),
         'error_code': report.get('error_code'),
