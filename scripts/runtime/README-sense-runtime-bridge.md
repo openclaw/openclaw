@@ -661,6 +661,12 @@ Current behavior is intentionally conservative:
 - after a successful main `run_runtime_task`, the executor performs one post-task evaluation pass through the existing manager classifier and policy
 - post-task evaluation is one-shot only; it does not recursively execute the returned candidate
 - if post-task confidence is below threshold or policy resolves to the same action/step again, the executor stops at evaluation and reports the candidate as blocked
+- if the post-task candidate passes the safety checks, the executor may run that follow-up exactly once
+- execution report includes:
+  - `post_task_followup_executed`
+  - `post_task_followup_blocked`
+  - `post_task_followup_block_reason`
+  - `post_task_followup_result`
 
 Execution report shape includes:
 
@@ -669,6 +675,10 @@ Execution report shape includes:
 - `secondary_action`
 - `task_payload`
 - `post_task_evaluation`
+- `post_task_followup_executed`
+- `post_task_followup_blocked`
+- `post_task_followup_block_reason`
+- `post_task_followup_result`
 - `secondary_gate_decision`
 - `secondary_gate_reason`
 - `secondary_gate_warning`
@@ -694,6 +704,20 @@ Current post-task evaluation safety rules are:
 - skipped for `failed` / `stopped` / non-zero exit cases
 - confidence below threshold stops candidate promotion
 - identical action/step output is blocked to avoid self-loops
+- follow-up runs only when:
+  - `next_action` and `next_step` are both present
+  - confidence is at least `0.5`
+  - the candidate is not the same action/step as the just-finished main action
+  - the candidate is not the fallback action
+  - the candidate is not a non-executing manager action such as `manual_review`
+
+Current block reasons include:
+
+- `same_action_step`
+- `low_confidence`
+- `incomplete_followup_candidate`
+- `fallback_action`
+- `non_executing_followup_action`
 
 Current confidence gate is intentionally small:
 

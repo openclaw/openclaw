@@ -371,6 +371,35 @@ def evaluate_post_task_followup(
     }
 
 
+def decide_post_task_followup(
+    post_task_evaluation: dict | None,
+    current_action: str | None,
+    current_step: str | None,
+    fallback_action: str | None,
+) -> tuple[bool, str | None]:
+    evaluation = post_task_evaluation if isinstance(post_task_evaluation, dict) else {}
+    next_action = evaluation.get('next_action')
+    next_step = evaluation.get('next_step')
+    confidence = evaluation.get('confidence')
+    if evaluation.get('same_action_blocked') is True:
+        return False, 'same_action_step'
+
+    if not next_action or not next_step:
+        stop_reason = str(evaluation.get('stop_reason') or '')
+        if 'confidence is below threshold' in stop_reason:
+            return False, 'low_confidence'
+        return False, 'incomplete_followup_candidate'
+    if next_action == fallback_action:
+        return False, 'fallback_action'
+    if next_action in NON_EXECUTING_ACTIONS:
+        return False, 'non_executing_followup_action'
+    if next_action == current_action and next_step == current_step:
+        return False, 'same_action_step'
+    if not isinstance(confidence, (int, float)) or confidence < 0.5:
+        return False, 'low_confidence'
+    return True, None
+
+
 def main() -> int:
     started_at = time.monotonic()
     args = build_parser().parse_args()
@@ -574,7 +603,35 @@ def main() -> int:
             next_step,
         )
         output['post_task_evaluation'] = post_task_evaluation
-        if post_task_evaluation.get('next_action'):
+        allow_followup, block_reason = decide_post_task_followup(
+            post_task_evaluation,
+            manager_action,
+            next_step,
+            fallback_action,
+        )
+        output['post_task_followup_executed'] = False
+        output['post_task_followup_blocked'] = not allow_followup
+        output['post_task_followup_block_reason'] = block_reason
+        output['post_task_followup_result'] = None
+        if allow_followup:
+            followup_action = str(post_task_evaluation.get('next_action'))
+            followup_step = str(post_task_evaluation.get('next_step'))
+            followup_task_payload = (
+                main_task_payload if followup_action == 'run_runtime_task' else None
+            )
+            followup_result = execute_step(
+                script_dir,
+                followup_action,
+                followup_step,
+                runtime_args,
+                followup_task_payload,
+            )
+            output['post_task_followup_executed'] = True
+            output['post_task_followup_blocked'] = False
+            output['post_task_followup_block_reason'] = None
+            output['post_task_followup_result'] = followup_result
+            output['executor_state'] = 'completed_with_followup_executed'
+        elif post_task_evaluation.get('next_action'):
             output['executor_state'] = 'completed_with_followup_candidate'
         else:
             output['executor_state'] = 'completed_resolved'
