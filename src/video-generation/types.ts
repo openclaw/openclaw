@@ -2,7 +2,12 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 export type GeneratedVideoAsset = {
-  buffer: Buffer;
+  /** Raw video bytes. Required for local delivery; omit when url is provided instead. */
+  buffer?: Buffer;
+  /** External URL for the video (e.g. a pre-signed cloud storage URL).
+   * When set and buffer is absent, the tool delivers the URL directly without
+   * downloading the file, bypassing channel file-size limits. */
+  url?: string;
   mimeType: string;
   fileName?: string;
   metadata?: Record<string, unknown>;

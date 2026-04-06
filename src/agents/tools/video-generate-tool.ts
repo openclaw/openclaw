@@ -569,6 +569,8 @@ type ExecutedVideoGeneration = {
   provider: string;
   model: string;
   savedPaths: string[];
+  /** Total number of generated videos, including url-only assets not in savedPaths. */
+  count: number;
   contentText: string;
   details: Record<string, unknown>;
   wakeResult: string;
@@ -621,8 +623,19 @@ async function executeVideoGenerationJob(params: {
     });
   }
 
+  // Partition assets: buffer-backed → saved to local file; url-only → delivered by URL.
+  const urlOnlyVideos: Array<{ url: string; mimeType: string; fileName?: string }> = [];
+  const bufferVideos: Array<(typeof result.videos)[number] & { buffer: Buffer }> = [];
+  for (const video of result.videos) {
+    if (video.buffer) {
+      bufferVideos.push(video as (typeof result.videos)[number] & { buffer: Buffer });
+    } else if (video.url) {
+      urlOnlyVideos.push({ url: video.url, mimeType: video.mimeType, fileName: video.fileName });
+    }
+  }
+
   const savedVideos = await Promise.all(
-    result.videos.map((video) =>
+    bufferVideos.map((video) =>
       saveMediaBuffer(
         video.buffer,
         video.mimeType,
@@ -632,6 +645,8 @@ async function executeVideoGenerationJob(params: {
       ),
     ),
   );
+
+  const totalCount = savedVideos.length + urlOnlyVideos.length;
   const requestedDurationSeconds =
     typeof result.metadata?.requestedDurationSeconds === "number" &&
     Number.isFinite(result.metadata.requestedDurationSeconds)
@@ -653,8 +668,12 @@ async function executeVideoGenerationJob(params: {
         (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
       )
     : undefined;
+  const allMediaUrls: string[] = [
+    ...savedVideos.map((video) => video.path),
+    ...urlOnlyVideos.map((video) => video.url),
+  ];
   const lines = [
-    `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+    `Generated ${totalCount} video${totalCount === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
     typeof requestedDurationSeconds === "number" &&
     typeof normalizedDurationSeconds === "number" &&
@@ -662,20 +681,22 @@ async function executeVideoGenerationJob(params: {
       ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`
       : null,
     ...savedVideos.map((video) => `MEDIA:${video.path}`),
+    ...urlOnlyVideos.map((video) => `MEDIA:${video.url}`),
   ].filter((entry): entry is string => Boolean(entry));
 
   return {
     provider: result.provider,
     model: result.model,
     savedPaths: savedVideos.map((video) => video.path),
+    count: totalCount,
     contentText: lines.join("\n"),
     wakeResult: lines.join("\n"),
     details: {
       provider: result.provider,
       model: result.model,
-      count: savedVideos.length,
+      count: totalCount,
       media: {
-        mediaUrls: savedVideos.map((video) => video.path),
+        mediaUrls: allMediaUrls,
       },
       paths: savedVideos.map((video) => video.path),
       ...(params.taskHandle
@@ -924,7 +945,7 @@ export function createVideoGenerateTool(options?: {
               handle: taskHandle,
               provider: executed.provider,
               model: executed.model,
-              count: executed.savedPaths.length,
+              count: executed.count,
               paths: executed.savedPaths,
             });
             try {
@@ -1039,7 +1060,7 @@ export function createVideoGenerateTool(options?: {
           handle: taskHandle,
           provider: executed.provider,
           model: executed.model,
-          count: executed.savedPaths.length,
+          count: executed.count,
           paths: executed.savedPaths,
         });
 

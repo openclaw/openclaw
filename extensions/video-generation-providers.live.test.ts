@@ -122,7 +122,11 @@ describe.skipIf(!LIVE)("video generation provider live", () => {
 
         expect(result.videos.length).toBeGreaterThan(0);
         expect(result.videos[0]?.mimeType.startsWith("video/")).toBe(true);
-        expect(result.videos[0]?.buffer.byteLength).toBeGreaterThan(1024);
+        const asset = result.videos[0];
+        // Providers may return either a buffer or a url (url-only skips local download).
+        const hasBuffer = asset?.buffer != null && asset.buffer.byteLength > 1024;
+        const hasUrl = typeof asset?.url === "string" && asset.url.startsWith("http");
+        expect(hasBuffer || hasUrl).toBe(true);
       },
       8 * 60_000,
     );
