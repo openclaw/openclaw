@@ -126,6 +126,119 @@ describe("memory-core dreaming phases", () => {
     expect(dailyContent).not.toContain("Light Sleep: Candidate:");
   });
 
+  it("does not re-ingest managed light dreaming blocks from CRLF daily notes", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      ["# 2026-04-05", "", "- Move backups to S3 Glacier.", "- Keep retention at 365 days."].join(
+        "\r\n",
+      ),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    for (let run = 0; run < 2; run += 1) {
+      await beforeAgentReply(
+        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    }
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:02:00.000Z"),
+    });
+    expect(candidates.map((candidate) => candidate.snippet)).toEqual([
+      "Move backups to S3 Glacier.; Keep retention at 365 days.",
+    ]);
+  });
+
+  it("does not swallow later notes when a managed dreaming block is incomplete", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      [
+        "# 2026-04-05",
+        "",
+        "- Move backups to S3 Glacier.",
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: Old staged summary.",
+        "",
+        "## Ops",
+        "- Rotate access keys.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await beforeAgentReply(
+      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+      { trigger: "heartbeat", workspaceDir },
+    );
+
+    const candidates = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:01:00.000Z"),
+    });
+    expect(candidates.map((candidate) => candidate.snippet)).toContain("Ops: Rotate access keys.");
+  });
+
   it("checkpoints daily ingestion and skips unchanged daily files", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });

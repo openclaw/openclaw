@@ -121,10 +121,6 @@ function formatErrorMessage(err: unknown): string {
   return String(err);
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function buildCronDescription(params: {
   tag: string;
   phase: "light" | "rem";
@@ -492,20 +488,53 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
   return chunks.slice(0, limit);
 }
 
-function blankNonNewlineCharacters(value: string): string {
-  return value.replace(/[^\n]/g, "");
+function findManagedDailyDreamingHeadingIndex(
+  lines: string[],
+  startIndex: number,
+  heading: string,
+): number | null {
+  for (let index = startIndex - 1; index >= 0; index -= 1) {
+    const trimmed = lines[index]?.trim() ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    return trimmed === heading ? index : null;
+  }
+  return null;
 }
 
-function stripManagedDailyDreamingBlocks(raw: string): string {
-  let sanitized = raw;
-  for (const block of MANAGED_DAILY_DREAMING_BLOCKS) {
-    const pattern = new RegExp(
-      `${escapeRegex(block.heading)}\\n${escapeRegex(block.startMarker)}[\\s\\S]*?${escapeRegex(block.endMarker)}(?:\\n|$)?`,
-      "g",
-    );
-    // Preserve line numbers so evidence coordinates remain stable for later notes.
-    sanitized = sanitized.replace(pattern, (match) => blankNonNewlineCharacters(match));
+function stripManagedDailyDreamingLines(lines: string[]): string[] {
+  const blockByStartMarker = new Map(
+    MANAGED_DAILY_DREAMING_BLOCKS.map((block) => [block.startMarker, block]),
+  );
+  const sanitized = [...lines];
+  for (let index = 0; index < sanitized.length; index += 1) {
+    const block = blockByStartMarker.get(sanitized[index]?.trim() ?? "");
+    if (!block) {
+      continue;
+    }
+
+    let endIndex = -1;
+    for (let cursor = index + 1; cursor < sanitized.length; cursor += 1) {
+      if ((sanitized[cursor]?.trim() ?? "") === block.endMarker) {
+        endIndex = cursor;
+        break;
+      }
+    }
+    if (endIndex === -1) {
+      continue;
+    }
+
+    const headingIndex = findManagedDailyDreamingHeadingIndex(sanitized, index, block.heading);
+    if (headingIndex !== null) {
+      sanitized[headingIndex] = "";
+    }
+    for (let cursor = index; cursor <= endIndex; cursor += 1) {
+      sanitized[cursor] = "";
+    }
+    index = endIndex;
   }
+
   return sanitized;
 }
 
@@ -673,7 +702,7 @@ async function collectDailyIngestionBatches(params: {
     if (!raw) {
       continue;
     }
-    const lines = stripManagedDailyDreamingBlocks(raw).split(/\r?\n/);
+    const lines = stripManagedDailyDreamingLines(raw.split(/\r?\n/));
     const chunks = buildDailySnippetChunks(lines, perFileCap);
     const results: MemorySearchResult[] = [];
     for (const chunk of chunks) {
