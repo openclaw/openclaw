@@ -470,11 +470,6 @@ async function sweepSubagentRuns() {
       continue;
     }
     clearPendingLifecycleError(runId);
-    void notifyContextEngineSubagentEnded({
-      childSessionKey: entry.childSessionKey,
-      reason: "swept",
-      workspaceDir: entry.workspaceDir,
-    });
     subagentRuns.delete(runId);
     mutated = true;
     // Archive/purge is terminal for the run record; remove any retained attachments too.
@@ -492,6 +487,13 @@ async function sweepSubagentRuns() {
     } catch {
       // ignore
     }
+    // Notify context engine after sessions.delete to avoid duplicate
+    // notifications when the session is still live. (#49004)
+    void notifyContextEngineSubagentEnded({
+      childSessionKey: entry.childSessionKey,
+      reason: "swept",
+      workspaceDir: entry.workspaceDir,
+    });
   }
   if (mutated) {
     persistSubagentRuns();
