@@ -36,6 +36,8 @@ type NavigationObservablePage = Pick<Page, "url"> & {
   off?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
 };
 
+const pendingInteractionNavigationGuardCleanup = new WeakMap<Page, () => void>();
+
 function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
   const normalized = Math.floor(value ?? 0);
   if (!Number.isFinite(normalized) || normalized < 0) {
@@ -142,6 +144,8 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
     return;
   }
 
+  pendingInteractionNavigationGuardCleanup.get(opts.page)?.();
+
   const onFrameNavigated = (_frame: Frame) => {
     if (!didCrossDocumentUrlChange(page, opts.previousUrl)) {
       return;
@@ -161,8 +165,12 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
   const cleanup = () => {
     clearTimeout(timeout);
     page.off!("framenavigated", onFrameNavigated);
+    if (pendingInteractionNavigationGuardCleanup.get(opts.page) === cleanup) {
+      pendingInteractionNavigationGuardCleanup.delete(opts.page);
+    }
   };
 
+  pendingInteractionNavigationGuardCleanup.set(opts.page, cleanup);
   page.on("framenavigated", onFrameNavigated);
 }
 

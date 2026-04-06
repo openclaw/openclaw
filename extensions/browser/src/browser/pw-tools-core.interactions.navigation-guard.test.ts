@@ -118,6 +118,59 @@ describe("pw-tools-core interaction navigation guard", () => {
     }
   });
 
+  it("deduplicates delayed navigation guards across repeated successful interactions", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<() => void>();
+      let currentUrl = "http://127.0.0.1:9222/json/version";
+      const click = vi.fn(async () => {});
+      const page = {
+        on: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => currentUrl),
+      };
+      setPwToolsCoreCurrentRefLocator({ click });
+      setPwToolsCoreCurrentPage(page);
+
+      await mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+      expect(listeners.size).toBe(1);
+
+      await mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+      expect(listeners.size).toBe(1);
+
+      currentUrl = "http://127.0.0.1:9222/json/list";
+      for (const listener of Array.from(listeners)) {
+        listener();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+      ).toHaveBeenCalledTimes(1);
+      expect(listeners.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs the post-click navigation guard with the resolved SSRF policy", async () => {
     const click = vi.fn(async () => {});
     const page = {
