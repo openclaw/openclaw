@@ -21,6 +21,7 @@ export {
 } from "./status-all/channels-table.js";
 export {
   buildStatusGatewaySurfaceValues,
+  buildStatusOverviewSurfaceRows,
   buildStatusOverviewRows,
   buildStatusUpdateSurface,
   buildGatewayStatusSummaryParts,

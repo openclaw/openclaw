@@ -168,6 +168,32 @@ export function clearPluginLoaderCache(): void {
 
 const defaultLogger = () => createSubsystemLogger("plugins");
 
+/**
+ * On Windows, the Node.js ESM loader requires absolute paths to be expressed
+ * as file:// URLs (e.g. file:///C:/Users/...). Raw drive-letter paths like
+ * C:\... are rejected with ERR_UNSUPPORTED_ESM_URL_SCHEME because the loader
+ * mistakes the drive letter for an unknown URL scheme.
+ *
+ * This helper converts Windows absolute import specifiers to file:// URLs and
+ * leaves everything else unchanged.
+ */
+function toSafeImportPath(specifier: string): string {
+  if (process.platform !== "win32") {
+    return specifier;
+  }
+  if (specifier.startsWith("file://")) {
+    return specifier;
+  }
+  if (path.win32.isAbsolute(specifier)) {
+    const normalizedSpecifier = specifier.replaceAll("\\", "/");
+    if (normalizedSpecifier.startsWith("//")) {
+      return new URL(`file:${encodeURI(normalizedSpecifier)}`).href;
+    }
+    return new URL(`file:///${encodeURI(normalizedSpecifier)}`).href;
+  }
+  return specifier;
+}
+
 function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
   return (modulePath: string) => {
@@ -210,6 +236,7 @@ export const __testing = {
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
   shouldPreferNativeJiti,
+  toSafeImportPath,
   getCompatibleActivePluginRegistry,
   resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {
@@ -1040,7 +1067,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (!runtimeModulePath) {
       throw new Error("Unable to resolve plugin runtime module");
     }
-    const runtimeModule = getJiti(runtimeModulePath)(runtimeModulePath) as {
+    const safeRuntimePath = toSafeImportPath(runtimeModulePath);
+    const runtimeModule = getJiti(runtimeModulePath)(safeRuntimePath) as {
       createPluginRuntime?: (options?: CreatePluginRuntimeOptions) => PluginRuntime;
     };
     if (typeof runtimeModule.createPluginRuntime !== "function") {
@@ -1447,13 +1475,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+    const safeImportSource = toSafeImportPath(safeSource);
 
     let mod: OpenClawPluginModule | null = null;
     try {
       // Track the plugin as imported once module evaluation begins. Top-level
       // code may have already executed even if evaluation later throws.
       recordImportedPluginId(record.id);
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      mod = getJiti(safeSource)(safeImportSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
@@ -1898,10 +1927,11 @@ export async function loadOpenClawPluginCliRegistry(
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+    const safeImportSource = toSafeImportPath(safeSource);
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      mod = getJiti(safeSource)(safeImportSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,

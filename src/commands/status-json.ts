@@ -1,5 +1,5 @@
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
+import { type RuntimeEnv } from "../runtime.js";
+import { runStatusJsonCommand } from "./status-json-command.ts";
 import { scanStatusJsonFast } from "./status.scan.fast-json.js";
 
 export async function statusJsonCommand(
@@ -11,14 +11,11 @@ export async function statusJsonCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const scan = await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all }, runtime);
-  writeRuntimeJson(
+  await runStatusJsonCommand({
+    opts,
     runtime,
-    await resolveStatusJsonOutput({
-      scan,
-      opts,
-      includeSecurityAudit: opts.all === true,
-      suppressHealthErrors: true,
-    }),
-  );
+    scanStatusJsonFast,
+    includeSecurityAudit: opts.all === true,
+    suppressHealthErrors: true,
+  });
 }

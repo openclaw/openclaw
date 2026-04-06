@@ -40,7 +40,14 @@ export {
   buildTokenProfileId,
   validateAnthropicSetupToken,
 } from "../plugins/provider-auth-token.js";
-export { applyAuthProfileConfig, buildApiKeyCredential } from "../plugins/provider-auth-helpers.js";
+export {
+  applyAuthProfileConfig,
+  buildApiKeyCredential,
+  upsertApiKeyProfile,
+  writeOAuthCredentials,
+  type ApiKeyStorageOptions,
+  type WriteOAuthCredentialsOptions,
+} from "../plugins/provider-auth-helpers.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export { coerceSecretRef } from "../config/types.secrets.js";
 export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";

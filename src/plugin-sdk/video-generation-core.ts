@@ -6,12 +6,16 @@ export type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 export type {
   GeneratedVideoAsset,
   VideoGenerationIgnoredOverride,
+  VideoGenerationMode,
+  VideoGenerationModeCapabilities,
   VideoGenerationProvider,
+  VideoGenerationProviderCapabilities,
   VideoGenerationProviderConfiguredContext,
   VideoGenerationRequest,
   VideoGenerationResolution,
   VideoGenerationResult,
   VideoGenerationSourceAsset,
+  VideoGenerationTransformCapabilities,
 } from "../video-generation/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 

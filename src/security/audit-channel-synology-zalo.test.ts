@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { collectSynologyChatSecurityAuditFindings } from "../../extensions/synology-chat/contract-api.js";
-import { resolveAccount as resolveSynologyChatAccount } from "../../extensions/synology-chat/src/accounts.js";
-import { collectZalouserSecurityAuditFindings } from "../../extensions/zalouser/contract-api.js";
-import type { ResolvedZalouserAccount } from "../../extensions/zalouser/src/accounts.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { collectSynologyChatSecurityAuditFindings } from "../plugin-sdk/synology-chat.js";
+import { collectZalouserSecurityAuditFindings } from "../plugin-sdk/zalouser.js";
 import { withChannelSecurityStateDir } from "./audit-channel-security.test-helpers.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
+
+type SynologyAuditParams = Parameters<typeof collectSynologyChatSecurityAuditFindings>[0];
+type ResolvedSynologyChatAccount = SynologyAuditParams["account"];
+type ZalouserAuditParams = Parameters<typeof collectZalouserSecurityAuditFindings>[0];
+type ResolvedZalouserAccount = ZalouserAuditParams["account"];
 
 function stubZalouserPlugin(): ChannelPlugin {
   return {
@@ -42,6 +45,28 @@ function stubZalouserPlugin(): ChannelPlugin {
       isConfigured: () => true,
     },
   };
+}
+
+function createSynologyChatAccount(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+}): ResolvedSynologyChatAccount {
+  const channel = params.cfg.channels?.["synology-chat"] ?? {};
+  const accountConfig =
+    params.accountId === "default"
+      ? channel
+      : ((channel.accounts as Record<string, unknown> | undefined)?.[params.accountId] ?? {});
+  return {
+    accountId: params.accountId,
+    dangerouslyAllowNameMatching:
+      Boolean(
+        (accountConfig as { dangerouslyAllowNameMatching?: boolean }).dangerouslyAllowNameMatching,
+      ) ||
+      Boolean(
+        params.accountId === "default" &&
+        (channel as { dangerouslyAllowNameMatching?: boolean }).dangerouslyAllowNameMatching,
+      ),
+  } as ResolvedSynologyChatAccount;
 }
 
 describe("security audit synology and zalo channel routing", () => {
@@ -100,7 +125,7 @@ describe("security audit synology and zalo channel routing", () => {
         ? "beta"
         : "default";
       const findings = collectSynologyChatSecurityAuditFindings({
-        account: resolveSynologyChatAccount(testCase.cfg, accountId),
+        account: createSynologyChatAccount({ cfg: testCase.cfg, accountId }),
         accountId,
         orderedAccountIds: Object.keys(synologyChat.accounts ?? {}),
         hasExplicitAccountPath: accountId !== "default",
