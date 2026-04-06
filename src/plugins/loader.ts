@@ -687,6 +687,24 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
   );
 }
 
+function pluginLoadOptionsMatchCacheKey(
+  options: PluginLoadOptions,
+  expectedCacheKey: string,
+): boolean {
+  if (resolvePluginLoadCacheContext(options).cacheKey === expectedCacheKey) {
+    return true;
+  }
+  if (options.installBundledRuntimeDeps !== false) {
+    return false;
+  }
+  return (
+    resolvePluginLoadCacheContext({
+      ...options,
+      installBundledRuntimeDeps: undefined,
+    }).cacheKey === expectedCacheKey
+  );
+}
+
 type PluginRegistrationPlan = {
   /** Public compatibility label passed to plugin register(api). */
   mode: PluginRegistrationMode;
@@ -896,15 +914,15 @@ function getCompatibleActivePluginRegistry(
     return undefined;
   }
   const loadContext = resolvePluginLoadCacheContext(options);
-  if (loadContext.cacheKey === activeCacheKey) {
+  if (pluginLoadOptionsMatchCacheKey(options, activeCacheKey)) {
     return activeRegistry;
   }
   if (!loadContext.shouldActivate) {
-    const activatingCacheKey = resolvePluginLoadCacheContext({
+    const activatingOptions = {
       ...options,
       activate: true,
-    }).cacheKey;
-    if (activatingCacheKey === activeCacheKey) {
+    };
+    if (pluginLoadOptionsMatchCacheKey(activatingOptions, activeCacheKey)) {
       return activeRegistry;
     }
   }
@@ -912,26 +930,26 @@ function getCompatibleActivePluginRegistry(
     loadContext.runtimeSubagentMode === "default" &&
     getActivePluginRuntimeSubagentMode() === "gateway-bindable"
   ) {
-    const gatewayBindableCacheKey = resolvePluginLoadCacheContext({
+    const gatewayBindableOptions = {
       ...options,
       runtimeOptions: {
         ...options.runtimeOptions,
         allowGatewaySubagentBinding: true,
       },
-    }).cacheKey;
-    if (gatewayBindableCacheKey === activeCacheKey) {
+    };
+    if (pluginLoadOptionsMatchCacheKey(gatewayBindableOptions, activeCacheKey)) {
       return activeRegistry;
     }
     if (!loadContext.shouldActivate) {
-      const activatingGatewayBindableCacheKey = resolvePluginLoadCacheContext({
+      const activatingGatewayBindableOptions = {
         ...options,
         activate: true,
         runtimeOptions: {
           ...options.runtimeOptions,
           allowGatewaySubagentBinding: true,
         },
-      }).cacheKey;
-      if (activatingGatewayBindableCacheKey === activeCacheKey) {
+      };
+      if (pluginLoadOptionsMatchCacheKey(activatingGatewayBindableOptions, activeCacheKey)) {
         return activeRegistry;
       }
     }
