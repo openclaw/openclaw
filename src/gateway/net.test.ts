@@ -483,6 +483,17 @@ describe("isContainerEnvironment", () => {
     expect(isContainerEnvironment()).toBe(true);
   });
 
+  it("returns true when /run/.containerenv exists", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation((filePath: unknown) => {
+      if (filePath === "/run/.containerenv") {
+        return undefined;
+      }
+      throw new Error("ENOENT");
+    });
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
   it("returns true when /proc/1/cgroup contains docker marker", () => {
     const fs = require("node:fs");
     vi.spyOn(fs, "accessSync").mockImplementation(() => {
