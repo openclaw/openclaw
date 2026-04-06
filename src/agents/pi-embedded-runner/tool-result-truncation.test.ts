@@ -1,6 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
@@ -8,9 +12,12 @@ let truncateToolResultMessage: typeof import("./tool-result-truncation.js").trun
 let calculateMaxToolResultChars: typeof import("./tool-result-truncation.js").calculateMaxToolResultChars;
 let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
+let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
 let isOversizedToolResult: typeof import("./tool-result-truncation.js").isOversizedToolResult;
+let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let HARD_MAX_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").HARD_MAX_TOOL_RESULT_CHARS;
+let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
   ({
@@ -19,7 +26,9 @@ async function loadFreshToolResultTruncationModuleForTest() {
     calculateMaxToolResultChars,
     getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
+    truncateOversizedToolResultsInSession,
     isOversizedToolResult,
+    sessionLikelyHasOversizedToolResults,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     HARD_MAX_TOOL_RESULT_CHARS,
   } = await import("./tool-result-truncation.js"));
@@ -31,6 +40,13 @@ const nextTimestamp = () => testTimestamp++;
 beforeEach(async () => {
   testTimestamp = 1;
   await loadFreshToolResultTruncationModuleForTest();
+});
+
+afterEach(async () => {
+  if (tmpDir) {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    tmpDir = undefined;
+  }
 });
 
 function makeToolResult(text: string, toolCallId = "call_1"): ToolResultMessage {
@@ -67,6 +83,11 @@ function getFirstToolResultText(message: AgentMessage | ToolResultMessage): stri
   }
   const firstBlock = message.content[0];
   return firstBlock && "text" in firstBlock ? firstBlock.text : "";
+}
+
+async function createTmpDir(): Promise<string> {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tool-result-truncation-test-"));
+  return tmpDir;
 }
 
 describe("truncateToolResultText", () => {
@@ -203,6 +224,27 @@ describe("isOversizedToolResult", () => {
   });
 });
 
+describe("sessionLikelyHasOversizedToolResults", () => {
+  it("returns true for individually oversized tool results", () => {
+    const messages: AgentMessage[] = [makeToolResult("x".repeat(500_000))];
+    expect(sessionLikelyHasOversizedToolResults({ messages, contextWindowTokens: 128_000 })).toBe(
+      true,
+    );
+  });
+
+  it("returns true for aggregate medium tool results that exceed the shared budget", () => {
+    const medium = "alpha beta gamma delta epsilon ".repeat(600);
+    const messages: AgentMessage[] = [
+      makeToolResult(medium, "call_1"),
+      makeToolResult(medium, "call_2"),
+      makeToolResult(medium, "call_3"),
+    ];
+    expect(sessionLikelyHasOversizedToolResults({ messages, contextWindowTokens: 128_000 })).toBe(
+      true,
+    );
+  });
+});
+
 describe("truncateOversizedToolResultsInMessages", () => {
   it("returns unchanged messages when nothing is oversized", () => {
     const messages = [
@@ -265,6 +307,64 @@ describe("truncateOversizedToolResultsInMessages", () => {
       const text = getFirstToolResultText(msg);
       expect(text.length).toBeLessThan(500_000);
     }
+  });
+});
+
+describe("truncateOversizedToolResultsInSession", () => {
+  it("readably truncates aggregate medium tool results in a session file", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage(makeUserMessage("hello"));
+    sm.appendMessage(makeAssistantMessage("calling tools"));
+    const medium = "alpha beta gamma delta epsilon ".repeat(600);
+    sm.appendMessage(makeToolResult(medium, "call_1"));
+    sm.appendMessage(makeToolResult(medium, "call_2"));
+    sm.appendMessage(makeToolResult(medium, "call_3"));
+    const sessionFile = sm.getSessionFile()!;
+
+    const beforeBranch = SessionManager.open(sessionFile).getBranch();
+    const beforeLengths = beforeBranch
+      .filter((entry) => entry.type === "message")
+      .map((entry) =>
+        entry.type === "message" && entry.message.role === "toolResult"
+          ? getToolResultTextLength(entry.message)
+          : 0,
+      )
+      .filter((length) => length > 0);
+
+    const result = await truncateOversizedToolResultsInSession({
+      sessionFile,
+      contextWindowTokens: 128_000,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedCount).toBeGreaterThan(0);
+
+    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const afterToolResults = afterBranch.filter(
+      (entry) => entry.type === "message" && entry.message.role === "toolResult",
+    );
+    const afterLengths = afterToolResults.map((entry) =>
+      entry.type === "message" ? getToolResultTextLength(entry.message) : 0,
+    );
+
+    expect(afterLengths.reduce((sum, value) => sum + value, 0)).toBeLessThan(
+      beforeLengths.reduce((sum, value) => sum + value, 0),
+    );
+    expect(
+      afterToolResults.some((entry) =>
+        entry.type === "message"
+          ? getFirstToolResultText(entry.message).includes("truncated")
+          : false,
+      ),
+    ).toBe(true);
+    expect(
+      afterToolResults.some((entry) =>
+        entry.type === "message"
+          ? getFirstToolResultText(entry.message).includes("[compacted:")
+          : false,
+      ),
+    ).toBe(false);
   });
 });
 
