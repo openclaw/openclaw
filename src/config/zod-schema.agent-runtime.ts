@@ -455,6 +455,8 @@ const ToolExecSchema = z.object(ToolExecBaseShape).strict().optional();
 const ToolFsSchema = z
   .object({
     workspaceOnly: z.boolean().optional(),
+    allowedPaths: z.array(z.string()).optional(),
+    denyPaths: z.array(z.string()).optional(),
   })
   .strict()
   .optional();
@@ -874,6 +876,7 @@ export const ToolsSchema = z
     subagents: z
       .object({
         tools: ToolPolicySchema,
+        fs: ToolFsSchema,
       })
       .strict()
       .optional(),
@@ -895,6 +898,7 @@ export const ToolsSchema = z
           })
           .strict()
           .optional(),
+        fsPolicy: ToolFsSchema,
       })
       .strict()
       .optional(),

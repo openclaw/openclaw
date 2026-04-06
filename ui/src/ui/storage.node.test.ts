@@ -45,6 +45,24 @@ describe("loadSettings default gateway URL derivation", () => {
     localStorage.clear();
     sessionStorage.clear();
     setControlUiBasePath(undefined);
+
+    // storage.ts derives a different effective gatewayUrl on Vite dev pages.
+    // Force a non-Vite environment for deterministic URL + persistence behavior.
+    if (typeof document === "undefined") {
+      vi.stubGlobal("document", {
+        querySelector: () => null,
+      } as unknown as Document);
+    } else {
+      vi.spyOn(document, "querySelector").mockReturnValue(null);
+    }
+
+    // In Vitest node pools, location may not be a full URL; storage.ts uses new URL(..., base).
+    // Provide a stable base so normalizeGatewayTokenScope stays deterministic.
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/openclaw",
+    });
   });
 
   afterEach(() => {
@@ -119,7 +137,8 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "agent",
     });
     const scopedKey = "openclaw.control.settings.v1:wss://gateway.example:8443/openclaw";
-    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).toEqual({
+    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");
+    expect(persisted).toEqual({
       gatewayUrl: "wss://gateway.example:8443/openclaw",
       theme: "claw",
       themeMode: "system",
@@ -166,10 +185,16 @@ describe("loadSettings default gateway URL derivation", () => {
       borderRadius: 50,
     });
 
+    // Tokens are stored per-gateway scope in sessionStorage.
     expect(loadSettings()).toMatchObject({
       gatewayUrl: gwUrl,
       token: "session-token",
     });
+
+    // Also verify it is persisted under the scoped sessionStorage key.
+    expect(sessionStorage.getItem("openclaw.control.token.v1:wss://gateway.example:8443/openclaw")).toBe(
+      "session-token",
+    );
   });
 
   it("does not reuse a session token for a different gatewayUrl", async () => {

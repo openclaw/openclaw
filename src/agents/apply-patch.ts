@@ -3,17 +3,25 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { openBoundaryFile, type BoundaryFileOpenResult } from "../infra/boundary-file-read.js";
+import { checkPathGuardStrict } from "../security/path-guard.js";
+import {
+  openBoundaryFile,
+  type BoundaryFileOpenResult,
+} from "../infra/boundary-file-read.js";
 import {
   mkdirPathWithinRoot,
   removePathWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
-import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
+import {
+  PATH_ALIAS_POLICIES,
+  type PathAliasPolicy,
+} from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
 const END_PATCH_MARKER = "*** End Patch";
@@ -77,6 +85,8 @@ type ApplyPatchOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
+  /** Optional filesystem policy for patch target paths (PathGuard). */
+  fsPolicy?: ToolFsPolicy;
   signal?: AbortSignal;
 };
 
@@ -87,11 +97,17 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    workspaceOnly?: boolean;
+    fsPolicy?: ToolFsPolicy;
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
   const workspaceOnly = options.workspaceOnly !== false;
+  const fsPolicy = options.fsPolicy;
 
   return {
     name: "apply_patch",
@@ -115,6 +131,7 @@ export function createApplyPatchTool(
         cwd,
         sandbox,
         workspaceOnly,
+        fsPolicy: fsPolicy ?? { workspaceOnly },
         signal,
       });
 
@@ -163,7 +180,11 @@ export async function applyPatch(
     }
 
     if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
+      const target = await resolvePatchPath(
+        hunk.path,
+        options,
+        PATH_ALIAS_POLICIES.unlinkTarget,
+      );
       await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
@@ -238,8 +259,10 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         const buf = await bridge.readFile({ filePath, cwd: root });
         return buf.toString("utf8");
       },
-      writeFile: (filePath, content) => bridge.writeFile({ filePath, cwd: root, data: content }),
-      remove: (filePath) => bridge.remove({ filePath, cwd: root, force: false }),
+      writeFile: (filePath, content) =>
+        bridge.writeFile({ filePath, cwd: root, data: content }),
+      remove: (filePath) =>
+        bridge.remove({ filePath, cwd: root, force: false }),
       mkdirp: (dir) => bridge.mkdirp({ filePath: dir, cwd: root }),
     };
   }
@@ -290,7 +313,9 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         await fs.mkdir(dir, { recursive: true });
         return;
       }
-      const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
+      const relative = toRelativeSandboxPath(options.cwd, dir, {
+        allowRoot: true,
+      });
       await mkdirPathWithinRoot({
         rootDir: options.cwd,
         relativePath: relative,
@@ -318,6 +343,8 @@ async function resolvePatchPath(
       filePath,
       cwd: options.cwd,
     });
+
+    // Enforce workspace boundary against a host-mapped path when available.
     if (options.workspaceOnly !== false && resolved.hostPath) {
       await assertSandboxPath({
         filePath: resolved.hostPath,
@@ -327,6 +354,15 @@ async function resolvePatchPath(
         allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
       });
     }
+
+    // Enforce per-tool filesystem policy (PathGuard) for sandbox patch targets.
+    // Only enforce when we have a hostPath — policy rules are defined in host namespace.
+    // When only containerPath is available (SSH/remote bridges), the sandbox itself
+    // handles isolation and we cannot reliably match host-relative deny patterns.
+    if (options.fsPolicy && resolved.hostPath) {
+      await checkPathGuardStrict(resolved.hostPath, options.fsPolicy, options.cwd);
+    }
+
     return {
       resolved: resolved.hostPath ?? resolved.containerPath,
       display: resolved.relativePath || resolved.containerPath,
@@ -345,6 +381,14 @@ async function resolvePatchPath(
         })
       ).resolved
     : resolvePathFromInput(filePath, options.cwd);
+
+  // Apply per-tool filesystem policy (PathGuard) to patch targets.
+  // Delegate to the canonical enforcement layer so apply_patch matches the same
+  // semantics as read/write/edit and local media loaders.
+  if (options.fsPolicy) {
+    await checkPathGuardStrict(resolved, options.fsPolicy, options.cwd);
+  }
+
   return {
     resolved,
     display: toDisplayPath(resolved, options.cwd),
@@ -358,7 +402,8 @@ function assertBoundaryRead(
   if (opened.ok) {
     return;
   }
-  const reason = opened.reason === "validation" ? "unsafe path" : "path not found";
+  const reason =
+    opened.reason === "validation" ? "unsafe path" : "path not found";
   throw new Error(`Failed boundary read for ${targetPath} (${reason})`);
 }
 
@@ -408,7 +453,10 @@ function checkPatchBoundariesLenient(lines: string[]): string[] {
   }
   const first = lines[0];
   const last = lines[lines.length - 1];
-  if ((first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') && last.endsWith("EOF")) {
+  if (
+    (first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') &&
+    last.endsWith("EOF")
+  ) {
     const inner = lines.slice(1, lines.length - 1);
     const innerError = checkPatchBoundariesStrict(inner);
     if (!innerError) {
@@ -433,7 +481,10 @@ function checkPatchBoundariesStrict(lines: string[]): string | null {
   return "The last line of the patch must be '*** End Patch'";
 }
 
-function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consumed: number } {
+function parseOneHunk(
+  lines: string[],
+  lineNumber: number,
+): { hunk: Hunk; consumed: number } {
   if (lines.length === 0) {
     throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
   }

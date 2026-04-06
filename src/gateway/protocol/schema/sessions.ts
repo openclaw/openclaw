@@ -127,6 +127,19 @@ export const SessionsPatchParamsSchema = Type.Object(
     subagentControlScope: Type.Optional(
       Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
     ),
+    spawnedToolFsPolicy: Type.Optional(
+      Type.Union([
+        Type.Object(
+          {
+            workspaceOnly: Type.Boolean(),
+            allowedPaths: Type.Optional(Type.Array(NonEmptyString)),
+            denyPaths: Type.Optional(Type.Array(NonEmptyString)),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Null(),
+      ]),
+    ),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),

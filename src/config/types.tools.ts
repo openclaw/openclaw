@@ -296,6 +296,10 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /** Allowlisted absolute paths or workspace-relative paths. */
+  allowedPaths?: string[];
+  /** Denylisted absolute paths or workspace-relative paths. */
+  denyPaths?: string[];
 };
 
 export type AgentToolsConfig = {
@@ -612,10 +616,23 @@ export type ToolsConfig = {
   exec?: ExecToolConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
+  /** Optional defaults for sessions_spawn tool behavior. */
+  sessions_spawn?: {
+    /** Attachments policy for sessions_spawn tool. */
+    attachments?: {
+      enabled?: boolean;
+      maxTotalBytes?: number;
+      maxFiles?: number;
+      maxFileBytes?: number;
+      retainOnSessionKeep?: boolean;
+    };
+    /** Default spawn-time filesystem policy tightening for spawned subagents. */
+    fsPolicy?: FsToolsConfig;
+  };
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
   /** Sub-agent tool policy defaults (deny wins). */
-  subagents?: {
+  subagents?: { 
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
@@ -624,6 +641,15 @@ export type ToolsConfig = {
       alsoAllow?: string[];
       deny?: string[];
     };
+    /**
+     * Optional filesystem policy ceiling + defaults for sub-agents.
+     * The effective sub-agent fs policy is the intersection/union/or of:
+     * - global tools.fs
+     * - agent tools.fs
+     * - tools.subagents.fs (this block)
+     * - sessions_spawn.fsPolicy (spawn-time overrides, can only tighten)
+     */
+    fs?: FsToolsConfig;
   };
   /** Sandbox tool policy defaults (deny wins). */
   sandbox?: {

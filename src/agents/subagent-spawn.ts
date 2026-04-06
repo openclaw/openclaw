@@ -8,6 +8,10 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import {
+  combineToolFsPolicies,
+  resolveToolFsConfig,
+} from "./tool-fs-policy.js";
+import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
@@ -19,7 +23,10 @@ import {
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import {
+  countActiveRunsForSession,
+  registerSubagentRun,
+} from "./subagent-registry.js";
 import {
   ADMIN_SCOPE,
   AGENT_LANE_SUBAGENT,
@@ -44,12 +51,14 @@ import {
   updateSessionStore,
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
+import { loadSessionEntry } from "../gateway/session-utils.js";
 import { readStringParam } from "./tools/common.js";
 
 export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
 export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
-export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
+export type SpawnSubagentSandboxMode =
+  (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
 
 export { decodeStrictBase64 };
 
@@ -88,6 +97,12 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /** Optional filesystem policy tightening for the spawned subagent (can only reduce access). */
+  fsPolicy?: {
+    workspaceOnly?: boolean;
+    allowedPaths?: string[];
+    denyPaths?: string[];
+  };
 };
 
 export type SpawnSubagentContext = {
@@ -160,14 +175,18 @@ async function callSubagentGateway(
   // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
   // "agent" → write) keep their least-privilege scope so that the gateway does
   // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
-  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  const scopes =
+    params.scopes ??
+    (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
   return await subagentSpawnDeps.callGateway({
     ...params,
     ...(scopes != null ? { scopes } : {}),
   });
 }
 
-function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): string | undefined {
+function readGatewayRunId(
+  response: Awaited<ReturnType<typeof callGateway>>,
+): string | undefined {
   if (!response || typeof response !== "object") {
     return undefined;
   }
@@ -199,14 +218,21 @@ async function persistInitialChildSessionRuntimeModel(params: {
         canonicalKey: target.canonicalKey,
         candidates: target.storeKeys,
       });
-      store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
-        model,
-        ...(provider ? { modelProvider: provider } : {}),
-      });
+      store[target.canonicalKey] = mergeSessionEntry(
+        store[target.canonicalKey],
+        {
+          model,
+          ...(provider ? { modelProvider: provider } : {}),
+        },
+      );
     });
     return undefined;
   } catch (err) {
-    return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+    return err instanceof Error
+      ? err.message
+      : typeof err === "string"
+        ? err
+        : "error";
   }
 }
 
@@ -330,7 +356,9 @@ async function ensureThreadBindingForSubagentSpawn(params: {
       const error = result.error.trim();
       return {
         status: "error",
-        error: error || "Failed to prepare thread binding for this subagent session.",
+        error:
+          error ||
+          "Failed to prepare thread binding for this subagent session.",
       };
     }
     if (result?.status !== "ok" || !result.threadBindingReady) {
@@ -378,7 +406,8 @@ export async function spawnSubagentDirect(
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",
-      error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
+      error:
+        'mode="session" requires thread=true so the subagent can stay bound to a thread.',
     };
   }
   const cleanup =
@@ -406,7 +435,8 @@ export async function spawnSubagentDirect(
       ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
       : 0;
   const runTimeoutSeconds =
-    typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
+    typeof params.runTimeoutSeconds === "number" &&
+    Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
       : cfgSubagentTimeout;
   let modelApplied = false;
@@ -426,9 +456,15 @@ export async function spawnSubagentDirect(
     mainKey,
   });
 
-  const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
+  const requesterFsCeiling =
+    loadSessionEntry(requesterInternalKey).entry?.spawnedToolFsPolicy;
+
+  const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, {
+    cfg,
+  });
   const maxSpawnDepth =
-    cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+    cfg.agents?.defaults?.subagents?.maxSpawnDepth ??
+    DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxSpawnDepth) {
     return {
       status: "forbidden",
@@ -446,7 +482,8 @@ export async function spawnSubagentDirect(
   }
 
   const requesterAgentId = normalizeAgentId(
-    ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
+    ctx.requesterAgentIdOverride ??
+      parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
@@ -459,7 +496,9 @@ export async function spawnSubagentDirect(
         "sessions_spawn requires explicit agentId when requireAgentId is configured. Use agents_list to see allowed agent ids.",
     };
   }
-  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  const targetAgentId = requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
     const allowAgents =
       resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
@@ -473,7 +512,8 @@ export async function spawnSubagentDirect(
         .map((value) => normalizeAgentId(value).toLowerCase()),
     );
     if (!allowAny && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+      const allowedText =
+        allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
       return {
         status: "forbidden",
         error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
@@ -489,7 +529,10 @@ export async function spawnSubagentDirect(
     cfg,
     sessionKey: childSessionKey,
   });
-  if (!childRuntime.sandboxed && (requesterRuntime.sandboxed || sandboxMode === "require")) {
+  if (
+    !childRuntime.sandboxed &&
+    (requesterRuntime.sandboxed || sandboxMode === "require")
+  ) {
     if (requesterRuntime.sandboxed) {
       return {
         status: "forbidden",
@@ -516,12 +559,18 @@ export async function spawnSubagentDirect(
     modelOverride,
   });
 
+  // (FS policy ceiling for subagents)
+  // Implemented via sessions.patch(spawnedToolFsPolicy), but must NOT happen before
+  // spawnDepth/subagentRole/subagentControlScope patching (tests expect specific patch shapes).
+  // We'll apply it later, after the initialChildSessionPatch succeeds.
+
   const resolvedThinkingDefaultRaw =
     readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
     readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
 
   let thinkingOverride: string | undefined;
-  const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
+  const thinkingCandidateRaw =
+    thinkingOverrideRaw || resolvedThinkingDefaultRaw;
   if (thinkingCandidateRaw) {
     const normalized = normalizeThinkLevel(thinkingCandidateRaw);
     if (!normalized) {
@@ -534,7 +583,9 @@ export async function spawnSubagentDirect(
     }
     thinkingOverride = normalized;
   }
-  const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
+  const patchChildSession = async (
+    patch: Record<string, unknown>,
+  ): Promise<string | undefined> => {
     try {
       await callSubagentGateway({
         method: "sessions.patch",
@@ -543,20 +594,26 @@ export async function spawnSubagentDirect(
       });
       return undefined;
     } catch (err) {
-      return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+      return err instanceof Error
+        ? err.message
+        : typeof err === "string"
+          ? err
+          : "error";
     }
   };
 
   const initialChildSessionPatch: Record<string, unknown> = {
     spawnDepth: childDepth,
-    subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
+    subagentRole:
+      childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
   };
   if (resolvedModel) {
     initialChildSessionPatch.model = resolvedModel;
   }
   if (thinkingOverride !== undefined) {
-    initialChildSessionPatch.thinkingLevel = thinkingOverride === "off" ? null : thinkingOverride;
+    initialChildSessionPatch.thinkingLevel =
+      thinkingOverride === "off" ? null : thinkingOverride;
   }
 
   const initialPatchError = await patchChildSession(initialChildSessionPatch);
@@ -567,12 +624,116 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
-  if (resolvedModel) {
-    const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
-      cfg,
-      childSessionKey,
-      resolvedModel,
+
+  // Compute + persist an effective filesystem policy ceiling for the child subagent.
+  // Child policy = combine(global tools.fs, agent tools.fs, tools.subagents.fs, spawn params.fsPolicy).
+  // - workspaceOnly: OR
+  // - denyPaths: UNION
+  // - allowedPaths: INTERSECTION
+  const globalFs = resolveToolFsConfig({ cfg });
+  // resolveToolFsConfig({ cfg, agentId }) already applies agent-over-global precedence.
+  // Avoid intersecting the global allowlist twice by treating this as the agent layer only.
+  const agentFs = resolveToolFsConfig({ cfg, agentId: targetAgentId });
+  const subagentFs = cfg.tools?.subagents?.fs;
+  const sessionsSpawnFs = cfg.tools?.sessions_spawn?.fsPolicy;
+  const effectiveFsPolicy = combineToolFsPolicies({
+    globalPolicy: globalFs,
+    // agentFs already includes global fallbacks; treat it as the agent layer only.
+    // Passing it as agentPolicy avoids intersecting global twice.
+    agentPolicy: agentFs,
+    spawnPolicy: {
+      ...(requesterFsCeiling
+        ? {
+            allowedPaths: requesterFsCeiling.allowedPaths,
+            denyPaths: requesterFsCeiling.denyPaths,
+            workspaceOnly: requesterFsCeiling.workspaceOnly,
+          }
+        : {}),
+      // Subagent defaults are an independent ceiling layer.
+      // sessions_spawn.fsPolicy provides a default spawn-time tightening.
+      // Per-call params.fsPolicy may tighten further but must not replace configured ceilings.
+      workspaceOnly:
+        requesterFsCeiling?.workspaceOnly === true ||
+        subagentFs?.workspaceOnly === true ||
+        sessionsSpawnFs?.workspaceOnly === true ||
+        params.fsPolicy?.workspaceOnly === true,
+      allowedPaths: (() => {
+        const lists = [
+          requesterFsCeiling?.allowedPaths,
+          subagentFs?.allowedPaths,
+          sessionsSpawnFs?.allowedPaths,
+          params.fsPolicy?.allowedPaths,
+        ].filter((value): value is string[] => Array.isArray(value));
+        if (lists.length === 0) {
+          return undefined;
+        }
+        // Use the same intersection semantics as the canonical combiner.
+        // (Note: combineToolFsPolicies intersects global/agent/spawn; here we only need
+        // spawn-layer intersection, so we rely on the combiner's allowlist intersection.
+        // We need intersection across multiple allowlists. Reuse the canonical
+        // intersectAll behavior by folding lists pairwise via combineToolFsPolicies.
+        let acc: string[] | undefined = lists[0];
+        for (const next of lists.slice(1)) {
+          acc = combineToolFsPolicies({
+            globalPolicy: { allowedPaths: acc },
+            spawnPolicy: { allowedPaths: next },
+          }).allowedPaths;
+        }
+        return acc;
+      })(),
+      denyPaths:
+        requesterFsCeiling?.denyPaths ||
+        subagentFs?.denyPaths ||
+        sessionsSpawnFs?.denyPaths ||
+        params.fsPolicy?.denyPaths
+          ? [
+              ...(requesterFsCeiling?.denyPaths ?? []),
+              ...(subagentFs?.denyPaths ?? []),
+              ...(sessionsSpawnFs?.denyPaths ?? []),
+              ...(params.fsPolicy?.denyPaths ?? []),
+            ]
+          : undefined,
+    },
+  });
+
+  if (
+    effectiveFsPolicy.workspaceOnly ||
+    // Persist explicit empty allowlists (deny-all) as a real ceiling.
+    effectiveFsPolicy.allowedPaths !== undefined ||
+    (effectiveFsPolicy.denyPaths?.length ?? 0) > 0
+  ) {
+    const fsPolicyPatchError = await patchChildSession({
+      spawnedToolFsPolicy: {
+        workspaceOnly: effectiveFsPolicy.workspaceOnly,
+        allowedPaths: effectiveFsPolicy.allowedPaths,
+        denyPaths: effectiveFsPolicy.denyPaths,
+      },
     });
+    if (fsPolicyPatchError) {
+      try {
+        await callSubagentGateway({
+          method: "sessions.delete",
+          params: { key: childSessionKey, emitLifecycleHooks: false },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // Best-effort cleanup only.
+      }
+      return {
+        status: "error",
+        error: fsPolicyPatchError,
+        childSessionKey,
+      };
+    }
+  }
+
+  if (resolvedModel) {
+    const runtimeModelPersistError =
+      await persistInitialChildSessionRuntimeModel({
+        cfg,
+        childSessionKey,
+        resolvedModel,
+      });
     if (runtimeModelPersistError) {
       try {
         await callSubagentGateway({
@@ -697,12 +858,16 @@ export async function spawnSubagentDirect(
       // For cross-agent spawns, ignore the caller's inherited workspace;
       // let targetAgentId resolve the correct workspace instead.
       explicitWorkspaceDir:
-        targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir,
+        targetAgentId !== requesterAgentId
+          ? undefined
+          : toolSpawnMetadata.workspaceDir,
     }),
   });
   const spawnLineagePatchError = await patchChildSession({
     spawnedBy: spawnedByKey,
-    ...(spawnedMetadata.workspaceDir ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir } : {}),
+    ...(spawnedMetadata.workspaceDir
+      ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir }
+      : {}),
   });
   if (spawnLineagePatchError) {
     await cleanupFailedSpawnBeforeAgentStart({
@@ -734,7 +899,10 @@ export async function spawnSubagentDirect(
         channel: requesterOrigin?.channel,
         to: requesterOrigin?.to ?? undefined,
         accountId: requesterOrigin?.accountId ?? undefined,
-        threadId: requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+        threadId:
+          requesterOrigin?.threadId != null
+            ? String(requesterOrigin.threadId)
+            : undefined,
         idempotencyKey: childIdem,
         deliver: false,
         lane: AGENT_LANE_SUBAGENT,

@@ -461,7 +461,11 @@ export async function runEmbeddedAttempt(
       : (() => {
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
-            ...buildEmbeddedAttemptToolRunContext(params),
+            // Spawned subagents can receive an explicit filesystem policy ceiling from the gateway.
+            // This is merged with config defaults inside createOpenClawCodingTools.
+            fsPolicy: params.toolFsPolicy ?? undefined,
+            trigger: params.trigger,
+            memoryFlushWritePath: params.memoryFlushWritePath,
             exec: {
               ...params.execOverrides,
               elevated: params.bashElevated,
@@ -517,6 +521,7 @@ export async function runEmbeddedAttempt(
               abortSessionForYield?.();
             },
           });
+
           if (params.toolsAllow && params.toolsAllow.length > 0) {
             const allowSet = new Set(params.toolsAllow);
             return allTools.filter((tool) => allowSet.has(tool.name));

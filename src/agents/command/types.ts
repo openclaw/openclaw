@@ -91,6 +91,12 @@ export type AgentCommandOpts = {
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Optional filesystem policy override for this run (used for spawned subagents). */
+  toolFsPolicy?: {
+    workspaceOnly: boolean;
+    allowedPaths?: string[];
+    denyPaths?: string[];
+  };
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
 };

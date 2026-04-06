@@ -668,6 +668,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
+  "tools.fs.allowedPaths":
+    "Optional allowlist for filesystem tools. When set, only paths matching this list are allowed (deny rules still override). Relative entries are workspace-anchored; glob patterns are supported.",
+  "tools.fs.denyPaths":
+    "Optional denylist for filesystem tools. Paths matching denyPaths are blocked even if allowedPaths matches. Relative entries are workspace-anchored; glob patterns are supported.",
+  "tools.subagents.fs.workspaceOnly":
+    "Optional workspace-only ceiling for spawned subagents. Combined with global/agent FS policy; spawn-time overrides may only tighten.",
+  "tools.subagents.fs.allowedPaths":
+    "Optional allowlist ceiling for spawned subagents. Combined with global/agent FS policy; spawn-time overrides may only tighten.",
+  "tools.subagents.fs.denyPaths":
+    "Optional denylist ceiling for spawned subagents. Combined with global/agent FS policy; spawn-time overrides may only tighten.",
+  "tools.sessions_spawn.fsPolicy":
+    "Spawn-time filesystem policy tightening for spawned subagents. This can only restrict further relative to configured ceilings; it cannot expand access.",
   "tools.sessions.visibility":
     'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
   "tools.message.allowCrossContextSend":
