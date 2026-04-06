@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 
@@ -17,21 +18,49 @@ const MIME_BY_EXT: Record<string, string> = {
   ".webm": "audio/webm",
 };
 
-function isLocalReadableFile(filePath: string): boolean {
-  if (!filePath.trim()) {
-    return false;
+/** Map `mediaUrl` strings to an absolute filesystem path for local embedding (plain paths or `file:` URLs). */
+function resolveLocalMediaPathForEmbedding(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
   }
-  if (/^(https?:|data:)/i.test(filePath)) {
-    return false;
+  if (/^data:/i.test(trimmed)) {
+    return null;
+  }
+  if (/^https?:/i.test(trimmed)) {
+    return null;
+  }
+  if (trimmed.startsWith("file:")) {
+    try {
+      const p = fileURLToPath(trimmed);
+      if (!path.isAbsolute(p)) {
+        return null;
+      }
+      return p;
+    } catch {
+      return null;
+    }
+  }
+  if (!path.isAbsolute(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
+
+/** Returns a readable local file path when it is a regular file and within the size cap (single stat before read). */
+function resolveLocalAudioFileForEmbedding(raw: string): string | null {
+  const resolved = resolveLocalMediaPathForEmbedding(raw);
+  if (!resolved) {
+    return null;
   }
   try {
-    if (!path.isAbsolute(filePath)) {
-      return false;
+    const st = fs.statSync(resolved);
+    if (!st.isFile() || st.size > MAX_WEBCHAT_AUDIO_BYTES) {
+      return null;
     }
-    const st = fs.statSync(filePath);
-    return st.isFile();
+    return resolved;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -53,14 +82,15 @@ export function buildWebchatAudioContentBlocksFromReplyPayloads(
     const parts = resolveSendableOutboundReplyParts(payload);
     for (const raw of parts.mediaUrls) {
       const url = raw.trim();
-      if (!url || seen.has(url)) {
+      if (!url) {
         continue;
       }
-      seen.add(url);
-      if (!isLocalReadableFile(url)) {
+      const resolved = resolveLocalAudioFileForEmbedding(url);
+      if (!resolved || seen.has(resolved)) {
         continue;
       }
-      const block = tryReadLocalAudioContentBlock(url);
+      seen.add(resolved);
+      const block = tryReadLocalAudioContentBlock(resolved);
       if (block) {
         blocks.push(block);
       }

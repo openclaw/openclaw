@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildWebchatAudioContentBlocksFromReplyPayloads } from "./chat-webchat-media.js";
 
 describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
@@ -49,5 +50,40 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
       { mediaUrl: audioPath },
     ]);
     expect(blocks).toHaveLength(1);
+  });
+
+  it("embeds file:// URLs pointing at a local file", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
+    const audioPath = path.join(tmpDir, "clip.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0x01]));
+
+    const fileUrl = pathToFileURL(audioPath).href;
+    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrl: fileUrl }]);
+
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { type?: string }).type).toBe("audio");
+  });
+
+  it("does not read file contents when stat reports size over the cap", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
+    const audioPath = path.join(tmpDir, "huge.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0x02]));
+
+    const origStat = fs.statSync.bind(fs);
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((p: fs.PathLike) => {
+      if (String(p) === audioPath) {
+        return { isFile: () => true, size: 16 * 1024 * 1024 } as fs.Stats;
+      }
+      return origStat(p);
+    });
+    const readSpy = vi.spyOn(fs, "readFileSync");
+
+    const blocks = buildWebchatAudioContentBlocksFromReplyPayloads([{ mediaUrl: audioPath }]);
+
+    expect(blocks).toHaveLength(0);
+    expect(readSpy).not.toHaveBeenCalled();
+
+    statSpy.mockRestore();
+    readSpy.mockRestore();
   });
 });
