@@ -215,4 +215,38 @@ describe("block streaming", () => {
       });
     });
   });
+
+  it("times out a hanging direct media send and still returns the final reply", async () => {
+    await withTempHome(async (home) => {
+      let abortSignal: AbortSignal | undefined;
+      let timeoutMs: number | undefined;
+      const onBlockReply = vi.fn(
+        async (_payload, context?: { abortSignal?: AbortSignal; timeoutMs?: number }) => {
+          abortSignal = context?.abortSignal;
+          timeoutMs = context?.timeoutMs;
+          await new Promise<void>(() => {});
+        },
+      );
+
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(
+        async (params: RunEmbeddedPiAgentParams) => {
+          await params.onBlockReply?.({ text: "Result\nMEDIA: ./image.png" });
+          return createEmbeddedReply("Final fallback reply");
+        },
+      );
+
+      const res = await runTelegramReply({
+        home,
+        messageSid: "msg-130",
+        onBlockReply,
+        disableBlockStreaming: false,
+      });
+
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(timeoutMs).toBeGreaterThan(0);
+      expect(abortSignal?.aborted).toBe(true);
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload?.text).toBe("Final fallback reply");
+    });
+  });
 });

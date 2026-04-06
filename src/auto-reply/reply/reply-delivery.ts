@@ -10,6 +10,27 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutError: Error,
+): Promise<T> => {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return promise;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(timeoutError), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
+
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
@@ -67,6 +88,7 @@ export function createBlockReplyDeliveryHandler(params: {
   typingSignals: TypingSignaler;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
+  blockReplyTimeoutMs: number;
   directlySentBlockKeys: Set<string>;
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
@@ -126,11 +148,27 @@ export function createBlockReplyDeliveryHandler(params: {
     if (params.blockStreamingEnabled && params.blockReplyPipeline) {
       params.blockReplyPipeline.enqueue(blockPayload);
     } else if (blockHasMedia) {
+      const timeoutError = new Error(
+        `block reply delivery timed out after ${params.blockReplyTimeoutMs}ms`,
+      );
+      const abortController = new AbortController();
       try {
-        await params.onBlockReply(blockPayload);
+        await withTimeout(
+          Promise.resolve(
+            params.onBlockReply(blockPayload, {
+              abortSignal: abortController.signal,
+              timeoutMs: params.blockReplyTimeoutMs,
+            }),
+          ),
+          params.blockReplyTimeoutMs,
+          timeoutError,
+        );
         // Track sent key to avoid duplicate delivery from the later final payload pass.
         params.directlySentBlockKeys.add(createBlockReplyContentKey(blockPayload));
       } catch (err) {
+        if (err === timeoutError) {
+          abortController.abort();
+        }
         logVerbose(`block reply delivery failed: ${String(err)}`);
       }
     }

@@ -93,6 +93,7 @@ export async function runAgentTurnWithFallback(params: {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
+  blockReplyTimeoutMs: number;
   resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
@@ -421,6 +422,7 @@ export async function runAgentTurnWithFallback(params: {
                       typingSignals: params.typingSignals,
                       blockStreamingEnabled: params.blockStreamingEnabled,
                       blockReplyPipeline,
+                      blockReplyTimeoutMs: params.blockReplyTimeoutMs,
                       directlySentBlockKeys,
                     })
                   : undefined,
