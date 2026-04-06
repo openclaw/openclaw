@@ -243,6 +243,30 @@ describe("command queue", () => {
     }
   });
 
+  it("heals missing activeTaskWaiters in preserved global queue state", async () => {
+    const queueStateKey = Symbol.for("openclaw.commandQueueState");
+    const queueState = (globalThis as Record<PropertyKey, unknown>)[queueStateKey] as
+      | { activeTaskWaiters?: unknown }
+      | undefined;
+    delete queueState?.activeTaskWaiters;
+
+    const { task, release } = enqueueBlockedMainTask();
+
+    vi.useFakeTimers();
+    try {
+      const drainPromise = waitForActiveTasks(5000);
+
+      await vi.advanceTimersByTimeAsync(50);
+      release();
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(drainPromise).resolves.toEqual({ drained: true });
+      await expect(task).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("resetAllLanes drains queued work immediately after reset", async () => {
     const lane = `reset-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);

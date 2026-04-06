@@ -53,6 +53,13 @@ type ActiveTaskWaiter = {
   timeout?: ReturnType<typeof setTimeout>;
 };
 
+type QueueState = {
+  gatewayDraining: boolean;
+  lanes: Map<string, LaneState>;
+  activeTaskWaiters: Set<ActiveTaskWaiter>;
+  nextTaskId: number;
+};
+
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return err instanceof Error && err.name === "LiveSessionModelSwitchError";
 }
@@ -64,12 +71,16 @@ function isExpectedNonErrorLaneFailure(err: unknown): boolean {
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
 function getQueueState() {
-  return resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+  const state = resolveGlobalSingleton<QueueState>(COMMAND_QUEUE_STATE_KEY, () => ({
     gatewayDraining: false,
     lanes: new Map<string, LaneState>(),
     activeTaskWaiters: new Set<ActiveTaskWaiter>(),
     nextTaskId: 1,
   }));
+  if (!(state.activeTaskWaiters instanceof Set)) {
+    state.activeTaskWaiters = new Set<ActiveTaskWaiter>();
+  }
+  return state;
 }
 
 function normalizeLane(lane: string): string {
