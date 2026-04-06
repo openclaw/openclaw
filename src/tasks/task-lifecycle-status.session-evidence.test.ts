@@ -6,7 +6,15 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { resolveTaskLifecycleStatusReason } from "./task-lifecycle-status.js";
+import { createRunningTaskRun } from "./task-executor.js";
+import {
+  resolveTaskFlowLifecycleStatusReason,
+  resolveTaskLifecycleStatusReason,
+} from "./task-lifecycle-status.js";
+import {
+  resetTaskRegistryDeliveryRuntimeForTests,
+  resetTaskRegistryForTests,
+} from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
@@ -36,12 +44,16 @@ async function withBackingSessionStore(
   await withTempDir({ prefix: "openclaw-task-lifecycle-status-" }, async (root) => {
     process.env.OPENCLAW_STATE_DIR = root;
     clearSessionStoreCacheForTest();
+    resetTaskRegistryDeliveryRuntimeForTests();
+    resetTaskRegistryForTests();
     const storePath = resolveStorePath(undefined, { agentId: "main" });
     await saveSessionStore(storePath, entries);
     try {
       await run();
     } finally {
       clearSessionStoreCacheForTest();
+      resetTaskRegistryDeliveryRuntimeForTests();
+      resetTaskRegistryForTests();
     }
   });
 }
@@ -49,6 +61,8 @@ async function withBackingSessionStore(
 describe("task lifecycle status session evidence", () => {
   afterEach(() => {
     clearSessionStoreCacheForTest();
+    resetTaskRegistryDeliveryRuntimeForTests();
+    resetTaskRegistryForTests();
     if (ORIGINAL_STATE_DIR === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -148,6 +162,48 @@ describe("task lifecycle status session evidence", () => {
             data: {
               state: "missing",
               source: "missing",
+            },
+          }),
+        ]),
+      });
+    });
+  });
+
+  it("bridges linked task session evidence into waiting flow reasons", async () => {
+    await withBackingSessionStore({}, () => {
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-flow-wait-child",
+        task: "Wait for child result",
+        childSessionKey: "agent:main:subagent:child-missing",
+        lastEventAt: NOW,
+      });
+
+      const reason = resolveTaskFlowLifecycleStatusReason({
+        flow: {
+          ownerKey: "agent:main:main",
+          status: "waiting",
+          waitJson: { kind: "task", taskId: child.taskId },
+          updatedAt: NOW,
+        },
+      });
+
+      expect(reason).toMatchObject({
+        code: "waiting_on_task",
+        summary: "Waiting on task: Backing session is missing; task may be orphaned.",
+        backing: expect.arrayContaining([
+          { kind: "task", relation: "wait_task", id: child.taskId },
+        ]),
+        evidence: expect.arrayContaining([
+          expect.objectContaining({
+            kind: "linked_task_reason",
+            summary: "Backing session is missing; task may be orphaned.",
+            data: {
+              relation: "wait_task",
+              taskId: child.taskId,
+              code: "missing_backing_session",
             },
           }),
         ]),

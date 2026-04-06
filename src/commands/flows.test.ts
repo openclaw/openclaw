@@ -219,6 +219,45 @@ describe("flows commands", () => {
     });
   });
 
+  it("shows linked task lifecycle reasons in TaskFlow text output", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: undefined,
+        childSessionKey: "agent:main:subagent:child-missing",
+        runId: "run-child-4",
+        label: "Wait for child",
+        task: "Wait for child",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Wait for linked child",
+        status: "waiting",
+        waitJson: { kind: "task", taskId: child.taskId },
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(
+        "reason: Waiting on task: Backing session is missing; task may be orphaned.",
+      );
+      expect(output).toContain("Linked tasks: none");
+    });
+  });
+
   it("shows one TaskFlow as JSON with lifecycle reason", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({

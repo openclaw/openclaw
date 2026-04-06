@@ -3,6 +3,7 @@ import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/errors.js"
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { getTaskById } from "./runtime-internal.js";
 import type { JsonValue, TaskFlowRecord } from "./task-flow-registry.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
@@ -16,7 +17,8 @@ export type LifecycleStatusEvidenceKind =
   | "blocked_summary"
   | "current_step"
   | "wait"
-  | "session_state";
+  | "session_state"
+  | "linked_task_reason";
 
 export type LifecycleStatusEvidence = {
   kind: LifecycleStatusEvidenceKind;
@@ -539,11 +541,38 @@ function resolveFlowReasonCode(flow: Pick<TaskFlowRecord, "status" | "waitJson">
   return flow.status;
 }
 
+function summarizeLinkedTaskReason(
+  prefix: string,
+  reason: LifecycleStatusReason | undefined,
+): string | undefined {
+  const summary = sanitizeLifecycleText(reason?.summary, { errorContext: true });
+  return summary ? `${prefix}: ${summary}` : undefined;
+}
+
+function resolveLinkedTaskLifecycleReason(
+  taskId: string | undefined,
+): LifecycleStatusReason | undefined {
+  const normalizedTaskId = normalizeId(taskId);
+  if (!normalizedTaskId) {
+    return undefined;
+  }
+  try {
+    const task = getTaskById(normalizedTaskId);
+    return task ? resolveTaskLifecycleStatusReason(task) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveFlowReasonSummary(
   flow: Pick<
     TaskFlowRecord,
     "status" | "currentStep" | "blockedSummary" | "blockedTaskId" | "waitJson" | "cancelRequestedAt"
   >,
+  linkedTaskReasons?: {
+    blockedTaskReason?: LifecycleStatusReason;
+    waitTaskReason?: LifecycleStatusReason;
+  },
 ): string {
   const currentStep = sanitizeLifecycleText(flow.currentStep);
   const blockedSummary = sanitizeLifecycleText(flow.blockedSummary, { errorContext: true });
@@ -554,10 +583,15 @@ function resolveFlowReasonSummary(
     case "running":
       return currentStep ? `Running: ${currentStep}` : "Flow is running.";
     case "waiting":
-      return waitSummary || (currentStep ? `Waiting: ${currentStep}` : "Flow is waiting.");
+      return (
+        summarizeLinkedTaskReason("Waiting on task", linkedTaskReasons?.waitTaskReason) ||
+        waitSummary ||
+        (currentStep ? `Waiting: ${currentStep}` : "Flow is waiting.")
+      );
     case "blocked":
       return (
         blockedSummary ||
+        summarizeLinkedTaskReason("Blocked on task", linkedTaskReasons?.blockedTaskReason) ||
         waitSummary ||
         (flow.blockedTaskId?.trim() ? "Flow is blocked on a child task." : "Flow is blocked.")
       );
@@ -589,7 +623,10 @@ export function resolveTaskFlowLifecycleStatusReason(params: {
   const { flow } = params;
   const evidence: LifecycleStatusEvidence[] = [];
   const backing: LifecycleBackingLink[] = [];
+  const blockedTaskId = normalizeId(flow.blockedTaskId);
   const waitTaskId = resolveWaitTaskId(flow.waitJson);
+  const blockedTaskReason = resolveLinkedTaskLifecycleReason(blockedTaskId);
+  const waitTaskReason = resolveLinkedTaskLifecycleReason(waitTaskId);
 
   pushEvidence(
     evidence,
@@ -621,6 +658,44 @@ export function resolveTaskFlowLifecycleStatusReason(params: {
       recordedAt: flow.updatedAt,
     }),
   );
+  pushEvidence(
+    evidence,
+    (() => {
+      if (!blockedTaskReason || !blockedTaskId) {
+        return undefined;
+      }
+      return makeEvidence({
+        kind: "linked_task_reason",
+        value: blockedTaskReason.summary,
+        errorContext: true,
+        data: {
+          relation: "blocked_task",
+          taskId: blockedTaskId,
+          code: blockedTaskReason.code,
+        },
+        recordedAt: flow.updatedAt,
+      });
+    })(),
+  );
+  pushEvidence(
+    evidence,
+    (() => {
+      if (!waitTaskReason || !waitTaskId) {
+        return undefined;
+      }
+      return makeEvidence({
+        kind: "linked_task_reason",
+        value: waitTaskReason.summary,
+        errorContext: true,
+        data: {
+          relation: "wait_task",
+          taskId: waitTaskId,
+          code: waitTaskReason.code,
+        },
+        recordedAt: flow.updatedAt,
+      });
+    })(),
+  );
 
   pushBacking(
     backing,
@@ -631,10 +706,9 @@ export function resolveTaskFlowLifecycleStatusReason(params: {
   );
   pushBacking(
     backing,
-    (() => {
-      const id = normalizeId(flow.blockedTaskId);
-      return id ? { kind: "task" as const, relation: "blocked_task" as const, id } : undefined;
-    })(),
+    blockedTaskId
+      ? { kind: "task" as const, relation: "blocked_task" as const, id: blockedTaskId }
+      : undefined,
   );
   pushBacking(
     backing,
@@ -643,7 +717,10 @@ export function resolveTaskFlowLifecycleStatusReason(params: {
 
   return buildReason({
     code: resolveFlowReasonCode(flow),
-    summary: resolveFlowReasonSummary(flow),
+    summary: resolveFlowReasonSummary(flow, {
+      blockedTaskReason,
+      waitTaskReason,
+    }),
     evidence,
     backing,
   });
