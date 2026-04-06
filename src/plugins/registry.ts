@@ -29,7 +29,9 @@ import {
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
 import {
+  registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
+  registerMemoryPromptSupplement,
   registerMemoryPromptSection,
   registerMemoryRuntime,
 } from "./memory-state.js";
@@ -45,6 +47,7 @@ import {
 } from "./types.js";
 import type {
   ImageGenerationProviderPlugin,
+  MusicGenerationProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
@@ -157,6 +160,8 @@ export type PluginImageGenerationProviderRegistration =
   PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
 export type PluginVideoGenerationProviderRegistration =
   PluginOwnedProviderRegistration<VideoGenerationProviderPlugin>;
+export type PluginMusicGenerationProviderRegistration =
+  PluginOwnedProviderRegistration<MusicGenerationProviderPlugin>;
 export type PluginWebFetchProviderRegistration =
   PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
@@ -254,6 +259,7 @@ export type PluginRecord = {
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
+  musicGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   memoryEmbeddingProviderIds: string[];
@@ -284,6 +290,7 @@ export type PluginRegistry = {
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
   videoGenerationProviders: PluginVideoGenerationProviderRegistration[];
+  musicGenerationProviders: PluginMusicGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
@@ -787,6 +794,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerMusicGenerationProvider = (
+    record: PluginRecord,
+    provider: MusicGenerationProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "music-generation provider",
+      registrations: registry.musicGenerationProviders,
+      ownedIds: record.musicGenerationProviderIds,
+    });
+  };
+
   const registerWebFetchProvider = (record: PluginRecord, provider: WebFetchProviderPlugin) => {
     registerUniqueProviderLike({
       record,
@@ -1179,6 +1199,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerImageGenerationProvider(record, provider),
               registerVideoGenerationProvider: (provider) =>
                 registerVideoGenerationProvider(record, provider),
+              registerMusicGenerationProvider: (provider) =>
+                registerMusicGenerationProvider(record, provider),
               registerWebFetchProvider: (provider) => registerWebFetchProvider(record, provider),
               registerWebSearchProvider: (provider) => registerWebSearchProvider(record, provider),
               registerGatewayMethod: (method, handler, opts) =>
@@ -1252,6 +1274,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   return;
                 }
                 registerMemoryPromptSection(builder);
+              },
+              registerMemoryPromptSupplement: (builder) => {
+                registerMemoryPromptSupplement(record.id, builder);
+              },
+              registerMemoryCorpusSupplement: (supplement) => {
+                registerMemoryCorpusSupplement(record.id, supplement);
               },
               registerMemoryFlushPlan: (resolver) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -1381,6 +1409,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerMediaUnderstandingProvider,
     registerImageGenerationProvider,
     registerVideoGenerationProvider,
+    registerMusicGenerationProvider,
     registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,

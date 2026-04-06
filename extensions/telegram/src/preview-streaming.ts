@@ -1,3 +1,5 @@
+import { getChannelStreamingConfigObject } from "openclaw/plugin-sdk/channel-streaming";
+
 export type TelegramPreviewStreamMode = "off" | "partial" | "block";
 
 function normalizeStreamingMode(value: unknown): string | null {
@@ -35,7 +37,9 @@ export function resolveTelegramPreviewStreamMode(
     streaming?: unknown;
   } = {},
 ): TelegramPreviewStreamMode {
-  const parsedStreaming = parseStreamingMode(params.streaming);
+  const parsedStreaming = parseStreamingMode(
+    getChannelStreamingConfigObject(params)?.mode ?? params.streaming,
+  );
   if (parsedStreaming) {
     if (parsedStreaming === "progress") {
       return "partial";

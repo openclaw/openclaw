@@ -221,6 +221,22 @@ describe("resolveExecTarget", () => {
     });
   });
 
+  it("keeps explicit node override under elevated requests when configured target is auto", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: true,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "node",
+      selectedTarget: "node",
+      effectiveHost: "node",
+    });
+  });
+
   it("honours node target for elevated requests when configured target is node", () => {
     expect(
       resolveExecTarget({
@@ -252,20 +268,17 @@ describe("resolveExecTarget", () => {
     });
   });
 
-  it("silently discards mismatched requestedTarget under elevated+node", () => {
-    expect(
+  it("rejects mismatched requestedTarget under elevated+node", () => {
+    expect(() =>
       resolveExecTarget({
         configuredTarget: "node",
         requestedTarget: "gateway",
         elevatedRequested: true,
         sandboxAvailable: false,
       }),
-    ).toMatchObject({
-      configuredTarget: "node",
-      requestedTarget: "gateway",
-      selectedTarget: "node",
-      effectiveHost: "node",
-    });
+    ).toThrow(
+      "exec host not allowed (requested gateway; configured host is node; set tools.exec.host=gateway or auto to allow this override).",
+    );
   });
 });
 

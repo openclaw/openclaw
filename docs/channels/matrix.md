@@ -175,6 +175,13 @@ This is a practical baseline config with DM pairing, room allowlist, and E2EE en
 }
 ```
 
+`autoJoin` applies to Matrix invites in general, not only room/group invites.
+That includes fresh DM-style invites. At invite time, OpenClaw does not reliably know whether the
+invited room will end up being treated as a DM or a group, so all invites go through the same
+`autoJoin` decision first. `dm.policy` still applies after the bot has joined and the room is
+classified as a DM, so `autoJoin` controls join behavior while `dm.policy` controls reply/access
+behavior.
+
 ## Streaming previews
 
 Matrix reply streaming is opt-in.
@@ -281,7 +288,7 @@ OpenClaw marks finalized text-only preview edits with:
 
 ```bash
 curl -sS -X PUT \
-  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview" \
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname" \
   -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{
@@ -311,7 +318,14 @@ Replace these values before you run the command:
 
 - `https://matrix.example.org`: your homeserver base URL
 - `$USER_ACCESS_TOKEN`: the receiving user's access token
+- `openclaw-finalized-preview-botname`: a rule ID unique to this bot for this receiving user
 - `@bot:example.org`: your OpenClaw Matrix bot MXID, not the receiving user's MXID
+
+Important for multi-bot setups:
+
+- Push rules are keyed by `ruleId`. Re-running `PUT` against the same rule ID updates that one rule.
+- If one receiving user should notify for multiple OpenClaw Matrix bot accounts, create one rule per bot with a unique rule ID for each sender match.
+- A simple pattern is `openclaw-finalized-preview-<botname>`, such as `openclaw-finalized-preview-ops` or `openclaw-finalized-preview-support`.
 
 The rule is evaluated against the event sender:
 
@@ -323,11 +337,19 @@ The rule is evaluated against the event sender:
 ```bash
 curl -sS \
   -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
-  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview"
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname"
 ```
 
 7. Test a streamed reply. In quiet mode, the room should show a quiet draft preview and the final
    in-place edit should notify once the block or turn finishes.
+
+If you need to remove the rule later, delete that same rule ID with the receiving user's token:
+
+```bash
+curl -sS -X DELETE \
+  -H "Authorization: Bearer $USER_ACCESS_TOKEN" \
+  "https://matrix.example.org/_matrix/client/v3/pushrules/global/override/openclaw-finalized-preview-botname"
+```
 
 Notes:
 
@@ -758,7 +780,7 @@ Current behavior:
 ## History context
 
 - `channels.matrix.historyLimit` controls how many recent room messages are included as `InboundHistory` when a Matrix room message triggers the agent.
-- It falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
+- It falls back to `messages.groupChat.historyLimit`. If both are unset, the effective default is `0`, so mention-gated room messages are not buffered. Set `0` to disable.
 - Matrix room history is room-only. DMs keep using normal session history.
 - Matrix room history is pending-only: OpenClaw buffers room messages that did not trigger a reply yet, then snapshots that window when a mention or other trigger arrives.
 - The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
@@ -980,7 +1002,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `contextVisibility`: supplemental room-context visibility mode (`all`, `allowlist`, `allowlist_quote`).
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `groupAllowFrom` entries should be full Matrix user IDs. Unresolved names are ignored at runtime.
-- `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
+- `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`; if both are unset, the effective default is `0`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, or `all`.
 - `markdown`: optional Markdown rendering configuration for outbound Matrix text.
 - `streaming`: `off` (default), `partial`, `quiet`, `true`, or `false`. `partial` and `true` enable preview-first draft updates with normal Matrix text messages. `quiet` uses non-notifying preview notices for self-hosted push-rule setups.
@@ -996,9 +1018,10 @@ Live directory lookup uses the logged-in Matrix account:
 - `ackReactionScope`: optional ack reaction scope override (`group-mentions`, `group-all`, `direct`, `all`, `none`, `off`).
 - `reactionNotifications`: inbound reaction notification mode (`own`, `off`).
 - `mediaMaxMb`: media size cap in MB for Matrix media handling. It applies to outbound sends and inbound media processing.
-- `autoJoin`: invite auto-join policy (`always`, `allowlist`, `off`). Default: `off`.
+- `autoJoin`: invite auto-join policy (`always`, `allowlist`, `off`). Default: `off`. This applies to Matrix invites in general, including DM-style invites, not only room/group invites. OpenClaw makes this decision at invite time, before it can reliably classify the joined room as a DM or a group.
 - `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `allowlist`. Alias entries are resolved to room IDs during invite handling; OpenClaw does not trust alias state claimed by the invited room.
 - `dm`: DM policy block (`enabled`, `policy`, `allowFrom`, `sessionScope`, `threadReplies`).
+- `dm.policy`: controls DM access after OpenClaw has joined the room and classified it as a DM. It does not change whether an invite is auto-joined.
 - `dm.allowFrom` entries should be full Matrix user IDs unless you already resolved them through live directory lookup.
 - `dm.sessionScope`: `per-user` (default) or `per-room`. Use `per-room` when you want each Matrix DM room to keep separate context even if the peer is the same.
 - `dm.threadReplies`: DM-only thread policy override (`off`, `inbound`, `always`). It overrides the top-level `threadReplies` setting for both reply placement and session isolation in DMs.

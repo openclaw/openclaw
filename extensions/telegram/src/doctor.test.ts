@@ -6,6 +6,7 @@ import {
   collectTelegramGroupPolicyWarnings,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramAllowFromUsernameEntries,
+  telegramDoctor,
 } from "./doctor.js";
 
 const resolveCommandSecretRefsViaGatewayMock = vi.hoisted(() => vi.fn());
@@ -64,6 +65,94 @@ describe("telegram doctor", () => {
       tokenStatus: "configured",
     });
     lookupTelegramChatIdMock.mockReset();
+  });
+
+  it("normalizes legacy telegram streaming aliases into the nested streaming shape", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            streamMode: "block",
+            chunkMode: "newline",
+            blockStreaming: true,
+            draftChunk: {
+              minChars: 120,
+            },
+            accounts: {
+              work: {
+                streaming: false,
+                blockStreamingCoalesce: {
+                  idleMs: 250,
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.streaming).toEqual({
+      mode: "block",
+      chunkMode: "newline",
+      block: {
+        enabled: true,
+      },
+      preview: {
+        chunk: {
+          minChars: 120,
+        },
+      },
+    });
+    expect(result.config.channels?.telegram?.accounts?.work?.streaming).toEqual({
+      mode: "off",
+      block: {
+        coalesce: {
+          idleMs: 250,
+        },
+      },
+    });
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
+        "Moved channels.telegram.chunkMode → channels.telegram.streaming.chunkMode.",
+        "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
+        "Moved channels.telegram.draftChunk → channels.telegram.streaming.preview.chunk.",
+        "Moved channels.telegram.accounts.work.streaming (boolean) → channels.telegram.accounts.work.streaming.mode (off).",
+        "Moved channels.telegram.accounts.work.blockStreamingCoalesce → channels.telegram.accounts.work.streaming.block.coalesce.",
+      ]),
+    );
+  });
+
+  it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            streamMode: "block",
+            streaming: false,
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.streaming).toEqual({
+      mode: "block",
+    });
+    expect(
+      result.changes.filter((change) => change.includes("channels.telegram.streaming.mode")),
+    ).toEqual(["Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block)."]);
   });
 
   it("finds username allowFrom entries across scopes", () => {

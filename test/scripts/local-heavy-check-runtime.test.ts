@@ -1,26 +1,14 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
   applyLocalTsgoPolicy,
 } from "../../scripts/lib/local-heavy-check-runtime.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function makeTempDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-heavy-check-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const { createTempDir } = createScriptTestHarness();
 
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   return {
@@ -61,7 +49,7 @@ describe("local-heavy-check-runtime", () => {
   });
 
   it("reclaims stale local heavy-check locks from dead pids", () => {
-    const cwd = makeTempDir();
+    const cwd = createTempDir("openclaw-local-heavy-check-");
     const commonDir = path.join(cwd, ".git");
     const lockDir = path.join(commonDir, "openclaw-local-checks", "heavy-check.lock");
     fs.mkdirSync(lockDir, { recursive: true });
