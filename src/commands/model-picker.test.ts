@@ -88,6 +88,46 @@ beforeEach(() => {
 });
 
 describe("promptDefaultModel", () => {
+  it("adds auth-route hints for OpenAI API and Codex OAuth models", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      },
+    ]);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+
+    await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const options = select.mock.calls[0]?.[0]?.options ?? [];
+    expect(options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: "openai/gpt-5.4",
+          hint: expect.stringContaining("API key route"),
+        }),
+        expect.objectContaining({
+          value: "openai-codex/gpt-5.4",
+          hint: expect.stringContaining("ChatGPT OAuth route"),
+        }),
+      ]),
+    );
+  });
+
   it("treats byteplus plan models as preferred-provider matches", async () => {
     loadModelCatalog.mockResolvedValue([
       {

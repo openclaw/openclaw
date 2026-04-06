@@ -657,6 +657,31 @@ for usage/billing and raise limits as needed.
     OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Onboarding can run the OAuth flow and will set the default model to `openai-codex/gpt-5.4` when appropriate. See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
+  <Accordion title="Why does ChatGPT GPT-5.4 not unlock openai/gpt-5.4 in OpenClaw?">
+    OpenClaw treats the two routes separately:
+
+    - `openai-codex/gpt-5.4` = ChatGPT/Codex OAuth
+    - `openai/gpt-5.4` = direct OpenAI Platform API
+
+    In OpenClaw, ChatGPT/Codex sign-in is wired to the `openai-codex/*` route,
+    not the direct `openai/*` route. If you want the direct API path in
+    OpenClaw, set `OPENAI_API_KEY` (or the equivalent OpenAI provider config).
+    If you want ChatGPT/Codex sign-in in OpenClaw, use `openai-codex/*`.
+
+  </Accordion>
+
+  <Accordion title="Why can Codex OAuth limits differ from ChatGPT web?">
+    `openai-codex/*` uses the Codex OAuth route, and its usable quota windows are
+    OpenAI-managed and plan-dependent. In practice, those limits can differ from
+    the ChatGPT website/app experience, even when both are tied to the same account.
+
+    OpenClaw can show the currently visible provider usage/quota windows in
+    `openclaw models status`, but it does not invent or normalize ChatGPT-web
+    entitlements into direct API access. If you want the direct OpenAI Platform
+    billing/limit path, use `openai/*` with an API key.
+
+  </Accordion>
+
   <Accordion title="Do you support OpenAI subscription auth (Codex OAuth)?">
     Yes. OpenClaw fully supports **OpenAI Code (Codex) subscription OAuth**.
     OpenAI explicitly allows subscription OAuth usage in external tools/workflows

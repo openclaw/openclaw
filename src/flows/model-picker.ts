@@ -115,6 +115,17 @@ function normalizeModelKeys(values: string[]): string[] {
   return next;
 }
 
+function resolveModelRouteHint(provider: string): string | undefined {
+  const normalized = normalizeProviderId(provider);
+  if (normalized === "openai") {
+    return "API key route";
+  }
+  if (normalized === "openai-codex") {
+    return "ChatGPT OAuth route";
+  }
+  return undefined;
+}
+
 function addModelSelectOption(params: {
   entry: {
     provider: string;
@@ -145,6 +156,10 @@ function addModelSelectOption(params: {
   const aliases = params.aliasIndex.byKey.get(key);
   if (aliases?.length) {
     hints.push(`alias: ${aliases.join(", ")}`);
+  }
+  const routeHint = resolveModelRouteHint(params.entry.provider);
+  if (routeHint) {
+    hints.push(routeHint);
   }
   if (!params.hasAuth(params.entry.provider)) {
     hints.push("auth missing");
