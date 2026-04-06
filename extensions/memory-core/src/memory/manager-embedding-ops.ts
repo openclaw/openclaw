@@ -655,6 +655,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
       }
     }
+    // HELM-0251: warn if chunks were written but chunks_vec was not updated
+    if (this.vector.enabled && !vectorReady && chunks.length > 0) {
+      const errDetail = this.vector.loadError ? `: ${this.vector.loadError}` : "";
+      log.warn(
+        `HELM-0251: chunks written for ${entry.path} without vector embeddings — chunks_vec not updated (sqlite-vec unavailable${errDetail}). Vector recall degraded for this file.`,
+      );
+    }
     this.upsertFileRecord(entry, source);
   }
 
