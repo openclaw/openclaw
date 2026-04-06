@@ -770,6 +770,7 @@ export function createVideoGenerateTool(options?: {
                 status: "ok",
                 statusLabel: "completed successfully",
                 result: executed.wakeResult,
+                mediaUrls: executed.savedPaths,
               });
             } catch (error) {
               log.warn("Video generation completion wake failed after successful generation", {
