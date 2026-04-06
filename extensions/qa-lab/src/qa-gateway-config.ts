@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 const DISABLED_BUNDLED_CHANNELS = Object.freeze({
   bluebubbles: { enabled: false },
@@ -37,6 +38,44 @@ export function buildQaGatewayConfig(params: {
   alternateModel?: string;
   fastMode?: boolean;
 }): OpenClawConfig {
+  const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
+  const mockOpenAiProvider: ModelProviderConfig = {
+    baseUrl: mockProviderBaseUrl,
+    apiKey: "test",
+    api: "openai-responses",
+    models: [
+      {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        api: "openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 128_000,
+        maxTokens: 4096,
+      },
+      {
+        id: "gpt-5.4-alt",
+        name: "gpt-5.4-alt",
+        api: "openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 128_000,
+        maxTokens: 4096,
+      },
+    ],
+  };
   const providerMode = params.providerMode ?? "mock-openai";
   const allowedPlugins =
     providerMode === "live-openai"
@@ -131,43 +170,7 @@ export function buildQaGatewayConfig(params: {
           models: {
             mode: "replace",
             providers: {
-              "mock-openai": {
-                baseUrl: params.providerBaseUrl,
-                apiKey: "test",
-                api: "openai-responses",
-                models: [
-                  {
-                    id: "gpt-5.4",
-                    name: "gpt-5.4",
-                    api: "openai-responses",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: {
-                      input: 0,
-                      output: 0,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                    },
-                    contextWindow: 128_000,
-                    maxTokens: 4096,
-                  },
-                  {
-                    id: "gpt-5.4-alt",
-                    name: "gpt-5.4-alt",
-                    api: "openai-responses",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: {
-                      input: 0,
-                      output: 0,
-                      cacheRead: 0,
-                      cacheWrite: 0,
-                    },
-                    contextWindow: 128_000,
-                    maxTokens: 4096,
-                  },
-                ],
-              },
+              "mock-openai": mockOpenAiProvider,
             },
           },
         }

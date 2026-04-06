@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
+function getPrimaryModel(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object" && "primary" in value) {
+    const primary = (value as { primary?: unknown }).primary;
+    return typeof primary === "string" ? primary : undefined;
+  }
+  return undefined;
+}
+
 describe("buildQaGatewayConfig", () => {
   it("keeps mock-openai as the default provider lane", () => {
     const cfg = buildQaGatewayConfig({
@@ -12,7 +23,7 @@ describe("buildQaGatewayConfig", () => {
       workspaceDir: "/tmp/qa-workspace",
     });
 
-    expect(cfg.agents?.defaults?.model?.primary).toBe("mock-openai/gpt-5.4");
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.4");
     expect(cfg.models?.providers?.["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(cfg.plugins?.allow).toEqual(["memory-core", "qa-channel"]);
     expect(cfg.plugins?.entries?.["memory-core"]).toEqual({ enabled: true });
@@ -32,8 +43,8 @@ describe("buildQaGatewayConfig", () => {
       alternateModel: "openai/gpt-5.4",
     });
 
-    expect(cfg.agents?.defaults?.model?.primary).toBe("openai/gpt-5.4");
-    expect(cfg.agents?.list?.[0]?.model?.primary).toBe("openai/gpt-5.4");
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.4");
+    expect(getPrimaryModel(cfg.agents?.list?.[0]?.model)).toBe("openai/gpt-5.4");
     expect(cfg.models).toBeUndefined();
     expect(cfg.plugins?.allow).toEqual(["memory-core", "openai", "qa-channel"]);
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
