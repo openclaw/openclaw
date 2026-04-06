@@ -116,6 +116,15 @@ function buildHookProviderCacheKey(params: {
   return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}::${JSON.stringify(params.onlyPluginIds ?? [])}::${JSON.stringify(params.providerRefs ?? [])}`;
 }
 
+// Reentrancy guard: prevents infinite recursion when plugin loading triggers
+// provider config normalization which in turn triggers another plugin load.
+// The cycle is: validateConfigObject → materializeRuntimeConfig → applyModelDefaults
+// → normalizeProviderSpecificConfig → normalizeProviderConfigWithPlugin
+// → resolveProviderPluginsForHooks → resolvePluginProviders
+// → resolveRuntimePluginRegistry → loadOpenClawPlugins → (plugin register/import)
+// → normalizeProviderConfigWithPlugin → ... (infinite recursion).
+let resolvingProviderPluginsForHooks = false;
+
 export function clearProviderRuntimeHookCache(): void {
   cachedHookProvidersWithoutConfig = new WeakMap<
     NodeJS.ProcessEnv,
@@ -129,6 +138,7 @@ export function clearProviderRuntimeHookCache(): void {
 
 export function resetProviderRuntimeHookCacheForTest(): void {
   clearProviderRuntimeHookCache();
+  resolvingProviderPluginsForHooks = false;
 }
 
 function resolveProviderPluginsForHooks(params: {
@@ -155,17 +165,31 @@ function resolveProviderPluginsForHooks(params: {
   if (cached) {
     return cached;
   }
-  const resolved = resolvePluginProviders({
-    ...params,
-    workspaceDir,
-    env,
-    activate: false,
-    cache: false,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
-  });
-  cacheBucket.set(cacheKey, resolved);
-  return resolved;
+  // Reentrancy bailout: if we are already inside a provider-plugin
+  // resolution call (e.g. a plugin's register() or top-level module code
+  // triggered another normalizeProviderConfigWithPlugin), return an empty
+  // list to break the recursive cycle.  This check intentionally sits
+  // *after* the cache lookup so that already-cached provider keys are
+  // still served correctly during reentrant resolution.
+  if (resolvingProviderPluginsForHooks) {
+    return [];
+  }
+  resolvingProviderPluginsForHooks = true;
+  try {
+    const resolved = resolvePluginProviders({
+      ...params,
+      workspaceDir,
+      env,
+      activate: false,
+      cache: false,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
+    });
+    cacheBucket.set(cacheKey, resolved);
+    return resolved;
+  } finally {
+    resolvingProviderPluginsForHooks = false;
+  }
 }
 
 function resolveProviderPluginsForCatalogHooks(params: {

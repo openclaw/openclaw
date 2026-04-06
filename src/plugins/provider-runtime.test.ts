@@ -1280,4 +1280,52 @@ describe("provider-runtime", () => {
       }),
     );
   });
+
+  it("does not stack-overflow when resolvePluginProviders reentrantly triggers provider hook resolution", () => {
+    // Regression test for #61922 / #61938: when loadOpenClawPlugins (called
+    // via resolvePluginProviders) reentrantly triggers
+    // normalizeProviderConfigWithPlugin during plugin module loading, the
+    // reentrancy guard must return an empty list instead of recursing.
+    let callDepth = 0;
+    resolvePluginProvidersMock.mockImplementation(() => {
+      callDepth++;
+      if (callDepth === 1) {
+        // Simulate the reentrant call that happens when a plugin's
+        // register() or top-level module code triggers provider config
+        // normalization, which calls resolveProviderPluginsForHooks again.
+        const reentrantResult = normalizeProviderConfigWithPlugin({
+          provider: "reentrant-provider",
+          context: {
+            provider: "reentrant-provider",
+            providerConfig: {
+              baseUrl: "https://example.com",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        });
+        // The reentrant call should safely return undefined (no plugin
+        // matched) instead of blowing the stack.
+        expect(reentrantResult).toBeUndefined();
+      }
+      return [];
+    });
+
+    // The outer call should complete without throwing RangeError.
+    const result = normalizeProviderConfigWithPlugin({
+      provider: "demo",
+      context: {
+        provider: "demo",
+        providerConfig: { baseUrl: "https://example.com", api: "openai-completions", models: [] },
+      },
+    });
+
+    expect(result).toBeUndefined();
+    // resolvePluginProviders should have been called exactly twice:
+    // once for the outer resolveProviderRuntimePlugin lookup, and once
+    // for the outer resolveProviderPluginsForHooks fallback.  The
+    // reentrant calls inside callDepth===1 are short-circuited by the
+    // guard and never reach resolvePluginProviders.
+    expect(callDepth).toBe(2);
+  });
 });
