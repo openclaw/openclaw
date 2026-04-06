@@ -89,6 +89,9 @@ export type AppViewState = {
   sidebarContent: string | null;
   sidebarError: string | null;
   splitRatio: number;
+  // Session sidebar
+  sessionSidebarOpen: boolean;
+  sessionSidebarOnSessionSelect?: (key: string) => void;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
   devicesLoading: boolean;
   devicesError: string | null;
