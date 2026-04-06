@@ -409,6 +409,27 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects remote config.patch when it changes plugin config", async () => {
+    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-remote-plugin-config", {
+        action: "config.patch",
+        gatewayUrl: "wss://gateway.example",
+        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("rejects config.patch when a legacy tools.bash alias changes exec security", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
@@ -627,6 +648,55 @@ describe("gateway tool", () => {
     }`;
 
     await tool.execute("call-reordered-dangerous-mapping", {
+      action: "config.apply",
+      raw,
+    });
+
+    expectConfigMutationCall({
+      callGatewayTool: vi.mocked(callGatewayTool),
+      action: "config.apply",
+      raw,
+      sessionKey,
+    });
+  });
+
+  it("allows config.apply when a dangerous legacy hook mapping only gains an id", async () => {
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            hooks: {
+              mappings: [
+                {
+                  channel: "gmail",
+                  allowUnsafeExternalContent: true,
+                },
+              ],
+            },
+            tools: {
+              exec: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool(sessionKey);
+    const raw = `{
+      hooks: {
+        mappings: [
+          { id: "gmail-a", channel: "gmail", allowUnsafeExternalContent: true }
+        ]
+      },
+      tools: { exec: { ask: "on-miss", security: "allowlist" } }
+    }`;
+
+    await tool.execute("call-legacy-mapping-add-id", {
       action: "config.apply",
       raw,
     });

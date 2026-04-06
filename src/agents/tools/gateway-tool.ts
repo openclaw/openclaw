@@ -4,6 +4,7 @@ import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -95,53 +96,105 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
   return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
-// Normalize a dangerous flag path using the mapping's id field (if present) so that
-// reordering an existing dangerous mapping does not look like a newly enabled flag,
-// while still detecting when a new mapping identity gains a dangerous flag.
-function normalizeDangerousConfigFlag(flag: string, config: Record<string, unknown>): string {
-  return flag.replace(/^(hooks\.mappings)\[(\d+)\]/, (_, prefix: string, indexStr: string) => {
-    const index = parseInt(indexStr, 10);
-    const mappings = (config as { hooks?: { mappings?: unknown[] } }).hooks?.mappings;
-    if (!Array.isArray(mappings)) {
-      return `${prefix}[${indexStr}]`;
+type DangerousFlagToken = {
+  fingerprintIdentity?: string;
+  idIdentity?: string;
+  identities: string[];
+  renderedFlag: string;
+};
+
+function toStableJsonWithoutMappingId(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => toStableJsonWithoutMappingId(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(record)
+      .filter((key) => key !== "id")
+      .toSorted()
+      .map((key) => [key, toStableJsonWithoutMappingId(record[key])]),
+  );
+}
+
+function createDangerousConfigFlagToken(
+  flag: string,
+  config: Record<string, unknown>,
+): DangerousFlagToken {
+  const hookMatch = /^hooks\.mappings\[(\d+)\]\.(.+)$/.exec(flag);
+  if (!hookMatch) {
+    return { identities: [flag], renderedFlag: flag };
+  }
+
+  const [, indexStr, suffix] = hookMatch;
+  const index = parseInt(indexStr, 10);
+  const mappings = (config as { hooks?: { mappings?: unknown[] } }).hooks?.mappings;
+  const identities = [`hooks.mappings[index=${index}].${suffix}`];
+  if (!Array.isArray(mappings)) {
+    return { identities, renderedFlag: flag };
+  }
+
+  const mapping = mappings[index];
+  if (!mapping || typeof mapping !== "object") {
+    return { identities, renderedFlag: flag };
+  }
+
+  let idIdentity: string | undefined;
+  const id = (mapping as Record<string, unknown>).id;
+  if (typeof id === "string" && id.trim()) {
+    idIdentity = `hooks.mappings[id=${id}].${suffix}`;
+    identities.unshift(idIdentity);
+  }
+  const fingerprintIdentity = `hooks.mappings[fingerprint=${JSON.stringify(toStableJsonWithoutMappingId(mapping))}].${suffix}`;
+  identities.unshift(fingerprintIdentity);
+  return { fingerprintIdentity, idIdentity, identities, renderedFlag: flag };
+}
+
+function takeMatchingDangerousFlag(
+  remainingCurrentTokens: DangerousFlagToken[],
+  nextToken: DangerousFlagToken,
+): boolean {
+  const matchIndex = remainingCurrentTokens.findIndex((currentToken) => {
+    if (currentToken.idIdentity && nextToken.idIdentity) {
+      return currentToken.idIdentity === nextToken.idIdentity;
     }
-    const mapping = mappings[index];
-    if (mapping && typeof mapping === "object") {
-      const id = (mapping as Record<string, unknown>).id;
-      if (typeof id === "string") {
-        return `${prefix}[id=${id}]`;
-      }
-    }
-    return `${prefix}[${indexStr}]`;
+    return currentToken.identities.some((identity) => nextToken.identities.includes(identity));
   });
+  if (matchIndex < 0) {
+    return false;
+  }
+  remainingCurrentTokens.splice(matchIndex, 1);
+  return true;
 }
 
 function collectNewlyEnabledDangerousConfigFlags(
   currentConfig: Record<string, unknown>,
   nextConfig: Record<string, unknown>,
 ): string[] {
-  const currentFlagCounts = new Map<string, number>();
-  for (const flag of collectEnabledInsecureOrDangerousFlags(currentConfig as OpenClawConfig)) {
-    const normalizedFlag = normalizeDangerousConfigFlag(flag, currentConfig);
-    currentFlagCounts.set(normalizedFlag, (currentFlagCounts.get(normalizedFlag) ?? 0) + 1);
-  }
+  const remainingCurrentTokens = collectEnabledInsecureOrDangerousFlags(
+    currentConfig as OpenClawConfig,
+  ).map((flag) => createDangerousConfigFlagToken(flag, currentConfig));
   // Honor the legacy tools.bash.applyPatch.workspaceOnly alias in the baseline so that
   // canonicalizing an already-dangerous legacy config to tools.exec.* is not treated as
   // a newly enabled dangerous flag.
   if (getValueAtPath(currentConfig, "tools.exec.applyPatch.workspaceOnly") === false) {
     const key = "tools.exec.applyPatch.workspaceOnly=false";
-    if (!currentFlagCounts.has(key)) {
-      currentFlagCounts.set(key, 1);
+    if (
+      !remainingCurrentTokens.some((token) =>
+        token.identities.includes("tools.exec.applyPatch.workspaceOnly=false"),
+      )
+    ) {
+      remainingCurrentTokens.push(createDangerousConfigFlagToken(key, currentConfig));
     }
   }
-  const seenNextFlagCounts = new Map<string, number>();
   const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig).filter(
-    (flag) => {
-      const normalizedFlag = normalizeDangerousConfigFlag(flag, nextConfig);
-      const nextCount = (seenNextFlagCounts.get(normalizedFlag) ?? 0) + 1;
-      seenNextFlagCounts.set(normalizedFlag, nextCount);
-      return nextCount > (currentFlagCounts.get(normalizedFlag) ?? 0);
-    },
+    (flag) =>
+      !takeMatchingDangerousFlag(
+        remainingCurrentTokens,
+        createDangerousConfigFlagToken(flag, nextConfig),
+      ),
   );
   if (
     getValueAtPath(currentConfig, "tools.exec.applyPatch.workspaceOnly") !== false &&
@@ -153,9 +206,18 @@ function collectNewlyEnabledDangerousConfigFlags(
   return nextFlags;
 }
 
+function isRemoteGatewayTarget(gatewayUrl: string | undefined): boolean {
+  const details = buildGatewayConnectionDetails(
+    gatewayUrl ? { url: gatewayUrl, urlSource: "cli" } : undefined,
+  );
+  const hostname = new URL(details.url).hostname.toLowerCase();
+  return hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1";
+}
+
 function assertGatewayConfigMutationAllowed(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;
+  gatewayUrl?: string;
   raw: string;
 }): void {
   const parsed = parseGatewayConfigMutationRaw(params.raw, params.action);
@@ -175,6 +237,17 @@ function assertGatewayConfigMutationAllowed(params: {
   if (changedProtectedPaths.length > 0) {
     throw new Error(
       `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+    );
+  }
+  if (
+    isRemoteGatewayTarget(params.gatewayUrl) &&
+    !isDeepStrictEqual(
+      getValueAtCanonicalPath(params.currentConfig, "plugins.entries"),
+      getValueAtCanonicalPath(nextConfig, "plugins.entries"),
+    )
+  ) {
+    throw new Error(
+      `gateway ${params.action} cannot change plugin config on remote gateways because dangerous plugin flags are host-specific`,
     );
   }
   const newlyEnabledDangerousFlags = collectNewlyEnabledDangerousConfigFlags(
@@ -343,6 +416,7 @@ export function createGatewayTool(opts?: {
         assertGatewayConfigMutationAllowed({
           action: "config.apply",
           currentConfig: snapshotConfig,
+          gatewayUrl: gatewayOpts.gatewayUrl,
           raw,
         });
         const result = await callGatewayTool("config.apply", gatewayOpts, {
@@ -360,6 +434,7 @@ export function createGatewayTool(opts?: {
         assertGatewayConfigMutationAllowed({
           action: "config.patch",
           currentConfig: snapshotConfig,
+          gatewayUrl: gatewayOpts.gatewayUrl,
           raw,
         });
         const result = await callGatewayTool("config.patch", gatewayOpts, {
