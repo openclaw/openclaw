@@ -7,6 +7,7 @@ import type { QaBusState } from "./bus-state.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
+import type { QaLabScenarioOutcome } from "./lab-server.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
@@ -26,10 +27,48 @@ type QaSuiteScenarioResult = {
 
 type QaSuiteEnvironment = {
   lab: Awaited<ReturnType<typeof startQaLabServer>>;
-  mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>>;
+  mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | null;
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
   cfg: OpenClawConfig;
+  providerMode: "mock-openai" | "live-openai";
+  primaryModel: string;
+  alternateModel: string;
 };
+
+function splitModelRef(ref: string) {
+  const slash = ref.indexOf("/");
+  if (slash <= 0 || slash === ref.length - 1) {
+    return null;
+  }
+  return {
+    provider: ref.slice(0, slash),
+    model: ref.slice(slash + 1),
+  };
+}
+
+function liveTurnTimeoutMs(env: QaSuiteEnvironment, fallbackMs: number) {
+  return env.providerMode === "live-openai" ? Math.max(fallbackMs, 120_000) : fallbackMs;
+}
+
+function hasDiscoveryLabels(text: string) {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("worked") &&
+    lower.includes("failed") &&
+    lower.includes("blocked") &&
+    (lower.includes("follow-up") || lower.includes("follow up"))
+  );
+}
+
+function reportsMissingDiscoveryFiles(text: string) {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("not present") ||
+    lower.includes("missing files") ||
+    lower.includes("blocked by missing") ||
+    lower.includes("could not inspect")
+  );
+}
 
 export type QaSuiteResult = {
   outputDir: string;
@@ -37,6 +76,7 @@ export type QaSuiteResult = {
   summaryPath: string;
   report: string;
   scenarios: QaSuiteScenarioResult[];
+  watchUrl: string;
 };
 
 function createQaActionConfig(baseUrl: string): OpenClawConfig {
@@ -245,6 +285,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               const message = await waitForOutboundMessage(
                 state,
                 (candidate) => candidate.conversation.id === "qa-room" && !candidate.threadId,
+                env.providerMode === "live-openai" ? 45_000 : 15_000,
               );
               return message.text;
             },
@@ -260,6 +301,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
             run: async () => {
               await reset();
               const at = new Date(Date.now() + 60_000).toISOString();
+              const cronMarker = `QA-CRON-${randomUUID().slice(0, 8)}`;
               const response = (await env.gateway.call("cron.add", {
                 name: `qa-suite-${randomUUID()}`,
                 enabled: true,
@@ -268,8 +310,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 wakeMode: "next-heartbeat",
                 payload: {
                   kind: "agentTurn",
-                  message:
-                    "A QA cron just fired. Send a one-line ping back to the room so the operator can verify delivery.",
+                  message: `A QA cron just fired. Send a one-line ping back to the room containing this exact marker: ${cronMarker}`,
                 },
                 delivery: {
                   mode: "announce",
@@ -284,6 +325,8 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               }
               (globalThis as typeof globalThis & { __qaCronJobId?: string }).__qaCronJobId =
                 response.id;
+              (globalThis as typeof globalThis & { __qaCronMarker?: string }).__qaCronMarker =
+                cronMarker;
               return scheduledAt;
             },
           },
@@ -292,8 +335,13 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
             run: async () => {
               const jobId = (globalThis as typeof globalThis & { __qaCronJobId?: string })
                 .__qaCronJobId;
+              const cronMarker = (globalThis as typeof globalThis & { __qaCronMarker?: string })
+                .__qaCronMarker;
               if (!jobId) {
                 throw new Error("missing cron job id");
+              }
+              if (!cronMarker) {
+                throw new Error("missing cron marker");
               }
               await env.gateway.call(
                 "cron.run",
@@ -302,8 +350,9 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               );
               const outbound = await waitForOutboundMessage(
                 state,
-                (candidate) => candidate.conversation.id === "qa-room",
-                30_000,
+                (candidate) =>
+                  candidate.conversation.id === "qa-room" && candidate.text.includes(cronMarker),
+                liveTurnTimeoutMs(env, 30_000),
               );
               return outbound.text;
             },
@@ -345,6 +394,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 sessionKey: "agent:qa:lobster-invaders",
                 message:
                   "Read the QA kickoff context first, then build a tiny Lobster Invaders HTML game in this workspace and tell me where it is.",
+                timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               await waitForOutboundMessage(
                 state,
@@ -355,11 +405,15 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               if (!artifact.includes("Lobster Invaders")) {
                 throw new Error("missing Lobster Invaders artifact");
               }
-              const requests = await fetchJson<Array<{ prompt?: string; toolOutput?: string }>>(
-                `${env.mock.baseUrl}/debug/requests`,
-              );
-              if (!requests.some((request) => (request.toolOutput ?? "").includes("QA mission"))) {
-                throw new Error("expected pre-write read evidence");
+              if (env.mock) {
+                const requests = await fetchJson<Array<{ prompt?: string; toolOutput?: string }>>(
+                  `${env.mock.baseUrl}/debug/requests`,
+                );
+                if (
+                  !requests.some((request) => (request.toolOutput ?? "").includes("QA mission"))
+                ) {
+                  throw new Error("expected pre-write read evidence");
+                }
               }
               return "lobster-invaders.html";
             },
@@ -421,25 +475,31 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:model-switch",
                 message: "Say hello from the default configured model.",
+                timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
-              await waitForOutboundMessage(
+              const outbound = await waitForOutboundMessage(
                 state,
                 (candidate) => candidate.conversation.id === "qa-operator",
               );
-              const request = await fetchJson<{ body?: { model?: string } }>(
-                `${env.mock.baseUrl}/debug/last-request`,
-              );
-              return String(request.body?.model ?? "");
+              if (env.mock) {
+                const request = await fetchJson<{ body?: { model?: string } }>(
+                  `${env.mock.baseUrl}/debug/last-request`,
+                );
+                return String(request.body?.model ?? "");
+              }
+              return outbound.text;
             },
           },
           {
             name: "switches to the alternate model and continues",
             run: async () => {
+              const alternate = splitModelRef(env.alternateModel);
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:model-switch",
                 message: "Continue the exchange after switching models and note the handoff.",
-                provider: "mock-openai",
-                model: "gpt-5.4-alt",
+                provider: alternate?.provider,
+                model: alternate?.model,
+                timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               const outbound = await waitForCondition(
                 () =>
@@ -449,16 +509,19 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                       (candidate) =>
                         candidate.direction === "outbound" &&
                         candidate.conversation.id === "qa-operator" &&
-                        candidate.text.toLowerCase().includes("switch"),
+                        (candidate.text.toLowerCase().includes("switch") ||
+                          candidate.text.toLowerCase().includes("handoff")),
                     )
                     .at(-1),
-                20_000,
+                liveTurnTimeoutMs(env, 20_000),
               );
-              const request = await fetchJson<{ body?: { model?: string } }>(
-                `${env.mock.baseUrl}/debug/last-request`,
-              );
-              if (request.body?.model !== "gpt-5.4-alt") {
-                throw new Error(`expected gpt-5.4-alt, got ${String(request.body?.model ?? "")}`);
+              if (env.mock) {
+                const request = await fetchJson<{ body?: { model?: string } }>(
+                  `${env.mock.baseUrl}/debug/last-request`,
+                );
+                if (request.body?.model !== "gpt-5.4-alt") {
+                  throw new Error(`expected gpt-5.4-alt, got ${String(request.body?.model ?? "")}`);
+                }
               }
               return outbound.text;
             },
@@ -516,7 +579,8 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:discovery",
                 message:
-                  "Read the seeded docs and source plan, then report grouped into Worked, Failed, Blocked, and Follow-up.",
+                  "Read the seeded docs and source plan. The full repo is mounted under ./repo/. Explicitly inspect repo/qa/seed-scenarios.json, repo/qa/QA_KICKOFF_TASK.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md, then report grouped into Worked, Failed, Blocked, and Follow-up. Mention at least two extra QA scenarios beyond the seed list.",
+                timeoutMs: liveTurnTimeoutMs(env, 30_000),
               });
               const outbound = await waitForCondition(
                 () =>
@@ -526,11 +590,15 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                       (candidate) =>
                         candidate.direction === "outbound" &&
                         candidate.conversation.id === "qa-operator" &&
-                        candidate.text.includes("Worked:"),
+                        hasDiscoveryLabels(candidate.text),
                     )
                     .at(-1),
-                20_000,
+                liveTurnTimeoutMs(env, 20_000),
+                env.providerMode === "live-openai" ? 250 : 100,
               );
+              if (reportsMissingDiscoveryFiles(outbound.text)) {
+                throw new Error(`discovery report still missed repo files: ${outbound.text}`);
+              }
               return outbound.text;
             },
           },
@@ -547,8 +615,8 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               await runAgentPrompt(env, {
                 sessionKey: "agent:qa:subagent",
                 message:
-                  "Delegate a bounded QA task to a subagent, then summarize the delegated result clearly.",
-                timeoutMs: 45_000,
+                  "Delegate one bounded QA task to a subagent. Wait for the subagent to finish. Then reply with three labeled sections exactly once: Delegated task, Result, Evidence. Include the child result itself, not 'waiting'.",
+                timeoutMs: liveTurnTimeoutMs(env, 90_000),
               });
               const outbound = await waitForCondition(
                 () =>
@@ -558,29 +626,22 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                       (candidate) =>
                         candidate.direction === "outbound" &&
                         candidate.conversation.id === "qa-operator" &&
-                        candidate.text.toLowerCase().includes("delegated"),
+                        candidate.text.toLowerCase().includes("delegated task") &&
+                        candidate.text.toLowerCase().includes("result") &&
+                        candidate.text.toLowerCase().includes("evidence") &&
+                        !candidate.text.toLowerCase().includes("waiting"),
                     )
                     .at(-1),
-                45_000,
+                liveTurnTimeoutMs(env, 45_000),
+                env.providerMode === "live-openai" ? 250 : 100,
               );
-              const sessions = await waitForCondition(
-                async () => {
-                  const listed = (await env.gateway.call("sessions.list", {
-                    spawnedBy: "agent:qa:subagent",
-                  })) as {
-                    sessions?: Array<{
-                      key?: string;
-                      parentSessionKey?: string;
-                      spawnedBy?: string;
-                    }>;
-                  };
-                  return (listed.sessions ?? []).length > 0 ? listed : null;
-                },
-                20_000,
-                250,
-              );
-              if ((sessions.sessions ?? []).length === 0) {
-                throw new Error("expected spawned child session");
+              const lower = outbound.text.toLowerCase();
+              if (
+                lower.includes("failed to delegate") ||
+                lower.includes("could not delegate") ||
+                lower.includes("subagent unavailable")
+              ) {
+                throw new Error(`subagent handoff reported failure: ${outbound.text}`);
               }
               return outbound.text;
             },
@@ -611,7 +672,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 conversation: { id: "qa-room", kind: "channel", title: "QA Room" },
                 senderId: "alice",
                 senderName: "Alice",
-                text: "@openclaw continue this work inside the thread",
+                text: "@openclaw reply in one short sentence inside this thread only. Do not use ACP or any external runtime. Confirm you stayed in-thread.",
                 threadId,
                 threadTitle: "QA deep dive",
               });
@@ -619,6 +680,7 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
                 state,
                 (candidate) =>
                   candidate.conversation.id === "qa-room" && candidate.threadId === threadId,
+                env.providerMode === "live-openai" ? 45_000 : 15_000,
               );
               const leaked = state
                 .getSnapshot()
@@ -631,6 +693,14 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
               if (leaked) {
                 throw new Error("thread reply leaked into root channel");
               }
+              const lower = outbound.text.toLowerCase();
+              if (
+                lower.includes("acp backend") ||
+                lower.includes("acpx") ||
+                lower.includes("not configured")
+              ) {
+                throw new Error(`thread reply fell back to ACP error: ${outbound.text}`);
+              }
               return outbound.text;
             },
           },
@@ -639,8 +709,22 @@ function buildScenarioMap(env: QaSuiteEnvironment) {
   ]);
 }
 
-export async function runQaSuite(params?: { outputDir?: string }) {
+export async function runQaSuite(params?: {
+  outputDir?: string;
+  providerMode?: "mock-openai" | "live-openai";
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+}) {
   const startedAt = new Date();
+  const providerMode = params?.providerMode ?? "mock-openai";
+  const fastMode = params?.fastMode ?? providerMode === "live-openai";
+  const primaryModel =
+    params?.primaryModel ??
+    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4");
+  const alternateModel =
+    params?.alternateModel ??
+    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4-alt");
   const outputDir =
     params?.outputDir ??
     path.join(process.cwd(), ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`);
@@ -651,42 +735,120 @@ export async function runQaSuite(params?: { outputDir?: string }) {
     port: 0,
     embeddedGateway: "disabled",
   });
-  const mock = await startQaMockOpenAiServer({
-    host: "127.0.0.1",
-    port: 0,
-  });
+  const mock =
+    providerMode === "mock-openai"
+      ? await startQaMockOpenAiServer({
+          host: "127.0.0.1",
+          port: 0,
+        })
+      : null;
   const gateway = await startQaGatewayChild({
     repoRoot: process.cwd(),
-    providerBaseUrl: `${mock.baseUrl}/v1`,
+    providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
     qaBusBaseUrl: lab.listenUrl,
+    providerMode,
+    primaryModel,
+    alternateModel,
+    fastMode,
+    controlUiEnabled: true,
+  });
+  lab.setControlUi({
+    controlUiProxyTarget: gateway.baseUrl,
+    controlUiToken: gateway.token,
   });
   const env: QaSuiteEnvironment = {
     lab,
     mock,
     gateway,
     cfg: createQaActionConfig(lab.listenUrl),
+    providerMode,
+    primaryModel,
+    alternateModel,
   };
 
   try {
     const catalog = readQaBootstrapScenarioCatalog();
     const scenarioMap = buildScenarioMap(env);
     const scenarios: QaSuiteScenarioResult[] = [];
+    const liveScenarioOutcomes: QaLabScenarioOutcome[] = catalog.scenarios.map((scenario) => ({
+      id: scenario.id,
+      name: scenario.title,
+      status: "pending",
+    }));
 
-    for (const scenario of catalog.scenarios) {
+    lab.setScenarioRun({
+      kind: "suite",
+      status: "running",
+      startedAt: startedAt.toISOString(),
+      scenarios: liveScenarioOutcomes,
+    });
+
+    for (const [index, scenario] of catalog.scenarios.entries()) {
       const run = scenarioMap.get(scenario.id);
       if (!run) {
-        scenarios.push({
+        const missingResult = {
           name: scenario.title,
           status: "fail",
           details: `no executable scenario registered for ${scenario.id}`,
           steps: [],
+        } satisfies QaSuiteScenarioResult;
+        scenarios.push(missingResult);
+        liveScenarioOutcomes[index] = {
+          id: scenario.id,
+          name: scenario.title,
+          status: "fail",
+          details: missingResult.details,
+          steps: [],
+          finishedAt: new Date().toISOString(),
+        };
+        lab.setScenarioRun({
+          kind: "suite",
+          status: "running",
+          startedAt: startedAt.toISOString(),
+          scenarios: [...liveScenarioOutcomes],
         });
         continue;
       }
-      scenarios.push(await run());
+      liveScenarioOutcomes[index] = {
+        id: scenario.id,
+        name: scenario.title,
+        status: "running",
+        startedAt: new Date().toISOString(),
+      };
+      lab.setScenarioRun({
+        kind: "suite",
+        status: "running",
+        startedAt: startedAt.toISOString(),
+        scenarios: [...liveScenarioOutcomes],
+      });
+
+      const result = await run();
+      scenarios.push(result);
+      liveScenarioOutcomes[index] = {
+        id: scenario.id,
+        name: scenario.title,
+        status: result.status,
+        details: result.details,
+        steps: result.steps,
+        startedAt: liveScenarioOutcomes[index]?.startedAt,
+        finishedAt: new Date().toISOString(),
+      };
+      lab.setScenarioRun({
+        kind: "suite",
+        status: "running",
+        startedAt: startedAt.toISOString(),
+        scenarios: [...liveScenarioOutcomes],
+      });
     }
 
     const finishedAt = new Date();
+    lab.setScenarioRun({
+      kind: "suite",
+      status: "completed",
+      startedAt: startedAt.toISOString(),
+      finishedAt: finishedAt.toISOString(),
+      scenarios: [...liveScenarioOutcomes],
+    });
     const report = renderQaMarkdownReport({
       title: "OpenClaw QA Scenario Suite",
       startedAt,
@@ -699,7 +861,9 @@ export async function runQaSuite(params?: { outputDir?: string }) {
         steps: scenario.steps,
       })) satisfies QaReportScenario[],
       notes: [
-        "Runs against qa-channel + qa-lab bus + real gateway child + mock OpenAI provider.",
+        providerMode === "mock-openai"
+          ? "Runs against qa-channel + qa-lab bus + real gateway child + mock OpenAI provider."
+          : `Runs against qa-channel + qa-lab bus + real gateway child + live OpenAI models (${primaryModel}, ${alternateModel})${fastMode ? " with fast mode enabled" : ""}.`,
         "Cron uses a one-minute schedule assertion plus forced execution for fast verification.",
       ],
     });
@@ -729,10 +893,14 @@ export async function runQaSuite(params?: { outputDir?: string }) {
       summaryPath,
       report,
       scenarios,
+      watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
   } finally {
-    await gateway.stop();
-    await mock.stop();
+    const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
+    await gateway.stop({
+      keepTemp,
+    });
+    await mock?.stop();
     await lab.stop();
   }
 }

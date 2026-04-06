@@ -34,4 +34,10 @@ The mounted repo source should be available read-only under \`./repo/\`.
       await fs.writeFile(path.join(params.workspaceDir, name), `${body.trim()}\n`, "utf8");
     }),
   );
+
+  if (params.repoRoot) {
+    const repoLinkPath = path.join(params.workspaceDir, "repo");
+    await fs.rm(repoLinkPath, { force: true, recursive: true });
+    await fs.symlink(params.repoRoot, repoLinkPath, "dir");
+  }
 }

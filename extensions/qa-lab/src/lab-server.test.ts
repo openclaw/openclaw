@@ -222,4 +222,71 @@ describe("qa-lab server", () => {
     };
     expect(snapshot.messages.filter((message) => message.direction === "outbound")).toHaveLength(0);
   });
+
+  it("exposes structured outcomes and can attach control-ui after startup", async () => {
+    const lab = await startQaLabServer({
+      host: "127.0.0.1",
+      port: 0,
+      embeddedGateway: "disabled",
+    });
+    cleanups.push(async () => {
+      await lab.stop();
+    });
+
+    const initialOutcomes = (await (await fetch(`${lab.baseUrl}/api/outcomes`)).json()) as {
+      run: null | unknown;
+    };
+    expect(initialOutcomes.run).toBeNull();
+
+    lab.setScenarioRun({
+      kind: "suite",
+      status: "running",
+      startedAt: "2026-04-06T09:00:00.000Z",
+      scenarios: [
+        {
+          id: "channel-chat-baseline",
+          name: "Channel baseline conversation",
+          status: "pass",
+          steps: [{ name: "reply check", status: "pass", details: "ok" }],
+          finishedAt: "2026-04-06T09:00:01.000Z",
+        },
+        {
+          id: "cron-one-minute-ping",
+          name: "Cron one-minute ping",
+          status: "running",
+          startedAt: "2026-04-06T09:00:02.000Z",
+        },
+      ],
+    });
+    lab.setControlUi({
+      controlUiUrl: "http://127.0.0.1:18789/",
+      controlUiToken: "late-token",
+    });
+
+    const bootstrap = (await (await fetch(`${lab.baseUrl}/api/bootstrap`)).json()) as {
+      controlUiEmbeddedUrl: string | null;
+    };
+    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:18789/#token=late-token");
+
+    const outcomes = (await (await fetch(`${lab.baseUrl}/api/outcomes`)).json()) as {
+      run: {
+        status: string;
+        counts: { total: number; passed: number; running: number };
+        scenarios: Array<{ id: string; status: string }>;
+      };
+    };
+    expect(outcomes.run.status).toBe("running");
+    expect(outcomes.run.counts).toEqual({
+      total: 2,
+      pending: 0,
+      running: 1,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+    });
+    expect(outcomes.run.scenarios.map((scenario) => scenario.id)).toEqual([
+      "channel-chat-baseline",
+      "cron-one-minute-ping",
+    ]);
+  });
 });
