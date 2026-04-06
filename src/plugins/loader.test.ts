@@ -1753,20 +1753,20 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     },
     {
-      name: "does not reuse cached registries across gateway subagent binding modes",
+      name: "does not reuse cached registries across different plugin SDK resolution preferences",
       setup: () => {
         useNoBundledPlugins();
         const plugin = writePlugin({
-          id: "cache-gateway-bindable",
-          filename: "cache-gateway-bindable.cjs",
-          body: `module.exports = { id: "cache-gateway-bindable", register() {} };`,
+          id: "cache-sdk-resolution",
+          filename: "cache-sdk-resolution.cjs",
+          body: `module.exports = { id: "cache-sdk-resolution", register() {} };`,
         });
 
         const options = {
           workspaceDir: plugin.dir,
           config: {
             plugins: {
-              allow: ["cache-gateway-bindable"],
+              allow: ["cache-sdk-resolution"],
               load: {
                 paths: [plugin.file],
               },
@@ -1779,15 +1779,41 @@ module.exports = { id: "throws-after-import", register() {} };`,
           loadVariant: () =>
             loadOpenClawPlugins({
               ...options,
-              runtimeOptions: {
-                allowGatewaySubagentBinding: true,
-              },
+              pluginSdkResolution: "workspace" as const,
             }),
         };
       },
     },
   ])("$name", ({ setup }) => {
     expectCacheMissThenHit(setup());
+  });
+
+  it("reuses cached registry across gateway subagent binding modes", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cache-gateway-shared",
+      filename: "cache-gateway-shared.cjs",
+      body: `module.exports = { id: "cache-gateway-shared", register() {} };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          allow: ["cache-gateway-shared"],
+          load: {
+            paths: [plugin.file],
+          },
+        },
+      },
+    };
+
+    const first = loadOpenClawPlugins(options);
+    const second = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: { allowGatewaySubagentBinding: true },
+    });
+    expect(second).toBe(first);
   });
 
   it("evicts least recently used registries when the loader cache exceeds its cap", () => {
