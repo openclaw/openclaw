@@ -288,6 +288,7 @@ function buildAggregateToolResultReplacements(params: {
         (item.entry.message as { role?: string }).role === "toolResult",
     )
     .map((item) => ({
+      index: item.index,
       entryId: item.entry.id,
       message: item.entry.message,
       textLength: getToolResultTextLength(item.entry.message),
@@ -306,7 +307,12 @@ function buildAggregateToolResultReplacements(params: {
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
 
-  for (const candidate of candidates.toSorted((a, b) => b.textLength - a.textLength)) {
+  for (const candidate of candidates.toSorted((a, b) => {
+    if (a.index !== b.index) {
+      return b.index - a.index;
+    }
+    return b.textLength - a.textLength;
+  })) {
     if (remainingReduction <= 0) {
       break;
     }

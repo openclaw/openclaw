@@ -424,6 +424,46 @@ describe("truncateOversizedToolResultsInSession", () => {
     ).toBe(false);
   });
 
+  it("prefers truncating newer aggregate tool-result entries before older larger ones", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage(makeUserMessage("hello"));
+    sm.appendMessage(makeAssistantMessage("calling tools"));
+    const olderLarge = "older-large ".repeat(2_000);
+    const newerEnough = "newer-enough ".repeat(1_400);
+    sm.appendMessage(makeToolResult(olderLarge, "call_1"));
+    sm.appendMessage(makeToolResult(newerEnough, "call_2"));
+    const sessionFile = sm.getSessionFile()!;
+
+    const beforeBranch = SessionManager.open(sessionFile).getBranch();
+    const beforeToolResults = beforeBranch.filter(
+      (entry) => entry.type === "message" && entry.message.role === "toolResult",
+    );
+    const beforeTexts = beforeToolResults.map((entry) =>
+      entry.type === "message" ? getFirstToolResultText(entry.message) : "",
+    );
+
+    const result = await truncateOversizedToolResultsInSession({
+      sessionFile,
+      contextWindowTokens: 128_000,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedCount).toBe(1);
+
+    const afterBranch = SessionManager.open(sessionFile).getBranch();
+    const afterToolResults = afterBranch.filter(
+      (entry) => entry.type === "message" && entry.message.role === "toolResult",
+    );
+    const afterTexts = afterToolResults.map((entry) =>
+      entry.type === "message" ? getFirstToolResultText(entry.message) : "",
+    );
+
+    expect(afterTexts[0]).toBe(beforeTexts[0]);
+    expect(afterTexts[1]).not.toBe(beforeTexts[1]);
+    expect(afterTexts[1]).toContain("truncated");
+  });
+
   it("allows persisted-session recovery truncation to shrink below the old 2k floor", async () => {
     const dir = await createTmpDir();
     const sm = SessionManager.create(dir, dir);
