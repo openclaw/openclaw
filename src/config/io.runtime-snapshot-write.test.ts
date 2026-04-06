@@ -1,12 +1,8 @@
-import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import {
-  clearConfigCache,
-  createConfigIO,
-  getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   loadConfig,
   projectConfigOntoRuntimeSourceSnapshot,
@@ -120,61 +116,6 @@ describe("runtime config snapshot writes", () => {
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     resetRuntimeConfigState();
     expect(getRuntimeConfigSourceSnapshot()).toBeNull();
-  });
-
-  it("keeps runtime snapshots after writeConfigFile clears parse cache (before first await)", async () => {
-    await withTempHome("openclaw-config-runtime-write-parse-cache-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const sourceConfig = createSourceConfig();
-      const runtimeConfig = createRuntimeConfig();
-
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf8");
-
-      try {
-        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-        const writePromise = writeConfigFile(loadConfig());
-        expect(getRuntimeConfigSnapshot()).not.toBeNull();
-        expect(getRuntimeConfigSourceSnapshot()).not.toBeNull();
-        await writePromise;
-      } finally {
-        resetRuntimeConfigState();
-      }
-    });
-  });
-
-  it("clearConfigCache still clears runtime snapshots (explicit invalidation)", () => {
-    setRuntimeConfigSnapshot(createRuntimeConfig(), createSourceConfig());
-    clearConfigCache();
-    expect(getRuntimeConfigSnapshot()).toBeNull();
-    expect(getRuntimeConfigSourceSnapshot()).toBeNull();
-  });
-
-  it("write listeners still see non-null runtime snapshots after setRuntimeConfigSnapshot + writeConfigFile(loadConfig())", async () => {
-    await withTempHome("openclaw-config-runtime-write-listener-snapshots-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const sourceConfig = createSourceConfig();
-      const runtimeConfig = createRuntimeConfig();
-
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, `${JSON.stringify(sourceConfig, null, 2)}\n`, "utf8");
-
-      let listenerCalls = 0;
-      const unsubscribe = registerConfigWriteListener(() => {
-        listenerCalls += 1;
-        expect(getRuntimeConfigSnapshot()).not.toBeNull();
-        expect(getRuntimeConfigSourceSnapshot()).not.toBeNull();
-      });
-
-      try {
-        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-        await writeConfigFile(loadConfig());
-        expect(listenerCalls).toBe(1);
-      } finally {
-        unsubscribe();
-        resetRuntimeConfigState();
-      }
-    });
   });
 
   it("preserves source secret refs when writeConfigFile receives runtime-resolved config", async () => {
@@ -344,84 +285,6 @@ describe("runtime config snapshot writes", () => {
         expect(seen[0]?.runtimeConfig.gateway?.port).toBe(19003);
       } finally {
         unsubscribe();
-        resetRuntimeConfigState();
-      }
-    });
-  });
-
-  it("forces a runtime reload after direct createConfigIO().writeConfigFile", async () => {
-    await withTempHome("openclaw-config-direct-io-write-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
-
-      try {
-        expect(loadConfig().gateway?.port).toBe(18789);
-        const io = createConfigIO();
-        await io.writeConfigFile({
-          ...loadConfig(),
-          gateway: { port: 19003 },
-        });
-
-        expect(loadConfig().gateway?.port).toBe(19003);
-      } finally {
-        resetRuntimeConfigState();
-      }
-    });
-  });
-
-  it("keeps runtime snapshot during direct createConfigIO().writeConfigFile until persistence succeeds", async () => {
-    await withTempHome("openclaw-config-direct-io-write-window-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
-
-      let releaseWriteGate!: () => void;
-      const writeGate = new Promise<void>((resolve) => {
-        releaseWriteGate = resolve;
-      });
-      let resolveWriteStarted!: () => void;
-      const writeStarted = new Promise<void>((resolve) => {
-        resolveWriteStarted = resolve;
-      });
-      let blockedTmpWrite = false;
-      const writeFileWithGate: typeof nodeFs.promises.writeFile = async (...args) => {
-        const [target] = args;
-        if (
-          !blockedTmpWrite &&
-          typeof target === "string" &&
-          target.startsWith(path.dirname(configPath)) &&
-          target.endsWith(".tmp")
-        ) {
-          blockedTmpWrite = true;
-          resolveWriteStarted();
-          await writeGate;
-        }
-        return await nodeFs.promises.writeFile(...args);
-      };
-
-      const io = createConfigIO({
-        fs: {
-          ...nodeFs,
-          promises: {
-            ...nodeFs.promises,
-            writeFile: writeFileWithGate,
-          },
-        } as unknown as typeof nodeFs,
-      });
-
-      try {
-        setRuntimeConfigSnapshot({ gateway: { port: 18789 } }, { gateway: { port: 18789 } });
-        const writePromise = io.writeConfigFile({ ...loadConfig(), gateway: { port: 19003 } });
-        await writeStarted;
-        expect(loadConfig().gateway?.port).toBe(18789);
-        expect(getRuntimeConfigSnapshot()).not.toBeNull();
-        releaseWriteGate();
-        await writePromise;
-        expect(getRuntimeConfigSnapshot()).toBeNull();
-        expect(loadConfig().gateway?.port).toBe(19003);
-      } finally {
-        releaseWriteGate?.();
         resetRuntimeConfigState();
       }
     });

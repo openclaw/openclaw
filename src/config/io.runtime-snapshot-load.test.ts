@@ -1,15 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import {
-  collectResolvedConfigSourceStatFingerprintSync,
-  getConfigStatFingerprintAtLastLoad,
   getRuntimeConfigSourceSnapshot,
   loadConfig,
   resetConfigRuntimeState,
-  resetConfigStatFingerprintAtLastLoadForTest,
-  setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
   writeConfigFile,
 } from "./io.js";
@@ -18,7 +14,6 @@ import type { OpenClawConfig } from "./types.js";
 function resetRuntimeConfigState(): void {
   setRuntimeConfigSnapshotRefreshHandler(null);
   resetConfigRuntimeState();
-  resetConfigStatFingerprintAtLastLoadForTest();
 }
 
 async function writeConfig(home: string, config: OpenClawConfig): Promise<string> {
@@ -29,26 +24,6 @@ async function writeConfig(home: string, config: OpenClawConfig): Promise<string
 }
 
 describe("loadConfig runtime snapshot pinning", () => {
-  afterEach(() => {
-    delete process.env.OPENCLAW_CONFIG_CACHE_MS;
-    delete process.env.OPENCLAW_DISABLE_CONFIG_CACHE;
-  });
-
-  it("prefers runtime snapshot over OPENCLAW_CONFIG_CACHE_MS parse cache", async () => {
-    await withTempHome("openclaw-config-runtime-load-cache-", async (home) => {
-      const configPath = await writeConfig(home, { gateway: { port: 18789 } });
-      try {
-        process.env.OPENCLAW_CONFIG_CACHE_MS = "60000";
-        resetRuntimeConfigState();
-        setRuntimeConfigSnapshot({ gateway: { port: 42424 } });
-        await fs.writeFile(configPath, "{ not valid json", "utf8");
-        expect(loadConfig().gateway?.port).toBe(42424);
-      } finally {
-        resetRuntimeConfigState();
-      }
-    });
-  });
-
   it("pins the first successful load in memory until the snapshot is cleared", async () => {
     await withTempHome("openclaw-config-runtime-load-pin-", async (home) => {
       await writeConfig(home, { gateway: { port: 18789 } });
@@ -85,29 +60,6 @@ describe("loadConfig runtime snapshot pinning", () => {
 
         await writeConfig(home, { gateway: { port: 19999 } });
         expect(loadConfig().gateway?.port).toBe(19002);
-      } finally {
-        resetRuntimeConfigState();
-      }
-    });
-  });
-
-  it("refreshes configStatFingerprintAtLastLoad when replacing the runtime snapshot", async () => {
-    await withTempHome("openclaw-config-runtime-load-fingerprint-", async (home) => {
-      await writeConfig(home, { gateway: { port: 18789 } });
-      try {
-        resetRuntimeConfigState();
-        expect(loadConfig().gateway?.port).toBe(18789);
-        const fingerprintBefore = getConfigStatFingerprintAtLastLoad();
-        expect(typeof fingerprintBefore).toBe("string");
-        expect(fingerprintBefore).toBe(collectResolvedConfigSourceStatFingerprintSync());
-
-        await writeConfig(home, { gateway: { port: 19007 }, session: { mainKey: "main" } });
-        const fingerprintAfterWrite = collectResolvedConfigSourceStatFingerprintSync();
-        expect(fingerprintAfterWrite).not.toBe(fingerprintBefore);
-
-        setRuntimeConfigSnapshot({ gateway: { port: 42424 } });
-        expect(loadConfig().gateway?.port).toBe(42424);
-        expect(getConfigStatFingerprintAtLastLoad()).toBe(fingerprintAfterWrite);
       } finally {
         resetRuntimeConfigState();
       }
