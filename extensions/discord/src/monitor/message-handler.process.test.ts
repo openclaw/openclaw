@@ -754,6 +754,68 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchArgs?.ctx?.MediaUrl).toBeUndefined();
     expect(dispatchArgs?.ctx?.MediaUrls).toBeUndefined();
   });
+
+  it("preserves forwarded snapshot text when substituting a DM preflight transcript", async () => {
+    const channelId = "dm-voice-process-forwarded-1";
+    transcribeFirstAudioMock.mockResolvedValueOnce("hello from discord voice");
+
+    const message = createDiscordMessage({
+      id: "voice-dm-process-forwarded-1",
+      channelId,
+      content: "",
+      author: { id: "42", bot: false, username: "user" },
+      attachments: [
+        {
+          content_type: "audio/ogg",
+          url: "https://cdn.discordapp.com/attachments/voice.ogg",
+          filename: "voice-message.ogg",
+        },
+      ],
+    });
+    (message as { rawData?: Record<string, unknown> }).rawData = {
+      message_snapshots: [
+        {
+          message: {
+            content: "forwarded hello",
+            embeds: [],
+            attachments: [],
+            author: {
+              id: "u2",
+              username: "Bob",
+              discriminator: "0",
+            },
+          },
+        },
+      ],
+    };
+    const data = {
+      channel_id: channelId,
+      author: message.author,
+      message,
+    } as import("./message-handler.preflight.test-helpers.js").DiscordMessageEvent;
+
+    const preflight = await preflightDiscordMessage(
+      createDiscordPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG as OpenClawConfig,
+        discordConfig: { dmPolicy: "open" },
+        data,
+        client: createDmClient(
+          channelId,
+        ) as import("./message-handler.preflight.test-helpers.js").DiscordClient,
+      }),
+    );
+
+    expect(preflight).not.toBeNull();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(preflight as any);
+
+    const dispatchArgs = dispatchInboundMessage.mock.calls.at(-1)?.[0] as
+      | { ctx?: Record<string, unknown> }
+      | undefined;
+    expect(dispatchArgs?.ctx?.Body).toEqual(expect.stringContaining("hello from discord voice"));
+    expect(dispatchArgs?.ctx?.Body).toEqual(expect.stringContaining("forwarded hello"));
+  });
 });
 
 describe("processDiscordMessage draft streaming", () => {

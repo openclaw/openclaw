@@ -107,6 +107,46 @@ function isPreflightAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
 
+function resolvePreflightTranscriptText(params: {
+  baseText: string;
+  messageText: string;
+  transcript?: string;
+  hasTypedText: boolean;
+}): { resolvedBaseText: string; resolvedMessageText: string } {
+  if (params.hasTypedText || !params.transcript) {
+    return {
+      resolvedBaseText: params.baseText,
+      resolvedMessageText: params.messageText,
+    };
+  }
+
+  if (!params.baseText) {
+    return {
+      resolvedBaseText: params.transcript,
+      resolvedMessageText: params.messageText || params.transcript,
+    };
+  }
+
+  if (params.messageText === params.baseText) {
+    return {
+      resolvedBaseText: params.transcript,
+      resolvedMessageText: params.transcript,
+    };
+  }
+
+  if (params.messageText.startsWith(`${params.baseText}\n`)) {
+    return {
+      resolvedBaseText: params.transcript,
+      resolvedMessageText: `${params.transcript}${params.messageText.slice(params.baseText.length)}`,
+    };
+  }
+
+  return {
+    resolvedBaseText: params.transcript,
+    resolvedMessageText: params.messageText.replace(params.baseText, params.transcript),
+  };
+}
+
 function isBoundThreadBotSystemMessage(params: {
   isBoundThreadSession: boolean;
   isBotAuthor: boolean;
@@ -799,9 +839,12 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const resolvedBaseText = !hasTypedText && preflightTranscript ? preflightTranscript : baseText;
-  const resolvedMessageText =
-    !hasTypedText && preflightTranscript ? preflightTranscript : messageText;
+  const { resolvedBaseText, resolvedMessageText } = resolvePreflightTranscriptText({
+    baseText,
+    messageText,
+    transcript: preflightTranscript,
+    hasTypedText,
+  });
 
   const mentionText = hasTypedText ? baseText : "";
   const { implicitMention, wasMentioned } = resolveDiscordMentionState({
