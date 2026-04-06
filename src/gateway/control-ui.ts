@@ -353,6 +353,12 @@ export function handleControlUiHttpRequest(
       agentId: identity.agentId,
       basePath,
     });
+    const escapedName = String(identity.name ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -362,7 +368,7 @@ export function handleControlUiHttpRequest(
     }
     sendJson(res, 200, {
       basePath,
-      assistantName: identity.name,
+      assistantName: escapedName,
       assistantAvatar: avatarValue ?? identity.avatar,
     } satisfies ControlUiBootstrapConfig);
     return true;
