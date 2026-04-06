@@ -1230,19 +1230,13 @@ export function attachGatewayWsMessageHandler(params: {
           const nodeSession = context.nodeRegistry.register(nextClient, {
             remoteIp: reportedClientIp,
           });
-          const instanceIdRaw = connectParams.client.instanceId;
-          const instanceId = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
-          const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-          if (instanceId) {
-            nodeIdsForPairing.add(instanceId);
-          }
-          for (const nodeId of nodeIdsForPairing) {
-            void updatePairedNodeMetadata(nodeId, {
-              lastConnectedAtMs: nodeSession.connectedAtMs,
-            }).catch((err) =>
-              logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
-            );
-          }
+          void updatePairedNodeMetadata(nodeSession.nodeId, {
+            lastConnectedAtMs: nodeSession.connectedAtMs,
+          }).catch((err) =>
+            logGateway.warn(
+              `failed to record last connect for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+            ),
+          );
           recordRemoteNodeInfo({
             nodeId: nodeSession.nodeId,
             displayName: nodeSession.displayName,
