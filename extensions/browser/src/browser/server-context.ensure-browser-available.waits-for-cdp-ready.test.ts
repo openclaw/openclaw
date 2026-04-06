@@ -3,7 +3,6 @@ import "./server-context.chrome-test-harness.js";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
-  PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS,
 } from "./cdp-timeouts.js";
 import * as chromeModule from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -104,6 +103,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
     };
     const ctx = createBrowserRouteContext({ getState: () => state });
     const profile = ctx.forProfile("openclaw");
+    const expectedRemoteHttpTimeoutMs = state.resolved.remoteCdpTimeoutMs;
+    const expectedRemoteWsTimeoutMs = state.resolved.remoteCdpHandshakeTimeoutMs;
 
     isChromeReachable.mockResolvedValueOnce(true);
     isChromeCdpReady.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -115,8 +116,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(isChromeCdpReady).toHaveBeenNthCalledWith(
       1,
       "ws://browserless:3001",
-      PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS,
-      3000,
+      expectedRemoteHttpTimeoutMs,
+      expectedRemoteWsTimeoutMs,
       {
         allowPrivateNetwork: true,
       },
@@ -124,8 +125,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(isChromeCdpReady).toHaveBeenNthCalledWith(
       2,
       "ws://browserless:3001",
-      PROFILE_ATTACH_RETRY_TIMEOUT_MS,
-      3000,
+      expectedRemoteHttpTimeoutMs,
+      expectedRemoteWsTimeoutMs,
       {
         allowPrivateNetwork: true,
       },
