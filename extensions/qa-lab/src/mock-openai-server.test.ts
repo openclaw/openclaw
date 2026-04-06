@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const QA_IMAGE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3RQQkAMAzAwPg33Wnos+wgBo40dboAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAC+Azy47PDiI4pA2wAAAABJRU5ErkJggg==";
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -330,6 +332,56 @@ describe("qa mock openai server", () => {
         },
       ],
     });
+  });
+
+  it("records image inputs and describes attached images", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "mock-openai/gpt-5.4",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Image understanding check: what do you see?" },
+              {
+                type: "input_image",
+                source: {
+                  type: "base64",
+                  mime_type: "image/png",
+                  data: QA_IMAGE_PNG_BASE64,
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    const text = payload.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text.toLowerCase()).toContain("red");
+    expect(text.toLowerCase()).toContain("blue");
+
+    const debug = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(debug.status).toBe(200);
+    expect(await debug.json()).toMatchObject([
+      expect.objectContaining({
+        imageInputCount: 1,
+      }),
+    ]);
   });
 
   it("ignores stale tool output from prior turns when planning the current turn", async () => {
