@@ -1,13 +1,17 @@
 import fs from "node:fs";
+import path from "node:path";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import { resolveUserPath } from "../../utils.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
   AUTH_STORE_VERSION,
   EXTERNAL_CLI_SYNC_TTL_MS,
+  LEGACY_AUTH_FILENAME,
   log,
+  OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import {
@@ -418,6 +422,61 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   return mutated;
 }
 
+type CodexCliAuthFile = {
+  auth_mode?: unknown;
+  tokens?: {
+    access_token?: unknown;
+    refresh_token?: unknown;
+    account_id?: unknown;
+  };
+};
+
+function resolveCodexCliAuthPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const rawHome = env.CODEX_HOME?.trim();
+  if (!rawHome) {
+    return undefined;
+  }
+  return path.join(resolveUserPath(rawHome, env), LEGACY_AUTH_FILENAME);
+}
+
+// Mirror Codex CLI ChatGPT OAuth into the runtime auth view without persisting
+// copied tokens into auth-profiles.json.
+function mergeCodexCliAuthFileIntoStore(
+  store: AuthProfileStore,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]) {
+    return false;
+  }
+  const authPath = resolveCodexCliAuthPath(env);
+  if (!authPath) {
+    return false;
+  }
+  const raw = loadJsonFile(authPath) as CodexCliAuthFile | null;
+  if (!raw || raw.auth_mode !== "chatgpt") {
+    return false;
+  }
+  const access =
+    typeof raw.tokens?.access_token === "string" ? raw.tokens.access_token.trim() : undefined;
+  const refresh =
+    typeof raw.tokens?.refresh_token === "string" ? raw.tokens.refresh_token.trim() : undefined;
+  const accountId =
+    typeof raw.tokens?.account_id === "string" ? raw.tokens.account_id.trim() : undefined;
+  if (!access || !refresh) {
+    return false;
+  }
+  store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID] = {
+    type: "oauth",
+    provider: "openai-codex",
+    access,
+    refresh,
+    expires: 0,
+    ...(accountId ? { accountId } : {}),
+    managedBy: "codex-cli",
+  };
+  return true;
+}
+
 function applyLegacyStore(store: AuthProfileStore, legacy: LegacyAuthStore): void {
   for (const [provider, cred] of Object.entries(legacy)) {
     const profileId = `${provider}:default`;
@@ -493,6 +552,7 @@ export function loadAuthProfileStore(): AuthProfileStore {
   if (asStore) {
     // Sync from external CLI tools on every load.
     syncExternalCliCredentialsTimed(asStore);
+    mergeCodexCliAuthFileIntoStore(asStore);
     return overlayExternalOAuthProfiles(asStore);
   }
   const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath());
@@ -504,11 +564,13 @@ export function loadAuthProfileStore(): AuthProfileStore {
     };
     applyLegacyStore(store, legacy);
     syncExternalCliCredentialsTimed(store);
+    mergeCodexCliAuthFileIntoStore(store);
     return overlayExternalOAuthProfiles(store);
   }
 
   const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
   syncExternalCliCredentialsTimed(store);
+  mergeCodexCliAuthFileIntoStore(store);
   return overlayExternalOAuthProfiles(store);
 }
 
@@ -528,6 +590,7 @@ function loadAuthProfileStoreForAgent(
       stateMtimeMs,
     });
     if (cached) {
+      mergeCodexCliAuthFileIntoStore(cached);
       return cached;
     }
   }
@@ -536,6 +599,7 @@ function loadAuthProfileStoreForAgent(
     // Runtime secret activation must remain read-only:
     // sync external CLI credentials in-memory, but never persist while readOnly.
     syncExternalCliCredentialsTimed(asStore, { log: !readOnly });
+    mergeCodexCliAuthFileIntoStore(asStore);
     if (!readOnly) {
       writeCachedAuthProfileStore({
         authPath,
@@ -583,6 +647,7 @@ function loadAuthProfileStoreForAgent(
   const mergedOAuth = mergeOAuthFileIntoStore(store);
   // Keep external CLI credentials visible in runtime even during read-only loads.
   syncExternalCliCredentialsTimed(store, { log: !readOnly });
+  mergeCodexCliAuthFileIntoStore(store);
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth);
   if (shouldWrite) {
@@ -669,6 +734,7 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
   savePersistedAuthProfileState(store, agentDir);
   const runtimeStore = cloneAuthProfileStore(store);
   syncExternalCliCredentialsTimed(runtimeStore, { log: false });
+  mergeCodexCliAuthFileIntoStore(runtimeStore);
   writeCachedAuthProfileStore({
     authPath,
     authMtimeMs: readAuthStoreMtimeMs(authPath),
