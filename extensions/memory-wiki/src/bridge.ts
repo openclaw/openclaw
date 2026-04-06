@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import { pathExists, resolveArtifactKey } from "./source-path-shared.js";
 import {
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
@@ -37,15 +38,6 @@ export type BridgeMemoryWikiResult = {
   pagePaths: string[];
 };
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
   const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
   const files: string[] = [];
@@ -60,11 +52,6 @@ async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
     }
   }
   return files.toSorted((left, right) => left.localeCompare(right));
-}
-
-async function resolveArtifactKey(absolutePath: string): Promise<string> {
-  const canonicalPath = await fs.realpath(absolutePath).catch(() => path.resolve(absolutePath));
-  return process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
 }
 
 async function collectWorkspaceArtifacts(

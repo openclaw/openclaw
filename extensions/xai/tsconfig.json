@@ -1,7 +1,22 @@
 {
   "extends": "../tsconfig.package-boundary.base.json",
   "compilerOptions": {
-    "rootDir": "."
+    "rootDir": ".",
+    "paths": {
+      "openclaw/extension-api": ["../../src/extensionAPI.ts"],
+      "openclaw/plugin-sdk": ["../../packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts"],
+      "openclaw/plugin-sdk/*": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts",
+        "../../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"
+      ],
+      "openclaw/plugin-sdk/account-id": ["../../src/plugin-sdk/account-id.ts"],
+      "@openclaw/*": ["../*"],
+      "@openclaw/plugin-sdk/*": ["../../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"],
+      "@openclaw/anthropic-vertex/api.js": ["./.boundary-stubs/anthropic-vertex-api.d.ts"],
+      "@openclaw/ollama/api.js": ["./.boundary-stubs/ollama-api.d.ts"],
+      "@openclaw/ollama/runtime-api.js": ["./.boundary-stubs/ollama-runtime-api.d.ts"],
+      "@openclaw/speech-core/runtime-api.js": ["./.boundary-stubs/speech-core-runtime-api.d.ts"]
+    }
   },
   "include": ["./*.ts", "./src/**/*.ts"],
   "exclude": ["./**/*.test.ts", "./dist/**", "./node_modules/**"]

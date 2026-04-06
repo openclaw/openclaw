@@ -25,10 +25,8 @@ vi.mock("./manifest-registry.js", () => ({
     mocks.loadPluginManifestRegistry(...args),
 }));
 
-import {
-  clearPluginDoctorContractRegistryCache,
-  listPluginDoctorLegacyConfigRules,
-} from "./doctor-contract-registry.js";
+let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.js").clearPluginDoctorContractRegistryCache;
+let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-doctor-contract-registry", tempDirs);
@@ -39,8 +37,7 @@ afterEach(() => {
 });
 
 describe("doctor-contract-registry getJiti", () => {
-  beforeEach(() => {
-    clearPluginDoctorContractRegistryCache();
+  beforeEach(async () => {
     mocks.createJiti.mockReset();
     mocks.discoverOpenClawPlugins.mockReset();
     mocks.loadPluginManifestRegistry.mockReset();
@@ -53,6 +50,10 @@ describe("doctor-contract-registry getJiti", () => {
         return () => ({ default: {} });
       },
     );
+    vi.resetModules();
+    ({ clearPluginDoctorContractRegistryCache, listPluginDoctorLegacyConfigRules } =
+      await import("./doctor-contract-registry.js"));
+    clearPluginDoctorContractRegistryCache();
   });
 
   it("disables native jiti loading on Windows for contract-api modules", () => {

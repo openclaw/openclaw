@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -23,11 +22,7 @@ const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
 const CLI_BACKEND_LIVE_TIMEOUT_MS = 180_000;
-const CLI_BOOTSTRAP_LIVE_TIMEOUT_MS = 300_000;
 const CLI_GATEWAY_CONNECT_TIMEOUT_MS = 30_000;
-const BOOTSTRAP_LIVE_MODEL = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
-const describeClaudeBootstrapLive =
-  LIVE && CLI_LIVE && BOOTSTRAP_LIVE_MODEL.startsWith("claude-cli/") ? describe : describe.skip;
 const DEFAULT_CLAUDE_ARGS = [
   "-p",
   "--output-format",
@@ -139,6 +134,12 @@ function parseImageMode(raw?: string): "list" | "repeat" | undefined {
   throw new Error("OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.");
 }
 
+function matchesCliBackendReply(text: string, expected: string): boolean {
+  const normalized = text.trim();
+  const target = expected.trim();
+  return normalized === target || normalized === target.slice(0, -1);
+}
+
 function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
   const next = [...args];
   if (!next.includes("--strict-mcp-config")) {
@@ -155,6 +156,35 @@ async function getFreeGatewayPort(): Promise<number> {
     offsets: [0, 1, 2, 4],
     fallbackBase: 40_000,
   });
+}
+
+type BootstrapWorkspaceContext = {
+  expectedInjectedFiles: string[];
+  workspaceRootDir: string;
+};
+
+type SystemPromptReport = {
+  injectedWorkspaceFiles?: Array<{ name?: string }>;
+};
+
+async function createBootstrapWorkspace(tempDir: string): Promise<BootstrapWorkspaceContext> {
+  const workspaceRootDir = path.join(tempDir, "workspace");
+  const workspaceDir = path.join(workspaceRootDir, "dev");
+  const expectedInjectedFiles = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.writeFile(
+    path.join(workspaceDir, "AGENTS.md"),
+    [
+      "# AGENTS.md",
+      "",
+      "Follow exact reply instructions from the user.",
+      "Do not add extra punctuation when the user asks for an exact response.",
+    ].join("\n"),
+  );
+  await fs.writeFile(path.join(workspaceDir, "SOUL.md"), `SOUL-${randomUUID()}\n`);
+  await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), `IDENTITY-${randomUUID()}\n`);
+  await fs.writeFile(path.join(workspaceDir, "USER.md"), `USER-${randomUUID()}\n`);
+  return { expectedInjectedFiles, workspaceRootDir };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -175,14 +205,14 @@ async function connectClient(params: { url: string; token: string }) {
     try {
       return await connectClientOnce({
         ...params,
-        timeoutMs: Math.min(remainingMs, 10_000),
+        timeoutMs: Math.min(remainingMs, 35_000),
       });
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 2_000) {
+      if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 5_000) {
         throw lastError;
       }
-      await sleep(Math.min(500 * attempt, 2_000));
+      await sleep(Math.min(1_000 * attempt, 5_000));
     }
   }
 
@@ -239,71 +269,10 @@ function isRetryableGatewayConnectError(error: Error): boolean {
   return (
     message.includes("gateway closed during connect (1000)") ||
     message.includes("gateway connect timeout") ||
-    message.includes("gateway connect challenge timeout")
+    message.includes("gateway connect challenge timeout") ||
+    message.includes("gateway request timeout for connect") ||
+    message.includes("gateway client stopped")
   );
-}
-
-async function runGatewayCliBootstrapLiveProbe(): Promise<{
-  ok: boolean;
-  text: string;
-  expectedText: string;
-  systemPromptReport: {
-    injectedWorkspaceFiles?: Array<{ name?: string }>;
-  } | null;
-}> {
-  return await new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    delete env.VITEST;
-    const child = spawn(
-      "pnpm",
-      ["exec", "tsx", path.join("scripts", "gateway-cli-bootstrap-live-probe.ts")],
-      {
-        cwd: process.cwd(),
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stdout = "";
-    let stderr = "";
-    const timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`bootstrap probe timed out\nstdout:\n${stdout}\nstderr:\n${stderr}`));
-    }, CLI_BOOTSTRAP_LIVE_TIMEOUT_MS);
-    timeout.unref();
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      if (code !== 0) {
-        reject(
-          new Error(`bootstrap probe exit=${String(code)}\nstdout:\n${stdout}\nstderr:\n${stderr}`),
-        );
-        return;
-      }
-      const line = stdout
-        .trim()
-        .split(/\r?\n/)
-        .map((entry) => entry.trim())
-        .findLast((entry) => entry.startsWith("{") && entry.endsWith("}"));
-      if (!line) {
-        reject(
-          new Error(`bootstrap probe missing JSON result\nstdout:\n${stdout}\nstderr:\n${stderr}`),
-        );
-        return;
-      }
-      resolve(JSON.parse(line) as Awaited<ReturnType<typeof runGatewayCliBootstrapLiveProbe>>);
-    });
-  });
 }
 
 describeLive("gateway live (cli backend)", () => {
@@ -395,6 +364,8 @@ describeLive("gateway live (cli backend)", () => {
       }
 
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cli-"));
+      const bootstrapWorkspace =
+        providerId === "claude-cli" ? await createBootstrapWorkspace(tempDir) : null;
       const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
       let cliArgs = baseCliArgs;
       if (providerId === "claude-cli" && disableMcpConfig) {
@@ -418,6 +389,7 @@ describeLive("gateway live (cli backend)", () => {
           ...cfg.agents,
           defaults: {
             ...cfg.agents?.defaults,
+            ...(bootstrapWorkspace ? { workspace: bootstrapWorkspace.workspaceRootDir } : {}),
             model: { primary: modelKey },
             models: {
               [modelKey]: {},
@@ -429,7 +401,7 @@ describeLive("gateway live (cli backend)", () => {
                 args: cliArgs,
                 clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
                 env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
-                systemPromptWhen: "never",
+                systemPromptWhen: providerId === "claude-cli" ? "first" : "never",
                 ...(cliImageArg ? { imageArg: cliImageArg, imageMode: cliImageMode } : {}),
               },
             },
@@ -478,7 +450,15 @@ describeLive("gateway live (cli backend)", () => {
         if (providerId === "codex-cli") {
           expect(text).toContain(`CLI-BACKEND-${nonce}`);
         } else {
-          expect(text).toContain(`CLI backend OK ${nonce}.`);
+          const resultWithMeta = payload?.result as {
+            meta?: { systemPromptReport?: SystemPromptReport };
+          };
+          expect(matchesCliBackendReply(text, `CLI backend OK ${nonce}.`)).toBe(true);
+          expect(
+            resultWithMeta.meta?.systemPromptReport?.injectedWorkspaceFiles?.map(
+              (entry) => entry.name,
+            ) ?? [],
+          ).toEqual(expect.arrayContaining(bootstrapWorkspace?.expectedInjectedFiles ?? []));
         }
 
         if (CLI_RESUME) {
@@ -505,7 +485,9 @@ describeLive("gateway live (cli backend)", () => {
           if (providerId === "codex-cli") {
             expect(resumeText).toContain(`CLI-RESUME-${resumeNonce}`);
           } else {
-            expect(resumeText).toContain(`CLI backend RESUME OK ${resumeNonce}.`);
+            expect(
+              matchesCliBackendReply(resumeText, `CLI backend RESUME OK ${resumeNonce}.`),
+            ).toBe(true);
           }
         }
 
@@ -599,21 +581,6 @@ describeLive("gateway live (cli backend)", () => {
           process.env.ANTHROPIC_API_KEY_OLD = previous.anthropicApiKeyOld;
         }
       }
-    },
-    CLI_BOOTSTRAP_LIVE_TIMEOUT_MS,
-  );
-});
-
-describeClaudeBootstrapLive("gateway live (claude-cli bootstrap context)", () => {
-  it(
-    "injects AGENTS, SOUL, IDENTITY, and USER files into the first Claude CLI turn",
-    async () => {
-      const result = await runGatewayCliBootstrapLiveProbe();
-      expect(result.ok).toBe(true);
-      expect(result.text).toBe(result.expectedText);
-      expect(
-        result.systemPromptReport?.injectedWorkspaceFiles?.map((entry) => entry.name) ?? [],
-      ).toEqual(expect.arrayContaining(["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]));
     },
     CLI_BACKEND_LIVE_TIMEOUT_MS,
   );

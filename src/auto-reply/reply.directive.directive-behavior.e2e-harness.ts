@@ -13,7 +13,7 @@ import {
   loadModelCatalogMock,
   runEmbeddedPiAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
-import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 type RunPreparedReply = typeof import("./reply/get-reply-run.js").runPreparedReply;
@@ -137,7 +137,7 @@ export function makeWhatsAppDirectiveConfig(
   defaults: Record<string, unknown>,
   extra: Record<string, unknown> = {},
 ) {
-  return withFastReplyConfig({
+  return withFullRuntimeReplyConfig({
     agents: {
       defaults: {
         workspace: path.join(home, "openclaw"),
@@ -259,7 +259,7 @@ export function installFreshDirectiveBehaviorReplyMocks(params?: {
 }
 
 export function makeRestrictedElevatedDisabledConfig(home: string) {
-  return {
+  return withFullRuntimeReplyConfig({
     agents: {
       defaults: {
         model: "anthropic/claude-opus-4-6",
@@ -281,5 +281,5 @@ export function makeRestrictedElevatedDisabledConfig(home: string) {
     },
     channels: { whatsapp: { allowFrom: ["+1222"] } },
     session: { store: path.join(home, "sessions.json") },
-  } as const;
+  } as const);
 }

@@ -3,11 +3,16 @@
   "compilerOptions": {
     "paths": {
       "openclaw/extension-api": ["../src/extensionAPI.ts"],
-      "openclaw/plugin-sdk": ["../src/plugin-sdk/index.ts"],
-      "openclaw/plugin-sdk/*": ["../src/plugin-sdk/*.ts"],
+      "openclaw/plugin-sdk": ["../packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts"],
+      "openclaw/plugin-sdk/*": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts",
+        "../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"
+      ],
       "openclaw/plugin-sdk/account-id": ["../src/plugin-sdk/account-id.ts"],
-      "@openclaw/*": ["../extensions/*"],
-      "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"]
+      "@openclaw/*": ["../packages/plugin-sdk/dist/packages/plugin-sdk/src/extensions/*"],
+      "@openclaw/plugin-sdk/*": [
+        "../packages/plugin-sdk/dist/packages/plugin-sdk/src/src/plugin-sdk/*"
+      ]
     }
   }
 }

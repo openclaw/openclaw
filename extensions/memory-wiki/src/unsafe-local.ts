@@ -5,6 +5,7 @@ import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import { pathExists, resolveArtifactKey } from "./source-path-shared.js";
 import {
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
@@ -22,20 +23,6 @@ type UnsafeLocalArtifact = {
 };
 
 const DIRECTORY_TEXT_EXTENSIONS = new Set([".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"]);
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveArtifactKey(absolutePath: string): Promise<string> {
-  const canonicalPath = await fs.realpath(absolutePath).catch(() => path.resolve(absolutePath));
-  return process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
-}
 
 function detectFenceLanguage(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();

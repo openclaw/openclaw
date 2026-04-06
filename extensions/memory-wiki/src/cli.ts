@@ -142,6 +142,11 @@ function normalizeCliStringList(values?: string[]): string[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function collectCliValues(value: string, acc: string[] = []) {
+  acc.push(value);
+  return acc;
+}
+
 function parseWikiSearchEnumOption<T extends string>(
   value: string,
   allowed: readonly T[],
@@ -161,6 +166,48 @@ async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }
     return await fs.readFile(params.bodyFile, "utf8");
   }
   throw new Error("wiki apply synthesis requires --body or --body-file.");
+}
+
+type MemoryWikiMutationResult = Awaited<ReturnType<typeof applyMemoryWikiMutation>>;
+
+function formatMemoryWikiMutationSummary(result: MemoryWikiMutationResult, json?: boolean): string {
+  if (json) {
+    return JSON.stringify(result, null, 2);
+  }
+  return `${result.changed ? "Updated" : "No changes for"} ${result.pagePath} via ${result.operation}. ${result.compile.updatedFiles.length > 0 ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.` : "Indexes unchanged."}`;
+}
+
+function formatJsonOrText<T>(
+  result: T,
+  json: boolean | undefined,
+  render: (result: T) => string,
+): string {
+  return json ? JSON.stringify(result, null, 2) : render(result);
+}
+
+function addWikiSearchConfigOptions<T extends Command>(command: T): T {
+  return command
+    .option(
+      "--backend <backend>",
+      `Search backend (${WIKI_SEARCH_BACKENDS.join(", ")})`,
+      (value: string) => parseWikiSearchEnumOption(value, WIKI_SEARCH_BACKENDS, "backend"),
+    )
+    .option(
+      "--corpus <corpus>",
+      `Search corpus (${WIKI_SEARCH_CORPORA.join(", ")})`,
+      (value: string) => parseWikiSearchEnumOption(value, WIKI_SEARCH_CORPORA, "corpus"),
+    );
+}
+
+function addWikiApplyMutationOptions<T extends Command>(command: T): T {
+  return command
+    .option("--source-id <id>", "Source id", collectCliValues)
+    .option("--contradiction <text>", "Contradiction note", collectCliValues)
+    .option("--question <text>", "Open question", collectCliValues)
+    .option("--confidence <n>", "Confidence score between 0 and 1", (value: string) =>
+      Number(value),
+    )
+    .option("--status <status>", "Page status");
 }
 
 export async function runWikiStatus(params: {
@@ -202,9 +249,12 @@ export async function runWikiInit(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   const result = await initializeMemoryWikiVault(params.config);
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : `Initialized wiki vault at ${result.rootDir} (${result.createdDirectories.length} dirs, ${result.createdFiles.length} files).`;
+  const summary = formatJsonOrText(
+    result,
+    params.json,
+    (value) =>
+      `Initialized wiki vault at ${value.rootDir} (${value.createdDirectories.length} dirs, ${value.createdFiles.length} files).`,
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -217,9 +267,12 @@ export async function runWikiCompile(params: {
 }) {
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
   const result = await compileMemoryWikiVault(params.config);
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : `Compiled wiki vault at ${result.vaultRoot} (${result.pages.length} pages, ${result.updatedFiles.length} indexes updated).`;
+  const summary = formatJsonOrText(
+    result,
+    params.json,
+    (value) =>
+      `Compiled wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -232,9 +285,12 @@ export async function runWikiLint(params: {
 }) {
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
   const result = await lintMemoryWikiVault(params.config);
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : `Linted wiki vault at ${result.vaultRoot} (${result.issueCount} issues, report: ${result.reportPath}).`;
+  const summary = formatJsonOrText(
+    result,
+    params.json,
+    (value) =>
+      `Linted wiki vault at ${value.vaultRoot} (${value.issueCount} issues, report: ${value.reportPath}).`,
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -251,9 +307,12 @@ export async function runWikiIngest(params: {
     inputPath: params.inputPath,
     title: params.title,
   });
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : `Ingested ${result.sourcePath} into ${result.pagePath}. Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
+  const summary = formatJsonOrText(
+    result,
+    params.json,
+    (value) =>
+      `Ingested ${value.sourcePath} into ${value.pagePath}. Refreshed ${value.indexUpdatedFiles.length} index file${value.indexUpdatedFiles.length === 1 ? "" : "s"}.`,
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -356,10 +415,7 @@ export async function runWikiApplySynthesis(params: {
       ...(params.status?.trim() ? { status: params.status.trim() } : {}),
     },
   });
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : `${result.changed ? "Updated" : "No changes for"} ${result.pagePath} via ${result.operation}. ${result.compile.updatedFiles.length > 0 ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.` : "Indexes unchanged."}`;
-  writeOutput(summary, params.stdout);
+  writeOutput(formatMemoryWikiMutationSummary(result, params.json), params.stdout);
   return result;
 }
 
@@ -399,10 +455,7 @@ export async function runWikiApplyMetadata(params: {
       ...(params.status?.trim() ? { status: params.status.trim() } : {}),
     },
   });
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : `${result.changed ? "Updated" : "No changes for"} ${result.pagePath} via ${result.operation}. ${result.compile.updatedFiles.length > 0 ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.` : "Indexes unchanged."}`;
-  writeOutput(summary, params.stdout);
+  writeOutput(formatMemoryWikiMutationSummary(result, params.json), params.stdout);
   return result;
 }
 
@@ -416,9 +469,12 @@ export async function runWikiBridgeImport(params: {
     config: params.config,
     appConfig: params.appConfig,
   });
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : `Bridge import synced ${result.artifactCount} artifacts across ${result.workspaces} workspaces (${result.importedCount} new, ${result.updatedCount} updated, ${result.skippedCount} unchanged, ${result.removedCount} removed). Indexes ${result.indexesRefreshed ? `refreshed (${result.indexUpdatedFiles.length} files)` : `not refreshed (${result.indexRefreshReason})`}.`;
+  const summary = formatJsonOrText(
+    result,
+    params.json,
+    (value) =>
+      `Bridge import synced ${value.artifactCount} artifacts across ${value.workspaces} workspaces (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`,
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -433,9 +489,12 @@ export async function runWikiUnsafeLocalImport(params: {
     config: params.config,
     appConfig: params.appConfig,
   });
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : `Unsafe-local import synced ${result.artifactCount} artifacts (${result.importedCount} new, ${result.updatedCount} updated, ${result.skippedCount} unchanged, ${result.removedCount} removed). Indexes ${result.indexesRefreshed ? `refreshed (${result.indexUpdatedFiles.length} files)` : `not refreshed (${result.indexRefreshReason})`}.`;
+  const summary = formatJsonOrText(
+    result,
+    params.json,
+    (value) =>
+      `Unsafe-local import synced ${value.artifactCount} artifacts (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`,
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -446,11 +505,11 @@ export async function runWikiObsidianStatus(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   const result = await probeObsidianCli();
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : result.available
-      ? `Obsidian CLI available at ${result.command}`
-      : "Obsidian CLI is not available on PATH.";
+  const summary = formatJsonOrText(result, params.json, (value) =>
+    value.available
+      ? `Obsidian CLI available at ${value.command}`
+      : "Obsidian CLI is not available on PATH.",
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -462,7 +521,7 @@ export async function runWikiObsidianSearch(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   const result = await runObsidianSearch({ config: params.config, query: params.query });
-  const summary = params.json ? JSON.stringify(result, null, 2) : result.stdout.trim();
+  const summary = formatJsonOrText(result, params.json, (value) => value.stdout.trim());
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -474,9 +533,11 @@ export async function runWikiObsidianOpenCli(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   const result = await runObsidianOpen({ config: params.config, vaultPath: params.vaultPath });
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : result.stdout.trim() || "Opened in Obsidian.";
+  const summary = formatJsonOrText(
+    result,
+    params.json,
+    (value) => value.stdout.trim() || "Opened in Obsidian.",
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -488,9 +549,11 @@ export async function runWikiObsidianCommandCli(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   const result = await runObsidianCommand({ config: params.config, id: params.id });
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : result.stdout.trim() || "Command sent to Obsidian.";
+  const summary = formatJsonOrText(
+    result,
+    params.json,
+    (value) => value.stdout.trim() || "Command sent to Obsidian.",
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -501,9 +564,11 @@ export async function runWikiObsidianDailyCli(params: {
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
   const result = await runObsidianDaily({ config: params.config });
-  const summary = params.json
-    ? JSON.stringify(result, null, 2)
-    : result.stdout.trim() || "Opened today's daily note.";
+  const summary = formatJsonOrText(
+    result,
+    params.json,
+    (value) => value.stdout.trim() || "Opened today's daily note.",
+  );
   writeOutput(summary, params.stdout);
   return result;
 }
@@ -568,21 +633,13 @@ export function registerWikiCli(
       await runWikiIngest({ config, inputPath, title: opts.title, json: opts.json });
     });
 
-  wiki
-    .command("search")
-    .description("Search wiki pages and, when configured, the active memory corpus")
-    .argument("<query>", "Search query")
-    .option("--max-results <n>", "Maximum results", (value: string) => Number(value))
-    .option(
-      "--backend <backend>",
-      `Search backend (${WIKI_SEARCH_BACKENDS.join(", ")})`,
-      (value: string) => parseWikiSearchEnumOption(value, WIKI_SEARCH_BACKENDS, "backend"),
-    )
-    .option(
-      "--corpus <corpus>",
-      `Search corpus (${WIKI_SEARCH_CORPORA.join(", ")})`,
-      (value: string) => parseWikiSearchEnumOption(value, WIKI_SEARCH_CORPORA, "corpus"),
-    )
+  addWikiSearchConfigOptions(
+    wiki
+      .command("search")
+      .description("Search wiki pages and, when configured, the active memory corpus")
+      .argument("<query>", "Search query")
+      .option("--max-results <n>", "Maximum results", (value: string) => Number(value)),
+  )
     .option("--json", "Print JSON")
     .action(async (query: string, opts: WikiSearchCommandOptions) => {
       await runWikiSearch({
@@ -596,22 +653,14 @@ export function registerWikiCli(
       });
     });
 
-  wiki
-    .command("get")
-    .description("Read a wiki page by id or relative path, with optional active-memory fallback")
-    .argument("<lookup>", "Relative path or page id")
-    .option("--from <n>", "Start line", (value: string) => Number(value))
-    .option("--lines <n>", "Number of lines", (value: string) => Number(value))
-    .option(
-      "--backend <backend>",
-      `Search backend (${WIKI_SEARCH_BACKENDS.join(", ")})`,
-      (value: string) => parseWikiSearchEnumOption(value, WIKI_SEARCH_BACKENDS, "backend"),
-    )
-    .option(
-      "--corpus <corpus>",
-      `Search corpus (${WIKI_SEARCH_CORPORA.join(", ")})`,
-      (value: string) => parseWikiSearchEnumOption(value, WIKI_SEARCH_CORPORA, "corpus"),
-    )
+  addWikiSearchConfigOptions(
+    wiki
+      .command("get")
+      .description("Read a wiki page by id or relative path, with optional active-memory fallback")
+      .argument("<lookup>", "Relative path or page id")
+      .option("--from <n>", "Start line", (value: string) => Number(value))
+      .option("--lines <n>", "Number of lines", (value: string) => Number(value)),
+  )
     .option("--json", "Print JSON")
     .action(async (lookup: string, opts: WikiGetCommandOptions) => {
       await runWikiGet({
@@ -627,28 +676,14 @@ export function registerWikiCli(
     });
 
   const apply = wiki.command("apply").description("Apply narrow wiki mutations");
-  apply
-    .command("synthesis")
-    .description("Create or refresh a synthesis page with managed summary content")
-    .argument("<title>", "Synthesis title")
-    .option("--body <text>", "Summary body text")
-    .option("--body-file <path>", "Read summary body text from a file")
-    .option("--source-id <id>", "Source id", (value: string, acc: string[] = []) => {
-      acc.push(value);
-      return acc;
-    })
-    .option("--contradiction <text>", "Contradiction note", (value: string, acc: string[] = []) => {
-      acc.push(value);
-      return acc;
-    })
-    .option("--question <text>", "Open question", (value: string, acc: string[] = []) => {
-      acc.push(value);
-      return acc;
-    })
-    .option("--confidence <n>", "Confidence score between 0 and 1", (value: string) =>
-      Number(value),
-    )
-    .option("--status <status>", "Page status")
+  addWikiApplyMutationOptions(
+    apply
+      .command("synthesis")
+      .description("Create or refresh a synthesis page with managed summary content")
+      .argument("<title>", "Synthesis title")
+      .option("--body <text>", "Summary body text")
+      .option("--body-file <path>", "Read summary body text from a file"),
+  )
     .option("--json", "Print JSON")
     .action(async (title: string, opts: WikiApplySynthesisCommandOptions) => {
       await runWikiApplySynthesis({
@@ -665,27 +700,13 @@ export function registerWikiCli(
         json: opts.json,
       });
     });
-  apply
-    .command("metadata")
-    .description("Update metadata on an existing page")
-    .argument("<lookup>", "Relative path or page id")
-    .option("--source-id <id>", "Source id", (value: string, acc: string[] = []) => {
-      acc.push(value);
-      return acc;
-    })
-    .option("--contradiction <text>", "Contradiction note", (value: string, acc: string[] = []) => {
-      acc.push(value);
-      return acc;
-    })
-    .option("--question <text>", "Open question", (value: string, acc: string[] = []) => {
-      acc.push(value);
-      return acc;
-    })
-    .option("--confidence <n>", "Confidence score between 0 and 1", (value: string) =>
-      Number(value),
-    )
+  addWikiApplyMutationOptions(
+    apply
+      .command("metadata")
+      .description("Update metadata on an existing page")
+      .argument("<lookup>", "Relative path or page id"),
+  )
     .option("--clear-confidence", "Remove any stored confidence value")
-    .option("--status <status>", "Page status")
     .option("--json", "Print JSON")
     .action(async (lookup: string, opts: WikiApplyMetadataCommandOptions) => {
       await runWikiApplyMetadata({

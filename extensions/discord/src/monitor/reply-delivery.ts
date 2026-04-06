@@ -20,6 +20,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import { isLikelyDiscordVideoMedia } from "../media-detection.js";
 import { createDiscordRetryRunner } from "../retry.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { sendDiscordText } from "../send.shared.js";
@@ -39,8 +40,6 @@ export type DiscordThreadBindingLookup = {
 };
 
 type ResolvedRetryConfig = Required<RetryConfig>;
-
-const DISCORD_VIDEO_MEDIA_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
 
 const DISCORD_DELIVERY_RETRY_DEFAULTS: ResolvedRetryConfig = {
   attempts: 3,
@@ -75,31 +74,6 @@ function getDiscordRetryAfterMs(err: unknown): number | undefined {
 
 function resolveDeliveryRetryConfig(retry?: RetryConfig): ResolvedRetryConfig {
   return resolveRetryConfig(DISCORD_DELIVERY_RETRY_DEFAULTS, retry);
-}
-
-function normalizeMediaPathForExtension(mediaUrl: string): string {
-  const trimmed = mediaUrl.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.pathname.toLowerCase();
-  } catch {
-    const withoutHash = trimmed.split("#", 1)[0] ?? trimmed;
-    const withoutQuery = withoutHash.split("?", 1)[0] ?? withoutHash;
-    return withoutQuery.toLowerCase();
-  }
-}
-
-function isLikelyDiscordVideoMedia(mediaUrl: string): boolean {
-  const normalized = normalizeMediaPathForExtension(mediaUrl);
-  for (const ext of DISCORD_VIDEO_MEDIA_EXTENSIONS) {
-    if (normalized.endsWith(ext)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 async function sendWithRetry(
