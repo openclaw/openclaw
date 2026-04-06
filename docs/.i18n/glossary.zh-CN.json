@@ -354,6 +354,10 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  { 
+    "source": "Exec Approval Limitations", 
+    "target": "执行审批限制" 
   }
 ]
-  { "source": "Exec Approval Limitations", "target": "??????" }
+
