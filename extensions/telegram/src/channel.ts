@@ -260,7 +260,7 @@ function matchTelegramAcpConversation(params: {
   };
 }
 
-function shouldTreatTelegramRoutedTextAsVisible(params: {
+function shouldTreatTelegramDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
   text?: string;
 }): boolean {
@@ -1020,7 +1020,7 @@ export const telegramPlugin = createChatChannelPlugin({
         }).catch(() => {});
       },
       shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
-      shouldTreatRoutedTextAsVisible: shouldTreatTelegramRoutedTextAsVisible,
+      shouldTreatDeliveredTextAsVisible: shouldTreatTelegramDeliveredTextAsVisible,
       targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
       resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
         typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,

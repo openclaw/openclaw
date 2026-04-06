@@ -40,7 +40,7 @@ const channelPluginMocks = vi.hoisted(() => ({
     }
     return {
       outbound: {
-        shouldTreatRoutedTextAsVisible: ({
+        shouldTreatDeliveredTextAsVisible: ({
           kind,
           text,
         }: {

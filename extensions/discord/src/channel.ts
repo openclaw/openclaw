@@ -135,7 +135,7 @@ const meta = {
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
 
-function shouldTreatDiscordRoutedTextAsVisible(params: {
+function shouldTreatDiscordDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
   text?: string;
 }): boolean {
@@ -822,7 +822,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         chunker: null,
         textChunkLimit: 2000,
         pollMaxOptions: 10,
-        shouldTreatRoutedTextAsVisible: shouldTreatDiscordRoutedTextAsVisible,
+        shouldTreatDeliveredTextAsVisible: shouldTreatDiscordDeliveredTextAsVisible,
         shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
           shouldSuppressLocalDiscordExecApprovalPrompt({
             cfg,
