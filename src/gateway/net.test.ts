@@ -2,6 +2,9 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
+  __resetContainerCacheForTest,
+  defaultGatewayBindMode,
+  isContainerEnvironment,
   isLocalishHost,
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
@@ -10,6 +13,7 @@ import {
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
   resolveClientIp,
+  resolveGatewayBindHost,
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
@@ -453,6 +457,178 @@ describe("isPrivateOrLoopbackHost", () => {
 
   it("rejects empty/falsy input", () => {
     expect(isPrivateOrLoopbackHost("")).toBe(false);
+  });
+});
+
+describe("isContainerEnvironment", () => {
+  afterEach(() => {
+    __resetContainerCacheForTest();
+    vi.restoreAllMocks();
+  });
+
+  it("returns false on a typical non-container host", () => {
+    // Mock fs.accessSync to throw (no /.dockerenv) and fs.readFileSync to
+    // return a cgroup file without container markers.
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice/user-1000.slice\n");
+    expect(isContainerEnvironment()).toBe(false);
+  });
+
+  it("returns true when /.dockerenv exists", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns true when /proc/1/cgroup contains docker marker", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/docker/abc123def456\n");
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns true when /proc/1/cgroup contains kubepods marker", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("11:cpuset:/kubepods/besteffort/pod-abc\n");
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns true when /proc/1/cgroup contains containerd with container ID", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      "0::/system.slice/containerd/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\n",
+    );
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns false when /proc/1/cgroup contains containerd.service (host machine)", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("0::/system.slice/containerd.service\n");
+    expect(isContainerEnvironment()).toBe(false);
+  });
+
+  it("returns true for cgroup v2 kubepods.slice path", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      "0::/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod123.slice/cri-containerd-abc123.scope\n",
+    );
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns true for cgroup v2 cri-containerd scope path", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(
+      "0::/system.slice/cri-containerd-a1b2c3d4e5f6.scope\n",
+    );
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("caches the result across calls", () => {
+    const fs = require("node:fs");
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    expect(isContainerEnvironment()).toBe(true);
+    expect(isContainerEnvironment()).toBe(true);
+    // accessSync should only be called once due to caching
+    expect(accessSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveGatewayBindHost", () => {
+  afterEach(() => {
+    __resetContainerCacheForTest();
+    vi.restoreAllMocks();
+  });
+
+  it("returns 127.0.0.1 for loopback mode", async () => {
+    expect(await resolveGatewayBindHost("loopback")).toBe("127.0.0.1");
+  });
+
+  it("returns 0.0.0.0 for lan mode", async () => {
+    expect(await resolveGatewayBindHost("lan")).toBe("0.0.0.0");
+  });
+
+  it("returns 127.0.0.1 for auto mode on non-container host", async () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice\n");
+    expect(await resolveGatewayBindHost("auto")).toBe("127.0.0.1");
+  });
+
+  it("returns 0.0.0.0 for auto mode inside a container", async () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    expect(await resolveGatewayBindHost("auto")).toBe("0.0.0.0");
+  });
+
+  it("defaults to loopback when bind is undefined (non-container)", async () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice\n");
+    expect(await resolveGatewayBindHost(undefined)).toBe("127.0.0.1");
+  });
+});
+
+describe("defaultGatewayBindMode", () => {
+  afterEach(() => {
+    __resetContainerCacheForTest();
+    vi.restoreAllMocks();
+  });
+
+  it("returns loopback on non-container host", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice\n");
+    expect(defaultGatewayBindMode()).toBe("loopback");
+  });
+
+  it("returns auto inside a container", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    expect(defaultGatewayBindMode()).toBe("auto");
+  });
+
+  it("returns loopback inside a container when tailscale serve is active", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    expect(defaultGatewayBindMode("serve")).toBe("loopback");
+  });
+
+  it("returns loopback inside a container when tailscale funnel is active", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    expect(defaultGatewayBindMode("funnel")).toBe("loopback");
+  });
+
+  it("returns auto inside a container when tailscale is off", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    expect(defaultGatewayBindMode("off")).toBe("auto");
   });
 });
 

@@ -16,6 +16,7 @@ import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
+import { defaultGatewayBindMode } from "../../gateway/net.js";
 import {
   inspectBestEffortPrimaryTailnetIPv4,
   resolveBestEffortGatewayBindHostForDisplay,
@@ -260,7 +261,9 @@ async function resolveGatewayStatusSummary(params: {
   const portSource: GatewayStatusSummary["portSource"] = portFromArgs
     ? "service args"
     : "env/config";
-  const bindMode: GatewayBindMode = params.daemonCfg.gateway?.bind ?? "loopback";
+  const statusTailscaleMode = params.daemonCfg.gateway?.tailscale?.mode ?? "off";
+  const bindMode: GatewayBindMode =
+    params.daemonCfg.gateway?.bind ?? defaultGatewayBindMode(statusTailscaleMode);
   const customBindHost = params.daemonCfg.gateway?.customBindHost;
   const { bindHost, warning: bindHostWarning } = await resolveBestEffortGatewayBindHostForDisplay({
     bindMode,
