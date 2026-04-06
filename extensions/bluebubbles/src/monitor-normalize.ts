@@ -1,5 +1,9 @@
 import { parseFiniteNumber } from "openclaw/plugin-sdk/infra-runtime";
-import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
+import {
+  extractHandleFromChatGuid,
+  normalizeBlueBubblesHandle,
+  normalizeChatGuidService,
+} from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -248,7 +252,7 @@ function extractChatContext(message: Record<string, unknown>): {
 } {
   const chat = asRecord(message.chat) ?? asRecord(message.conversation) ?? null;
   const chatFromList = readFirstChatRecord(message);
-  const chatGuid =
+  const rawChatGuid =
     readString(message, "chatGuid") ??
     readString(message, "chat_guid") ??
     readString(chat, "chatGuid") ??
@@ -257,6 +261,9 @@ function extractChatContext(message: Record<string, unknown>): {
     readString(chatFromList, "chatGuid") ??
     readString(chatFromList, "chat_guid") ??
     readString(chatFromList, "guid");
+  // Satellite messages arrive as "iMessageLite;-;…" — normalize to "iMessage"
+  // so downstream send calls use a service type macOS Messages recognizes.
+  const chatGuid = rawChatGuid ? normalizeChatGuidService(rawChatGuid) : rawChatGuid;
   const chatIdentifier =
     readString(message, "chatIdentifier") ??
     readString(message, "chat_identifier") ??
