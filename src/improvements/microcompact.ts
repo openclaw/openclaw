@@ -100,8 +100,8 @@ export const DEFAULT_MICROCOMPACT_CONFIG: MicrocompactConfig = {
  * 支持压缩的工具列表
  * 
  * 这些工具的结果可能会被重复调用，适合压缩
- */
-与其他文本（如代码、配置、错误信息）不同，工具结果通常遵循可预测的模式，这使得它们非常适合进行压缩和去重。
+ * 与其他文本（如代码、配置、错误信息）不同，工具结果通常遵循可预测的模式，
+ * 这使得它们非常适合进行压缩和去重。
  */
 export const COMPACTABLE_TOOLS = new Set<string>([
   'read',
