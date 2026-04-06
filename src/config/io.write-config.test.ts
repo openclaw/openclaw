@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -24,8 +24,7 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 }));
 
 describe("config io write", () => {
-  let fixtureRoot = "";
-  let homeCaseId = 0;
+  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-io-" });
   const silentLogger = {
     warn: () => {},
     error: () => {},
@@ -64,13 +63,12 @@ describe("config io write", () => {
   }
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-    const home = path.join(fixtureRoot, `case-${homeCaseId++}`);
-    await fs.mkdir(home, { recursive: true });
+    const home = await suiteRootTracker.make("case");
     return fn(home);
   }
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-io-"));
+    await suiteRootTracker.setup();
 
     // Default: return an empty plugin list so existing tests that don't need
     // plugin-owned channel schemas keep working unchanged.
@@ -81,21 +79,7 @@ describe("config io write", () => {
   });
 
   afterAll(async () => {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      try {
-        await fs.rm(fixtureRoot, { recursive: true, force: true });
-        return;
-      } catch (error) {
-        const code =
-          error && typeof error === "object" && "code" in error
-            ? String((error as { code?: unknown }).code)
-            : "";
-        if ((code !== "ENOTEMPTY" && code !== "EBUSY") || attempt === 4) {
-          throw error;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
-      }
-    }
+    await suiteRootTracker.cleanup();
   });
 
   async function writeConfigAndCreateIo(params: {

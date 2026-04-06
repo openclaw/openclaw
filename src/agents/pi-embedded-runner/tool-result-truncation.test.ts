@@ -28,6 +28,7 @@ let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncat
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
 let isOversizedToolResult: typeof import("./tool-result-truncation.js").isOversizedToolResult;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
+let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let HARD_MAX_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").HARD_MAX_TOOL_RESULT_CHARS;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 
@@ -45,6 +46,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     truncateOversizedToolResultsInSession,
     isOversizedToolResult,
     sessionLikelyHasOversizedToolResults,
+    DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     HARD_MAX_TOOL_RESULT_CHARS,
   } = await import("./tool-result-truncation.js"));
 }
@@ -196,16 +198,19 @@ describe("calculateMaxToolResultChars", () => {
     expect(large).toBeGreaterThan(small);
   });
 
+  it("exports the live cap through both constant names", () => {
+    expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(40_000);
+    expect(HARD_MAX_TOOL_RESULT_CHARS).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
+  });
+
   it("caps at HARD_MAX_TOOL_RESULT_CHARS for very large windows", () => {
     const result = calculateMaxToolResultChars(2_000_000); // 2M token window
     expect(result).toBeLessThanOrEqual(HARD_MAX_TOOL_RESULT_CHARS);
   });
 
-  it("returns reasonable size for 128K context", () => {
+  it("caps 128K contexts at the live tool-result ceiling", () => {
     const result = calculateMaxToolResultChars(128_000);
-    // 30% of 128K = 38.4K tokens * 4 chars = 153.6K chars
-    expect(result).toBeGreaterThan(100_000);
-    expect(result).toBeLessThan(200_000);
+    expect(result).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
   });
 });
 

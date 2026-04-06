@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
-import type { MatrixRoomConfig, ReplyToMode } from "../../types.js";
+import type { MatrixRoomConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
@@ -32,7 +32,7 @@ type MatrixHandlerTestHarnessOptions = {
   threadReplies?: "off" | "inbound" | "always";
   dmThreadReplies?: "off" | "inbound" | "always";
   dmSessionScope?: "per-user" | "per-room";
-  streaming?: "partial" | "off";
+  streaming?: MatrixStreamingMode;
   blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";

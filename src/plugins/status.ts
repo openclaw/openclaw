@@ -18,6 +18,7 @@ import { createPluginLoaderLogger } from "./logger.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
 import { listImportedRuntimePluginIds } from "./runtime.js";
+import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
 import type { PluginDiagnostic, PluginHookName } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -189,17 +190,25 @@ function buildPluginReport(
     pluginIds: bundledProviderIds,
   });
 
-  const registry = loadOpenClawPlugins({
-    config: runtimeCompatConfig,
-    activationSourceConfig: rawConfig,
-    autoEnabledReasons: autoEnabled.autoEnabledReasons,
-    workspaceDir,
-    env: params?.env,
-    logger: createPluginLoaderLogger(log),
-    activate: false,
-    cache: false,
-    loadModules,
-  });
+  const registry = loadModules
+    ? loadOpenClawPlugins({
+        config: runtimeCompatConfig,
+        activationSourceConfig: rawConfig,
+        autoEnabledReasons: autoEnabled.autoEnabledReasons,
+        workspaceDir,
+        env: params?.env,
+        logger: createPluginLoaderLogger(log),
+        activate: false,
+        cache: false,
+        loadModules,
+      })
+    : loadPluginMetadataRegistrySnapshot({
+        config: runtimeCompatConfig,
+        activationSourceConfig: rawConfig,
+        workspaceDir,
+        env: params?.env,
+        loadModules: false,
+      });
   const importedPluginIds = new Set([
     ...(loadModules
       ? registry.plugins

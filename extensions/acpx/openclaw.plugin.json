@@ -124,5 +124,22 @@
       "help": "Optional per-agent command overrides for the embedded ACP runtime.",
       "advanced": true
     }
+  },
+  "configContracts": {
+    "dangerousFlags": [
+      {
+        "path": "permissionMode",
+        "equals": "approve-all"
+      }
+    ],
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [
+        {
+          "path": "mcpServers.*.env.*",
+          "expected": "string"
+        }
+      ]
+    }
   }
 }

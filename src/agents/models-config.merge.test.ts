@@ -11,23 +11,25 @@ import type { ProviderConfig } from "./models-config.providers.secrets.js";
 describe("models-config merge helpers", () => {
   const preservedApiKey = "AGENT_KEY"; // pragma: allowlist secret
   const configApiKey = "CONFIG_KEY"; // pragma: allowlist secret
+  const createModel = (
+    overrides: Partial<NonNullable<ProviderConfig["models"]>[number]> = {},
+  ): NonNullable<ProviderConfig["models"]>[number] => ({
+    id: "config-model",
+    name: "Config model",
+    input: ["text"],
+    reasoning: false,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 2048,
+    ...overrides,
+  });
 
   function createConfigProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     return {
       baseUrl: "https://config.example/v1",
       apiKey: configApiKey,
       api: "openai-responses",
-      models: [
-        {
-          id: "config-model",
-          name: "Config model",
-          input: ["text"],
-          reasoning: false,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 8192,
-          maxTokens: 2048,
-        },
-      ],
+      models: [createModel()],
       ...overrides,
     } as ProviderConfig;
   }
@@ -39,7 +41,7 @@ describe("models-config merge helpers", () => {
       baseUrl: "https://agent.example/v1",
       apiKey: preservedApiKey,
       api: "openai-responses",
-      models: [{ id: "agent-model", name: "Agent model", input: ["text"] }],
+      models: [createModel({ id: "agent-model", name: "Agent model" })],
       ...overrides,
     } as ExistingProviderConfig;
   }
@@ -226,17 +228,19 @@ describe("models-config merge helpers", () => {
   });
 
   it("replaces stale baseUrl when only model-level apis change", () => {
+    const nextProvider = createConfigProvider();
+    delete (nextProvider as { api?: string }).api;
+    nextProvider.models = [createModel({ api: "openai-responses" })];
+    const existingProvider = createExistingProvider({
+      models: [createModel({ id: "agent-model", name: "Agent model", api: "openai-completions" })],
+    });
+    delete (existingProvider as { api?: string }).api;
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
-        custom: createConfigProvider({ api: "" }),
+        custom: nextProvider,
       },
       existingProviders: {
-        custom: createExistingProvider({
-          api: "",
-          models: [
-            { id: "agent-model", name: "Agent model", input: ["text"], api: "openai-completions" },
-          ],
-        }),
+        custom: existingProvider,
       },
       secretRefManagedProviders: new Set<string>(),
       explicitBaseUrlProviders: new Set<string>(["custom"]),
@@ -251,13 +255,13 @@ describe("models-config merge helpers", () => {
       nextProviders: {
         custom: {
           apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
-          models: [{ id: "model", api: "openai-responses" }],
+          models: [createModel({ id: "model", api: "openai-responses" })],
         } as ProviderConfig,
       },
       existingProviders: {
         custom: {
           apiKey: preservedApiKey,
-          models: [{ id: "model", api: "openai-responses" }],
+          models: [createModel({ id: "model", api: "openai-responses" })],
         } as ExistingProviderConfig,
       },
       secretRefManagedProviders: new Set<string>(),

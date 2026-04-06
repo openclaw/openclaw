@@ -1,23 +1,84 @@
 import {
+  buildNoCapabilityModelConfiguredMessage,
+  resolveCapabilityModelCandidates,
+  throwCapabilityGenerationFailure,
+} from "openclaw/plugin-sdk/media-generation-runtime-shared";
+import {
   createSubsystemLogger,
   describeFailoverError,
-  getProviderEnvVars,
   getVideoGenerationProvider,
   isFailoverError,
   listVideoGenerationProviders,
   parseVideoGenerationModelRef,
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
   type AuthProfileStore,
   type FallbackAttempt,
   type GeneratedVideoAsset,
   type OpenClawConfig,
+  type VideoGenerationIgnoredOverride,
   type VideoGenerationResolution,
   type VideoGenerationResult,
   type VideoGenerationSourceAsset,
 } from "../api.js";
 
 const log = createSubsystemLogger("video-generation");
+
+function resolveVideoGenerationMode(params: {
+  inputImageCount?: number;
+  inputVideoCount?: number;
+}): "generate" | "imageToVideo" | "videoToVideo" | null {
+  const inputImageCount = params.inputImageCount ?? 0;
+  const inputVideoCount = params.inputVideoCount ?? 0;
+  if (inputImageCount > 0 && inputVideoCount > 0) {
+    return null;
+  }
+  if (inputVideoCount > 0) {
+    return "videoToVideo";
+  }
+  if (inputImageCount > 0) {
+    return "imageToVideo";
+  }
+  return "generate";
+}
+
+function resolveVideoGenerationModeCapabilities(params: {
+  provider?: NonNullable<ReturnType<typeof getVideoGenerationProvider>>;
+  inputImageCount?: number;
+  inputVideoCount?: number;
+}) {
+  const mode = resolveVideoGenerationMode(params);
+  const capabilities = params.provider?.capabilities;
+  if (!capabilities) {
+    return { mode, capabilities: undefined };
+  }
+  if (mode === "generate") {
+    return {
+      mode,
+      capabilities: capabilities.generate ?? capabilities,
+    };
+  }
+  if (mode === "imageToVideo") {
+    return {
+      mode,
+      capabilities: capabilities.imageToVideo ?? {
+        ...capabilities,
+        enabled: (capabilities.maxInputImages ?? 0) > 0,
+      },
+    };
+  }
+  if (mode === "videoToVideo") {
+    return {
+      mode,
+      capabilities: capabilities.videoToVideo ?? {
+        ...capabilities,
+        enabled: (capabilities.maxInputVideos ?? 0) > 0,
+      },
+    };
+  }
+  return {
+    mode,
+    capabilities,
+  };
+}
 
 export type GenerateVideoParams = {
   cfg: OpenClawConfig;
@@ -41,87 +102,98 @@ export type GenerateVideoRuntimeResult = {
   model: string;
   attempts: FallbackAttempt[];
   metadata?: Record<string, unknown>;
+  ignoredOverrides: VideoGenerationIgnoredOverride[];
 };
 
-function resolveVideoGenerationCandidates(params: {
-  cfg: OpenClawConfig;
-  modelOverride?: string;
-}): Array<{ provider: string; model: string }> {
-  const candidates: Array<{ provider: string; model: string }> = [];
-  const seen = new Set<string>();
-  const add = (raw: string | undefined) => {
-    const parsed = parseVideoGenerationModelRef(raw);
-    if (!parsed) {
-      return;
-    }
-    const key = `${parsed.provider}/${parsed.model}`;
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    candidates.push(parsed);
-  };
-
-  add(params.modelOverride);
-  add(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.videoGenerationModel));
-  for (const fallback of resolveAgentModelFallbackValues(
-    params.cfg.agents?.defaults?.videoGenerationModel,
-  )) {
-    add(fallback);
-  }
-  return candidates;
-}
-
-function throwVideoGenerationFailure(params: {
-  attempts: FallbackAttempt[];
-  lastError: unknown;
-}): never {
-  if (params.attempts.length <= 1 && params.lastError) {
-    throw params.lastError;
-  }
-  const summary =
-    params.attempts.length > 0
-      ? params.attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
-  throw new Error(`All video generation models failed (${params.attempts.length}): ${summary}`, {
-    cause: params.lastError instanceof Error ? params.lastError : undefined,
-  });
-}
-
 function buildNoVideoGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
-  const providers = listVideoGenerationProviders(cfg);
-  const sampleModel =
-    providers.find((provider) => provider.defaultModel) ??
-    ({ id: "qwen", defaultModel: "wan2.6-t2v" } as const);
-  const authHints = providers
-    .flatMap((provider) => {
-      const envVars = getProviderEnvVars(provider.id);
-      if (envVars.length === 0) {
-        return [];
-      }
-      return [`${provider.id}: ${envVars.join(" / ")}`];
-    })
-    .slice(0, 3);
-  return [
-    `No video-generation model configured. Set agents.defaults.videoGenerationModel.primary to a provider/model like "${sampleModel.id}/${sampleModel.defaultModel}".`,
-    authHints.length > 0
-      ? `If you want a specific provider, also configure that provider's auth/API key first (${authHints.join("; ")}).`
-      : "If you want a specific provider, also configure that provider's auth/API key first.",
-  ].join(" ");
+  return buildNoCapabilityModelConfiguredMessage({
+    capabilityLabel: "video-generation",
+    modelConfigKey: "videoGenerationModel",
+    providers: listVideoGenerationProviders(cfg),
+    fallbackSampleRef: "qwen/wan2.6-t2v",
+  });
 }
 
 export function listRuntimeVideoGenerationProviders(params?: { config?: OpenClawConfig }) {
   return listVideoGenerationProviders(params?.config);
 }
 
+function resolveProviderVideoGenerationOverrides(params: {
+  provider: NonNullable<ReturnType<typeof getVideoGenerationProvider>>;
+  size?: string;
+  aspectRatio?: string;
+  resolution?: VideoGenerationResolution;
+  audio?: boolean;
+  watermark?: boolean;
+  inputImageCount?: number;
+  inputVideoCount?: number;
+}) {
+  const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
+    provider: params.provider,
+    inputImageCount: params.inputImageCount,
+    inputVideoCount: params.inputVideoCount,
+  });
+  const ignoredOverrides: VideoGenerationIgnoredOverride[] = [];
+  let size = params.size;
+  let aspectRatio = params.aspectRatio;
+  let resolution = params.resolution;
+  let audio = params.audio;
+  let watermark = params.watermark;
+
+  if (!caps) {
+    return {
+      size,
+      aspectRatio,
+      resolution,
+      audio,
+      watermark,
+      ignoredOverrides,
+    };
+  }
+
+  if (size && !caps.supportsSize) {
+    ignoredOverrides.push({ key: "size", value: size });
+    size = undefined;
+  }
+
+  if (aspectRatio && !caps.supportsAspectRatio) {
+    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
+    aspectRatio = undefined;
+  }
+
+  if (resolution && !caps.supportsResolution) {
+    ignoredOverrides.push({ key: "resolution", value: resolution });
+    resolution = undefined;
+  }
+
+  if (typeof audio === "boolean" && !caps.supportsAudio) {
+    ignoredOverrides.push({ key: "audio", value: audio });
+    audio = undefined;
+  }
+
+  if (typeof watermark === "boolean" && !caps.supportsWatermark) {
+    ignoredOverrides.push({ key: "watermark", value: watermark });
+    watermark = undefined;
+  }
+
+  return {
+    size,
+    aspectRatio,
+    resolution,
+    audio,
+    watermark,
+    ignoredOverrides,
+  };
+}
+
 export async function generateVideo(
   params: GenerateVideoParams,
 ): Promise<GenerateVideoRuntimeResult> {
-  const candidates = resolveVideoGenerationCandidates({
+  const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
+    modelConfig: params.cfg.agents?.defaults?.videoGenerationModel,
     modelOverride: params.modelOverride,
+    parseModelRef: parseVideoGenerationModelRef,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg));
@@ -144,6 +216,16 @@ export async function generateVideo(
     }
 
     try {
+      const sanitized = resolveProviderVideoGenerationOverrides({
+        provider,
+        size: params.size,
+        aspectRatio: params.aspectRatio,
+        resolution: params.resolution,
+        audio: params.audio,
+        watermark: params.watermark,
+        inputImageCount: params.inputImages?.length ?? 0,
+        inputVideoCount: params.inputVideos?.length ?? 0,
+      });
       const result: VideoGenerationResult = await provider.generateVideo({
         provider: candidate.provider,
         model: candidate.model,
@@ -151,12 +233,12 @@ export async function generateVideo(
         cfg: params.cfg,
         agentDir: params.agentDir,
         authStore: params.authStore,
-        size: params.size,
-        aspectRatio: params.aspectRatio,
-        resolution: params.resolution,
+        size: sanitized.size,
+        aspectRatio: sanitized.aspectRatio,
+        resolution: sanitized.resolution,
         durationSeconds: params.durationSeconds,
-        audio: params.audio,
-        watermark: params.watermark,
+        audio: sanitized.audio,
+        watermark: sanitized.watermark,
         inputImages: params.inputImages,
         inputVideos: params.inputVideos,
       });
@@ -168,6 +250,7 @@ export async function generateVideo(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
+        ignoredOverrides: sanitized.ignoredOverrides,
         metadata: result.metadata,
       };
     } catch (err) {
@@ -185,5 +268,9 @@ export async function generateVideo(
     }
   }
 
-  throwVideoGenerationFailure({ attempts, lastError });
+  throwCapabilityGenerationFailure({
+    capabilityLabel: "video generation",
+    attempts,
+    lastError,
+  });
 }

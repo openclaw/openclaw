@@ -50,7 +50,8 @@ gateway without forcing a `tsdown` rebuild; source and config changes still
 rebuild `dist` first.
 
 Add any gateway CLI flags after `gateway:watch` and they will be passed through on
-each restart.
+each restart. Re-running the same watch command for the same repo/flag set now
+replaces the older watcher instead of leaving duplicate watcher parents behind.
 
 ## Dev profile + dev gateway (--dev)
 

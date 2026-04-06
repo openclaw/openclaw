@@ -1,10 +1,10 @@
 import type {
-  BlockStreamingCoalesceConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
   ReplyToMode,
+  SlackChannelStreamingConfig,
 } from "./types.base.js";
 import type {
   ChannelHealthMonitorConfig,
@@ -149,30 +149,14 @@ export type SlackAccountConfig = {
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /**
-   * Stream preview mode:
-   * - "off": disable live preview streaming
-   * - "partial": replace preview text with the latest partial output (default)
-   * - "block": append chunked preview updates
-   * - "progress": show progress status, then send final text
-   */
-  streaming?: SlackStreamingMode;
-  /**
-   * Slack native text streaming toggle (`chat.startStream` / `chat.appendStream` / `chat.stopStream`).
-   * Used when `streaming` is `partial`. Default: true.
-   */
-  nativeStreaming?: boolean;
+  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
+  streaming?: SlackChannelStreamingConfig;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
   reactionAllowlist?: Array<string | number>;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /**
    * Optional per-chat-type reply threading overrides.

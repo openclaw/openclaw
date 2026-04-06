@@ -16,6 +16,21 @@ vi.mock("./models-config.providers.policy.runtime.js", () => ({
 }));
 
 describe("normalizeProviders", () => {
+  const createModel = (
+    overrides: Partial<
+      NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["models"][number]
+    > = {},
+  ) => ({
+    id: "config-model",
+    name: "Config model",
+    input: ["text"] as Array<"text" | "image">,
+    reasoning: false,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 2048,
+    ...overrides,
+  });
+
   it("trims provider keys so image models remain discoverable for custom providers", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
@@ -129,7 +144,7 @@ describe("normalizeProviders", () => {
           baseUrl: "https://config.example/v1",
           api: "openai-responses",
           apiKey: { source: "env", provider: "default", id: "CUSTOM_PROVIDER_API_KEY" },
-          models: [{ id: "config-model", name: "Config model", input: ["text"] }],
+          models: [createModel()],
         },
       };
 

@@ -34,6 +34,7 @@ describe("memory dreaming host helpers", () => {
       pluginConfig: {
         dreaming: {
           enabled: true,
+          frequency: "0 */4 * * *",
           timezone: "Europe/London",
           storage: {
             mode: "both",
@@ -41,7 +42,6 @@ describe("memory dreaming host helpers", () => {
           },
           phases: {
             deep: {
-              cron: "0 */4 * * *",
               limit: "5",
               minScore: "0.9",
               minRecallCount: "4",
@@ -55,6 +55,7 @@ describe("memory dreaming host helpers", () => {
     });
 
     expect(resolved.enabled).toBe(true);
+    expect(resolved.frequency).toBe("0 3 * * *");
     expect(resolved.timezone).toBe("Europe/London");
     expect(resolved.storage).toEqual({
       mode: "both",
@@ -85,7 +86,8 @@ describe("memory dreaming host helpers", () => {
       cfg,
     });
 
-    expect(resolved.enabled).toBe(true);
+    expect(resolved.enabled).toBe(false);
+    expect(resolved.frequency).toBe("0 3 * * *");
     expect(resolved.timezone).toBe("America/Los_Angeles");
     expect(resolved.phases.deep).toMatchObject({
       cron: "0 3 * * *",
@@ -94,6 +96,22 @@ describe("memory dreaming host helpers", () => {
       recencyHalfLifeDays: 14,
       maxAgeDays: 30,
     });
+  });
+
+  it("applies top-level dreaming frequency across all phases", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          enabled: true,
+          frequency: "15 */8 * * *",
+        },
+      },
+    });
+
+    expect(resolved.frequency).toBe("15 */8 * * *");
+    expect(resolved.phases.light.cron).toBe("15 */8 * * *");
+    expect(resolved.phases.deep.cron).toBe("15 */8 * * *");
+    expect(resolved.phases.rem.cron).toBe("15 */8 * * *");
   });
 
   it("dedupes shared workspaces and skips agents without memory search", () => {

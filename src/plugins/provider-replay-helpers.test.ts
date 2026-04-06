@@ -33,19 +33,51 @@ describe("provider replay helpers", () => {
   });
 
   it("derives claude-only anthropic replay policy from the model id", () => {
+    // Sonnet 4.6 preserves thinking blocks (no drop)
     expect(buildAnthropicReplayPolicyForModel("claude-sonnet-4-6")).toMatchObject({
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
-      dropThinkingBlocks: true,
       validateAnthropicTurns: true,
+    });
+    expect(buildAnthropicReplayPolicyForModel("claude-sonnet-4-6")).not.toHaveProperty(
+      "dropThinkingBlocks",
+    );
+    // Legacy models still drop thinking blocks
+    expect(buildAnthropicReplayPolicyForModel("claude-3-7-sonnet-20250219")).toMatchObject({
+      dropThinkingBlocks: true,
     });
     expect(buildAnthropicReplayPolicyForModel("amazon.nova-pro-v1")).not.toHaveProperty(
       "dropThinkingBlocks",
     );
   });
 
+  it("preserves thinking blocks for Claude Opus 4.5+ and Sonnet 4.5+ models", () => {
+    // These models should NOT drop thinking blocks
+    for (const modelId of [
+      "claude-opus-4-5-20251101",
+      "claude-opus-4-6",
+      "claude-sonnet-4-5-20250929",
+      "claude-sonnet-4-6",
+      "claude-haiku-4-5-20251001",
+    ]) {
+      const policy = buildAnthropicReplayPolicyForModel(modelId);
+      expect(policy).not.toHaveProperty("dropThinkingBlocks");
+    }
+
+    // These legacy models SHOULD drop thinking blocks
+    for (const modelId of [
+      "claude-3-7-sonnet-20250219",
+      "claude-3-5-sonnet-20240620",
+    ]) {
+      const policy = buildAnthropicReplayPolicyForModel(modelId);
+      expect(policy).toMatchObject({ dropThinkingBlocks: true });
+    }
+  });
+
   it("builds native Anthropic replay policy with selective tool-call id preservation", () => {
-    expect(buildNativeAnthropicReplayPolicyForModel("claude-sonnet-4-6")).toMatchObject({
+    // Sonnet 4.6 preserves thinking blocks
+    const policy46 = buildNativeAnthropicReplayPolicyForModel("claude-sonnet-4-6");
+    expect(policy46).toMatchObject({
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
@@ -54,17 +86,37 @@ describe("provider replay helpers", () => {
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
       allowSyntheticToolResults: true,
+    });
+    expect(policy46).not.toHaveProperty("dropThinkingBlocks");
+
+    // Legacy model drops thinking blocks
+    expect(buildNativeAnthropicReplayPolicyForModel("claude-3-7-sonnet-20250219")).toMatchObject({
       dropThinkingBlocks: true,
     });
   });
 
   it("builds hybrid anthropic or openai replay policy", () => {
+    // Sonnet 4.6 preserves thinking blocks even when flag is set
+    const sonnet46Policy = buildHybridAnthropicOrOpenAIReplayPolicy(
+      {
+        provider: "minimax",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never,
+      { anthropicModelDropThinkingBlocks: true },
+    );
+    expect(sonnet46Policy).toMatchObject({
+      validateAnthropicTurns: true,
+    });
+    expect(sonnet46Policy).not.toHaveProperty("dropThinkingBlocks");
+
+    // Legacy model still drops
     expect(
       buildHybridAnthropicOrOpenAIReplayPolicy(
         {
           provider: "minimax",
           modelApi: "anthropic-messages",
-          modelId: "claude-sonnet-4-6",
+          modelId: "claude-3-7-sonnet-20250219",
         } as never,
         { anthropicModelDropThinkingBlocks: true },
       ),

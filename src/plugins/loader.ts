@@ -39,6 +39,8 @@ import {
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
+  listMemoryCorpusSupplements,
+  listMemoryPromptSupplements,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
@@ -129,9 +131,11 @@ export class PluginLoadFailureError extends Error {
 
 type CachedPluginState = {
   registry: PluginRegistry;
+  memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
   memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
+  memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
   memoryRuntime: ReturnType<typeof getMemoryRuntime>;
 };
 
@@ -163,6 +167,32 @@ export function clearPluginLoaderCache(): void {
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
+
+/**
+ * On Windows, the Node.js ESM loader requires absolute paths to be expressed
+ * as file:// URLs (e.g. file:///C:/Users/...). Raw drive-letter paths like
+ * C:\... are rejected with ERR_UNSUPPORTED_ESM_URL_SCHEME because the loader
+ * mistakes the drive letter for an unknown URL scheme.
+ *
+ * This helper converts Windows absolute import specifiers to file:// URLs and
+ * leaves everything else unchanged.
+ */
+function toSafeImportPath(specifier: string): string {
+  if (process.platform !== "win32") {
+    return specifier;
+  }
+  if (specifier.startsWith("file://")) {
+    return specifier;
+  }
+  if (path.win32.isAbsolute(specifier)) {
+    const normalizedSpecifier = specifier.replaceAll("\\", "/");
+    if (normalizedSpecifier.startsWith("//")) {
+      return new URL(`file:${encodeURI(normalizedSpecifier)}`).href;
+    }
+    return new URL(`file:///${encodeURI(normalizedSpecifier)}`).href;
+  }
+  return specifier;
+}
 
 function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
@@ -206,6 +236,7 @@ export const __testing = {
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
   shouldPreferNativeJiti,
+  toSafeImportPath,
   getCompatibleActivePluginRegistry,
   resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {
@@ -596,6 +627,7 @@ function createPluginRecord(params: {
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
     memoryEmbeddingProviderIds: [],
@@ -992,7 +1024,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (cached) {
       restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
       restoreMemoryPluginState({
+        corpusSupplements: cached.memoryCorpusSupplements,
         promptBuilder: cached.memoryPromptBuilder,
+        promptSupplements: cached.memoryPromptSupplements,
         flushPlanResolver: cached.memoryFlushPlanResolver,
         runtime: cached.memoryRuntime,
       });
@@ -1033,7 +1067,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (!runtimeModulePath) {
       throw new Error("Unable to resolve plugin runtime module");
     }
-    const runtimeModule = getJiti(runtimeModulePath)(runtimeModulePath) as {
+    const safeRuntimePath = toSafeImportPath(runtimeModulePath);
+    const runtimeModule = getJiti(runtimeModulePath)(safeRuntimePath) as {
       createPluginRuntime?: (options?: CreatePluginRuntimeOptions) => PluginRuntime;
     };
     if (typeof runtimeModule.createPluginRuntime !== "function") {
@@ -1093,7 +1128,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     },
   });
 
-  const { registry, createApi } = createPluginRegistry({
+  const {
+    registry,
+    createApi,
+    registerReload,
+    registerNodeHostCommand,
+    registerSecurityAuditCollector,
+  } = createPluginRegistry({
     logger,
     runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
@@ -1434,13 +1475,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+    const safeImportSource = toSafeImportPath(safeSource);
 
     let mod: OpenClawPluginModule | null = null;
     try {
       // Track the plugin as imported once module evaluation begins. Top-level
       // code may have already executed even if evaluation later throws.
       recordImportedPluginId(record.id);
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      mod = getJiti(safeSource)(safeImportSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
@@ -1536,6 +1578,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
     }
 
+    if (registrationMode === "full") {
+      if (definition?.reload) {
+        registerReload(record, definition.reload);
+      }
+      for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
+        registerNodeHostCommand(record, nodeHostCommand);
+      }
+      for (const collector of definition?.securityAuditCollectors ?? []) {
+        registerSecurityAuditCollector(record, collector);
+      }
+    }
+
     if (validateOnly) {
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
@@ -1557,6 +1611,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
     const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
     const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
+    const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
+    const previousMemoryPromptSupplements = listMemoryPromptSupplements();
     const previousMemoryRuntime = getMemoryRuntime();
 
     try {
@@ -1573,7 +1629,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (!shouldActivate) {
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
+          corpusSupplements: previousMemoryCorpusSupplements,
           promptBuilder: previousMemoryPromptBuilder,
+          promptSupplements: previousMemoryPromptSupplements,
           flushPlanResolver: previousMemoryFlushPlanResolver,
           runtime: previousMemoryRuntime,
         });
@@ -1583,7 +1641,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     } catch (err) {
       restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
       restoreMemoryPluginState({
+        corpusSupplements: previousMemoryCorpusSupplements,
         promptBuilder: previousMemoryPromptBuilder,
+        promptSupplements: previousMemoryPromptSupplements,
         flushPlanResolver: previousMemoryFlushPlanResolver,
         runtime: previousMemoryRuntime,
       });
@@ -1635,10 +1695,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, {
+      memoryCorpusSupplements: listMemoryCorpusSupplements(),
       registry,
       memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
       memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
       memoryPromptBuilder: getMemoryPromptSectionBuilder(),
+      memoryPromptSupplements: listMemoryPromptSupplements(),
       memoryRuntime: getMemoryRuntime(),
     });
   }
@@ -1865,10 +1927,11 @@ export async function loadOpenClawPluginCliRegistry(
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+    const safeImportSource = toSafeImportPath(safeSource);
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      mod = getJiti(safeSource)(safeImportSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,

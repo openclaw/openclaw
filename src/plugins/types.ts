@@ -32,6 +32,7 @@ import type { HookEntry } from "../hooks/types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
@@ -53,6 +54,7 @@ import type {
   RuntimeWebFetchMetadata,
   RuntimeWebSearchMetadata,
 } from "../secrets/runtime-web-tools.types.js";
+import type { SecurityAuditFinding } from "../security/audit.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -1038,6 +1040,20 @@ export type ProviderSyntheticAuthResult = {
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
 };
 
+export type ProviderResolveExternalOAuthProfilesContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  store: AuthProfileStore;
+};
+
+export type ProviderExternalOAuthProfile = {
+  profileId: string;
+  credential: OAuthCredential;
+  persistence?: "runtime-only" | "persisted";
+};
+
 export type ProviderDeferSyntheticProfileAuthContext = {
   config?: OpenClawConfig;
   provider: string;
@@ -1516,6 +1532,20 @@ export type ProviderPlugin = {
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
   /**
+   * Provider-owned external OAuth profile discovery.
+   *
+   * Use this when credentials are managed by an external tool and should be
+   * visible to runtime auth resolution without being written back into
+   * `auth-profiles.json` by core.
+   */
+  resolveExternalOAuthProfiles?: (
+    ctx: ProviderResolveExternalOAuthProfilesContext,
+  ) =>
+    | Array<ProviderExternalOAuthProfile>
+    | ReadonlyArray<ProviderExternalOAuthProfile>
+    | null
+    | undefined;
+  /**
    * Provider-owned precedence rule for stored synthetic auth profiles.
    *
    * Return true when a stored profile API key is only a provider-owned
@@ -1723,6 +1753,7 @@ export type PluginRealtimeVoiceProviderEntry = RealtimeVoiceProviderPlugin & {
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
 export type ImageGenerationProviderPlugin = ImageGenerationProvider;
 export type VideoGenerationProviderPlugin = VideoGenerationProvider;
+export type MusicGenerationProviderPlugin = MusicGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
   method: string;
@@ -1928,6 +1959,30 @@ export type OpenClawPluginCliCommandDescriptor = {
   hasSubcommands: boolean;
 };
 
+export type OpenClawPluginReloadRegistration = {
+  restartPrefixes?: string[];
+  hotPrefixes?: string[];
+  noopPrefixes?: string[];
+};
+
+export type OpenClawPluginNodeHostCommand = {
+  command: string;
+  cap?: string;
+  handle: (paramsJSON?: string | null) => Promise<string>;
+};
+
+export type OpenClawPluginSecurityAuditContext = {
+  config: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  configPath: string;
+};
+
+export type OpenClawPluginSecurityAuditCollector = (
+  ctx: OpenClawPluginSecurityAuditContext,
+) => SecurityAuditFinding[] | Promise<SecurityAuditFinding[]>;
+
 /** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
@@ -1955,6 +2010,9 @@ export type OpenClawPluginDefinition = {
   version?: string;
   kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
+  reload?: OpenClawPluginReloadRegistration;
+  nodeHostCommands?: OpenClawPluginNodeHostCommand[];
+  securityAuditCollectors?: OpenClawPluginSecurityAuditCollector[];
   register?: (api: OpenClawPluginApi) => void | Promise<void>;
   activate?: (api: OpenClawPluginApi) => void | Promise<void>;
 };
@@ -2040,6 +2098,9 @@ export type OpenClawPluginApi = {
       descriptors?: OpenClawPluginCliCommandDescriptor[];
     },
   ) => void;
+  registerReload: (registration: OpenClawPluginReloadRegistration) => void;
+  registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
+  registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: (service: OpenClawPluginService) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
@@ -2059,6 +2120,8 @@ export type OpenClawPluginApi = {
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   /** Register a video generation provider (video generation capability). */
   registerVideoGenerationProvider: (provider: VideoGenerationProviderPlugin) => void;
+  /** Register a music generation provider (music generation capability). */
+  registerMusicGenerationProvider: (provider: MusicGenerationProviderPlugin) => void;
   /** Register a web fetch provider (web fetch capability). */
   registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */
@@ -2081,6 +2144,14 @@ export type OpenClawPluginApi = {
   /** Register the system prompt section builder for this memory plugin (exclusive slot). */
   registerMemoryPromptSection: (
     builder: import("./memory-state.js").MemoryPromptSectionBuilder,
+  ) => void;
+  /** Register an additive memory-adjacent prompt section (non-exclusive). */
+  registerMemoryPromptSupplement: (
+    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
+  ) => void;
+  /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
+  registerMemoryCorpusSupplement: (
+    supplement: import("./memory-state.js").MemoryCorpusSupplement,
   ) => void;
   /** Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot). */
   registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;

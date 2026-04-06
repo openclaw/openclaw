@@ -146,17 +146,6 @@ function resolveSlackNativeStreaming(
   return true;
 }
 
-function formatSlackStreamModeMigrationMessage(pathPrefix: string, resolvedStreaming: string) {
-  return `Moved ${pathPrefix}.streamMode → ${pathPrefix}.streaming (${resolvedStreaming}).`;
-}
-
-function formatSlackStreamingBooleanMigrationMessage(
-  pathPrefix: string,
-  resolvedNativeStreaming: boolean,
-) {
-  return `Moved ${pathPrefix}.streaming (boolean) → ${pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`;
-}
-
 function hasLegacyThreadBindingTtl(value: unknown): boolean {
   const threadBindings = getRecord(value);
   return Boolean(threadBindings && hasOwnKey(threadBindings, "ttlHours"));
@@ -223,7 +212,15 @@ function hasLegacyTelegramStreamingKeys(value: unknown): boolean {
   if (!entry) {
     return false;
   }
-  return entry.streamMode !== undefined;
+  return (
+    entry.streamMode !== undefined ||
+    typeof entry.streaming === "boolean" ||
+    typeof entry.streaming === "string" ||
+    hasOwnKey(entry, "chunkMode") ||
+    hasOwnKey(entry, "blockStreaming") ||
+    hasOwnKey(entry, "draftChunk") ||
+    hasOwnKey(entry, "blockStreamingCoalesce")
+  );
 }
 
 function hasLegacyDiscordStreamingKeys(value: unknown): boolean {
@@ -231,7 +228,15 @@ function hasLegacyDiscordStreamingKeys(value: unknown): boolean {
   if (!entry) {
     return false;
   }
-  return entry.streamMode !== undefined || typeof entry.streaming === "boolean";
+  return (
+    entry.streamMode !== undefined ||
+    typeof entry.streaming === "boolean" ||
+    typeof entry.streaming === "string" ||
+    hasOwnKey(entry, "chunkMode") ||
+    hasOwnKey(entry, "blockStreaming") ||
+    hasOwnKey(entry, "draftChunk") ||
+    hasOwnKey(entry, "blockStreamingCoalesce")
+  );
 }
 
 function hasLegacySlackStreamingKeys(value: unknown): boolean {
@@ -239,7 +244,177 @@ function hasLegacySlackStreamingKeys(value: unknown): boolean {
   if (!entry) {
     return false;
   }
-  return entry.streamMode !== undefined || typeof entry.streaming === "boolean";
+  return (
+    entry.streamMode !== undefined ||
+    typeof entry.streaming === "boolean" ||
+    typeof entry.streaming === "string" ||
+    hasOwnKey(entry, "chunkMode") ||
+    hasOwnKey(entry, "blockStreaming") ||
+    hasOwnKey(entry, "blockStreamingCoalesce") ||
+    hasOwnKey(entry, "nativeStreaming")
+  );
+}
+
+function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
+  const existing = getRecord(owner[key]);
+  if (existing) {
+    return existing;
+  }
+  const created: Record<string, unknown> = {};
+  owner[key] = created;
+  return created;
+}
+
+function moveLegacyStreamingShapeForPath(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+  resolveMode?: (entry: Record<string, unknown>) => string;
+  resolveNativeTransport?: (entry: Record<string, unknown>) => boolean;
+}): boolean {
+  let changed = false;
+  const legacyStreaming = params.entry.streaming;
+  const legacyStreamingInput = {
+    ...params.entry,
+    streaming: legacyStreaming,
+  };
+  const legacyNativeTransportInput = {
+    nativeStreaming: params.entry.nativeStreaming,
+    streaming: legacyStreaming,
+  };
+  const hadLegacyStreamMode = hasOwnKey(params.entry, "streamMode");
+  const hadLegacyStreamingScalar =
+    typeof legacyStreaming === "string" || typeof legacyStreaming === "boolean";
+
+  if (params.resolveMode && (hadLegacyStreamMode || hadLegacyStreamingScalar)) {
+    const streaming = ensureNestedRecord(params.entry, "streaming");
+    if (!hasOwnKey(streaming, "mode")) {
+      const resolvedMode = params.resolveMode(legacyStreamingInput);
+      streaming.mode = resolvedMode;
+      if (hadLegacyStreamMode) {
+        params.changes.push(
+          `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${resolvedMode}).`,
+        );
+      }
+      if (typeof legacyStreaming === "boolean") {
+        params.changes.push(
+          `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${resolvedMode}).`,
+        );
+      } else if (typeof legacyStreaming === "string") {
+        params.changes.push(
+          `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${resolvedMode}).`,
+        );
+      }
+    } else {
+      params.changes.push(
+        `Removed legacy ${params.pathPrefix}.streaming mode aliases (${params.pathPrefix}.streaming.mode already set).`,
+      );
+    }
+    changed = true;
+  }
+
+  if (hadLegacyStreamMode) {
+    delete params.entry.streamMode;
+    changed = true;
+  }
+
+  if (hadLegacyStreamingScalar) {
+    if (!getRecord(params.entry.streaming)) {
+      params.entry.streaming = {};
+    }
+    changed = true;
+  }
+
+  if (hasOwnKey(params.entry, "chunkMode")) {
+    const streaming = ensureNestedRecord(params.entry, "streaming");
+    if (!hasOwnKey(streaming, "chunkMode")) {
+      streaming.chunkMode = params.entry.chunkMode;
+      params.changes.push(
+        `Moved ${params.pathPrefix}.chunkMode → ${params.pathPrefix}.streaming.chunkMode.`,
+      );
+    } else {
+      params.changes.push(
+        `Removed ${params.pathPrefix}.chunkMode (${params.pathPrefix}.streaming.chunkMode already set).`,
+      );
+    }
+    delete params.entry.chunkMode;
+    changed = true;
+  }
+
+  if (hasOwnKey(params.entry, "blockStreaming")) {
+    const block = ensureNestedRecord(ensureNestedRecord(params.entry, "streaming"), "block");
+    if (!hasOwnKey(block, "enabled")) {
+      block.enabled = params.entry.blockStreaming;
+      params.changes.push(
+        `Moved ${params.pathPrefix}.blockStreaming → ${params.pathPrefix}.streaming.block.enabled.`,
+      );
+    } else {
+      params.changes.push(
+        `Removed ${params.pathPrefix}.blockStreaming (${params.pathPrefix}.streaming.block.enabled already set).`,
+      );
+    }
+    delete params.entry.blockStreaming;
+    changed = true;
+  }
+
+  if (hasOwnKey(params.entry, "draftChunk")) {
+    const preview = ensureNestedRecord(ensureNestedRecord(params.entry, "streaming"), "preview");
+    if (!hasOwnKey(preview, "chunk")) {
+      preview.chunk = params.entry.draftChunk;
+      params.changes.push(
+        `Moved ${params.pathPrefix}.draftChunk → ${params.pathPrefix}.streaming.preview.chunk.`,
+      );
+    } else {
+      params.changes.push(
+        `Removed ${params.pathPrefix}.draftChunk (${params.pathPrefix}.streaming.preview.chunk already set).`,
+      );
+    }
+    delete params.entry.draftChunk;
+    changed = true;
+  }
+
+  if (hasOwnKey(params.entry, "blockStreamingCoalesce")) {
+    const block = ensureNestedRecord(ensureNestedRecord(params.entry, "streaming"), "block");
+    if (!hasOwnKey(block, "coalesce")) {
+      block.coalesce = params.entry.blockStreamingCoalesce;
+      params.changes.push(
+        `Moved ${params.pathPrefix}.blockStreamingCoalesce → ${params.pathPrefix}.streaming.block.coalesce.`,
+      );
+    } else {
+      params.changes.push(
+        `Removed ${params.pathPrefix}.blockStreamingCoalesce (${params.pathPrefix}.streaming.block.coalesce already set).`,
+      );
+    }
+    delete params.entry.blockStreamingCoalesce;
+    changed = true;
+  }
+
+  if (params.resolveNativeTransport && hasOwnKey(params.entry, "nativeStreaming")) {
+    const streaming = ensureNestedRecord(params.entry, "streaming");
+    if (!hasOwnKey(streaming, "nativeTransport")) {
+      streaming.nativeTransport = params.resolveNativeTransport(legacyNativeTransportInput);
+      params.changes.push(
+        `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
+      );
+    } else {
+      params.changes.push(
+        `Removed ${params.pathPrefix}.nativeStreaming (${params.pathPrefix}.streaming.nativeTransport already set).`,
+      );
+    }
+    delete params.entry.nativeStreaming;
+    changed = true;
+  } else if (params.resolveNativeTransport && typeof legacyStreaming === "boolean") {
+    const streaming = ensureNestedRecord(params.entry, "streaming");
+    if (!hasOwnKey(streaming, "nativeTransport")) {
+      streaming.nativeTransport = params.resolveNativeTransport(legacyNativeTransportInput);
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
+      );
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 function hasLegacyGoogleChatStreamMode(value: unknown): boolean {
@@ -343,37 +518,37 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
   {
     path: ["channels", "telegram"],
     message:
-      'channels.telegram.streamMode is legacy; use channels.telegram.streaming instead. Run "openclaw doctor --fix".',
+      'channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce} instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyTelegramStreamingKeys(value),
   },
   {
     path: ["channels", "telegram", "accounts"],
     message:
-      'channels.telegram.accounts.<id>.streamMode is legacy; use channels.telegram.accounts.<id>.streaming instead. Run "openclaw doctor --fix".',
+      'channels.telegram.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce} instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacyTelegramStreamingKeys),
   },
   {
     path: ["channels", "discord"],
     message:
-      'channels.discord.streamMode and boolean channels.discord.streaming are legacy; use channels.discord.streaming with enum values instead. Run "openclaw doctor --fix".',
+      'channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce} instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyDiscordStreamingKeys(value),
   },
   {
     path: ["channels", "discord", "accounts"],
     message:
-      'channels.discord.accounts.<id>.streamMode and boolean channels.discord.accounts.<id>.streaming are legacy; use channels.discord.accounts.<id>.streaming with enum values instead. Run "openclaw doctor --fix".',
+      'channels.discord.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce} instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacyDiscordStreamingKeys),
   },
   {
     path: ["channels", "slack"],
     message:
-      'channels.slack.streamMode and boolean channels.slack.streaming are legacy; use channels.slack.streaming with enum values instead. Run "openclaw doctor --fix".',
+      'channels.slack.streamMode, channels.slack.streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport} instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacySlackStreamingKeys(value),
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
-      'channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming with enum values instead. Run "openclaw doctor --fix".',
+      'channels.slack.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.accounts.<id>.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport} instead. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacySlackStreamingKeys),
   },
 ];
@@ -501,60 +676,33 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
         entry: Record<string, unknown>;
         pathPrefix: string;
       }) => {
-        const migrateCommonStreamingMode = (
-          resolveMode: (entry: Record<string, unknown>) => string,
-        ) => {
-          const hasLegacyStreamMode = params.entry.streamMode !== undefined;
-          const legacyStreaming = params.entry.streaming;
-          if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
-            return false;
-          }
-          const resolved = resolveMode(params.entry);
-          params.entry.streaming = resolved;
-          if (hasLegacyStreamMode) {
-            delete params.entry.streamMode;
-            changes.push(
-              `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
-            );
-          }
-          if (typeof legacyStreaming === "boolean") {
-            changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-          }
-          return true;
-        };
-
-        const hasLegacyStreamMode = params.entry.streamMode !== undefined;
-        const legacyStreaming = params.entry.streaming;
-        const legacyNativeStreaming = params.entry.nativeStreaming;
-
         if (params.provider === "telegram") {
-          migrateCommonStreamingMode(resolveTelegramPreviewStreamMode);
+          moveLegacyStreamingShapeForPath({
+            entry: params.entry,
+            pathPrefix: params.pathPrefix,
+            changes,
+            resolveMode: resolveTelegramPreviewStreamMode,
+          });
           return;
         }
 
         if (params.provider === "discord") {
-          migrateCommonStreamingMode(resolveDiscordPreviewStreamMode);
+          moveLegacyStreamingShapeForPath({
+            entry: params.entry,
+            pathPrefix: params.pathPrefix,
+            changes,
+            resolveMode: resolveDiscordPreviewStreamMode,
+          });
           return;
         }
 
-        if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
-          return;
-        }
-        const resolvedStreaming = resolveSlackStreamingMode(params.entry);
-        const resolvedNativeStreaming = resolveSlackNativeStreaming(params.entry);
-        params.entry.streaming = resolvedStreaming;
-        params.entry.nativeStreaming = resolvedNativeStreaming;
-        if (hasLegacyStreamMode) {
-          delete params.entry.streamMode;
-          changes.push(formatSlackStreamModeMigrationMessage(params.pathPrefix, resolvedStreaming));
-        }
-        if (typeof legacyStreaming === "boolean") {
-          changes.push(
-            formatSlackStreamingBooleanMigrationMessage(params.pathPrefix, resolvedNativeStreaming),
-          );
-        } else if (typeof legacyNativeStreaming !== "boolean" && hasLegacyStreamMode) {
-          changes.push(`Set ${params.pathPrefix}.nativeStreaming → ${resolvedNativeStreaming}.`);
-        }
+        moveLegacyStreamingShapeForPath({
+          entry: params.entry,
+          pathPrefix: params.pathPrefix,
+          changes,
+          resolveMode: resolveSlackStreamingMode,
+          resolveNativeTransport: resolveSlackNativeStreaming,
+        });
       };
 
       const migrateProvider = (provider: "telegram" | "discord" | "slack") => {

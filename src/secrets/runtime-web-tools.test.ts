@@ -370,6 +370,48 @@ describe("runtime web tools resolution", () => {
     },
   );
 
+  it("resolves selected provider SecretRef even when provider config is disabled", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  enabled: false,
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
+      },
+    });
+
+    expect(metadata.search.providerConfigured).toBe("gemini");
+    expect(metadata.search.selectedProvider).toBe("gemini");
+    expect(readProviderKey(resolvedConfig, "gemini")).toBe("web-search-gemini-ref");
+    expect(context.warnings.map((warning) => warning.path)).not.toContain(
+      "plugins.entries.google.config.webSearch.apiKey",
+    );
+  });
+
   it("auto-detects provider precedence across all configured providers", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
@@ -750,6 +792,49 @@ describe("runtime web tools resolution", () => {
     );
   });
 
+  it("emits inactive warnings for configured and lower-priority web-search providers when search is disabled", async () => {
+    const { context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              apiKey: { source: "env", provider: "default", id: "DISABLED_WEB_SEARCH_API_KEY" },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "plugins.entries.brave.config.webSearch.apiKey",
+        }),
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "plugins.entries.google.config.webSearch.apiKey",
+        }),
+      ]),
+    );
+  });
+
   it("does not auto-enable search when tools.web.search is absent", async () => {
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({}),
@@ -757,6 +842,17 @@ describe("runtime web tools resolution", () => {
 
     expect(metadata.search.providerSource).toBe("none");
     expect(metadata.search.selectedProvider).toBeUndefined();
+  });
+
+  it("skips provider discovery when no web surfaces are configured", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({}),
+    });
+
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.fetch.providerSource).toBe("none");
+    expect(runtimeWebSearchProviders.resolvePluginWebSearchProviders).not.toHaveBeenCalled();
+    expect(runtimeWebFetchProviders.resolvePluginWebFetchProviders).not.toHaveBeenCalled();
   });
 
   it("uses env fallback for unresolved web fetch provider SecretRef when active", async () => {

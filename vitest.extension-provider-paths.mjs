@@ -7,6 +7,7 @@ export const providerExtensionIds = [
   "anthropic-vertex",
   "byteplus",
   "chutes",
+  "comfy",
   "deepseek",
   "github-copilot",
   "google",

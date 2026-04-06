@@ -58,6 +58,17 @@ const invokeDoctorMemoryStatus = async (
   });
 };
 
+const invokeDoctorMemoryDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
+  await doctorHandlers["doctor.memory.dreamDiary"]({
+    req: {} as never,
+    params: {} as never,
+    respond: respond as never,
+    context: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+};
+
 const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
   expect(respond).toHaveBeenCalledWith(
     true,
@@ -108,6 +119,8 @@ describe("doctor.memory.status", () => {
         dreaming: expect.objectContaining({
           enabled: true,
           shortTermCount: 0,
+          totalSignalCount: 0,
+          phaseSignalCount: 0,
           promotedTotal: 0,
           promotedToday: 0,
           phases: expect.objectContaining({
@@ -172,6 +185,18 @@ describe("doctor.memory.status", () => {
       ".dreams",
       "short-term-recall.json",
     );
+    const mainPhaseSignalPath = path.join(
+      mainWorkspaceDir,
+      "memory",
+      ".dreams",
+      "phase-signals.json",
+    );
+    const alphaPhaseSignalPath = path.join(
+      alphaWorkspaceDir,
+      "memory",
+      ".dreams",
+      "phase-signals.json",
+    );
     await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
     await fs.mkdir(path.dirname(alphaStorePath), { recursive: true });
     await fs.writeFile(
@@ -184,11 +209,15 @@ describe("doctor.memory.status", () => {
             "memory:memory/2026-04-03.md:1:2": {
               path: "memory/2026-04-03.md",
               source: "memory",
+              recallCount: 2,
+              dailyCount: 1,
               promotedAt: undefined,
             },
             "memory:memory/2026-04-02.md:1:2": {
               path: "memory/2026-04-02.md",
               source: "memory",
+              recallCount: 9,
+              dailyCount: 5,
               promotedAt: recentIso,
             },
           },
@@ -208,12 +237,56 @@ describe("doctor.memory.status", () => {
             "memory:memory/2026-04-01.md:1:2": {
               path: "memory/2026-04-01.md",
               source: "memory",
+              recallCount: 7,
+              dailyCount: 4,
               promotedAt: olderIso,
             },
             "memory:memory/2026-04-04.md:1:2": {
               path: "memory/2026-04-04.md",
               source: "memory",
+              recallCount: 8,
+              dailyCount: 3,
               promotedAt: recentIso,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      mainPhaseSignalPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: recentIso,
+          entries: {
+            "memory:memory/2026-04-03.md:1:2": {
+              lightHits: 2,
+              remHits: 3,
+            },
+            "memory:memory/2026-04-02.md:1:2": {
+              lightHits: 9,
+              remHits: 9,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      alphaPhaseSignalPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: recentIso,
+          entries: {
+            "memory:memory/2026-04-01.md:1:2": {
+              lightHits: 5,
+              remHits: 5,
             },
           },
         },
@@ -241,9 +314,10 @@ describe("doctor.memory.status", () => {
           "memory-core": {
             config: {
               dreaming: {
+                enabled: true,
+                frequency: "0 */4 * * *",
                 phases: {
                   deep: {
-                    cron: "0 */4 * * *",
                     recencyHalfLifeDays: 21,
                     maxAgeDays: 30,
                   },
@@ -296,6 +370,12 @@ describe("doctor.memory.status", () => {
             enabled: true,
             timezone: "America/Los_Angeles",
             shortTermCount: 1,
+            recallSignalCount: 2,
+            dailySignalCount: 1,
+            totalSignalCount: 3,
+            phaseSignalCount: 5,
+            lightPhaseHitCount: 2,
+            remPhaseHitCount: 3,
             promotedTotal: 3,
             promotedToday: 2,
             phases: expect.objectContaining({
@@ -486,6 +566,84 @@ describe("doctor.memory.status", () => {
     } finally {
       readFileSpy.mockRestore();
       await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("doctor.memory.dreamDiary", () => {
+  beforeEach(() => {
+    loadConfig.mockClear();
+    resolveDefaultAgentId.mockClear();
+    resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
+  });
+
+  it("reads DREAMS.md when present", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-upper-"));
+    const diaryPath = path.join(workspaceDir, "DREAMS.md");
+    await fs.writeFile(diaryPath, "## Dream Diary\n- staged durable memory\n", "utf-8");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryDreamDiary(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          found: true,
+          path: "DREAMS.md",
+          content: "## Dream Diary\n- staged durable memory\n",
+          updatedAtMs: expect.any(Number),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to lowercase dreams.md", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-lower-"));
+    await fs.writeFile(path.join(workspaceDir, "dreams.md"), "lowercase diary\n", "utf-8");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryDreamDiary(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          found: true,
+          path: "dreams.md",
+          content: "lowercase diary\n",
+          updatedAtMs: expect.any(Number),
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns not-found payload when no dream diary exists", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-missing-"));
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryDreamDiary(respond);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          agentId: "main",
+          found: false,
+          path: "DREAMS.md",
+        }),
+        undefined,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 });

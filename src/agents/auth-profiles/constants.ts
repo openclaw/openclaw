@@ -5,7 +5,6 @@ export const AUTH_PROFILE_FILENAME = "auth-profiles.json";
 export const LEGACY_AUTH_FILENAME = "auth.json";
 
 export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";
-export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 
 export const AUTH_STORE_LOCK_OPTIONS = {
   retries: {

@@ -389,6 +389,15 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Enable: `BYTEPLUS_API_KEY=... BYTEPLUS_LIVE_TEST=1 pnpm test:live src/agents/byteplus.live.test.ts`
 - Optional model override: `BYTEPLUS_CODING_MODEL=ark-code-latest`
 
+## ComfyUI workflow media live
+
+- Test: `extensions/comfy/comfy.live.test.ts`
+- Enable: `OPENCLAW_LIVE_TEST=1 COMFY_LIVE_TEST=1 pnpm test:live -- extensions/comfy/comfy.live.test.ts`
+- Scope:
+  - Exercises the bundled comfy image, video, and `music_generate` paths
+  - Skips each capability unless `models.providers.comfy.<capability>` is configured
+  - Useful after changing comfy workflow submission, polling, downloads, or plugin registration
+
 ## Image generation live
 
 - Test: `src/image-generation/runtime.live.test.ts`
@@ -412,6 +421,19 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
+## Music generation live
+
+- Test: `extensions/music-generation-providers.live.test.ts`
+- Enable: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/music-generation-providers.live.test.ts`
+- Scope:
+  - Exercises the shared bundled music-generation provider path
+  - Currently covers Google and MiniMax
+  - Loads provider env vars from your login shell (`~/.profile`) before probing
+  - Skips providers with no usable auth/profile/model
+- Optional narrowing:
+  - `OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS="google,minimax"`
+  - `OPENCLAW_LIVE_MUSIC_GENERATION_MODELS="google/lyria-3-clip-preview,minimax/music-2.5+"`
 
 ## Docker runners (optional "works in Linux" checks)
 
@@ -442,6 +464,10 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 The live-model Docker runners also bind-mount the current checkout read-only and
 stage it into a temporary workdir inside the container. This keeps the runtime
 image slim while still running Vitest against your exact local source/config.
+The staging step skips large local-only caches and app build outputs such as
+`.pnpm-store`, `.worktrees`, `__openclaw_vitest__`, and app-local `.build` or
+Gradle output directories so Docker live runs do not spend minutes copying
+machine-specific artifacts.
 They also set `OPENCLAW_SKIP_CHANNELS=1` so gateway live probes do not start
 real Telegram/Discord/etc. channel workers inside the container.
 `test:docker:live-models` still runs `pnpm test:live`, so pass through
@@ -479,8 +505,8 @@ Useful env vars:
 - `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
 - `OPENCLAW_DOCKER_CLI_TOOLS_DIR=...` (default: `~/.cache/openclaw/docker-cli-tools`) mounted to `/home/node/.npm-global` for cached CLI installs inside Docker
 - External CLI auth dirs/files under `$HOME` are mounted read-only under `/host-auth...`, then copied into `/home/node/...` before tests start
-  - Default dirs: `.codex`, `.minimax`
-  - Default files: `.claude.json`, `~/.claude/.credentials.json`, `~/.claude/settings.json`, `~/.claude/settings.local.json`
+  - Default dirs: `.minimax`
+  - Default files: `~/.codex/auth.json`, `~/.codex/config.toml`, `.claude.json`, `~/.claude/.credentials.json`, `~/.claude/settings.json`, `~/.claude/settings.local.json`
   - Narrowed provider runs mount only the needed dirs/files inferred from `OPENCLAW_LIVE_PROVIDERS` / `OPENCLAW_LIVE_GATEWAY_PROVIDERS`
   - Override manually with `OPENCLAW_DOCKER_AUTH_DIRS=all`, `OPENCLAW_DOCKER_AUTH_DIRS=none`, or a comma list like `OPENCLAW_DOCKER_AUTH_DIRS=.claude,.codex`
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run

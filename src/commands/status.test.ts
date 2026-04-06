@@ -284,6 +284,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../channels/config-presence.js", () => ({
   hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  hasMeaningfulChannelConfig: (entry: unknown) =>
+    Boolean(
+      entry && typeof entry === "object" && Object.keys(entry as Record<string, unknown>).length,
+    ),
   listPotentialConfiguredChannelIds: (cfg: { channels?: Record<string, unknown> }) =>
     Object.keys(cfg.channels ?? {}).filter((key) => key !== "defaults" && key !== "modelByChannel"),
 }));
@@ -420,6 +424,9 @@ vi.mock("../gateway/probe.js", () => ({
 }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  buildGatewayConnectionDetails: vi.fn(() => ({
+    message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+  })),
   resolveGatewayCredentialsWithSecretInputs: vi.fn(
     async (params: {
       config?: {

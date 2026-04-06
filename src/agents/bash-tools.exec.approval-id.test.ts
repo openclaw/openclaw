@@ -231,6 +231,8 @@ function mockNoApprovalRouteRegistration() {
 describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
+  let previousBundledPluginsDir: string | undefined;
+  let previousDisableBundledPlugins: string | undefined;
 
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
@@ -242,10 +244,14 @@ describe("exec approvals", () => {
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
+    previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     vi.mocked(callGatewayTool).mockReset();
     vi.mocked(sendMessage).mockClear();
   });
@@ -263,6 +269,16 @@ describe("exec approvals", () => {
       delete process.env.USERPROFILE;
     } else {
       process.env.USERPROFILE = previousUserProfile;
+    }
+    if (previousBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+    }
+    if (previousDisableBundledPlugins === undefined) {
+      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    } else {
+      process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
     }
   });
 
@@ -440,6 +456,41 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(prepareHasCwd).toBe(false);
     expect(prepareCwd).toBeUndefined();
+  });
+
+  it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {
+    const calls: string[] = [];
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "node-ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "auto",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      elevated: { enabled: true, allowed: true, defaultLevel: "on" },
+    });
+
+    const result = await tool.execute("call-auto-node-elevated-default", {
+      command: "echo gateway-ok",
+      host: "node",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("node-ok");
+    expect(calls).toContain("node.invoke");
   });
 
   it("honors ask=off for elevated gateway exec without prompting", async () => {

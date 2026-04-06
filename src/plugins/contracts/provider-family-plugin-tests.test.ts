@@ -41,6 +41,7 @@ const EXPECTED_SHARED_FAMILY_CONTRACTS: Record<string, ExpectedSharedFamilyContr
   google: {
     replayFamilies: ["google-gemini"],
     streamFamilies: ["google-thinking"],
+    toolCompatFamilies: ["gemini"],
   },
   kilocode: {
     replayFamilies: ["passthrough-gemini"],

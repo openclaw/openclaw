@@ -1,6 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
+import {
+  normalizeAssistantPhase,
+  parseAssistantTextSignature,
+  type AssistantPhase,
+} from "../shared/chat-message-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
@@ -233,37 +238,6 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
-type AssistantPhase = "commentary" | "final_answer";
-
-function normalizeAssistantPhase(value: unknown): AssistantPhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function parseAssistantTextSignature(
-  value: unknown,
-): { id?: string; phase?: AssistantPhase } | null {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
-  if (!value.startsWith("{")) {
-    return { id: value };
-  }
-  try {
-    const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
-    if (parsed.v !== 1) {
-      return null;
-    }
-    return {
-      ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-      ...(normalizeAssistantPhase(parsed.phase)
-        ? { phase: normalizeAssistantPhase(parsed.phase) }
-        : {}),
-    };
-  } catch {
-    return null;
-  }
-}
-
 function sanitizeAssistantText(text: string): string {
   return stripThinkingTagsFromText(
     stripDowngradedToolCallText(stripModelSpecialTokens(stripMinimaxToolCallXml(text))),
@@ -275,7 +249,15 @@ function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): 
   return sanitizeUserFacingText(extracted, { errorContext });
 }
 
-function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPhase): string {
+type AssistantTextExtractionResult = {
+  text: string;
+  hadRequestedPhase: boolean;
+};
+
+function extractAssistantTextForPhase(
+  msg: AssistantMessage,
+  phase?: AssistantPhase,
+): AssistantTextExtractionResult {
   const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
   const shouldIncludeContent = (resolvedPhase?: AssistantPhase) => {
     if (phase) {
@@ -285,13 +267,17 @@ function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPh
   };
 
   if (typeof msg.content === "string") {
-    return shouldIncludeContent(messagePhase)
-      ? finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content))
-      : "";
+    const hadRequestedPhase = phase ? messagePhase === phase : messagePhase === undefined;
+    return {
+      text: shouldIncludeContent(messagePhase)
+        ? finalizeAssistantExtraction(msg, sanitizeAssistantText(msg.content))
+        : "",
+      hadRequestedPhase,
+    };
   }
 
   if (!Array.isArray(msg.content)) {
-    return "";
+    return { text: "", hadRequestedPhase: false };
   }
 
   const hasExplicitPhasedTextBlocks = msg.content.some((block) => {
@@ -305,6 +291,7 @@ function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPh
     return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
   });
 
+  let hadRequestedPhase = false;
   const extracted =
     extractTextFromChatContent(
       msg.content.filter((block) => {
@@ -318,6 +305,9 @@ function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPh
         const signature = parseAssistantTextSignature(record.textSignature);
         const resolvedPhase =
           signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
+        if (phase ? resolvedPhase === phase : resolvedPhase === undefined) {
+          hadRequestedPhase = true;
+        }
         return shouldIncludeContent(resolvedPhase);
       }),
       {
@@ -327,16 +317,19 @@ function extractAssistantTextForPhase(msg: AssistantMessage, phase?: AssistantPh
       },
     ) ?? "";
 
-  return finalizeAssistantExtraction(msg, extracted);
+  return {
+    text: finalizeAssistantExtraction(msg, extracted),
+    hadRequestedPhase,
+  };
 }
 
 export function extractAssistantVisibleText(msg: AssistantMessage): string {
-  const finalAnswerText = extractAssistantTextForPhase(msg, "final_answer");
-  if (finalAnswerText.trim()) {
-    return finalAnswerText;
+  const finalAnswerExtraction = extractAssistantTextForPhase(msg, "final_answer");
+  if (finalAnswerExtraction.hadRequestedPhase) {
+    return finalAnswerExtraction.text.trim() ? finalAnswerExtraction.text : "";
   }
 
-  return extractAssistantTextForPhase(msg);
+  return extractAssistantTextForPhase(msg).text;
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
