@@ -347,7 +347,7 @@ Events are not replayed. On sequence gaps, refresh state (`health`, `system-pres
 | `Gateway start blocked: set gateway.mode=local`                | Config set to remote mode, or local-mode stamp is missing from a damaged config |
 | `unauthorized` during connect                                  | Auth mismatch between client and gateway                                        |
 
-For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooting).
+For full symptom-first diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooting).
 
 ## Safety guarantees
 

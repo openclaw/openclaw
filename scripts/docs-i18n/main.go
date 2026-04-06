@@ -135,6 +135,9 @@ func main() {
 	if err := tm.Save(); err != nil {
 		fatal(err)
 	}
+	if err := relocalizeExistingDocs(resolvedDocsRoot, *targetLang); err != nil {
+		fatal(err)
+	}
 	elapsed := time.Since(start).Round(time.Millisecond)
 	log.Printf("docs-i18n: completed processed=%d skipped=%d elapsed=%s", processed, skipped, elapsed)
 }
