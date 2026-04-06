@@ -30,6 +30,13 @@ import type {
 } from "./types.js";
 
 type PluginManifestContractListKey =
+  | "speechProviders"
+  | "mediaUnderstandingProviders"
+  | "realtimeVoiceProviders"
+  | "realtimeTranscriptionProviders"
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders"
   | "memoryEmbeddingProviders"
   | "webFetchProviders"
   | "webSearchProviders";

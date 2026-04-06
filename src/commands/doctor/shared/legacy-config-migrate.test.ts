@@ -3,7 +3,10 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
-import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import {
+  applyLegacyDoctorMigrations,
+  migrateLegacyConfig,
+} from "./legacy-config-migrate.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -156,146 +159,6 @@ describe("legacy migrate mention routing", () => {
   });
 });
 
-describe("legacy migrate tts provider shape", () => {
-  it("moves messages.tts.<provider> keys into messages.tts.providers", () => {
-    const res = migrateLegacyConfig({
-      messages: {
-        tts: {
-          provider: "elevenlabs",
-          elevenlabs: {
-            apiKey: "test-key",
-            voiceId: "voice-1",
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Moved messages.tts.elevenlabs → messages.tts.providers.elevenlabs.",
-    );
-    expect(res.config?.messages?.tts).toEqual({
-      provider: "elevenlabs",
-      providers: {
-        elevenlabs: {
-          apiKey: "test-key",
-          voiceId: "voice-1",
-        },
-      },
-    });
-  });
-
-  it("moves channels.discord.accounts.<id>.voice.tts.edge into providers.microsoft", () => {
-    const res = migrateLegacyConfig({
-      channels: {
-        discord: {
-          accounts: {
-            main: {
-              voice: {
-                tts: {
-                  edge: {
-                    voice: "en-US-JennyNeural",
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
-    );
-    const mainTts = (
-      res.config?.channels?.discord?.accounts as
-        | Record<string, { voice?: { tts?: Record<string, unknown> } }>
-        | undefined
-    )?.main?.voice?.tts;
-    expect(mainTts?.providers).toEqual({
-      microsoft: {
-        voice: "en-US-JennyNeural",
-      },
-    });
-    expect(mainTts?.edge).toBeUndefined();
-  });
-
-  it("moves plugins.entries.voice-call.config.tts.<provider> keys into providers", () => {
-    const res = migrateLegacyConfig({
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              tts: {
-                provider: "openai",
-                openai: {
-                  model: "gpt-4o-mini-tts",
-                  voice: "alloy",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toContain(
-      "Moved plugins.entries.voice-call.config.tts.openai → plugins.entries.voice-call.config.tts.providers.openai.",
-    );
-    const voiceCallTts = (
-      res.config?.plugins?.entries as
-        | Record<string, { config?: { tts?: Record<string, unknown> } }>
-        | undefined
-    )?.["voice-call"]?.config?.tts;
-    expect(voiceCallTts).toEqual({
-      provider: "openai",
-      providers: {
-        openai: {
-          model: "gpt-4o-mini-tts",
-          voice: "alloy",
-        },
-      },
-    });
-  });
-
-  it("does not migrate legacy tts provider keys for unknown plugin ids", () => {
-    const res = migrateLegacyConfig({
-      plugins: {
-        entries: {
-          "third-party-plugin": {
-            config: {
-              tts: {
-                provider: "openai",
-                openai: {
-                  model: "custom-tts",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-});
-
-describe("legacy migrate talk provider shape", () => {
-  it("does not migrate extension-owned talk legacy fields during config-load migration", () => {
-    const res = migrateLegacyConfig({
-      talk: {
-        voiceId: "voice-1",
-        modelId: "eleven_v3",
-        outputFormat: "pcm_44100",
-        apiKey: "test-key",
-      },
-    });
-
-    expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
-  });
-});
-
 describe("legacy migrate sandbox scope aliases", () => {
   it("moves agents.defaults.sandbox.perSession into scope", () => {
     const res = migrateLegacyConfig({
@@ -378,27 +241,131 @@ describe("legacy migrate sandbox scope aliases", () => {
 });
 
 describe("legacy migrate channel streaming aliases", () => {
-  it("migrates telegram and discord streaming aliases", () => {
+  it("migrates preview-channel legacy streaming fields into the nested streaming shape", () => {
     const res = migrateLegacyConfig({
       channels: {
         telegram: {
           streamMode: "block",
+          chunkMode: "newline",
+          blockStreaming: true,
+          draftChunk: {
+            minChars: 120,
+          },
+          blockStreamingCoalesce: {
+            idleMs: 250,
+          },
         },
         discord: {
           streaming: false,
+          chunkMode: "newline",
+          blockStreaming: true,
+          draftChunk: {
+            maxChars: 900,
+          },
+        },
+        slack: {
+          streamMode: "status_final",
+          blockStreaming: true,
+          blockStreamingCoalesce: {
+            minChars: 100,
+          },
+          nativeStreaming: false,
         },
       },
     });
 
     expect(res.changes).toContain(
-      "Moved channels.telegram.streamMode → channels.telegram.streaming (block).",
+      "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
     );
-    expect(res.changes).toContain("Normalized channels.discord.streaming boolean → enum (off).");
+    expect(res.changes).toContain(
+      "Moved channels.telegram.chunkMode → channels.telegram.streaming.chunkMode.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.telegram.draftChunk → channels.telegram.streaming.preview.chunk.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.telegram.blockStreamingCoalesce → channels.telegram.streaming.block.coalesce.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (off).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.slack.streamMode → channels.slack.streaming.mode (progress).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.slack.nativeStreaming → channels.slack.streaming.nativeTransport.",
+    );
     expect(res.config?.channels?.telegram).toMatchObject({
-      streaming: "block",
+      streaming: {
+        mode: "block",
+        chunkMode: "newline",
+        block: {
+          enabled: true,
+          coalesce: {
+            idleMs: 250,
+          },
+        },
+        preview: {
+          chunk: {
+            minChars: 120,
+          },
+        },
+      },
     });
     expect(res.config?.channels?.discord).toMatchObject({
-      streaming: "off",
+      streaming: {
+        mode: "off",
+        chunkMode: "newline",
+        block: {
+          enabled: true,
+        },
+        preview: {
+          chunk: {
+            maxChars: 900,
+          },
+        },
+      },
+    });
+    expect(res.config?.channels?.slack).toMatchObject({
+      streaming: {
+        mode: "progress",
+        block: {
+          enabled: true,
+          coalesce: {
+            minChars: 100,
+          },
+        },
+        nativeTransport: false,
+      },
+    });
+  });
+
+  it("preserves slack streaming=false when deriving nativeTransport during migration", () => {
+    const raw = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          streaming: false,
+        },
+      },
+    };
+    const res = migrateLegacyConfig(raw);
+    const migrated = applyLegacyDoctorMigrations(raw);
+
+    expect(res.changes).toContain(
+      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.mode (off).",
+    );
+    expect((migrated.next as { channels?: { slack?: unknown } }).channels?.slack).toMatchObject({
+      streaming: {
+        mode: "off",
+        nativeTransport: false,
+      },
     });
   });
 
@@ -959,7 +926,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 
   it("does not overwrite existing allowedOrigins — returns null (no migration needed)", () => {
     // When allowedOrigins already exists, the migration is a no-op.
-    // applyLegacyMigrations returns next=null when changes.length===0, so config is null.
+    // applyLegacyDoctorMigrations returns next=null when changes.length===0, so config is null.
     const res = migrateLegacyConfig({
       gateway: {
         bind: "lan",

@@ -1,8 +1,47 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   normalizeProviderSpecificConfig,
   resolveProviderConfigApiKeyResolver,
 } from "./models-config.providers.policy.js";
+
+const GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com";
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
+  normalizeProviderConfigWithPlugin: (params: {
+    provider: string;
+    context: { providerConfig?: { baseUrl?: string } };
+  }) => {
+    if (params.provider !== "google") {
+      return undefined;
+    }
+    const baseUrl = params.context.providerConfig?.baseUrl?.trim();
+    if (!baseUrl || baseUrl.endsWith("/v1beta")) {
+      return undefined;
+    }
+    return {
+      ...params.context.providerConfig,
+      baseUrl:
+        baseUrl === GOOGLE_BASE_URL
+          ? `${GOOGLE_BASE_URL}/v1beta`
+          : params.context.providerConfig?.baseUrl,
+    };
+  },
+  resolveProviderConfigApiKeyWithPlugin: (params: {
+    provider: string;
+    context: { env: NodeJS.ProcessEnv };
+  }) => {
+    if (params.provider === "amazon-bedrock") {
+      return params.context.env.AWS_PROFILE?.trim() ? "AWS_PROFILE" : undefined;
+    }
+    if (params.provider === "anthropic-vertex") {
+      return params.context.env.ANTHROPIC_VERTEX_USE_GCP_METADATA === "true"
+        ? "gcp-vertex-credentials"
+        : undefined;
+    }
+    return undefined;
+  },
+}));
 
 describe("models-config.providers.policy", () => {
   it("resolves config apiKey markers through provider plugin hooks", async () => {
@@ -47,7 +86,9 @@ describe("models-config.providers.policy", () => {
       models: [],
     };
 
-    expect(resolveProviderConfigApiKeyResolver("dashscope-vision", provider)).toBeUndefined();
+    const resolver = resolveProviderConfigApiKeyResolver("dashscope-vision", provider);
+    expect(resolver).toBeTypeOf("function");
+    expect(resolver?.({} as NodeJS.ProcessEnv)).toBeUndefined();
     expect(normalizeProviderSpecificConfig("dashscope-vision", provider)).toBe(provider);
   });
 });

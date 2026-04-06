@@ -2313,6 +2313,42 @@ for usage/billing and raise limits as needed.
 
   </Accordion>
 
+  <Accordion title="How do I configure fast mode for GPT 5.4?">
+    Use either a session toggle or a config default:
+
+    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.4` or `openai-codex/gpt-5.4`.
+    - **Per model default:** set `agents.defaults.models["openai/gpt-5.4"].params.fastMode` to `true`.
+    - **Codex OAuth too:** if you also use `openai-codex/gpt-5.4`, set the same flag there.
+
+    Example:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.4": {
+              params: {
+                fastMode: true,
+              },
+            },
+            "openai-codex/gpt-5.4": {
+              params: {
+                fastMode: true,
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    For OpenAI, fast mode maps to `service_tier = "priority"` on supported native Responses requests. Session `/fast` overrides beat config defaults.
+
+    See [Thinking and fast mode](/tools/thinking) and [OpenAI fast mode](/providers/openai#openai-fast-mode).
+
+  </Accordion>
+
   <Accordion title='Why do I see "Model ... is not allowed" and then no reply?'>
     If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and any
     session overrides. Choosing a model that isn't in that list returns:

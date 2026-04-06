@@ -1,4 +1,4 @@
-import { listBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
+import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { isRecord } from "../utils.js";
 
 const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
@@ -10,9 +10,11 @@ const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
 ] as const;
 
 function collectChannelUnsupportedSecretRefSurfacePatterns(): string[] {
-  return listBootstrapChannelPlugins().flatMap(
-    (plugin) => plugin.secrets?.unsupportedSecretRefSurfacePatterns ?? [],
-  );
+  const patterns: string[] = [];
+  for (const plugin of iterateBootstrapChannelPlugins()) {
+    patterns.push(...(plugin.secrets?.unsupportedSecretRefSurfacePatterns ?? []));
+  }
+  return patterns;
 }
 
 let cachedUnsupportedSecretRefSurfacePatterns: string[] | null = null;
@@ -74,7 +76,7 @@ export function collectUnsupportedSecretRefConfigCandidates(
   }
 
   if (isRecord(raw.channels)) {
-    for (const plugin of listBootstrapChannelPlugins()) {
+    for (const plugin of iterateBootstrapChannelPlugins()) {
       const channelCandidates = plugin.secrets?.collectUnsupportedSecretRefConfigCandidates?.(raw);
       if (!channelCandidates?.length) {
         continue;

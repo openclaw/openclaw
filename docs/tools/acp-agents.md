@@ -114,7 +114,6 @@ Important distinction:
   For operators, the practical rule is:
 
 - want `/acp spawn`, bindable sessions, runtime controls, or persistent harness work: use ACP
-- want simple local text fallback through the raw CLI: use CLI backends
 
 ## Bound sessions
 

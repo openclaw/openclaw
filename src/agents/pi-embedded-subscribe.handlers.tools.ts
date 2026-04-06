@@ -295,6 +295,30 @@ function collectEmittedToolOutputMediaUrls(
   return filterToolResultMediaUrls(toolName, mediaUrls, result);
 }
 
+const COMPACT_PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
+
+function hasProviderInventoryDetails(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const details = readToolResultDetailsRecord(result);
+  return Array.isArray(details?.providers);
+}
+
+function shouldEmitCompactToolOutput(params: {
+  toolName: string;
+  result: unknown;
+  outputText?: string;
+}): boolean {
+  if (!COMPACT_PROVIDER_INVENTORY_TOOLS.has(params.toolName)) {
+    return false;
+  }
+  if (!hasProviderInventoryDetails(params.result)) {
+    return false;
+  }
+  return Boolean(params.outputText?.trim());
+}
+
 function readExecApprovalPendingDetails(result: unknown): {
   approvalId: string;
   approvalSlug: string;
@@ -345,7 +369,9 @@ function readExecApprovalPendingDetails(result: unknown): {
 function readExecApprovalUnavailableDetails(result: unknown): {
   reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
   warningText?: string;
+  channel?: string;
   channelLabel?: string;
+  accountId?: string;
   sentApproverDms?: boolean;
 } | null {
   if (!result || typeof result !== "object") {
@@ -371,7 +397,9 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   return {
     reason,
     warningText: typeof details.warningText === "string" ? details.warningText : undefined,
+    channel: typeof details.channel === "string" ? details.channel : undefined,
     channelLabel: typeof details.channelLabel === "string" ? details.channelLabel : undefined,
+    accountId: typeof details.accountId === "string" ? details.accountId : undefined,
     sentApproverDms: details.sentApproverDms === true,
   };
 }
@@ -431,7 +459,9 @@ async function emitToolResultOutput(params: {
         buildExecApprovalUnavailableReplyPayload({
           reason: approvalUnavailable.reason,
           warningText: approvalUnavailable.warningText,
+          channel: approvalUnavailable.channel,
           channelLabel: approvalUnavailable.channelLabel,
+          accountId: approvalUnavailable.accountId,
           sentApproverDms: approvalUnavailable.sentApproverDms,
         }),
       );
@@ -442,8 +472,10 @@ async function emitToolResultOutput(params: {
     return;
   }
 
-  if (ctx.shouldEmitToolOutput()) {
-    const outputText = extractToolResultText(sanitizedResult);
+  const outputText = extractToolResultText(sanitizedResult);
+  const shouldEmitOutput =
+    ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText });
+  if (shouldEmitOutput) {
     if (outputText) {
       if (ctx.params.toolResultFormat === "plain") {
         emittedToolOutputMediaUrls = collectEmittedToolOutputMediaUrls(

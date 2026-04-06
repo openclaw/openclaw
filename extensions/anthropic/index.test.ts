@@ -4,10 +4,10 @@ import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-
 import anthropicPlugin from "./index.js";
 
 describe("anthropic provider replay hooks", () => {
-  it("registers no cli backends", async () => {
+  it("registers no cli commands", async () => {
     const captured = capturePluginRegistration({ register: anthropicPlugin.register });
 
-    expect(captured.cliBackends).toEqual([]);
+    expect(captured.cliRegistrars).toEqual([]);
   });
 
   it("owns native reasoning output mode for Claude transports", async () => {

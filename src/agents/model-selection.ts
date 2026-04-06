@@ -86,10 +86,6 @@ export {
   normalizeProviderIdForAuth,
 };
 
-export function isCliProvider(_provider: string, _cfg?: OpenClawConfig): boolean {
-  return false;
-}
-
 function normalizeProviderModelId(provider: string, model: string): string {
   const staticModelId = normalizeStaticProviderModelId(provider, model);
   return (

@@ -51,6 +51,7 @@ openclaw onboard --non-interactive \
 | ---------------------- | ----------------- |
 | Chat completions       | Yes               |
 | Image generation       | Yes               |
+| Music generation       | Yes               |
 | Image understanding    | Yes               |
 | Audio transcription    | Yes               |
 | Video understanding    | Yes               |
@@ -99,6 +100,79 @@ The bundled `google` image-generation provider defaults to
 
 Image generation, media understanding, and Gemini Grounding all stay on the
 `google` provider id.
+
+To use Google as the default image provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "google/gemini-3.1-flash-image-preview",
+      },
+    },
+  },
+}
+```
+
+See [Image Generation](/tools/image-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Video generation
+
+The bundled `google` plugin also registers video generation through the shared
+`video_generate` tool.
+
+- Default video model: `google/veo-3.1-fast-generate-preview`
+- Modes: text-to-video, image-to-video, and single-video reference flows
+- Supports `aspectRatio`, `resolution`, and `audio`
+- Current duration clamp: **4 to 8 seconds**
+
+To use Google as the default video provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "google/veo-3.1-fast-generate-preview",
+      },
+    },
+  },
+}
+```
+
+See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Music generation
+
+The bundled `google` plugin also registers music generation through the shared
+`music_generate` tool.
+
+- Default music model: `google/lyria-3-clip-preview`
+- Also supports `google/lyria-3-pro-preview`
+- Prompt controls: `lyrics` and `instrumental`
+- Output format: `mp3` by default, plus `wav` on `google/lyria-3-pro-preview`
+- Reference inputs: up to 10 images
+- Session-backed runs detach through the shared task/status flow, including `action: "status"`
+
+To use Google as the default music provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "google/lyria-3-clip-preview",
+      },
+    },
+  },
+}
+```
+
+See [Music Generation](/tools/music-generation) for the shared tool
+parameters, provider selection, and failover behavior.
 
 ## Environment note
 

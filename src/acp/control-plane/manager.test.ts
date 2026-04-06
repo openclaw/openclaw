@@ -3,6 +3,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
+import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
 
@@ -42,6 +44,7 @@ let findTaskByRunId: typeof import("../../tasks/task-registry.js").findTaskByRun
 let resetTaskRegistryForTests: typeof import("../../tasks/task-registry.js").resetTaskRegistryForTests;
 let resetTaskFlowRegistryForTests: typeof import("../../tasks/task-flow-registry.js").resetTaskFlowRegistryForTests;
 let installInMemoryTaskRegistryRuntime: typeof import("../../test-utils/task-registry-runtime.js").installInMemoryTaskRegistryRuntime;
+let configureTaskFlowRegistryRuntime: typeof import("../../tasks/task-flow-registry.store.js").configureTaskFlowRegistryRuntime;
 
 const baseCfg = {
   acp: {
@@ -58,6 +61,17 @@ async function withAcpManagerTaskStateDir(run: (root: string) => Promise<void>):
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     installInMemoryTaskRegistryRuntime();
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          flows: new Map(),
+        }),
+        saveSnapshot: () => {},
+        upsertFlow: () => {},
+        deleteFlow: () => {},
+        close: () => {},
+      },
+    });
     try {
       await run(root);
     } finally {
@@ -186,6 +200,8 @@ describe("AcpSessionManager", () => {
     ({ AcpRuntimeError } = await import("../runtime/errors.js"));
     ({ findTaskByRunId, resetTaskRegistryForTests } = await import("../../tasks/task-registry.js"));
     ({ resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js"));
+    ({ configureTaskFlowRegistryRuntime } =
+      await import("../../tasks/task-flow-registry.store.js"));
     ({ installInMemoryTaskRegistryRuntime } =
       await import("../../test-utils/task-registry-runtime.js"));
   });
@@ -205,6 +221,8 @@ describe("AcpSessionManager", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
+    resetSystemEventsForTest();
+    resetHeartbeatWakeStateForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
   });
@@ -328,7 +346,6 @@ describe("AcpSessionManager", () => {
         mode: "prompt",
         requestId: "direct-parented-run",
       });
-
       await flushMicrotasks();
 
       expect(findTaskByRunId("direct-parented-run")).toMatchObject({

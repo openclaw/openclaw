@@ -1,6 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -39,6 +39,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { normalizeVerboseLevel } from "../thinking.js";
 import {
   getReplyPayloadMetadata,
   type BlockReplyContext,
@@ -84,6 +85,13 @@ function loadTtsRuntime() {
   return ttsRuntimePromise;
 }
 
+async function maybeApplyTtsToReplyPayload(
+  params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
+) {
+  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  return maybeApplyTtsToPayload(params);
+}
+
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
@@ -123,6 +131,7 @@ const resolveSessionStoreLookup = (
   cfg: OpenClawConfig,
 ): {
   sessionKey?: string;
+  storePath?: string;
   entry?: SessionEntry;
 } => {
   const targetSessionKey =
@@ -137,13 +146,37 @@ const resolveSessionStoreLookup = (
     const store = loadSessionStore(storePath);
     return {
       sessionKey,
+      storePath,
       entry: resolveSessionStoreEntry({ store, sessionKey }).existing,
     };
   } catch {
     return {
       sessionKey,
+      storePath,
     };
   }
+};
+
+const createShouldEmitVerboseProgress = (params: {
+  sessionKey?: string;
+  storePath?: string;
+  fallbackLevel: string;
+}) => {
+  return () => {
+    if (params.sessionKey && params.storePath) {
+      try {
+        const store = loadSessionStore(params.storePath);
+        const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+        const currentLevel = normalizeVerboseLevel(String(entry?.verboseLevel ?? ""));
+        if (currentLevel) {
+          return currentLevel !== "off";
+        }
+      } catch {
+        // Ignore transient store read failures and fall back to the current dispatch snapshot.
+      }
+    }
+    return params.fallbackLevel !== "off";
+  };
 };
 
 export type DispatchFromConfigResult = {
@@ -157,6 +190,8 @@ export async function dispatchReplyFromConfig(params: {
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./get-reply-from-config.runtime.js").getReplyFromConfig;
+  fastAbortResolver?: typeof import("./abort.runtime.js").tryFastAbortFromMessage;
+  formatAbortReplyTextResolver?: typeof import("./abort.runtime.js").formatAbortReplyText;
   /** Optional config override passed to getReplyFromConfig (e.g. per-sender timezone). */
   configOverride?: OpenClawConfig;
 }): Promise<DispatchFromConfigResult> {
@@ -221,6 +256,21 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
+  const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
+  const shouldEmitVerboseProgress = createShouldEmitVerboseProgress({
+    sessionKey: acpDispatchSessionKey,
+    storePath: sessionStoreEntry.storePath,
+    fallbackLevel:
+      normalizeVerboseLevel(
+        String(
+          sessionStoreEntry.entry?.verboseLevel ??
+            sessionAgentCfg?.verboseDefault ??
+            cfg.agents?.defaults?.verboseDefault ??
+            "",
+        ),
+      ) ?? "off",
+  });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
@@ -450,11 +500,17 @@ export async function dispatchReplyFromConfig(params: {
   markProcessing();
 
   try {
-    const abortRuntime = await loadAbortRuntime();
-    const fastAbort = await abortRuntime.tryFastAbortFromMessage({ ctx, cfg });
+    const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
+    const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
+    const formatAbortReplyTextResolver =
+      params.formatAbortReplyTextResolver ?? abortRuntime?.formatAbortReplyText;
+    if (!fastAbortResolver || !formatAbortReplyTextResolver) {
+      throw new Error("abort runtime unavailable");
+    }
+    const fastAbort = await fastAbortResolver({ ctx, cfg });
     if (fastAbort.handled) {
       const payload = {
-        text: abortRuntime.formatAbortReplyText(fastAbort.stoppedSubagents),
+        text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
@@ -502,13 +558,12 @@ export async function dispatchReplyFromConfig(params: {
       chatType: sessionStoreEntry.entry?.chatType,
     });
 
-    const { maybeApplyTtsToPayload } = await loadTtsRuntime();
     const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
     const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
-      const ttsPayload = await maybeApplyTtsToPayload({
+      const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
         channel: ttsChannel,
@@ -650,6 +705,7 @@ export async function dispatchReplyFromConfig(params: {
     const maybeSendWorkingStatus = (label: string) => {
       const normalizedLabel = normalizeWorkingLabel(label);
       if (
+        !shouldEmitVerboseProgress() ||
         !shouldSendToolStartStatuses ||
         !normalizedLabel ||
         toolStartStatusCount >= 2 ||
@@ -668,6 +724,9 @@ export async function dispatchReplyFromConfig(params: {
       dispatcher.sendToolResult(payload);
     };
     const sendPlanUpdate = (payload: { explanation?: string; steps?: string[] }) => {
+      if (!shouldEmitVerboseProgress()) {
+        return;
+      }
       const replyPayload: ReplyPayload = {
         text: formatPlanUpdateText(payload),
       };
@@ -758,7 +817,7 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
+            const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
               channel: ttsChannel,
@@ -834,7 +893,7 @@ export async function dispatchReplyFromConfig(params: {
                   }
                 : context;
             await params.replyOptions?.onBlockReplyQueued?.(payload, queuedContext);
-            const ttsPayload = await maybeApplyTtsToPayload({
+            const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
               channel: ttsChannel,
@@ -918,7 +977,7 @@ export async function dispatchReplyFromConfig(params: {
       accumulatedBlockText.trim()
     ) {
       try {
-        const ttsSyntheticReply = await maybeApplyTtsToPayload({
+        const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
           payload: { text: accumulatedBlockText },
           cfg,
           channel: ttsChannel,

@@ -23,11 +23,13 @@ import {
   minimaxMediaUnderstandingProvider,
   minimaxPortalMediaUnderstandingProvider,
 } from "./media-understanding-provider.js";
+import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
+import { buildMinimaxVideoGenerationProvider } from "./video-generation-provider.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -313,6 +315,8 @@ export default definePluginEntry({
     });
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildMinimaxMusicGenerationProvider());
+    api.registerVideoGenerationProvider(buildMinimaxVideoGenerationProvider());
     api.registerSpeechProvider(buildMinimaxSpeechProvider());
     api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
   },

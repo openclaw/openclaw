@@ -11,8 +11,11 @@ import {
   normalizeGoogleModelId,
   resolveGoogleGenerativeAiTransport,
 } from "./api.js";
+import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { buildGoogleMusicGenerationProvider } from "./music-generation-provider.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
+import { buildGoogleVideoGenerationProvider } from "./video-generation-provider.js";
 
 let googleImageGenerationProviderPromise: Promise<ImageGenerationProvider> | null = null;
 let googleMediaUnderstandingProviderPromise: Promise<MediaUnderstandingProvider> | null = null;
@@ -120,6 +123,7 @@ export default definePluginEntry({
   name: "Google Plugin",
   description: "Bundled Google plugin",
   register(api) {
+    registerGoogleGeminiCliProvider(api);
     api.registerProvider({
       id: "google",
       label: "Google AI Studio",
@@ -163,6 +167,8 @@ export default definePluginEntry({
     });
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
+    api.registerMusicGenerationProvider(buildGoogleMusicGenerationProvider());
+    api.registerVideoGenerationProvider(buildGoogleVideoGenerationProvider());
     api.registerWebSearchProvider(createGeminiWebSearchProvider());
   },
 });

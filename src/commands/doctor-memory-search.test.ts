@@ -232,6 +232,7 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("QMD memory backend is configured");
     expect(message).toContain("spawn qmd ENOENT");
     expect(message).toContain("npm install -g @tobilu/qmd");
+    expect(message).toContain("bun install -g @tobilu/qmd");
   });
 
   it("does not warn when remote apiKey is configured for explicit provider", async () => {

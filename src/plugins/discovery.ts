@@ -296,7 +296,15 @@ function isExtensionFile(filePath: string): boolean {
   if (!EXTENSION_EXTS.has(ext)) {
     return false;
   }
-  return !filePath.endsWith(".d.ts");
+  if (filePath.endsWith(".d.ts")) {
+    return false;
+  }
+  const baseName = path.basename(filePath).toLowerCase();
+  return (
+    !baseName.includes(".test.") &&
+    !baseName.includes(".live.test.") &&
+    !baseName.includes(".e2e.test.")
+  );
 }
 
 function shouldIgnoreScannedDirectory(dirName: string): boolean {

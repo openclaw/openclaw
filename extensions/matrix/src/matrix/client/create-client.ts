@@ -33,6 +33,7 @@ export async function createMatrixClient(params: {
   accessToken: string;
   password?: string;
   deviceId?: string;
+  persistStorage?: boolean;
   encryption?: boolean;
   localTimeoutMs?: number;
   initialSyncLimit?: number;
@@ -45,36 +46,41 @@ export async function createMatrixClient(params: {
   const { MatrixClient, ensureMatrixSdkLoggingConfigured } =
     await loadMatrixCreateClientRuntimeDeps();
   ensureMatrixSdkLoggingConfigured();
-  const env = process.env;
   const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
     dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
   });
   const userId = params.userId?.trim() || "unknown";
   const matrixClientUserId = params.userId?.trim() || undefined;
+  const persistStorage = params.persistStorage !== false;
+  const storagePaths = persistStorage
+    ? resolveMatrixStoragePaths({
+        homeserver,
+        userId,
+        accessToken: params.accessToken,
+        accountId: params.accountId,
+        deviceId: params.deviceId,
+        env: process.env,
+      })
+    : null;
 
-  const storagePaths = resolveMatrixStoragePaths({
-    homeserver,
-    userId,
-    accessToken: params.accessToken,
-    accountId: params.accountId,
-    deviceId: params.deviceId,
-    env,
-  });
-  await maybeMigrateLegacyStorage({
-    storagePaths,
-    env,
-  });
-  fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+  if (storagePaths) {
+    await maybeMigrateLegacyStorage({
+      storagePaths,
+      env: process.env,
+    });
+    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+    writeStorageMeta({
+      storagePaths,
+      homeserver,
+      userId,
+      accountId: params.accountId,
+      deviceId: params.deviceId,
+    });
+  }
 
-  writeStorageMeta({
-    storagePaths,
-    homeserver,
-    userId,
-    accountId: params.accountId,
-    deviceId: params.deviceId,
-  });
-
-  const cryptoDatabasePrefix = `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`;
+  const cryptoDatabasePrefix = storagePaths
+    ? `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`
+    : undefined;
 
   return new MatrixClient(homeserver, params.accessToken, {
     userId: matrixClientUserId,
@@ -83,9 +89,9 @@ export async function createMatrixClient(params: {
     encryption: params.encryption,
     localTimeoutMs: params.localTimeoutMs,
     initialSyncLimit: params.initialSyncLimit,
-    storagePath: storagePaths.storagePath,
-    recoveryKeyPath: storagePaths.recoveryKeyPath,
-    idbSnapshotPath: storagePaths.idbSnapshotPath,
+    storagePath: storagePaths?.storagePath,
+    recoveryKeyPath: storagePaths?.recoveryKeyPath,
+    idbSnapshotPath: storagePaths?.idbSnapshotPath,
     cryptoDatabasePrefix,
     autoBootstrapCrypto: params.autoBootstrapCrypto,
     ssrfPolicy: params.ssrfPolicy,

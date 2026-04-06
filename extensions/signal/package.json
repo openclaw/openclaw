@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/signal",
-  "version": "2026.4.4",
+  "version": "2026.4.5",
   "private": true,
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
