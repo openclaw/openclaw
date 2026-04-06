@@ -348,7 +348,7 @@ export async function extractPdfContent(
     return extractPdfContentPdfJs({ ...params, engineConfigured });
   }
 
-  if (engineConfigured === "auto" && params.pageNumbers && params.pageNumbers.length > 0) {
+  if (engineConfigured === "auto" && params.pageNumbers) {
     return extractPdfContentPdfJs({ ...params, engineConfigured });
   }
 
