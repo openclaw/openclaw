@@ -265,6 +265,62 @@ describe("gateway tool", () => {
     });
   });
 
+  it("rejects config.patch when it enables unsafe external content for gmail hooks", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-hook-patch", {
+        action: "config.patch",
+        raw: "{ hooks: { gmail: { allowUnsafeExternalContent: true } } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: hooks.gmail.allowUnsafeExternalContent=true",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("allows config.patch when it explicitly keeps a dangerous hook flag disabled", async () => {
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    const tool = requireGatewayTool(sessionKey);
+    const raw = "{ hooks: { gmail: { allowUnsafeExternalContent: false } } }";
+
+    await tool.execute("call-safe-hook-patch", {
+      action: "config.patch",
+      raw,
+    });
+
+    expectConfigMutationCall({
+      callGatewayTool: vi.mocked(callGatewayTool),
+      action: "config.patch",
+      raw,
+      sessionKey,
+    });
+  });
+
+  it("rejects config.patch when it weakens workspace-only apply_patch restrictions", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-apply-patch", {
+        action: "config.patch",
+        raw: "{ tools: { exec: { applyPatch: { workspaceOnly: false } } } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: tools.exec.applyPatch.workspaceOnly=false",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("rejects config.patch when it changes strict inline eval directly", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
@@ -315,6 +371,44 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.patch when it disables control ui device auth", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-device-auth", {
+        action: "config.patch",
+        raw: "{ gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: gateway.controlUi.dangerouslyDisableDeviceAuth=true",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch when it enables approve-all plugin permission mode", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-dangerous-plugin-permissions", {
+        action: "config.patch",
+        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "approve-all" } } } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: plugins.entries.acpx.config.permissionMode=approve-all",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("rejects config.patch when a legacy tools.bash alias changes exec security", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
@@ -331,6 +425,31 @@ describe("gateway tool", () => {
       }),
     ).rejects.toThrow(
       "gateway config.patch cannot change protected config paths: tools.exec.security",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch when a legacy tools.bash alias weakens workspace-only apply_patch restrictions", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: {} };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-legacy-dangerous-apply-patch", {
+        action: "config.patch",
+        raw: "{ tools: { bash: { applyPatch: { workspaceOnly: false } } } }",
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: tools.exec.applyPatch.workspaceOnly=false",
     );
     expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
     expect(callGatewayTool).not.toHaveBeenCalledWith(

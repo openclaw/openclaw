@@ -13,6 +13,7 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
+import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -94,6 +95,26 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
   return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
+function collectNewlyEnabledDangerousConfigFlags(
+  currentConfig: Record<string, unknown>,
+  nextConfig: Record<string, unknown>,
+): string[] {
+  const currentFlags = new Set(
+    collectEnabledInsecureOrDangerousFlags(currentConfig as OpenClawConfig),
+  );
+  const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig).filter(
+    (flag) => !currentFlags.has(flag),
+  );
+  if (
+    getValueAtPath(currentConfig, "tools.exec.applyPatch.workspaceOnly") !== false &&
+    getValueAtPath(nextConfig, "tools.exec.applyPatch.workspaceOnly") === false &&
+    !nextFlags.includes("tools.exec.applyPatch.workspaceOnly=false")
+  ) {
+    nextFlags.push("tools.exec.applyPatch.workspaceOnly=false");
+  }
+  return nextFlags;
+}
+
 function assertGatewayConfigMutationAllowed(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;
@@ -113,11 +134,20 @@ function assertGatewayConfigMutationAllowed(params: {
         getValueAtPath(nextConfig, path),
       ),
   );
-  if (changedProtectedPaths.length === 0) {
+  if (changedProtectedPaths.length > 0) {
+    throw new Error(
+      `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+    );
+  }
+  const newlyEnabledDangerousFlags = collectNewlyEnabledDangerousConfigFlags(
+    params.currentConfig,
+    nextConfig,
+  );
+  if (newlyEnabledDangerousFlags.length === 0) {
     return;
   }
   throw new Error(
-    `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+    `gateway ${params.action} cannot enable dangerous config flags: ${newlyEnabledDangerousFlags.join(", ")}`,
   );
 }
 
