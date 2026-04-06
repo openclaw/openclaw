@@ -1,142 +1,25 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type {
-  PluginWebFetchProviderEntry,
-  PluginWebSearchProviderEntry,
-} from "../plugins/types.js";
+import type { PluginOrigin } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-}));
-const { resolvePluginWebFetchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
-}));
+let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
+let collectAuthStoreAssignments: typeof import("./runtime-auth-collectors.js").collectAuthStoreAssignments;
+let collectConfigAssignments: typeof import("./runtime-config-collectors.js").collectConfigAssignments;
+let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
+let resolveSecretRefValues: typeof import("./resolve.js").resolveSecretRefValues;
 
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
-
-vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
-
-vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
-  resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
-}));
-
-function createTestProvider(params: {
-  id: "brave" | "gemini" | "grok" | "kimi" | "minimax" | "perplexity" | "firecrawl" | "tavily";
-  pluginId: string;
-  order: number;
-}): PluginWebSearchProviderEntry {
-  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
-  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
-    const providerConfig =
-      searchConfig?.[params.id] && typeof searchConfig[params.id] === "object"
-        ? (searchConfig[params.id] as { apiKey?: unknown })
-        : undefined;
-    return providerConfig?.apiKey ?? searchConfig?.apiKey;
-  };
-  return {
-    pluginId: params.pluginId,
-    id: params.id,
-    label: params.id,
-    hint: `${params.id} test provider`,
-    envVars: [`${params.id.toUpperCase()}_API_KEY`],
-    placeholder: `${params.id}-...`,
-    signupUrl: `https://example.com/${params.id}`,
-    autoDetectOrder: params.order,
-    credentialPath,
-    inactiveSecretPaths: [credentialPath],
-    getCredentialValue: readSearchConfigKey,
-    setCredentialValue: (searchConfigTarget, value) => {
-      const providerConfig =
-        params.id === "brave" || params.id === "firecrawl"
-          ? searchConfigTarget
-          : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
-      providerConfig.apiKey = value;
-    },
-    getConfiguredCredentialValue: (config) =>
-      (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
-        ?.webSearch?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
-      const entries = (plugins.entries ??= {});
-      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
-      const config = (entry.config ??= {});
-      const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
-      webSearch.apiKey = value;
-    },
-    resolveRuntimeMetadata:
-      params.id === "perplexity"
-        ? () => ({
-            perplexityTransport: "search_api" as const,
-          })
-        : undefined,
-    createTool: () => null,
-  };
-}
-
-function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
-  return [
-    createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
-    createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
-    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
-    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
-    createTestProvider({ id: "minimax", pluginId: "minimax", order: 15 }),
-    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
-    createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
-    createTestProvider({ id: "tavily", pluginId: "tavily", order: 70 }),
-  ];
-}
-
-function buildTestWebFetchProviders(): PluginWebFetchProviderEntry[] {
-  return [
-    {
-      pluginId: "firecrawl",
-      id: "firecrawl",
-      label: "firecrawl",
-      hint: "firecrawl test provider",
-      envVars: ["FIRECRAWL_API_KEY"],
-      placeholder: "fc-...",
-      signupUrl: "https://example.com/firecrawl",
-      autoDetectOrder: 50,
-      credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
-      inactiveSecretPaths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
-      getCredentialValue: (fetchConfig) => fetchConfig?.apiKey,
-      setCredentialValue: (fetchConfigTarget, value) => {
-        fetchConfigTarget.apiKey = value;
-      },
-      getConfiguredCredentialValue: (config) => {
-        const entryConfig = config?.plugins?.entries?.firecrawl?.config;
-        return entryConfig && typeof entryConfig === "object"
-          ? (entryConfig as { webFetch?: { apiKey?: unknown } }).webFetch?.apiKey
-          : undefined;
-      },
-      setConfiguredCredentialValue: (configTarget, value) => {
-        const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
-        const entries = (plugins.entries ??= {});
-        const entry = (entries.firecrawl ??= {}) as { config?: Record<string, unknown> };
-        const config = (entry.config ??= {});
-        const webFetch = (config.webFetch ??= {}) as { apiKey?: unknown };
-        webFetch.apiKey = value;
-      },
-      createTool: () => null,
-    },
-  ];
-}
-
-function toConcretePathSegments(pathPattern: string): string[] {
+function toConcretePathSegments(pathPattern: string, wildcardToken = "sample"): string[] {
   const segments = pathPattern.split(".").filter(Boolean);
   const out: string[] = [];
   for (const segment of segments) {
     if (segment === "*") {
-      out.push("sample");
+      out.push(wildcardToken);
       continue;
     }
     if (segment.endsWith("[]")) {
@@ -158,14 +41,42 @@ function resolveCoverageResolvedPath(entry: SecretRegistryEntry): string {
   return canonicalizeSecretTargetCoverageId(entry.id);
 }
 
-function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string): OpenClawConfig {
-  const config = {} as OpenClawConfig;
+function resolveCoverageWildcardToken(index: number): string {
+  return `sample-${index}`;
+}
+
+function resolveCoverageResolvedSegments(
+  entry: SecretRegistryEntry,
+  wildcardToken: string,
+): string[] {
+  return toConcretePathSegments(resolveCoverageResolvedPath(entry), wildcardToken);
+}
+
+function buildCoverageLoadablePluginOrigins(
+  entries: readonly SecretRegistryEntry[],
+): ReadonlyMap<string, PluginOrigin> {
+  const origins = new Map<string, PluginOrigin>();
+  for (const entry of entries) {
+    const [scope, entriesKey, pluginId] = entry.id.split(".");
+    if (scope === "plugins" && entriesKey === "entries" && pluginId) {
+      origins.set(pluginId, "bundled");
+    }
+  }
+  return origins;
+}
+
+function applyConfigForOpenClawTarget(
+  config: OpenClawConfig,
+  entry: SecretRegistryEntry,
+  envId: string,
+  wildcardToken: string,
+): void {
   const resolvedEnvId = resolveCoverageEnvId(entry, envId);
   const refTargetPath =
     entry.secretShape === "sibling_ref" && entry.refPathPattern // pragma: allowlist secret
       ? entry.refPathPattern
       : entry.pathPattern;
-  setPathCreateStrict(config, toConcretePathSegments(refTargetPath), {
+  setPathCreateStrict(config, toConcretePathSegments(refTargetPath, wildcardToken), {
     source: "env",
     provider: "default",
     id: resolvedEnvId,
@@ -173,10 +84,10 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id.startsWith("models.providers.")) {
     setPathCreateStrict(
       config,
-      ["models", "providers", "sample", "baseUrl"],
+      ["models", "providers", wildcardToken, "baseUrl"],
       "https://api.example/v1",
     );
-    setPathCreateStrict(config, ["models", "providers", "sample", "models"], []);
+    setPathCreateStrict(config, ["models", "providers", wildcardToken, "models"], []);
   }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
@@ -258,107 +169,161 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "models.providers.*.request.auth.token") {
     setPathCreateStrict(
       config,
-      ["models", "providers", "sample", "request", "auth", "mode"],
+      ["models", "providers", wildcardToken, "request", "auth", "mode"],
       "authorization-bearer",
     );
   }
   if (entry.id === "models.providers.*.request.auth.value") {
     setPathCreateStrict(
       config,
-      ["models", "providers", "sample", "request", "auth", "mode"],
+      ["models", "providers", wildcardToken, "request", "auth", "mode"],
       "header",
     );
     setPathCreateStrict(
       config,
-      ["models", "providers", "sample", "request", "auth", "headerName"],
+      ["models", "providers", wildcardToken, "request", "auth", "headerName"],
       "x-api-key",
     );
   }
   if (entry.id.startsWith("models.providers.*.request.proxy.tls.")) {
     setPathCreateStrict(
       config,
-      ["models", "providers", "sample", "request", "proxy", "mode"],
+      ["models", "providers", wildcardToken, "request", "proxy", "mode"],
       "explicit-proxy",
     );
     setPathCreateStrict(
       config,
-      ["models", "providers", "sample", "request", "proxy", "url"],
+      ["models", "providers", wildcardToken, "request", "proxy", "url"],
       "http://proxy.example:8080",
     );
   }
-  return config;
 }
 
-function buildAuthStoreForTarget(entry: SecretRegistryEntry, envId: string): AuthProfileStore {
+function applyAuthStoreTarget(
+  store: AuthProfileStore,
+  entry: SecretRegistryEntry,
+  envId: string,
+  wildcardToken: string,
+): void {
   if (entry.authProfileType === "token") {
-    return {
-      version: 1 as const,
-      profiles: {
-        sample: {
-          type: "token" as const,
-          provider: "sample-provider",
-          token: "legacy-token",
-          tokenRef: {
-            source: "env" as const,
-            provider: "default",
-            id: envId,
-          },
-        },
+    setPathCreateStrict(store, ["profiles", wildcardToken], {
+      type: "token" as const,
+      provider: "sample-provider",
+      token: "legacy-token",
+      tokenRef: {
+        source: "env" as const,
+        provider: "default",
+        id: envId,
       },
-    };
+    });
+    return;
   }
-  return {
-    version: 1 as const,
-    profiles: {
-      sample: {
-        type: "api_key" as const,
-        provider: "sample-provider",
-        key: "legacy-key",
-        keyRef: {
-          source: "env" as const,
-          provider: "default",
-          id: envId,
-        },
-      },
+  setPathCreateStrict(store, ["profiles", wildcardToken], {
+    type: "api_key" as const,
+    provider: "sample-provider",
+    key: "legacy-key",
+    keyRef: {
+      source: "env" as const,
+      provider: "default",
+      id: envId,
     },
+  });
+}
+
+async function prepareCoverageSnapshot(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentDirs: string[];
+  loadAuthStore: (agentDir?: string) => AuthProfileStore;
+  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+}) {
+  const sourceConfig = structuredClone(params.config);
+  const resolvedConfig = structuredClone(params.config);
+  const context = createResolverContext({
+    sourceConfig,
+    env: params.env,
+  });
+
+  collectConfigAssignments({
+    config: resolvedConfig,
+    context,
+    loadablePluginOrigins: params.loadablePluginOrigins,
+  });
+
+  const authStores = params.agentDirs.map((agentDir) => {
+    const store = structuredClone(params.loadAuthStore(agentDir));
+    collectAuthStoreAssignments({
+      store,
+      context,
+      agentDir,
+    });
+    return { agentDir, store };
+  });
+
+  if (context.assignments.length > 0) {
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      {
+        config: sourceConfig,
+        env: context.env,
+        cache: context.cache,
+      },
+    );
+    applyResolvedAssignments({
+      assignments: context.assignments,
+      resolved,
+    });
+  }
+
+  return {
+    config: resolvedConfig,
+    authStores,
+    warnings: context.warnings,
   };
 }
 
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  afterEach(() => {
-    clearSecretsRuntimeSnapshot();
-    resolvePluginWebSearchProvidersMock.mockReset();
-    resolvePluginWebFetchProvidersMock.mockReset();
-  });
-
-  beforeEach(() => {
-    clearSecretsRuntimeSnapshot();
+    const [sharedRuntime, authCollectors, configCollectors, resolver] = await Promise.all([
+      import("./runtime-shared.js"),
+      import("./runtime-auth-collectors.js"),
+      import("./runtime-config-collectors.js"),
+      import("./resolve.js"),
+    ]);
+    ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
+    ({ collectAuthStoreAssignments } = authCollectors);
+    ({ collectConfigAssignments } = configCollectors);
+    ({ resolveSecretRefValues } = resolver);
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {
     const entries = listSecretTargetRegistryEntries().filter(
       (entry) => entry.configFile === "openclaw.json",
     );
+    const config = {} as OpenClawConfig;
+    const env: Record<string, string> = {};
     for (const [index, entry] of entries.entries()) {
       const envId = `OPENCLAW_SECRET_TARGET_${index}`;
       const runtimeEnvId = resolveCoverageEnvId(entry, envId);
       const expectedValue = `resolved-${entry.id}`;
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: buildConfigForOpenClawTarget(entry, envId),
-        env: { [runtimeEnvId]: expectedValue },
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
-      });
+      const wildcardToken = resolveCoverageWildcardToken(index);
+      env[runtimeEnvId] = expectedValue;
+      applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
+    }
+    const snapshot = await prepareCoverageSnapshot({
+      config,
+      env,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      loadablePluginOrigins: buildCoverageLoadablePluginOrigins(entries),
+    });
+    for (const [index, entry] of entries.entries()) {
       const resolved = getPath(
         snapshot.config,
-        toConcretePathSegments(resolveCoverageResolvedPath(entry)),
+        resolveCoverageResolvedSegments(entry, resolveCoverageWildcardToken(index)),
       );
       if (entry.expectedResolvedValue === "string") {
-        expect(resolved).toBe(expectedValue);
+        expect(resolved).toBe(`resolved-${entry.id}`);
       } else {
         expect(typeof resolved === "string" || (resolved && typeof resolved === "object")).toBe(
           true,
@@ -371,19 +336,30 @@ describe("secrets runtime target coverage", () => {
     const entries = listSecretTargetRegistryEntries().filter(
       (entry) => entry.configFile === "auth-profiles.json",
     );
+    const env: Record<string, string> = {};
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {},
+    };
     for (const [index, entry] of entries.entries()) {
       const envId = `OPENCLAW_AUTH_SECRET_TARGET_${index}`;
-      const expectedValue = `resolved-${entry.id}`;
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: {} as OpenClawConfig,
-        env: { [envId]: expectedValue },
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => buildAuthStoreForTarget(entry, envId),
-      });
-      const store = snapshot.authStores[0]?.store;
-      expect(store).toBeDefined();
-      const resolved = getPath(store, toConcretePathSegments(entry.pathPattern));
-      expect(resolved).toBe(expectedValue);
+      env[envId] = `resolved-${entry.id}`;
+      applyAuthStoreTarget(authStore, entry, envId, resolveCoverageWildcardToken(index));
+    }
+    const snapshot = await prepareCoverageSnapshot({
+      config: {} as OpenClawConfig,
+      env,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => authStore,
+    });
+    const resolvedStore = snapshot.authStores[0]?.store;
+    expect(resolvedStore).toBeDefined();
+    for (const [index, entry] of entries.entries()) {
+      const resolved = getPath(
+        resolvedStore,
+        toConcretePathSegments(entry.pathPattern, resolveCoverageWildcardToken(index)),
+      );
+      expect(resolved).toBe(`resolved-${entry.id}`);
     }
   });
 });
