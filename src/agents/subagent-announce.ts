@@ -13,11 +13,11 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
-  resolveAnnounceOrigin,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
   resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
+import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
   buildChildCompletionFindings,

@@ -17,7 +17,7 @@ import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
 import { loadCronJobs, loadCronRuns, loadCronStatus } from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
-import { loadDreamingStatus } from "./controllers/dreaming.ts";
+import { loadDreamDiary, loadDreamingStatus } from "./controllers/dreaming.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
@@ -64,6 +64,10 @@ type SettingsHost = {
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
   dreamingModeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
 };
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
@@ -274,7 +278,10 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "dreams") {
     await loadConfig(host as unknown as OpenClawApp);
-    await loadDreamingStatus(host as unknown as OpenClawApp);
+    await Promise.all([
+      loadDreamingStatus(host as unknown as OpenClawApp),
+      loadDreamDiary(host as unknown as OpenClawApp),
+    ]);
   }
   if (host.tab === "chat") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);

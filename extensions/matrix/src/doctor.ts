@@ -8,7 +8,12 @@ import {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
   removePluginFromConfig,
-} from "openclaw/plugin-sdk/runtime";
+} from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  hasLegacyFlatAllowPrivateNetworkAlias,
+  isPrivateNetworkOptInEnabled,
+  migrateLegacyFlatAllowPrivateNetworkAlias,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   autoMigrateLegacyMatrixState,
   autoPrepareLegacyMatrixCrypto,
@@ -49,6 +54,16 @@ function hasLegacyMatrixAccountRoomAllowAliases(value: unknown): boolean {
   });
 }
 
+function hasLegacyMatrixAccountPrivateNetworkAliases(value: unknown): boolean {
+  const accounts = isRecord(value) ? value : null;
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) =>
+    hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
+  );
+}
+
 function normalizeMatrixRoomAllowAliases(params: {
   rooms: Record<string, unknown>;
   pathPrefix: string;
@@ -86,6 +101,14 @@ function normalizeMatrixCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorC
   let updatedMatrix: Record<string, unknown> = matrix;
   let changed = false;
 
+  const topLevelPrivateNetwork = migrateLegacyFlatAllowPrivateNetworkAlias({
+    entry: updatedMatrix,
+    pathPrefix: "channels.matrix",
+    changes,
+  });
+  updatedMatrix = topLevelPrivateNetwork.entry;
+  changed = changed || topLevelPrivateNetwork.changed;
+
   const normalizeTopLevelRoomScope = (key: "groups" | "rooms") => {
     const rooms = isRecord(updatedMatrix[key]) ? updatedMatrix[key] : null;
     if (!rooms) {
@@ -116,6 +139,17 @@ function normalizeMatrixCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorC
       }
       let nextAccount: Record<string, unknown> = account;
       let accountChanged = false;
+
+      const privateNetworkMigration = migrateLegacyFlatAllowPrivateNetworkAlias({
+        entry: nextAccount,
+        pathPrefix: `channels.matrix.accounts.${accountId}`,
+        changes,
+      });
+      if (privateNetworkMigration.changed) {
+        nextAccount = privateNetworkMigration.entry;
+        accountChanged = true;
+      }
+
       for (const key of ["groups", "rooms"] as const) {
         const rooms = isRecord(nextAccount[key]) ? nextAccount[key] : null;
         if (!rooms) {
@@ -159,21 +193,33 @@ function normalizeMatrixCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorC
 
 const MATRIX_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
   {
+    path: ["channels", "matrix"],
+    message:
+      'channels.matrix.allowPrivateNetwork is legacy; use channels.matrix.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(isRecord(value) ? value : {}),
+  },
+  {
+    path: ["channels", "matrix", "accounts"],
+    message:
+      'channels.matrix.accounts.<id>.allowPrivateNetwork is legacy; use channels.matrix.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
+    match: hasLegacyMatrixAccountPrivateNetworkAliases,
+  },
+  {
     path: ["channels", "matrix", "groups"],
     message:
-      "channels.matrix.groups.<room>.allow is legacy; use channels.matrix.groups.<room>.enabled instead (auto-migrated on load).",
+      'channels.matrix.groups.<room>.allow is legacy; use channels.matrix.groups.<room>.enabled instead. Run "openclaw doctor --fix".',
     match: hasLegacyMatrixRoomMapAllowAliases,
   },
   {
     path: ["channels", "matrix", "rooms"],
     message:
-      "channels.matrix.rooms.<room>.allow is legacy; use channels.matrix.rooms.<room>.enabled instead (auto-migrated on load).",
+      'channels.matrix.rooms.<room>.allow is legacy; use channels.matrix.rooms.<room>.enabled instead. Run "openclaw doctor --fix".',
     match: hasLegacyMatrixRoomMapAllowAliases,
   },
   {
     path: ["channels", "matrix", "accounts"],
     message:
-      "channels.matrix.accounts.<id>.{groups,rooms}.<room>.allow is legacy; use channels.matrix.accounts.<id>.{groups,rooms}.<room>.enabled instead (auto-migrated on load).",
+      'channels.matrix.accounts.<id>.{groups,rooms}.<room>.allow is legacy; use channels.matrix.accounts.<id>.{groups,rooms}.<room>.enabled instead. Run "openclaw doctor --fix".',
     match: hasLegacyMatrixAccountRoomAllowAliases,
   },
 ];

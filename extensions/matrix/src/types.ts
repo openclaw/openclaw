@@ -7,7 +7,7 @@ import type {
 } from "./runtime-api.js";
 export type { ContextVisibilityMode, DmPolicy, GroupPolicy };
 
-export type ReplyToMode = "off" | "first" | "all";
+export type ReplyToMode = "off" | "first" | "all" | "batched";
 
 export type MatrixDmConfig = {
   /** If false, ignore all incoming Matrix DMs. Default: true. */
@@ -16,6 +16,12 @@ export type MatrixDmConfig = {
   policy?: DmPolicy;
   /** Allowlist for DM senders (matrix user IDs or "*"). */
   allowFrom?: Array<string | number>;
+  /**
+   * How Matrix DMs map to sessions.
+   * - `per-user` (default): all DM rooms with the same routed peer share one DM session.
+   * - `per-room`: each Matrix DM room gets its own session key.
+   */
+  sessionScope?: "per-user" | "per-room";
   /** Per-DM thread reply behavior override (off|inbound|always). Overrides top-level threadReplies for direct messages. */
   threadReplies?: "off" | "inbound" | "always";
 };
@@ -77,6 +83,13 @@ export type MatrixExecApprovalConfig = {
   target?: MatrixExecApprovalTarget;
 };
 
+export type MatrixStreamingMode = "partial" | "quiet" | "off";
+
+export type MatrixNetworkConfig = {
+  /** Dangerous opt-in for trusted private/internal Matrix homeservers. */
+  dangerouslyAllowPrivateNetwork?: boolean;
+};
+
 /** Per-account Matrix config (excludes the accounts field to prevent recursion). */
 export type MatrixAccountConfig = Omit<MatrixConfig, "accounts">;
 
@@ -91,8 +104,8 @@ export type MatrixConfig = {
   defaultAccount?: string;
   /** Matrix homeserver URL (https://matrix.example.org). */
   homeserver?: string;
-  /** Allow Matrix homeserver traffic to private/internal hosts. */
-  allowPrivateNetwork?: boolean;
+  /** Network policy overrides for trusted private/internal Matrix homeservers. */
+  network?: MatrixNetworkConfig;
   /** Optional HTTP(S) proxy URL for Matrix connections (e.g. http://127.0.0.1:7890). */
   proxy?: string;
   /** Matrix user id (@user:server). */
@@ -131,7 +144,7 @@ export type MatrixConfig = {
   blockStreaming?: boolean;
   /** Allowlist for group senders (matrix user IDs). */
   groupAllowFrom?: Array<string | number>;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /** How to handle thread replies (off|inbound|always). */
   threadReplies?: "off" | "inbound" | "always";
@@ -178,16 +191,20 @@ export type MatrixConfig = {
   /**
    * Streaming mode for Matrix replies.
    * - `"partial"`: edit a single draft message in place for the current
+   *   assistant block as the model generates text using normal Matrix text
+   *   messages. This preserves legacy preview-first notification behavior.
+   * - `"quiet"`: edit a single quiet draft notice in place for the current
    *   assistant block as the model generates text.
    * - `"off"`: deliver the full reply once the model finishes.
    * - Use `blockStreaming: true` when you want completed assistant blocks to
    *   stay visible as separate progress messages. When combined with
-   *   `"partial"`, Matrix keeps a live draft for the current block and
+   *   preview streaming, Matrix keeps a live draft for the current block and
    *   preserves completed blocks as separate messages.
-   * - `true` maps to `"partial"`, `false` maps to `"off"`.
+   * - `true` maps to `"partial"`, `false` maps to `"off"` for backward
+   *   compatibility.
    * Default: `"off"`.
    */
-  streaming?: "partial" | "off" | boolean;
+  streaming?: MatrixStreamingMode | boolean;
 };
 
 export type CoreConfig = {

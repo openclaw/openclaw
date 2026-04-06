@@ -6,7 +6,7 @@ import {
   composeProviderStreamWrappers,
   resolveAnthropicPayloadPolicy,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
 const log = createSubsystemLogger("anthropic-stream");
@@ -210,7 +210,9 @@ export function resolveAnthropicServiceTier(
   return normalized;
 }
 
-export function wrapAnthropicProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+export function wrapAnthropicProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
   const fastMode = resolveAnthropicFastMode(ctx.extraParams);

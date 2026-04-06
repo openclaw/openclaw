@@ -7,6 +7,13 @@ import {
   wrapXaiProviderStream,
 } from "./stream.js";
 
+type ToolPayload = {
+  function?: Record<string, unknown>;
+};
+type XaiTestPayload = Record<string, unknown> & {
+  tools?: Array<{ type?: string; function?: Record<string, unknown> }>;
+  input?: unknown[];
+};
 function captureWrappedModelId(params: {
   modelId: string;
   fastMode: boolean;
@@ -59,10 +66,10 @@ describe("xai stream wrappers", () => {
 
   it("composes the xai provider stream chain from extra params", () => {
     let capturedModelId = "";
-    let capturedPayload: Record<string, unknown> | undefined;
+    let capturedPayload: XaiTestPayload | undefined;
     const baseStreamFn: StreamFn = (model, _context, options) => {
       capturedModelId = String(model.id);
-      const payload: Record<string, unknown> = {
+      const payload: XaiTestPayload = {
         reasoning: { effort: "high" },
         tools: [
           {
@@ -80,7 +87,7 @@ describe("xai stream wrappers", () => {
       return {
         result: async () => ({}) as never,
         async *[Symbol.asyncIterator]() {},
-      } as ReturnType<StreamFn>;
+      } as unknown as ReturnType<StreamFn>;
     };
 
     const wrapped = wrapXaiProviderStream({
@@ -101,7 +108,8 @@ describe("xai stream wrappers", () => {
     expect(capturedModelId).toBe("grok-4-fast");
     expect(capturedPayload).toMatchObject({ tool_stream: true });
     expect(capturedPayload).not.toHaveProperty("reasoning");
-    expect(capturedPayload?.tools?.[0]?.function).not.toHaveProperty("strict");
+    const payloadTools = capturedPayload?.tools as ToolPayload[] | undefined;
+    expect(payloadTools?.[0]?.function).not.toHaveProperty("strict");
   });
 
   it("strips unsupported strict and reasoning controls from tool payloads", () => {

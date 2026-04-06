@@ -16,9 +16,7 @@ import {
   describeInterpreterInlineEval,
   detectInterpreterInlineEvalArgv,
 } from "../infra/exec-inline-eval.js";
-import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
-import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -151,11 +149,6 @@ export async function processGatewayAllowlist(
       enforcedCommand = enforced.command;
     }
   }
-  const obfuscation = detectCommandObfuscation(params.command);
-  if (obfuscation.detected) {
-    logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
-    params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
-  }
   const recordMatchedAllowlistUse = (resolvedPath?: string) =>
     recordAllowlistMatchesUse({
       approvals: approvals.file,
@@ -186,8 +179,7 @@ export async function processGatewayAllowlist(
     }) ||
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
-    requiresInlineEvalApproval ||
-    obfuscation.detected;
+    requiresInlineEvalApproval;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
@@ -249,7 +241,6 @@ export async function processGatewayAllowlist(
       const { approvedByAsk, deniedReason } = createExecApprovalDecisionState({
         decision: preResolvedDecision,
         askFallback,
-        obfuscationDetected: obfuscation.detected,
       });
 
       if (deniedReason || !approvedByAsk) {
@@ -311,7 +302,6 @@ export async function processGatewayAllowlist(
       } = createExecApprovalDecisionState({
         decision,
         askFallback,
-        obfuscationDetected: obfuscation.detected,
       });
       let approvedByAsk = initialApprovedByAsk;
       let deniedReason = initialDeniedReason;

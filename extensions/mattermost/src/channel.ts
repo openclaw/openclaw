@@ -11,11 +11,12 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -30,7 +31,7 @@ import {
   type ChannelPlugin,
 } from "./channel-api.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
-import { collectMattermostMutableAllowlistWarnings } from "./doctor.js";
+import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
   listMattermostAccountIds,
@@ -51,6 +52,7 @@ import { collectMattermostSlashCallbackPaths } from "./mattermost/slash-commands
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { getMattermostRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
@@ -330,13 +332,15 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         }),
     },
     auth: mattermostApprovalAuth,
-    doctor: {
-      collectMutableAllowlistWarnings: collectMattermostMutableAllowlistWarnings,
-    },
+    doctor: mattermostDoctor,
     groups: {
       resolveRequireMention: resolveMattermostGroupRequireMention,
     },
     actions: mattermostMessageActions,
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
+    },
     directory: createChannelDirectoryAdapter({
       listGroups: async (params) => listMattermostDirectoryGroups(params),
       listGroupsLive: async (params) => listMattermostDirectoryGroups(params),
@@ -344,6 +348,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       listPeersLive: async (params) => listMattermostDirectoryPeers(params),
     }),
     messaging: {
+      defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
       resolveOutboundSessionRoute: (params) => resolveMattermostOutboundSessionRoute(params),
       targetResolver: {
@@ -388,7 +393,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
           baseUrl,
           token,
           timeoutMs,
-          account.config.allowPrivateNetwork === true,
+          isPrivateNetworkOptInEnabled(account.config),
         );
       },
       resolveAccountSnapshot: ({ account, runtime }) => ({

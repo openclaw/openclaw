@@ -77,6 +77,7 @@ export type CreateFeishuReplyDispatcherParams = {
   agentId: string;
   runtime: RuntimeEnv;
   chatId: string;
+  allowReasoningPreview?: boolean;
   replyToMessageId?: string;
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
   skipReplyToInMessages?: boolean;
@@ -188,6 +189,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Card streaming may miss thread affinity in topic contexts; use direct replies there.
   const streamingEnabled =
     !threadReplyMode && account.config?.streaming !== false && renderMode !== "raw";
+  const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
@@ -491,7 +493,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             });
           }
         : undefined,
-      onReasoningStream: streamingEnabled
+      onReasoningStream: reasoningPreviewEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
               return;
@@ -500,7 +502,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             queueReasoningUpdate(payload.text);
           }
         : undefined,
-      onReasoningEnd: streamingEnabled ? () => {} : undefined,
+      onReasoningEnd: reasoningPreviewEnabled ? () => {} : undefined,
     },
     markDispatchIdle,
   };

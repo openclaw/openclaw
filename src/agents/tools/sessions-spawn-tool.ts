@@ -8,6 +8,10 @@ import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
+import {
+  describeSessionsSpawnTool,
+  SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 import {
@@ -131,8 +135,8 @@ export function createSessionsSpawnTool(
   return {
     label: "Sessions",
     name: "sessions_spawn",
-    description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
+    displaySummary: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsSpawnTool(),
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

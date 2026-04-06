@@ -7,6 +7,12 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
+import { isSupportedMatrixAvatarSource } from "./matrix/profile.js";
+import {
+  matrixNamedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget,
+  matrixSingleAccountKeysToMove,
+} from "./setup-contract.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
@@ -32,48 +38,8 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "groupAllowFrom",
   "defaultTo",
 ]);
-const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
-  "deviceId",
-  "avatarUrl",
-  "initialSyncLimit",
-  "encryption",
-  "allowlistOnly",
-  "allowBots",
-  "blockStreaming",
-  "replyToMode",
-  "threadReplies",
-  "textChunkLimit",
-  "chunkMode",
-  "responsePrefix",
-  "ackReaction",
-  "ackReactionScope",
-  "reactionNotifications",
-  "threadBindings",
-  "startupVerification",
-  "startupVerificationCooldownHours",
-  "mediaMaxMb",
-  "autoJoin",
-  "autoJoinAllowlist",
-  "dm",
-  "groups",
-  "rooms",
-  "actions",
-]);
-const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set([
-  // When named accounts already exist, only move auth/bootstrap fields into the
-  // promoted account. Delivery-policy fields stay at the top level so they
-  // remain shared inherited defaults for every account.
-  "name",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceId",
-  "deviceName",
-  "avatarUrl",
-  "initialSyncLimit",
-  "encryption",
-]);
+const MATRIX_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set<string>(matrixSingleAccountKeysToMove);
+const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set<string>(matrixNamedAccountPromotionKeys);
 
 function cloneIfObject<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -82,7 +48,28 @@ function cloneIfObject<T>(value: T): T {
   return value;
 }
 
-function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): CoreConfig {
+function resolveSetupAvatarUrl(input: ChannelSetupInput): string | undefined {
+  const avatarUrl = input.avatarUrl;
+  if (typeof avatarUrl !== "string") {
+    return undefined;
+  }
+  const trimmed = avatarUrl.trim();
+  return trimmed || undefined;
+}
+
+function resolveExistingMatrixAccountKey(
+  accounts: Record<string, Record<string, unknown>>,
+  targetAccountId: string,
+): string {
+  const normalizedTargetAccountId = normalizeAccountId(targetAccountId);
+  return (
+    Object.keys(accounts).find(
+      (accountId) => normalizeAccountId(accountId) === normalizedTargetAccountId,
+    ) ?? targetAccountId
+  );
+}
+
+export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): CoreConfig {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   const baseConfig = channels?.[channel];
   const base =
@@ -119,25 +106,10 @@ function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): CoreConfi
     return cfg;
   }
 
-  const defaultAccount =
-    typeof base.defaultAccount === "string" && base.defaultAccount.trim()
-      ? normalizeAccountId(base.defaultAccount)
-      : undefined;
-  const targetAccountId =
-    defaultAccount && defaultAccount !== DEFAULT_ACCOUNT_ID
-      ? (Object.entries(accounts).find(
-          ([accountId, value]) =>
-            accountId &&
-            value &&
-            typeof value === "object" &&
-            normalizeAccountId(accountId) === defaultAccount,
-        )?.[0] ?? DEFAULT_ACCOUNT_ID)
-      : (defaultAccount ??
-        (Object.keys(accounts).filter(Boolean).length === 1
-          ? Object.keys(accounts).filter(Boolean)[0]
-          : DEFAULT_ACCOUNT_ID));
+  const targetAccountId = resolveSingleAccountPromotionTarget({ channel: base });
+  const resolvedTargetAccountId = resolveExistingMatrixAccountKey(accounts, targetAccountId);
 
-  const nextAccount: Record<string, unknown> = { ...(accounts[targetAccountId] ?? {}) };
+  const nextAccount: Record<string, unknown> = { ...(accounts[resolvedTargetAccountId] ?? {}) };
   for (const key of keysToMove) {
     nextAccount[key] = cloneIfObject(base[key]);
   }
@@ -154,7 +126,7 @@ function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): CoreConfi
         ...nextChannel,
         accounts: {
           ...accounts,
-          [targetAccountId]: nextAccount,
+          [resolvedTargetAccountId]: nextAccount,
         },
       },
     },
@@ -165,6 +137,10 @@ export function validateMatrixSetupInput(params: {
   accountId: string;
   input: ChannelSetupInput;
 }): string | null {
+  const avatarUrl = resolveSetupAvatarUrl(params.input);
+  if (avatarUrl && !isSupportedMatrixAvatarSource(avatarUrl)) {
+    return "Matrix avatar URL must be an mxc:// URI or an http(s) URL.";
+  }
   if (params.input.useEnv) {
     const envReadiness = resolveMatrixEnvAuthReadiness(params.accountId, process.env);
     return envReadiness.ready ? null : envReadiness.missingMessage;
@@ -193,7 +169,6 @@ export function applyMatrixSetupAccountConfig(params: {
   cfg: CoreConfig;
   accountId: string;
   input: ChannelSetupInput;
-  avatarUrl?: string;
 }): CoreConfig {
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const migratedCfg =
@@ -206,6 +181,7 @@ export function applyMatrixSetupAccountConfig(params: {
     accountId: normalizedAccountId,
     name: params.input.name,
   }) as CoreConfig;
+  const avatarUrl = resolveSetupAvatarUrl(params.input);
 
   if (params.input.useEnv) {
     return updateMatrixAccountConfig(next, normalizedAccountId, {
@@ -218,6 +194,7 @@ export function applyMatrixSetupAccountConfig(params: {
       password: null,
       deviceId: null,
       deviceName: null,
+      avatarUrl,
     });
   }
 
@@ -228,15 +205,17 @@ export function applyMatrixSetupAccountConfig(params: {
     enabled: true,
     homeserver: params.input.homeserver?.trim(),
     allowPrivateNetwork:
-      typeof params.input.allowPrivateNetwork === "boolean"
-        ? params.input.allowPrivateNetwork
-        : undefined,
+      typeof params.input.dangerouslyAllowPrivateNetwork === "boolean"
+        ? params.input.dangerouslyAllowPrivateNetwork
+        : typeof params.input.allowPrivateNetwork === "boolean"
+          ? params.input.allowPrivateNetwork
+          : undefined,
     proxy: params.input.proxy?.trim() || undefined,
     userId: password && !userId ? null : userId,
     accessToken: accessToken || (password ? null : undefined),
     password: password || (accessToken ? null : undefined),
     deviceName: params.input.deviceName?.trim(),
-    avatarUrl: params.avatarUrl,
+    avatarUrl,
     initialSyncLimit: params.input.initialSyncLimit,
   });
 }

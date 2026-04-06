@@ -3,12 +3,26 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { bundledPluginFile } from "../../../test/helpers/bundled-plugin-paths.js";
 import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
+import { loadPluginManifestRegistry } from "../manifest-registry.js";
 
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
 const bundledRepresentativeEntrypoints = ["matrix-runtime-heavy"] as const;
+const bundledPluginRoots = new Map(
+  loadPluginManifestRegistry({ cache: true, config: {} })
+    .plugins.filter((plugin) => plugin.origin === "bundled")
+    .map((plugin) => [plugin.id, plugin.rootDir] as const),
+);
+
+function bundledPluginFile(pluginId: string, relativePath: string): string {
+  const rootDir = bundledPluginRoots.get(pluginId);
+  if (!rootDir) {
+    throw new Error(`missing bundled plugin root for ${pluginId}`);
+  }
+  return path.join(rootDir, relativePath);
+}
+
 const matrixRuntimeCoverageEntries = {
   "matrix-runtime-sdk": bundledPluginFile("matrix", "src/matrix/sdk.ts"),
 } as const;

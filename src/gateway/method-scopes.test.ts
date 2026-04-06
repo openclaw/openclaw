@@ -97,12 +97,18 @@ describe("operator scope authorization", () => {
     });
   });
 
-  it("requires approvals scope for approval methods", () => {
-    expect(authorizeOperatorScopesForMethod("exec.approval.resolve", ["operator.write"])).toEqual({
-      allowed: false,
-      missingScope: "operator.approvals",
-    });
-  });
+  it.each(["exec.approval.get", "exec.approval.resolve"])(
+    "requires approvals scope for %s",
+    (method) => {
+      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+        allowed: false,
+        missingScope: "operator.approvals",
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
+        allowed: true,
+      });
+    },
+  );
 
   it.each(["plugin.approval.request", "plugin.approval.waitDecision", "plugin.approval.resolve"])(
     "requires approvals scope for %s",
@@ -169,5 +175,12 @@ describe("core gateway method classification", () => {
       (method) => !isGatewayMethodClassified(method),
     );
     expect(unclassified).toEqual([]);
+  });
+});
+
+describe("CLI default operator scopes", () => {
+  it("includes operator.talk.secrets for node-role device pairing approvals", async () => {
+    const { CLI_DEFAULT_OPERATOR_SCOPES } = await import("./method-scopes.js");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.talk.secrets");
   });
 });

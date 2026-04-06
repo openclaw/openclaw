@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -79,9 +79,14 @@ type LegacySessionSurface = {
 };
 
 function getLegacySessionSurfaces(): LegacySessionSurface[] {
-  return getBundledChannelContractSurfaces().filter(
-    (surface): surface is LegacySessionSurface => Boolean(surface) && typeof surface === "object",
-  );
+  const surfaces: LegacySessionSurface[] = [];
+  for (const plugin of iterateBootstrapChannelPlugins()) {
+    const surface = plugin.messaging;
+    if (surface && typeof surface === "object") {
+      surfaces.push(surface);
+    }
+  }
+  return surfaces;
 }
 
 function isSurfaceGroupKey(key: string): boolean {
@@ -92,6 +97,10 @@ function isLegacyGroupKey(key: string): boolean {
   const trimmed = key.trim();
   if (!trimmed) {
     return false;
+  }
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("group:") || lower.startsWith("channel:")) {
+    return true;
   }
   for (const surface of getLegacySessionSurfaces()) {
     if (surface.isLegacyGroupSessionKey?.(trimmed)) {
@@ -206,6 +215,10 @@ function canonicalizeSessionKeyForAgent(params: {
     const rest = raw.slice("subagent:".length);
     return `agent:${agentId}:subagent:${rest}`.toLowerCase();
   }
+  // Channel-owned legacy shapes must win before the generic group/channel
+  // fallback. WhatsApp shipped channel-qualified group sessions, so
+  // `group:123@g.us` must canonicalize to `...:whatsapp:group:...`, not the
+  // generic `...:unknown:group:...` bucket.
   for (const surface of getLegacySessionSurfaces()) {
     const canonicalized = surface.canonicalizeLegacySessionKey?.({
       key: raw,
@@ -214,6 +227,10 @@ function canonicalizeSessionKeyForAgent(params: {
     if (typeof canonicalized === "string" && canonicalized.trim()) {
       return canonicalized.trim().toLowerCase();
     }
+  }
+  const lower = raw.toLowerCase();
+  if (lower.startsWith("group:") || lower.startsWith("channel:")) {
+    return `agent:${agentId}:unknown:${raw}`.toLowerCase();
   }
   if (isSurfaceGroupKey(raw)) {
     return `agent:${agentId}:${raw}`.toLowerCase();

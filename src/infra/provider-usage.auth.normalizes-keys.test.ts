@@ -478,8 +478,11 @@ describe("resolveProviderAuths key normalization", () => {
       expectedToken: "plain-google-token",
     },
   ])("$name", async ({ token, expectedToken }) => {
+    const googleGeminiCliUsageProvider = "google-gemini-cli" as unknown as Parameters<
+      typeof resolveProviderAuths
+    >[0]["providers"][number];
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["google-gemini-cli"],
+      providers: [googleGeminiCliUsageProvider],
       setup: async (home) => {
         await writeAuthProfiles(home, {
           "google-gemini-cli:default": {
@@ -489,7 +492,7 @@ describe("resolveProviderAuths key normalization", () => {
           },
         });
       },
-      expected: [{ provider: "google-gemini-cli", token: expectedToken }],
+      expected: [{ provider: googleGeminiCliUsageProvider, token: expectedToken }],
     });
   });
 
