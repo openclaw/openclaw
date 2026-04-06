@@ -403,10 +403,11 @@ export async function runEmbeddedAttempt(
       params.bootstrapContextRunKind !== "heartbeat";
     // When contextInjection is "always" (default), use reduced bootstrap
     // budgets on continuation turns to save context window space (~75%
-    // reduction). Skipped when isContinuationTurn is true (bootstrap already
-    // fully skipped). The worst case if session file is unexpectedly absent
-    // is using full budgets — no harm done.
+    // reduction). Only applies in "always" mode — when contextInjection is
+    // "continuation-skip", bootstrap is either fully skipped or re-injected
+    // at full budget (e.g. post-compaction), so reduced budgets would be wrong.
     const isContinuationBudget =
+      contextInjectionMode === "always" &&
       !isContinuationTurn &&
       (await fs
         .stat(params.sessionFile)
