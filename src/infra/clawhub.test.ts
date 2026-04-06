@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  computeClawHubFileIntegritySha256,
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   normalizeClawHubSha256Integrity,
@@ -108,15 +107,9 @@ describe("clawhub helpers", () => {
     expect(normalizeClawHubSha256Integrity("not-a-hash")).toBeNull();
   });
 
-  it("normalizes ClawHub SHA-256 hex values and mirrors the upstream file-list fingerprint", () => {
+  it("normalizes ClawHub SHA-256 hex values", () => {
     expect(normalizeClawHubSha256Hex("AA".repeat(32))).toBe("aa".repeat(32));
     expect(normalizeClawHubSha256Hex("not-a-hash")).toBeNull();
-    expect(
-      computeClawHubFileIntegritySha256([
-        { path: "b.txt", sha256: "22".repeat(32) },
-        { path: "a.txt", sha256: "11".repeat(32) },
-      ]),
-    ).toBe("2c5f39fed1cfc81a03cb45ec44a05f9f9e1156f9c1e5d84c970a873e89de9ebe");
   });
 
   it("resolves ClawHub auth token from config.json", async () => {

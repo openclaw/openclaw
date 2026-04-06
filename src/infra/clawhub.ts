@@ -450,20 +450,6 @@ export function normalizeClawHubSha256Hex(value: string): string | null {
   return trimmed.toLowerCase();
 }
 
-export function computeClawHubFileIntegritySha256(
-  files: Array<{ path: string; sha256: string }>,
-): string {
-  // ClawHub computes the legacy package fingerprint from the sorted
-  // "path:sha256" payload in convex/lib/skills.ts hashSkillFiles().
-  const payload = files
-    .filter((file) => Boolean(file.path) && Boolean(file.sha256))
-    .map((file) => ({ path: file.path, sha256: file.sha256 }))
-    .toSorted((left, right) => left.path.localeCompare(right.path))
-    .map((file) => `${file.path}:${file.sha256}`)
-    .join("\n");
-  return createHash("sha256").update(payload, "utf8").digest("hex");
-}
-
 export function parseClawHubPluginSpec(raw: string): {
   name: string;
   version?: string;
