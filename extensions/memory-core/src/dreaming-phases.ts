@@ -503,10 +503,17 @@ function findManagedDailyDreamingHeadingIndex(
   return null;
 }
 
+function isManagedDailyDreamingBoundary(
+  line: string,
+  blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]>,
+): boolean {
+  const trimmed = line.trim();
+  return /^#{1,6}\s+/.test(trimmed) || blockByStartMarker.has(trimmed);
+}
+
 function stripManagedDailyDreamingLines(lines: string[]): string[] {
-  const blockByStartMarker = new Map(
-    MANAGED_DAILY_DREAMING_BLOCKS.map((block) => [block.startMarker, block]),
-  );
+  const blockByStartMarker: ReadonlyMap<string, (typeof MANAGED_DAILY_DREAMING_BLOCKS)[number]> =
+    new Map(MANAGED_DAILY_DREAMING_BLOCKS.map((block) => [block.startMarker, block]));
   const sanitized = [...lines];
   for (let index = 0; index < sanitized.length; index += 1) {
     const block = blockByStartMarker.get(sanitized[index]?.trim() ?? "");
@@ -514,23 +521,29 @@ function stripManagedDailyDreamingLines(lines: string[]): string[] {
       continue;
     }
 
-    let endIndex = -1;
+    let stripUntilIndex = -1;
     for (let cursor = index + 1; cursor < sanitized.length; cursor += 1) {
-      if ((sanitized[cursor]?.trim() ?? "") === block.endMarker) {
-        endIndex = cursor;
+      const line = sanitized[cursor];
+      const trimmed = line?.trim() ?? "";
+      if (trimmed === block.endMarker) {
+        stripUntilIndex = cursor;
+        break;
+      }
+      if (line && isManagedDailyDreamingBoundary(line, blockByStartMarker)) {
+        stripUntilIndex = cursor - 1;
         break;
       }
     }
-    if (endIndex === -1) {
+    if (stripUntilIndex < index) {
       continue;
     }
 
     const headingIndex = findManagedDailyDreamingHeadingIndex(lines, index, block.heading);
     const startIndex = headingIndex ?? index;
-    for (let cursor = startIndex; cursor <= endIndex; cursor += 1) {
+    for (let cursor = startIndex; cursor <= stripUntilIndex; cursor += 1) {
       sanitized[cursor] = "";
     }
-    index = endIndex;
+    index = stripUntilIndex;
   }
 
   return sanitized;
