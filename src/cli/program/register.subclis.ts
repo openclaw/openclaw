@@ -210,6 +210,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       loadModule: () => import("../completion-cli.js"),
       exportName: "registerCompletionCli",
     },
+    {
+      commandNames: ["video"],
+      loadModule: () => import("../video-cli.js"),
+      exportName: "registerVideoCli",
+    },
   ]),
 ];
 

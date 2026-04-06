@@ -137,6 +137,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Generate shell completion script",
     hasSubcommands: false,
   },
+  {
+    name: "video",
+    description: "Video generation commands",
+    hasSubcommands: true,
+  },
 ] as const satisfies ReadonlyArray<SubCliDescriptor>);
 
 export const SUB_CLI_DESCRIPTORS = subCliCommandCatalog.descriptors;

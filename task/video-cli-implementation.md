@@ -46,9 +46,7 @@ Create the Commander.js subcli that registers `openclaw video` with three subcom
 import { Command } from "commander";
 
 export function registerVideoCli(program: Command) {
-  const video = program
-    .command("video")
-    .description("Video generation commands");
+  const video = program.command("video").description("Video generation commands");
 
   video
     .command("generate")
@@ -71,14 +69,18 @@ export function registerVideoCli(program: Command) {
     .command("list")
     .description("List available video generation providers and models")
     .option("--json", "Output as JSON")
-    .action(async (opts) => { /* ... */ });
+    .action(async (opts) => {
+      /* ... */
+    });
 
   video
     .command("status")
     .description("Check status of a video generation task")
     .requiredOption("--task-id <id>", "Task ID to check")
     .option("--json", "Output as JSON")
-    .action(async (opts) => { /* ... */ });
+    .action(async (opts) => {
+      /* ... */
+    });
 }
 ```
 
@@ -110,7 +112,9 @@ vi.mock("../commands/video-status.js", () => ({
 }));
 
 describe("video cli", () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   function createProgram() {
     const program = new Command();
@@ -227,7 +231,9 @@ vi.mock("../video-generation/runtime.js", () => ({
 }));
 
 describe("videoGenerateCommand", () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it("calls generateVideo with prompt and model", async () => {
     mocks.generateVideo.mockResolvedValue({
@@ -238,10 +244,7 @@ describe("videoGenerateCommand", () => {
       ignoredOverrides: [],
     });
 
-    await videoGenerateCommand(
-      { prompt: "a sunset", model: "google/veo-3" },
-      mockRuntime,
-    );
+    await videoGenerateCommand({ prompt: "a sunset", model: "google/veo-3" }, mockRuntime);
 
     expect(mocks.generateVideo).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "a sunset", modelOverride: "google/veo-3" }),
@@ -315,6 +318,7 @@ export async function videoListCommand(opts: VideoListOpts, runtime: Runtime) {
 ```
 
 **Example output:**
+
 ```
 Provider      Default Model                    Models  Configured  Audio  Max Duration
 ────────────  ───────────────────────────────  ──────  ──────────  ─────  ────────────
@@ -330,10 +334,18 @@ runway        gen4.5                           3       ✗           ✗      10
 
 ```typescript
 describe("videoListCommand", () => {
-  it("lists all registered providers", async () => { /* ... */ });
-  it("shows configured status per provider", async () => { /* ... */ });
-  it("outputs JSON when --json flag set", async () => { /* ... */ });
-  it("handles no providers gracefully", async () => { /* ... */ });
+  it("lists all registered providers", async () => {
+    /* ... */
+  });
+  it("shows configured status per provider", async () => {
+    /* ... */
+  });
+  it("outputs JSON when --json flag set", async () => {
+    /* ... */
+  });
+  it("handles no providers gracefully", async () => {
+    /* ... */
+  });
 });
 ```
 
@@ -385,11 +397,21 @@ export async function videoStatusCommand(opts: VideoStatusOpts, runtime: Runtime
 
 ```typescript
 describe("videoStatusCommand", () => {
-  it("shows status for active task", async () => { /* ... */ });
-  it("shows completed task with output path", async () => { /* ... */ });
-  it("shows failed task with error details", async () => { /* ... */ });
-  it("exits 1 when task not found", async () => { /* ... */ });
-  it("outputs JSON when --json flag set", async () => { /* ... */ });
+  it("shows status for active task", async () => {
+    /* ... */
+  });
+  it("shows completed task with output path", async () => {
+    /* ... */
+  });
+  it("shows failed task with error details", async () => {
+    /* ... */
+  });
+  it("exits 1 when task not found", async () => {
+    /* ... */
+  });
+  it("outputs JSON when --json flag set", async () => {
+    /* ... */
+  });
 });
 ```
 
@@ -447,13 +469,21 @@ describe("video cli integration", () => {
   });
 
   describe("list", () => {
-    it("renders provider table", async () => { /* ... */ });
-    it("renders JSON with --json", async () => { /* ... */ });
+    it("renders provider table", async () => {
+      /* ... */
+    });
+    it("renders JSON with --json", async () => {
+      /* ... */
+    });
   });
 
   describe("status", () => {
-    it("shows task status by id", async () => { /* ... */ });
-    it("exits 1 for unknown task id", async () => { /* ... */ });
+    it("shows task status by id", async () => {
+      /* ... */
+    });
+    it("exits 1 for unknown task id", async () => {
+      /* ... */
+    });
   });
 });
 ```
@@ -470,40 +500,40 @@ describe("video cli integration", () => {
 
 ### New Files (7)
 
-| File | Purpose |
-|------|---------|
-| `src/cli/video-cli.ts` | CLI subcli registration (Commander.js) |
-| `src/commands/video-generate.ts` | Generate command implementation |
-| `src/commands/video-list.ts` | List command implementation |
-| `src/commands/video-status.ts` | Status command implementation |
-| `src/cli/video-cli.test.ts` | Unit tests for CLI registration |
-| `src/commands/video-generate.test.ts` | Unit tests for generate command |
-| `src/commands/video-list.test.ts` | Unit tests for list command |
-| `src/commands/video-status.test.ts` | Unit tests for status command |
+| File                                  | Purpose                                |
+| ------------------------------------- | -------------------------------------- |
+| `src/cli/video-cli.ts`                | CLI subcli registration (Commander.js) |
+| `src/commands/video-generate.ts`      | Generate command implementation        |
+| `src/commands/video-list.ts`          | List command implementation            |
+| `src/commands/video-status.ts`        | Status command implementation          |
+| `src/cli/video-cli.test.ts`           | Unit tests for CLI registration        |
+| `src/commands/video-generate.test.ts` | Unit tests for generate command        |
+| `src/commands/video-list.test.ts`     | Unit tests for list command            |
+| `src/commands/video-status.test.ts`   | Unit tests for status command          |
 
 ### Modified Files (1)
 
-| File | Change |
-|------|--------|
+| File                                  | Change                            |
+| ------------------------------------- | --------------------------------- |
 | `src/cli/program/register.subclis.ts` | Add `video` entry to subcli array |
 
 ### Existing Files Reused (Not Modified)
 
-| File | What's Reused |
-|------|--------------|
-| `src/video-generation/runtime.ts` | `generateVideo()`, `listRuntimeVideoGenerationProviders()` |
-| `src/video-generation/provider-registry.ts` | `listVideoGenerationProviders()` |
-| `src/video-generation/types.ts` | All request/result/provider types |
-| `src/video-generation/model-ref.ts` | Model string parsing |
-| `src/video-generation/duration-support.ts` | Duration normalization |
-| `src/cli/plugin-registry.ts` | `ensurePluginRegistryLoaded()` |
-| `src/cli/command-config-resolution.ts` | Config + secrets resolution |
-| `src/cli/progress.ts` | `withProgress()` spinner |
-| `src/media/store.ts` | `saveMediaBuffer()` |
-| `src/terminal/table.ts` | Table rendering |
-| `src/runtime.ts` | `defaultRuntime` |
-| `src/agents/video-generation-task-status.ts` | Task status helpers |
-| `extensions/*/video-generation-provider.ts` | All 12 provider plugins |
+| File                                         | What's Reused                                              |
+| -------------------------------------------- | ---------------------------------------------------------- |
+| `src/video-generation/runtime.ts`            | `generateVideo()`, `listRuntimeVideoGenerationProviders()` |
+| `src/video-generation/provider-registry.ts`  | `listVideoGenerationProviders()`                           |
+| `src/video-generation/types.ts`              | All request/result/provider types                          |
+| `src/video-generation/model-ref.ts`          | Model string parsing                                       |
+| `src/video-generation/duration-support.ts`   | Duration normalization                                     |
+| `src/cli/plugin-registry.ts`                 | `ensurePluginRegistryLoaded()`                             |
+| `src/cli/command-config-resolution.ts`       | Config + secrets resolution                                |
+| `src/cli/progress.ts`                        | `withProgress()` spinner                                   |
+| `src/media/store.ts`                         | `saveMediaBuffer()`                                        |
+| `src/terminal/table.ts`                      | Table rendering                                            |
+| `src/runtime.ts`                             | `defaultRuntime`                                           |
+| `src/agents/video-generation-task-status.ts` | Task status helpers                                        |
+| `extensions/*/video-generation-provider.ts`  | All 12 provider plugins                                    |
 
 ---
 
@@ -540,3 +570,54 @@ src/cli/program/register.subclis.ts
 5. **Subtask 5** — Integration tests (validates full path end-to-end)
 
 This order lets you verify the CLI wiring early with the simpler `list` command before tackling generation.
+
+---
+
+## Implementation Results
+
+**Status:** Complete. All files implemented and tests passing.
+
+### Test Results
+
+```
+pnpm test src/cli/video-cli.test.ts src/commands/video-list.test.ts src/commands/video-generate.test.ts src/commands/video-status.test.ts
+
+Test Files  4 passed (4)
+     Tests  21 passed (21)
+  Duration  206ms
+```
+
+### TypeScript Check
+
+Zero type errors in video CLI files (`pnpm tsgo` — pre-existing errors in unrelated files only).
+
+### Formatting
+
+All files pass `pnpm format` (oxfmt).
+
+### Files Created
+
+| File                                  | Lines | Purpose                                                        |
+| ------------------------------------- | ----- | -------------------------------------------------------------- |
+| `src/cli/video-cli.ts`                | 77    | Commander.js subcli with generate/list/status subcommands      |
+| `src/commands/video-generate.ts`      | 133   | Generate command: validate, call generateVideo(), save to disk |
+| `src/commands/video-list.ts`          | 83    | List command: table + JSON output of providers/capabilities    |
+| `src/commands/video-status.ts`        | 38    | Status command: task lookup by ID                              |
+| `src/cli/video-cli.test.ts`           | 98    | 4 tests: registration + option passthrough for all subcommands |
+| `src/commands/video-generate.test.ts` | 168   | 8 tests: generation, validation, output, JSON, warnings        |
+| `src/commands/video-list.test.ts`     | 114   | 4 tests: table, JSON, empty, alphabetical sort                 |
+| `src/commands/video-status.test.ts`   | 106   | 5 tests: found, JSON, not-found, wrong-kind                    |
+
+### Files Modified
+
+| File                                    | Change                        |
+| --------------------------------------- | ----------------------------- |
+| `src/cli/program/register.subclis.ts`   | Added `video` lazy-load entry |
+| `src/cli/program/subcli-descriptors.ts` | Added `video` descriptor      |
+
+### Backward Compatibility
+
+- No existing files deleted or modified (beyond the two registration files)
+- Agent tool `video_generate` unchanged
+- All 12 provider plugins unchanged
+- Config structure unchanged

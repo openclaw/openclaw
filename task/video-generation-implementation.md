@@ -38,20 +38,20 @@ extensions/                   # Bundled provider plugins (12 total)
 
 ## Supported Providers (12)
 
-| Provider     | Default Model                         | API Key Env Var           |
-|-------------|---------------------------------------|---------------------------|
-| Alibaba     | wan2.6-t2v                            | `MODELSTUDIO_API_KEY`     |
-| BytePlus    | seedance-1-0-lite-t2v-250428          | `BYTEPLUS_API_KEY`        |
-| ComfyUI     | workflow                              | `COMFY_API_KEY`           |
-| fal         | fal-ai/minimax/video-01-live          | `FAL_KEY`                 |
-| Google (Veo)| veo-3.1-fast-generate-preview         | `GEMINI_API_KEY`          |
-| MiniMax     | MiniMax-Hailuo-2.3                    | `MINIMAX_API_KEY`         |
-| OpenAI (Sora)| sora-2                               | `OPENAI_API_KEY`          |
-| Qwen        | wan2.6-t2v                            | `QWEN_API_KEY`            |
-| Runway      | gen4.5                                | `RUNWAYML_API_SECRET`     |
-| Together AI | Wan-AI/Wan2.2-T2V-A14B                | `TOGETHER_API_KEY`        |
-| Vydra       | veo3                                  | `VYDRA_API_KEY`           |
-| xAI (Grok)  | grok-imagine-video                    | `XAI_API_KEY`             |
+| Provider      | Default Model                 | API Key Env Var       |
+| ------------- | ----------------------------- | --------------------- |
+| Alibaba       | wan2.6-t2v                    | `MODELSTUDIO_API_KEY` |
+| BytePlus      | seedance-1-0-lite-t2v-250428  | `BYTEPLUS_API_KEY`    |
+| ComfyUI       | workflow                      | `COMFY_API_KEY`       |
+| fal           | fal-ai/minimax/video-01-live  | `FAL_KEY`             |
+| Google (Veo)  | veo-3.1-fast-generate-preview | `GEMINI_API_KEY`      |
+| MiniMax       | MiniMax-Hailuo-2.3            | `MINIMAX_API_KEY`     |
+| OpenAI (Sora) | sora-2                        | `OPENAI_API_KEY`      |
+| Qwen          | wan2.6-t2v                    | `QWEN_API_KEY`        |
+| Runway        | gen4.5                        | `RUNWAYML_API_SECRET` |
+| Together AI   | Wan-AI/Wan2.2-T2V-A14B        | `TOGETHER_API_KEY`    |
+| Vydra         | veo3                          | `VYDRA_API_KEY`       |
+| xAI (Grok)    | grok-imagine-video            | `XAI_API_KEY`         |
 
 Each provider is a bundled plugin under `extensions/` with its own `video-generation-provider.ts` and manifest (`openclaw.plugin.json`).
 
@@ -61,20 +61,20 @@ Each provider is a bundled plugin under `extensions/` with its own `video-genera
 
 ### Actions
 
-| Action     | Description                                      |
-|-----------|--------------------------------------------------|
+| Action     | Description                                          |
+| ---------- | ---------------------------------------------------- |
 | `generate` | (default) Create video from prompt + optional inputs |
-| `status`   | Check in-flight task state                       |
-| `list`     | Show available providers, models, and capabilities |
+| `status`   | Check in-flight task state                           |
+| `list`     | Show available providers, models, and capabilities   |
 
 ### Parameters
 
-| Category   | Parameters                                                        |
-|-----------|-------------------------------------------------------------------|
-| Required  | `prompt` — text description of video to generate                  |
-| Inputs    | `image`, `images` (max 5), `video`, `videos` (max 4)             |
-| Style     | `aspectRatio`, `resolution` (480P/720P/1080P), `durationSeconds`, `size`, `audio`, `watermark` |
-| Advanced  | `model` (override), `filename`, `action`                          |
+| Category | Parameters                                                                                     |
+| -------- | ---------------------------------------------------------------------------------------------- |
+| Required | `prompt` — text description of video to generate                                               |
+| Inputs   | `image`, `images` (max 5), `video`, `videos` (max 4)                                           |
+| Style    | `aspectRatio`, `resolution` (480P/720P/1080P), `durationSeconds`, `size`, `audio`, `watermark` |
+| Advanced | `model` (override), `filename`, `action`                                                       |
 
 ### Supported Aspect Ratios
 
@@ -112,6 +112,7 @@ Each provider is a bundled plugin under `extensions/` with its own `video-genera
 ## Provider Selection Logic
 
 Resolution order:
+
 1. **User override** — `model` parameter on tool call (`provider/model` format)
 2. **Config primary** — `agents.defaults.videoGenerationModel.primary`
 3. **Config fallbacks** — `agents.defaults.videoGenerationModel.fallbacks` (in order)
@@ -130,14 +131,14 @@ openclaw config set agents.defaults.videoGenerationModel.primary "google/veo-3.1
 
 ```json5
 {
-  "agents": {
-    "defaults": {
-      "videoGenerationModel": {
-        "primary": "google/veo-3.1-fast-generate-preview",
-        "fallbacks": ["runway/gen4.5", "qwen/wan2.6-t2v"]
-      }
-    }
-  }
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "google/veo-3.1-fast-generate-preview",
+        fallbacks: ["runway/gen4.5", "qwen/wan2.6-t2v"],
+      },
+    },
+  },
 }
 ```
 
@@ -148,6 +149,7 @@ Config types defined in `src/config/types.agent-defaults.ts`.
 ## Asset Loading
 
 Reference images/videos can be loaded from:
+
 - Local file paths (with `~` expansion)
 - `file://` URLs
 - `http(s)://` URLs (remote fetch)
@@ -166,12 +168,12 @@ Max file size enforced per provider.
 
 ### Key Functions
 
-| Function                              | Location                                     | Purpose                           |
-|---------------------------------------|----------------------------------------------|-----------------------------------|
-| `createVideoGenerateTool()`           | `src/agents/tools/video-generate-tool.ts`    | Tool definition and execute fn    |
-| `generateVideo()`                     | `src/video-generation/runtime.ts`            | Core generation with fallover     |
-| `listVideoGenerationProviders()`      | `src/video-generation/provider-registry.ts`  | Discover available providers      |
-| `createVideoGenerationTaskRun()`      | `src/agents/tools/video-generate-background.ts` | Create background task record  |
+| Function                              | Location                                        | Purpose                         |
+| ------------------------------------- | ----------------------------------------------- | ------------------------------- |
+| `createVideoGenerateTool()`           | `src/agents/tools/video-generate-tool.ts`       | Tool definition and execute fn  |
+| `generateVideo()`                     | `src/video-generation/runtime.ts`               | Core generation with fallover   |
+| `listVideoGenerationProviders()`      | `src/video-generation/provider-registry.ts`     | Discover available providers    |
+| `createVideoGenerationTaskRun()`      | `src/agents/tools/video-generate-background.ts` | Create background task record   |
 | `completeVideoGenerationTaskRun()`    | `src/agents/tools/video-generate-background.ts` | Mark task complete with results |
 | `wakeVideoGenerationTaskCompletion()` | `src/agents/tools/video-generate-background.ts` | Notify session of completion    |
 
@@ -189,7 +191,7 @@ type VideoGenerationProvider = {
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx) => boolean;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
-}
+};
 
 type VideoGenerationProviderCapabilities = {
   maxVideos?: number;
@@ -203,14 +205,14 @@ type VideoGenerationProviderCapabilities = {
   supportsResolution?: boolean;
   supportsAudio?: boolean;
   supportsWatermark?: boolean;
-}
+};
 
 type GeneratedVideoAsset = {
   buffer: Buffer;
   mimeType: string;
   fileName?: string;
   metadata?: Record<string, unknown>;
-}
+};
 ```
 
 ---
@@ -228,6 +230,7 @@ Providers register via plugin manifest:
 ```
 
 Discovery flow:
+
 1. Plugin declares `videoGenerationProviders` in manifest
 2. Core discovers via `resolvePluginCapabilityProviders()`
 3. Providers cached in `buildProviderMaps()` (canonical + aliases)
