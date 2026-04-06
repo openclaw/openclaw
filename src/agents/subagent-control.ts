@@ -31,7 +31,6 @@ import {
   type SubagentListItem,
 } from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
