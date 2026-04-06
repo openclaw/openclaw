@@ -159,7 +159,10 @@ function missingUiHtml() {
 </html>`;
 }
 
-function resolveUiDistDir() {
+function resolveUiDistDir(overrideDir?: string) {
+  if (overrideDir?.trim()) {
+    return path.resolve(overrideDir);
+  }
   const candidates = [
     fileURLToPath(new URL("../web/dist", import.meta.url)),
     path.resolve(process.cwd(), "extensions/qa-lab/web/dist"),
@@ -335,8 +338,7 @@ function proxyUpgradeRequest(params: {
   params.socket.on("close", closeBoth);
 }
 
-function tryResolveUiAsset(pathname: string): string | null {
-  const distDir = resolveUiDistDir();
+function tryResolveUiAsset(pathname: string, distDir: string): string | null {
   if (!fs.existsSync(distDir)) {
     return null;
   }
@@ -418,7 +420,9 @@ export async function startQaLabServer(params?: {
   autoKickoffTarget?: string;
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
+  uiDistDir?: string;
 }) {
+  const uiDistDir = resolveUiDistDir(params?.uiDistDir);
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -676,7 +680,7 @@ export async function startQaLabServer(params?: {
         return;
       }
 
-      const asset = tryResolveUiAsset(url.pathname);
+      const asset = tryResolveUiAsset(url.pathname, uiDistDir);
       if (!asset) {
         const html = missingUiHtml();
         res.writeHead(200, {
