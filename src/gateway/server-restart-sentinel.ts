@@ -88,7 +88,9 @@ async function deliverRestartSentinelNotice(params: {
       });
       if (results.length > 0) {
         if (queueId) {
-          await ackDelivery(queueId).catch(() => {});
+          await ackDelivery(queueId).catch((err) => {
+            log.warn(`ackDelivery failed for queue ${queueId}: ${String(err)}`);
+          });
         }
         return;
       }
@@ -106,8 +108,9 @@ async function deliverRestartSentinelNotice(params: {
       if (!retrying) {
         if (queueId) {
           await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
-            () => {
+            (failErr) => {
               // Best-effort queue bookkeeping.
+              log.warn(`failDelivery failed for queue ${queueId}: ${String(failErr)}`);
             },
           );
         }
