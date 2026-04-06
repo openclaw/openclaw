@@ -146,6 +146,13 @@ export function parseModelRef(
   if (slash === -1) {
     return normalizeModelRef(defaultProvider, trimmed, options);
   }
+  if (
+    defaultProvider === "openrouter" &&
+    !trimmed.toLowerCase().startsWith("openrouter/") &&
+    (trimmed.toLowerCase().startsWith("minimax/") || trimmed.toLowerCase().startsWith("qwen/"))
+  ) {
+    return normalizeModelRef("openrouter", trimmed, options);
+  }
   const providerRaw = trimmed.slice(0, slash).trim();
   const model = trimmed.slice(slash + 1).trim();
   if (!providerRaw || !model) {
@@ -242,6 +249,16 @@ export function inferUniqueProviderFromConfiguredModels(params: {
     return undefined;
   }
   const normalized = model.toLowerCase();
+  const parsedInput = parseModelRef(model, DEFAULT_PROVIDER, {
+    allowPluginNormalization: false,
+  });
+  const isProviderQualified = model.includes("/") && Boolean(parsedInput);
+  const bareModelCandidate =
+    isProviderQualified && parsedInput?.provider
+      ? parsedInput.model.toLowerCase().startsWith(`${parsedInput.provider.toLowerCase()}/`)
+        ? parsedInput.model
+        : undefined
+      : undefined;
   const providers = new Set<string>();
   const addProvider = (provider: string) => {
     const normalizedProvider = normalizeProviderId(provider);
@@ -263,7 +280,13 @@ export function inferUniqueProviderFromConfiguredModels(params: {
       if (!parsed) {
         continue;
       }
-      if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
+      if (
+        parsed.model === model ||
+        parsed.model.toLowerCase() === normalized ||
+        (bareModelCandidate !== undefined &&
+          (parsed.model === bareModelCandidate ||
+            parsed.model.toLowerCase() === bareModelCandidate.toLowerCase()))
+      ) {
         addProvider(parsed.provider);
         if (providers.size > 1) {
           return undefined;
@@ -590,7 +613,8 @@ export function buildAllowedModelSet(params: {
     };
   };
   for (const raw of rawAllowlist) {
-    const parsed = parseModelRef(String(raw), params.defaultProvider);
+    const rawValue = String(raw).trim();
+    const parsed = parseModelRef(rawValue, params.defaultProvider);
     if (!parsed) {
       continue;
     }
@@ -598,6 +622,9 @@ export function buildAllowedModelSet(params: {
     // Explicit allowlist entries are always trusted, even when bundled catalog
     // data is stale and does not include the configured model yet.
     allowedKeys.add(key);
+    if (parsed.provider === "openrouter" && parsed.model.includes("/")) {
+      allowedKeys.add(parsed.model);
+    }
 
     if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
       const configuredSynthetic = resolveConfiguredSyntheticEntry(parsed.provider, parsed.model);
@@ -747,13 +774,23 @@ export function resolveAllowedModelRef(params: {
   // correct provider from the configured allowlist before falling back to the
   // session's current default provider. This prevents provider prefix drift
   // when switching models across different providers (see #48369).
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: params.cfg,
+    model: trimmed,
+  });
   const effectiveDefaultProvider = !trimmed.includes("/")
-    ? (inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: trimmed }) ??
-      params.defaultProvider)
+    ? (inferredProvider ?? params.defaultProvider)
     : params.defaultProvider;
 
+  const normalizedRaw =
+    inferredProvider === "openrouter" &&
+    trimmed.includes("/") &&
+    !trimmed.toLowerCase().startsWith("openrouter/")
+      ? `openrouter/${trimmed}`
+      : trimmed;
+
   const resolved = resolveModelRefFromString({
-    raw: trimmed,
+    raw: normalizedRaw,
     defaultProvider: effectiveDefaultProvider,
     aliasIndex,
   });

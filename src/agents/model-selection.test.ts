@@ -471,6 +471,33 @@ describe("model-selection", () => {
       ).toBe("vercel-ai-gateway");
     });
 
+    it("infers openrouter for native slash model ids when allowlist match is unique", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/minimax/minimax-m2.5:free": {},
+              "openrouter/qwen/qwen3.6-plus:free": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "minimax/minimax-m2.5:free",
+        }),
+      ).toBe("openrouter");
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "qwen/qwen3.6-plus:free",
+        }),
+      ).toBe("openrouter");
+    });
+
     it("infers provider from configured provider catalogs when allowlist is absent", () => {
       const cfg = {
         models: {
@@ -677,6 +704,43 @@ describe("model-selection", () => {
       expect(result).toEqual({
         key: "opencode-go/kimi-k2.5",
         ref: { provider: "opencode-go", model: "kimi-k2.5" },
+      });
+    });
+
+    it("resolves openrouter native slash ids against allowlisted fully-qualified refs", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/minimax/minimax-m2.5:free": {},
+              "openrouter/qwen/qwen3.6-plus:free": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveAllowedModelRef({
+          cfg,
+          catalog: [],
+          raw: "minimax/minimax-m2.5:free",
+          defaultProvider: "openai-codex",
+        }),
+      ).toEqual({
+        key: "openrouter/minimax/minimax-m2.5:free",
+        ref: { provider: "openrouter", model: "minimax/minimax-m2.5:free" },
+      });
+
+      expect(
+        resolveAllowedModelRef({
+          cfg,
+          catalog: [],
+          raw: "qwen/qwen3.6-plus:free",
+          defaultProvider: "openai-codex",
+        }),
+      ).toEqual({
+        key: "openrouter/qwen/qwen3.6-plus:free",
+        ref: { provider: "openrouter", model: "qwen/qwen3.6-plus:free" },
       });
     });
   });
