@@ -78,15 +78,6 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
-const HOST_READ_ALLOWED_DOCUMENT_EXTS = new Set([
-  ".doc",
-  ".docx",
-  ".pdf",
-  ".ppt",
-  ".pptx",
-  ".xls",
-  ".xlsx",
-]);
 const MB = 1024 * 1024;
 
 function formatMb(bytes: number, digits = 2): string {
@@ -124,18 +115,17 @@ function assertHostReadMediaAllowed(params: {
   mediaUrl: string;
   fileName?: string;
 }): void {
-  if (params.kind !== "document") {
+  if (params.kind === "image" || params.kind === "audio" || params.kind === "video") {
     return;
+  }
+  if (params.kind !== "document") {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${params.contentType?.trim().toLowerCase() ?? "unknown"}).`,
+    );
   }
   const normalizedMime = params.contentType?.trim().toLowerCase();
   if (normalizedMime && HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)) {
-    return;
-  }
-  const ext = path
-    .extname(params.fileName ?? params.mediaUrl)
-    .trim()
-    .toLowerCase();
-  if (ext && HOST_READ_ALLOWED_DOCUMENT_EXTS.has(ext)) {
     return;
   }
   throw new LocalMediaAccessError(
@@ -381,7 +371,9 @@ async function loadWebMediaInternal(
       throw err;
     }
   }
-  const mime = await detectMime({ buffer: data, filePath: mediaUrl });
+  const detectedMime = await detectMime({ buffer: data, filePath: mediaUrl });
+  const verifiedMime = hostReadCapability ? await detectMime({ buffer: data }) : detectedMime;
+  const mime = verifiedMime ?? detectedMime;
   const kind = kindFromMime(mime);
   let fileName = path.basename(mediaUrl) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
@@ -392,8 +384,8 @@ async function loadWebMediaInternal(
   }
   if (hostReadCapability) {
     assertHostReadMediaAllowed({
-      contentType: mime,
-      kind,
+      contentType: verifiedMime,
+      kind: kindFromMime(detectedMime ?? verifiedMime),
       mediaUrl,
       fileName,
     });

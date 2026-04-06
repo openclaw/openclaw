@@ -54,6 +54,7 @@ Docs: https://docs.openclaw.ai
 - Agents/history: suppress commentary-only visible-text leaks in streaming and chat history views, and keep sanitized SSE history sequence numbers monotonic after transcript-only refreshes. (#61829) Thanks @100yenadmin.
 - Agents/history: use one shared assistant-visible sanitizer across embedded delivery and chat-history extraction so leaked `<tool_call>` and `<tool_result>` XML blocks stay hidden from user-facing replies. (#61729) Thanks @openperf.
 - Agents/history: keep truly legacy unsigned replay text unphased when mixed with phased OpenAI WS assistant blocks, while still inheriting message phase for id-only replay signatures. (#61529) Thanks @100yenadmin.
+- Auto-reply/media: block arbitrary absolute host-local `MEDIA:` paths from normal reply text, keep managed generated-media reply paths working, and require detected PDF or Office file content before host-local document sends are accepted.
 - Memory/dreaming: strip managed Light Sleep and REM blocks before daily-note ingestion so dreaming summaries stop re-ingesting their own staged output into new candidates. (#61720) Thanks @MonkeyLeeT.
 - Docs/i18n: relocalize final localized-page links after translation so generated locale pages stop keeping stale English-root links when targets appear later in the same run. (#61796) thanks @hxy91819.
 - Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
