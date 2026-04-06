@@ -193,6 +193,27 @@ describe("pw-tools-core interaction navigation guard", () => {
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).not.toHaveBeenCalled();
   });
 
+  it("does not run the navigation guard when only the URL hash changes (same-document navigation)", async () => {
+    const click = vi.fn(async () => {});
+    const page = {
+      url: vi
+        .fn()
+        .mockReturnValueOnce("https://example.com/page")
+        .mockReturnValue("https://example.com/page#section"),
+    };
+    setPwToolsCoreCurrentRefLocator({ click });
+    setPwToolsCoreCurrentPage(page);
+
+    await mod.clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "1",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).not.toHaveBeenCalled();
+  });
+
   it("does not run the post-evaluate navigation guard when the url is unchanged", async () => {
     const page = {
       evaluate: vi.fn(async () => "ok"),

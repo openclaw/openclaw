@@ -58,15 +58,37 @@ function resolveInteractionTimeoutMs(timeoutMs?: number): number {
   return Math.max(500, Math.min(60_000, Math.floor(timeoutMs ?? 8000)));
 }
 
-function didPageUrlChange(page: { url(): string }, previousUrl: string): boolean {
-  return page.url() !== previousUrl;
+// Returns true only when the URL change indicates a cross-document navigation
+// (i.e., a real network fetch occurred). Same-document hash-only mutations —
+// anchor clicks and history.pushState/replaceState that change only the
+// fragment — do not cause a network request and must not trigger SSRF checks.
+function didCrossDocumentUrlChange(page: { url(): string }, previousUrl: string): boolean {
+  const currentUrl = page.url();
+  if (currentUrl === previousUrl) {
+    return false;
+  }
+  try {
+    const prev = new URL(previousUrl);
+    const curr = new URL(currentUrl);
+    if (
+      prev.origin === curr.origin &&
+      prev.pathname === curr.pathname &&
+      prev.search === curr.search
+    ) {
+      // Only the fragment changed — same-document navigation, no fetch.
+      return false;
+    }
+  } catch {
+    // Non-parseable URL; fall through to string comparison.
+  }
+  return true;
 }
 
 function observeDelayedInteractionNavigation(
   page: NavigationObservablePage,
   previousUrl: string,
 ): Promise<boolean> {
-  if (didPageUrlChange(page, previousUrl)) {
+  if (didCrossDocumentUrlChange(page, previousUrl)) {
     return Promise.resolve(true);
   }
   if (typeof page.on !== "function" || typeof page.off !== "function") {
@@ -75,7 +97,7 @@ function observeDelayedInteractionNavigation(
 
   return new Promise<boolean>((resolve) => {
     const onFrameNavigated = (_frame: Frame) => {
-      if (!didPageUrlChange(page, previousUrl)) {
+      if (!didCrossDocumentUrlChange(page, previousUrl)) {
         return;
       }
       cleanup();
@@ -83,7 +105,7 @@ function observeDelayedInteractionNavigation(
     };
     const timeout = setTimeout(() => {
       cleanup();
-      resolve(didPageUrlChange(page, previousUrl));
+      resolve(didCrossDocumentUrlChange(page, previousUrl));
     }, INTERACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
@@ -106,7 +128,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
   targetId?: string;
 }): void {
   const page = opts.page as unknown as NavigationObservablePage;
-  if (didPageUrlChange(page, opts.previousUrl)) {
+  if (didCrossDocumentUrlChange(page, opts.previousUrl)) {
     void assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
       page: opts.page,
@@ -121,7 +143,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
   }
 
   const onFrameNavigated = (_frame: Frame) => {
-    if (!didPageUrlChange(page, opts.previousUrl)) {
+    if (!didCrossDocumentUrlChange(page, opts.previousUrl)) {
       return;
     }
     cleanup();
@@ -159,7 +181,7 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   const navPage = opts.page as unknown as NavigationObservablePage;
   let navigatedDuringAction = false;
   const onFrameNavigated = (_frame: Frame) => {
-    if (didPageUrlChange(opts.page, opts.previousUrl)) {
+    if (didCrossDocumentUrlChange(opts.page, opts.previousUrl)) {
       navigatedDuringAction = true;
     }
   };
@@ -179,7 +201,8 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
     }
   }
 
-  const navigationObserved = navigatedDuringAction || didPageUrlChange(opts.page, opts.previousUrl);
+  const navigationObserved =
+    navigatedDuringAction || didCrossDocumentUrlChange(opts.page, opts.previousUrl);
 
   if (navigationObserved) {
     await assertPageNavigationCompletedSafely({
