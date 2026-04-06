@@ -88,8 +88,14 @@ export async function sendMessageIrc(
         connectTimeoutMs: 12000,
       }),
     );
-    transient.sendPrivmsg(target, payload);
-    transient.quit("sent");
+    try {
+      transient.sendPrivmsg(target, payload);
+      // Give the server time to process the PRIVMSG before disconnecting.
+      // IRC has no delivery ACK, so a short drain delay is the best we can do.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } finally {
+      transient.quit("sent");
+    }
   }
 
   recordIrcOutboundActivity(account.accountId);

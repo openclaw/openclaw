@@ -93,7 +93,10 @@ function buildFallbackNick(nick: string): string {
   return `${base}${suffix}`;
 }
 
-export function buildIrcNickServCommands(options?: IrcNickServOptions): string[] {
+export function buildIrcNickServCommands(
+  options?: IrcNickServOptions,
+  accountNick?: string,
+): string[] {
   if (!options || options.enabled === false) {
     return [];
   }
@@ -102,7 +105,10 @@ export function buildIrcNickServCommands(options?: IrcNickServOptions): string[]
     return [];
   }
   const service = sanitizeIrcTarget(options.service?.trim() || "NickServ");
-  const commands = [`PRIVMSG ${service} :IDENTIFY ${password}`];
+  // Use "IDENTIFY <account> <password>" so it works even when connected
+  // with a fallback nick (e.g. mrpink_ identifying as mrpink).
+  const identifyArgs = accountNick ? `${accountNick} ${password}` : password;
+  const commands = [`PRIVMSG ${service} :IDENTIFY ${identifyArgs}`];
   if (options.register) {
     const registerEmail = sanitizeIrcOutboundText(options.registerEmail ?? "");
     if (!registerEmail) {
@@ -166,6 +172,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     if (!cleaned) {
       throw new Error("IRC command cannot be empty");
     }
+    if (closed || socket.destroyed) {
+      throw new Error("IRC socket is closed; cannot send");
+    }
     socket.write(`${cleaned}\r\n`);
   };
 
@@ -212,7 +221,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     const normalizedTarget = sanitizeIrcTarget(target);
     const cleaned = sanitizeIrcOutboundText(text);
     if (!cleaned) {
-      return;
+      throw new Error("IRC message is empty after sanitization");
     }
     let remaining = cleaned;
     while (remaining.length > 0) {
@@ -326,9 +335,38 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           currentNick = nickParam.trim();
         }
         try {
-          const nickServCommands = buildIrcNickServCommands(options.nickserv);
+          const nickServCommands = buildIrcNickServCommands(options.nickserv, desiredNick);
           for (const command of nickServCommands) {
             sendRaw(command);
+          }
+          // If we're on a fallback nick and have NickServ credentials,
+          // wait for IDENTIFY to complete, then reclaim the desired nick.
+          // Handles both cases: nick reserved (Ergo enforce-nick) and
+          // nick held by zombie (needs GHOST first).
+          if (
+            currentNick.toLowerCase() !== desiredNick.toLowerCase() &&
+            options.nickserv?.enabled !== false &&
+            options.nickserv?.password?.trim()
+          ) {
+            const service = sanitizeIrcTarget(options.nickserv.service?.trim() || "NickServ");
+            const nsPassword = sanitizeIrcOutboundText(options.nickserv.password);
+            // Wait for IDENTIFY to be processed by NickServ.
+            setTimeout(() => {
+              try {
+                // GHOST in case a zombie holds the nick (harmless if nick is free).
+                sendRaw(`PRIVMSG ${service} :GHOST ${desiredNick} ${nsPassword}`);
+              } catch {
+                // Socket may have closed; ignore.
+              }
+              // Then reclaim — works whether nick was reserved or ghosted.
+              setTimeout(() => {
+                try {
+                  sendRaw(`NICK ${desiredNick}`);
+                } catch {
+                  // Socket may have closed; ignore.
+                }
+              }, 1500);
+            }, 2000);
           }
         } catch (err) {
           fail(err);

@@ -10,6 +10,17 @@ describe("irc client nickserv", () => {
     ).toEqual(["PRIVMSG NickServ :IDENTIFY secret"]);
   });
 
+  it("builds IDENTIFY with account nick when provided", () => {
+    expect(
+      buildIrcNickServCommands(
+        {
+          password: "secret",
+        },
+        "mrpink",
+      ),
+    ).toEqual(["PRIVMSG NickServ :IDENTIFY mrpink secret"]);
+  });
+
   it("builds REGISTER command when enabled with email", () => {
     expect(
       buildIrcNickServCommands({
