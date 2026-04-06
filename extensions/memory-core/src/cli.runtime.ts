@@ -856,13 +856,14 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
           if (qmdIndexSummary) {
             defaultRuntime.log(qmdIndexSummary);
           }
-          // HELM-0251: surface warning if vec0/chunks_vec was not updated
           const postIndexStatus = manager.status();
           const vectorEnabled = postIndexStatus.vector?.enabled ?? false;
           const vectorAvailable = postIndexStatus.vector?.available;
           const vectorLoadErr = postIndexStatus.vector?.loadError;
           if (vectorEnabled && vectorAvailable === false) {
             const errDetail = vectorLoadErr ? `: ${vectorLoadErr}` : "";
+            // Indexing still persisted chunks/FTS state; keep the command successful but
+            // emit a stderr warning so operators and scripts can detect degraded recall.
             defaultRuntime.error(
               `Memory index WARNING (${agentId}): chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded.`,
             );
