@@ -251,7 +251,35 @@ export async function createQaLabApp(root: HTMLDivElement) {
   }
 
   function render() {
-    root.innerHTML = renderQaLabUi(state);
+    const next = document.createElement("div");
+    next.innerHTML = renderQaLabUi(state);
+
+    // Keep the embedded Control UI pane mounted across polling refreshes so auth/session
+    // state does not bounce while the QA-side debugger updates.
+    const currentControlPane = root.querySelector<HTMLElement>(".control-pane");
+    const currentControlFrame =
+      currentControlPane?.querySelector<HTMLIFrameElement>(".control-frame");
+    const currentQaColumn = root.querySelector<HTMLElement>(".qa-column");
+    const nextControlPane = next.querySelector<HTMLElement>(".control-pane");
+    const nextControlFrame = nextControlPane?.querySelector<HTMLIFrameElement>(".control-frame");
+    const nextQaColumn = next.querySelector<HTMLElement>(".qa-column");
+    const currentControlSrc = currentControlFrame?.getAttribute("src") ?? "";
+    const nextControlSrc = nextControlFrame?.getAttribute("src") ?? "";
+
+    if (
+      currentControlPane &&
+      currentQaColumn &&
+      nextControlPane &&
+      nextQaColumn &&
+      currentControlSrc &&
+      currentControlSrc === nextControlSrc
+    ) {
+      currentQaColumn.replaceWith(nextQaColumn);
+      bindEvents();
+      return;
+    }
+
+    root.replaceChildren(...Array.from(next.childNodes));
     bindEvents();
   }
 
