@@ -24,9 +24,14 @@ type MockOpenAiRequestSnapshot = {
   raw: string;
   body: Record<string, unknown>;
   prompt: string;
+  allInputText: string;
   toolOutput: string;
   model: string;
+  plannedToolName?: string;
 };
+
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -82,8 +87,19 @@ function extractLastUserText(input: ResponsesInputItem[]) {
   return "";
 }
 
-function extractToolOutput(input: ResponsesInputItem[]) {
+function findLastUserIndex(input: ResponsesInputItem[]) {
   for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (item.role === "user" && Array.isArray(item.content)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function extractToolOutput(input: ResponsesInputItem[]) {
+  const lastUserIndex = findLastUserIndex(input);
+  for (let index = input.length - 1; index > lastUserIndex; index -= 1) {
     const item = input[index];
     if (item.type === "function_call_output" && typeof item.output === "string" && item.output) {
       return item.output;
@@ -114,6 +130,44 @@ function extractAllUserTexts(input: ResponsesInputItem[]) {
     }
   }
   return texts;
+}
+
+function extractAllInputTexts(input: ResponsesInputItem[]) {
+  const texts: string[] = [];
+  for (const item of input) {
+    if (typeof item.output === "string" && item.output.trim()) {
+      texts.push(item.output.trim());
+    }
+    if (!Array.isArray(item.content)) {
+      continue;
+    }
+    const text = item.content
+      .filter(
+        (entry): entry is { type: "input_text"; text: string } =>
+          !!entry &&
+          typeof entry === "object" &&
+          (entry as { type?: unknown }).type === "input_text" &&
+          typeof (entry as { text?: unknown }).text === "string",
+      )
+      .map((entry) => entry.text)
+      .join("\n")
+      .trim();
+    if (text) {
+      texts.push(text);
+    }
+  }
+  return texts.join("\n");
+}
+
+function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
+  if (!toolOutput.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(toolOutput) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 function normalizePromptPathCandidate(candidate: string) {
@@ -221,12 +275,26 @@ function extractRememberedFact(userTexts: string[]) {
   return null;
 }
 
+function extractOrbitCode(text: string) {
+  return /\b(?:ORBIT-9|orbit-9)\b/.exec(text)?.[0]?.toUpperCase() ?? null;
+}
+
 function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
+  const toolJson = parseToolOutputJson(toolOutput);
   const userTexts = extractAllUserTexts(input);
+  const allInputText = extractAllInputTexts(input);
   const rememberedFact = extractRememberedFact(userTexts);
   const model = typeof body.model === "string" ? body.model : "";
+  const memorySnippet =
+    typeof toolJson?.text === "string"
+      ? toolJson.text
+      : Array.isArray(toolJson?.results)
+        ? JSON.stringify(toolJson.results)
+        : toolOutput;
+  const orbitCode = extractOrbitCode(memorySnippet);
+  const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
@@ -234,8 +302,26 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   if (/remember this fact/i.test(prompt) && rememberedFact) {
     return `Protocol note: acknowledged. I will remember ${rememberedFact}.`;
   }
+  if (/memory unavailable check/i.test(prompt)) {
+    return "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess.";
+  }
+  if (/visible skill marker/i.test(prompt)) {
+    return "VISIBLE-SKILL-OK";
+  }
+  if (/hot install marker/i.test(prompt)) {
+    return "HOT-INSTALL-OK";
+  }
+  if (/memory tools check/i.test(prompt) && orbitCode) {
+    return `Protocol note: I checked memory and the project codename is ${orbitCode}.`;
+  }
   if (/switch(?:ing)? models?/i.test(prompt)) {
     return `Protocol note: model switch acknowledged. Continuing on ${model || "the requested model"}.`;
+  }
+  if (/tool continuity check/i.test(prompt) && toolOutput) {
+    return `Protocol note: model switch acknowledged. Tool continuity held on ${model || "the requested model"}.`;
+  }
+  if (/image generation check/i.test(prompt) && mediaPath) {
+    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
   }
   if (toolOutput && /delegate|subagent/i.test(prompt)) {
     return `Protocol note: delegated result acknowledged. The bounded subagent task returned and is folded back into the main thread.`;
@@ -262,6 +348,19 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
 function buildToolCallEvents(prompt: string): StreamEvent[] {
   const targetPath = readTargetFromPrompt(prompt);
   return buildToolCallEventsWithArgs("read", { path: targetPath });
+}
+
+function extractPlannedToolName(events: StreamEvent[]) {
+  for (const event of events) {
+    if (event.type !== "response.output_item.done") {
+      continue;
+    }
+    const item = event.item as { type?: unknown; name?: unknown };
+    if (item.type === "function_call" && typeof item.name === "string") {
+      return item.name;
+    }
+  }
+  return undefined;
 }
 
 function buildAssistantEvents(text: string): StreamEvent[] {
@@ -303,6 +402,10 @@ function buildResponsesPayload(body: Record<string, unknown>) {
   const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
+  const toolJson = parseToolOutputJson(toolOutput);
+  const allInputText = extractAllInputTexts(input);
+  const isGroupChat = allInputText.includes('"is_group_chat": true');
+  const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -317,6 +420,44 @@ function buildResponsesPayload(body: Record<string, unknown>) {
 </html>`,
       });
     }
+  }
+  if (/memory tools check/i.test(prompt)) {
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("memory_search", {
+        query: "project codename ORBIT-9",
+        maxResults: 3,
+      });
+    }
+    const results = Array.isArray(toolJson?.results)
+      ? (toolJson.results as Array<Record<string, unknown>>)
+      : [];
+    const first = results[0];
+    if (
+      typeof first?.path === "string" &&
+      (typeof first.startLine === "number" || typeof first.endLine === "number")
+    ) {
+      const from =
+        typeof first.startLine === "number"
+          ? Math.max(1, first.startLine)
+          : typeof first.endLine === "number"
+            ? Math.max(1, first.endLine)
+            : 1;
+      return buildToolCallEventsWithArgs("memory_get", {
+        path: first.path,
+        from,
+        lines: 4,
+      });
+    }
+  }
+  if (/image generation check/i.test(prompt) && !toolOutput) {
+    return buildToolCallEventsWithArgs("image_generate", {
+      prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
+      filename: "qa-lighthouse.png",
+      size: "1024x1024",
+    });
+  }
+  if (/tool continuity check/i.test(prompt) && !toolOutput) {
+    return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
   }
   if (/delegate|subagent/i.test(prompt) && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -333,6 +474,15 @@ function buildResponsesPayload(body: Record<string, unknown>) {
   }
   if (!toolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
     return buildToolCallEvents(prompt);
+  }
+  if (/visible skill marker/i.test(prompt) && !toolOutput) {
+    return buildAssistantEvents("VISIBLE-SKILL-OK");
+  }
+  if (/hot install marker/i.test(prompt) && !toolOutput) {
+    return buildAssistantEvents("HOT-INSTALL-OK");
+  }
+  if (isGroupChat && isBaselineUnmentionedChannelChatter && !toolOutput) {
+    return buildAssistantEvents("NO_REPLY");
   }
   return buildAssistantEvents(buildAssistantText(input, body));
 }
@@ -352,6 +502,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         data: [
           { id: "gpt-5.4", object: "model" },
           { id: "gpt-5.4-alt", object: "model" },
+          { id: "gpt-image-1", object: "model" },
         ],
       });
       return;
@@ -364,22 +515,35 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       writeJson(res, 200, requests);
       return;
     }
+    if (req.method === "POST" && url.pathname === "/v1/images/generations") {
+      writeJson(res, 200, {
+        data: [
+          {
+            b64_json: TINY_PNG_BASE64,
+            revised_prompt: "A QA lighthouse with protocol droid silhouette.",
+          },
+        ],
+      });
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/v1/responses") {
       const raw = await readBody(req);
       const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+      const events = buildResponsesPayload(body);
       lastRequest = {
         raw,
         body,
         prompt: extractLastUserText(input),
+        allInputText: extractAllInputTexts(input),
         toolOutput: extractToolOutput(input),
         model: typeof body.model === "string" ? body.model : "",
+        plannedToolName: extractPlannedToolName(events),
       };
       requests.push(lastRequest);
       if (requests.length > 50) {
         requests.splice(0, requests.length - 50);
       }
-      const events = buildResponsesPayload(body);
       if (body.stream === false) {
         const completion = events.at(-1);
         if (!completion || completion.type !== "response.completed") {
