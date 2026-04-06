@@ -547,6 +547,7 @@ describe("resolveMemorySlotDecision", () => {
     });
     expect(result.enabled).toBe(true);
     expect(result.selected).toBeUndefined();
+    expect(result.sidecar).toBe(true);
   });
 
   it("selects a dual-kind plugin when it owns the memory slot", () => {
@@ -568,6 +569,7 @@ describe("resolveMemorySlotDecision", () => {
       selectedId: null,
     });
     expect(result.enabled).toBe(true);
+    expect(result.sidecar).toBe(true);
   });
 
   it("disables a memory-only plugin when memory slot is null", () => {
@@ -576,6 +578,44 @@ describe("resolveMemorySlotDecision", () => {
       kind: "memory",
       slot: null,
       selectedId: null,
+    });
+    expect(result.enabled).toBe(false);
+  });
+
+  it("keeps an explicitly enabled sidecar-safe memory plugin enabled when slot points elsewhere", () => {
+    const result = resolveMemorySlotDecision({
+      id: "memory-sidecar",
+      kind: "memory",
+      slot: "new-memory",
+      selectedId: null,
+      explicitlyEnabled: true,
+      sidecarSafe: true,
+    });
+    expect(result.enabled).toBe(true);
+    expect(result.selected).toBeUndefined();
+    expect(result.sidecar).toBe(true);
+  });
+
+  it("still disables a non-sidecar-safe memory plugin when explicitly enabled but slot points elsewhere", () => {
+    const result = resolveMemorySlotDecision({
+      id: "old-memory",
+      kind: "memory",
+      slot: "new-memory",
+      selectedId: null,
+      explicitlyEnabled: true,
+      sidecarSafe: false,
+    });
+    expect(result.enabled).toBe(false);
+  });
+
+  it("still disables a sidecar-safe memory plugin when memory slot is none", () => {
+    const result = resolveMemorySlotDecision({
+      id: "memory-sidecar",
+      kind: "memory",
+      slot: null,
+      selectedId: null,
+      explicitlyEnabled: true,
+      sidecarSafe: true,
     });
     expect(result.enabled).toBe(false);
   });

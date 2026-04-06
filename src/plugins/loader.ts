@@ -1397,6 +1397,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         kind: manifestRecord.kind,
         slot: memorySlot,
         selectedId: selectedMemoryPluginId,
+        explicitlyEnabled: record.explicitlyEnabled,
+        sidecarSafe: manifestRecord.contracts?.memorySlotSidecarSafe === true,
       });
       if (!earlyMemoryDecision.enabled) {
         record.enabled = false;
@@ -1420,6 +1422,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         kind: record.kind,
         slot: memorySlot,
         selectedId: selectedMemoryPluginId,
+        explicitlyEnabled: record.explicitlyEnabled,
+        sidecarSafe: record.contracts?.memorySlotSidecarSafe === true,
       });
 
       if (!memoryDecision.enabled) {
@@ -1436,6 +1440,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         selectedMemoryPluginId = record.id;
         memorySlotMatched = true;
         record.memorySlotSelected = true;
+      } else if (memoryDecision.sidecar && hasKind(record.kind, "memory")) {
+        record.memorySlotSidecar = true;
       }
     }
 
@@ -1561,6 +1567,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         kind: record.kind,
         slot: memorySlot,
         selectedId: selectedMemoryPluginId,
+        explicitlyEnabled: record.explicitlyEnabled,
+        sidecarSafe: record.contracts?.memorySlotSidecarSafe === true,
       });
 
       if (!memoryDecision.enabled) {
@@ -1576,6 +1584,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = record.id;
         record.memorySlotSelected = true;
+      } else if (memoryDecision.sidecar && hasKind(record.kind, "memory")) {
+        record.memorySlotSidecar = true;
       }
     }
 
@@ -1980,6 +1990,8 @@ export async function loadOpenClawPluginCliRegistry(
       kind: record.kind,
       slot: memorySlot,
       selectedId: selectedMemoryPluginId,
+      explicitlyEnabled: record.explicitlyEnabled,
+      sidecarSafe: record.contracts?.memorySlotSidecarSafe === true,
     });
     if (!memoryDecision.enabled) {
       record.enabled = false;
@@ -1993,6 +2005,8 @@ export async function loadOpenClawPluginCliRegistry(
     if (memoryDecision.selected && hasKind(record.kind, "memory")) {
       selectedMemoryPluginId = record.id;
       record.memorySlotSelected = true;
+    } else if (memoryDecision.sidecar && hasKind(record.kind, "memory")) {
+      record.memorySlotSidecar = true;
     }
 
     if (typeof register !== "function") {

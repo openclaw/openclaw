@@ -1,6 +1,9 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "contracts": {
+    "memorySlotSidecarSafe": true
+  },
   "uiHints": {
     "dreaming.frequency": {
       "label": "Dreaming Frequency",

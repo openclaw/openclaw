@@ -284,6 +284,7 @@ export type PluginRecord = {
   configJsonSchema?: Record<string, unknown>;
   contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
+  memorySlotSidecar?: boolean;
 };
 
 export type PluginRegistry = {
@@ -317,6 +318,10 @@ export type PluginRegistry = {
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };
+
+function isMemorySlotSidecar(record: PluginRecord): boolean {
+  return hasKind(record.kind, "memory") && record.memorySlotSidecar === true;
+}
 
 export type PluginRegistryParams = {
   logger: PluginLogger;
@@ -1305,17 +1310,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                if (
-                  Array.isArray(record.kind) &&
-                  record.kind.length > 1 &&
-                  !record.memorySlotSelected
-                ) {
+                if (isMemorySlotSidecar(record)) {
                   pushDiagnostic({
                     level: "warn",
                     pluginId: record.id,
                     source: record.source,
                     message:
-                      "dual-kind plugin not selected for memory slot; skipping memory prompt section registration",
+                      "memory plugin not selected for memory slot; skipping memory prompt section registration",
                   });
                   return;
                 }
@@ -1337,17 +1338,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                if (
-                  Array.isArray(record.kind) &&
-                  record.kind.length > 1 &&
-                  !record.memorySlotSelected
-                ) {
+                if (isMemorySlotSidecar(record)) {
                   pushDiagnostic({
                     level: "warn",
                     pluginId: record.id,
                     source: record.source,
                     message:
-                      "dual-kind plugin not selected for memory slot; skipping memory flush plan registration",
+                      "memory plugin not selected for memory slot; skipping memory flush plan registration",
                   });
                   return;
                 }
@@ -1363,17 +1360,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                if (
-                  Array.isArray(record.kind) &&
-                  record.kind.length > 1 &&
-                  !record.memorySlotSelected
-                ) {
+                if (isMemorySlotSidecar(record)) {
                   pushDiagnostic({
                     level: "warn",
                     pluginId: record.id,
                     source: record.source,
                     message:
-                      "dual-kind plugin not selected for memory slot; skipping memory runtime registration",
+                      "memory plugin not selected for memory slot; skipping memory runtime registration",
                   });
                   return;
                 }
@@ -1381,17 +1374,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerMemoryEmbeddingProvider: (adapter) => {
                 if (hasKind(record.kind, "memory")) {
-                  if (
-                    Array.isArray(record.kind) &&
-                    record.kind.length > 1 &&
-                    !record.memorySlotSelected
-                  ) {
+                  if (isMemorySlotSidecar(record)) {
                     pushDiagnostic({
                       level: "warn",
                       pluginId: record.id,
                       source: record.source,
                       message:
-                        "dual-kind plugin not selected for memory slot; skipping memory embedding provider registration",
+                        "memory plugin not selected for memory slot; skipping memory embedding provider registration",
                     });
                     return;
                   }

@@ -110,6 +110,12 @@ export type PluginManifest = {
 };
 
 export type PluginManifestContracts = {
+  /**
+   * Allows a memory plugin to keep non-memory surfaces active even when another
+   * plugin owns `plugins.slots.memory`. Memory-runtime registrations remain
+   * gated to the selected slot owner.
+   */
+  memorySlotSidecarSafe?: boolean;
   memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
@@ -192,6 +198,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     return undefined;
   }
 
+  const memorySlotSidecarSafe = value.memorySlotSidecarSafe === true;
   const memoryEmbeddingProviders = normalizeStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeStringList(value.realtimeTranscriptionProviders);
@@ -204,6 +211,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webSearchProviders = normalizeStringList(value.webSearchProviders);
   const tools = normalizeStringList(value.tools);
   const contracts = {
+    ...(memorySlotSidecarSafe ? { memorySlotSidecarSafe: true } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),

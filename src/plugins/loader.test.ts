@@ -2948,6 +2948,104 @@ module.exports = {
         },
       },
       {
+        label: "loads sidecar-safe bundled memory plugins without memory runtime ownership",
+        loadRegistry: () => {
+          const bundledDir = makeTempDir();
+          const memoryADir = path.join(bundledDir, "memory-a");
+          const memoryBDir = path.join(bundledDir, "memory-b");
+          mkdirSafe(memoryADir);
+          mkdirSafe(memoryBDir);
+          writePlugin({
+            id: "memory-a",
+            dir: memoryADir,
+            filename: "index.cjs",
+            body: `
+module.exports = {
+  id: "memory-a",
+  kind: "memory",
+  register(api) {
+    api.registerHook("gateway:startup", () => {}, { name: "memory-a-startup" });
+    api.registerMemoryRuntime({
+      async getMemorySearchManager() {
+        return { manager: null, error: "missing" };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" };
+      },
+    });
+  },
+};`,
+          });
+          writePlugin({
+            id: "memory-b",
+            dir: memoryBDir,
+            filename: "index.cjs",
+            body: memoryPluginBody("memory-b"),
+          });
+          fs.writeFileSync(
+            path.join(memoryADir, "openclaw.plugin.json"),
+            JSON.stringify(
+              {
+                id: "memory-a",
+                kind: "memory",
+                configSchema: EMPTY_PLUGIN_SCHEMA,
+                contracts: { memorySlotSidecarSafe: true },
+              },
+              null,
+              2,
+            ),
+            "utf-8",
+          );
+          fs.writeFileSync(
+            path.join(memoryBDir, "openclaw.plugin.json"),
+            JSON.stringify(
+              {
+                id: "memory-b",
+                kind: "memory",
+                configSchema: EMPTY_PLUGIN_SCHEMA,
+              },
+              null,
+              2,
+            ),
+            "utf-8",
+          );
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: ["memory-a", "memory-b"],
+                slots: { memory: "memory-b" },
+                entries: {
+                  "memory-a": { enabled: true },
+                  "memory-b": { enabled: true },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const a = registry.plugins.find((entry) => entry.id === "memory-a");
+          const b = registry.plugins.find((entry) => entry.id === "memory-b");
+          expect(a?.status).toBe("loaded");
+          expect(a?.memorySlotSelected).toBeUndefined();
+          expect(a?.memorySlotSidecar).toBe(true);
+          expect(a?.hookNames).toContain("memory-a-startup");
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.pluginId === "memory-a" &&
+                String(diag.message).includes(
+                  "memory plugin not selected for memory slot; skipping memory runtime registration",
+                ),
+            ),
+          ).toBe(true);
+          expect(b?.status).toBe("loaded");
+          expect(b?.memorySlotSelected).toBe(true);
+        },
+      },
+      {
         label: "disables memory plugins when slot is none",
         loadRegistry: () => {
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
