@@ -16,6 +16,7 @@ import {
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveAssistantPhase } from "./assistant-phase.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -37,8 +38,19 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
-function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
-  return resolveAssistantMessagePhase(message) === "commentary";
+function clearCommentaryAssistantTexts(ctx: EmbeddedPiSubscribeContext) {
+  const baseline = Math.max(
+    0,
+    Math.min(ctx.state.assistantTextBaseline ?? 0, ctx.state.assistantTexts.length),
+  );
+  if (ctx.state.assistantTexts.length > baseline) {
+    ctx.state.assistantTexts.splice(baseline, ctx.state.assistantTexts.length - baseline);
+  }
+  ctx.state.assistantTextBaseline = ctx.state.assistantTexts.length;
+  ctx.state.lastAssistantTextMessageIndex = -1;
+  ctx.state.lastAssistantTextNormalized = undefined;
+  ctx.state.lastAssistantTextTrimmed = undefined;
+  ctx.state.lastBlockReplyText = undefined;
 }
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
@@ -375,14 +387,16 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
-  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
-  if (suppressVisibleAssistantOutput) {
+  const messagePhase = resolveAssistantPhase(msg);
+  if (messagePhase) {
+    ctx.state.currentAssistantPhase = messagePhase;
+  }
+  if (ctx.state.deterministicApprovalPromptSent) {
     return;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
 
   const assistantEvent = evt.assistantMessageEvent;
-  const assistantPhase = resolveAssistantMessagePhase(msg);
   const assistantRecord =
     assistantEvent && typeof assistantEvent === "object"
       ? (assistantEvent as Record<string, unknown>)
@@ -454,12 +468,14 @@ export function handleMessageUpdate(
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
       ? (assistantRecord.partial as AssistantMessage)
       : msg;
-  const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
+  const detectedDeliveryPhase = resolveAssistantPhase(partialAssistant) ?? messagePhase;
   const streamItemId = resolveAssistantStreamItemId({
     contentIndex: assistantRecord?.contentIndex,
     message: partialAssistant,
   });
-  if (deliveryPhase && streamItemId) {
+  const deliveryPhaseForBoundary =
+    resolveAssistantMessagePhase(partialAssistant) ?? detectedDeliveryPhase;
+  if (deliveryPhaseForBoundary && streamItemId) {
     const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
     if (previousStreamItemId && previousStreamItemId !== streamItemId) {
       void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
@@ -468,13 +484,29 @@ export function handleMessageUpdate(
     }
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }
-  if (deliveryPhase === "commentary") {
-    return;
+  if (detectedDeliveryPhase) {
+    ctx.state.currentAssistantPhase = detectedDeliveryPhase;
   }
   const phaseAwareVisibleText = coerceChatContentText(
     extractAssistantVisibleText(partialAssistant),
   ).trim();
-  const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
+  if (
+    !detectedDeliveryPhase &&
+    ctx.state.currentAssistantPhase === "commentary" &&
+    phaseAwareVisibleText
+  ) {
+    ctx.state.currentAssistantPhase = undefined;
+  }
+  const deliveryPhase =
+    deliveryPhaseForBoundary ??
+    (ctx.state.currentAssistantPhase === "commentary" && !phaseAwareVisibleText
+      ? "commentary"
+      : undefined);
+  if (deliveryPhase === "commentary") {
+    return;
+  }
+  const shouldUsePhaseAwareBlockReply = Boolean(detectedDeliveryPhase);
+  const assistantPhase = detectedDeliveryPhase;
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
@@ -615,19 +647,42 @@ export function handleMessageEnd(
   }
 
   const assistantMessage = msg;
-  const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
-  const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
-  if (suppressVisibleAssistantOutput) {
+
+  const finalizeMessageEnd = () => {
+    ctx.state.deltaBuffer = "";
+    ctx.state.blockBuffer = "";
+    ctx.blockChunker?.reset();
+    ctx.state.blockState.thinking = false;
+    ctx.state.blockState.final = false;
+    ctx.state.blockState.inlineCode = createInlineCodeState();
+    ctx.state.lastStreamedAssistant = undefined;
+    ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.state.reasoningStreamOpen = false;
+  };
+
+  if (ctx.state.deterministicApprovalPromptSent) {
+    finalizeMessageEnd();
     return;
   }
   promoteThinkingTagsToBlocks(assistantMessage);
-
   const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
   const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
+  const detectedAssistantPhase = resolveAssistantPhase(assistantMessage);
+  if (detectedAssistantPhase) {
+    ctx.state.currentAssistantPhase = detectedAssistantPhase;
+  } else if (ctx.state.currentAssistantPhase === "commentary" && rawVisibleText.trim()) {
+    ctx.state.currentAssistantPhase = undefined;
+  }
+  const assistantPhase =
+    resolveAssistantMessagePhase(assistantMessage) ??
+    detectedAssistantPhase ??
+    (ctx.state.currentAssistantPhase === "commentary" && !rawVisibleText.trim()
+      ? "commentary"
+      : undefined);
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",
@@ -653,18 +708,12 @@ export function handleMessageEnd(
   let cleanedText = parsedText?.text ?? "";
   let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
-  const finalizeMessageEnd = () => {
-    ctx.state.deltaBuffer = "";
-    ctx.state.blockBuffer = "";
-    ctx.blockChunker?.reset();
-    ctx.state.blockState.thinking = false;
-    ctx.state.blockState.final = false;
-    ctx.state.blockState.inlineCode = createInlineCodeState();
-    ctx.state.lastStreamedAssistant = undefined;
-    ctx.state.lastStreamedAssistantCleaned = undefined;
-    ctx.state.reasoningStreamOpen = false;
-  };
-
+  if (assistantPhase === "commentary") {
+    clearCommentaryAssistantTexts(ctx);
+    emitReasoningEnd(ctx);
+    finalizeMessageEnd();
+    return;
+  }
   const previousStreamedText = ctx.state.lastStreamedAssistantCleaned ?? "";
   const shouldReplaceFinalStream = Boolean(
     previousStreamedText && cleanedText && !cleanedText.startsWith(previousStreamedText),

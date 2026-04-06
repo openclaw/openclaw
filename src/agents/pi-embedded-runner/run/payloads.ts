@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
+import { resolveAssistantPhase } from "../../assistant-phase.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -208,9 +209,10 @@ export function buildEmbeddedRunPayloads(params: {
     }
   }
 
+  const lastAssistantPhase = resolveAssistantPhase(params.lastAssistant);
   const reasoningText = suppressAssistantArtifacts
     ? ""
-    : params.lastAssistant && params.reasoningLevel === "on"
+    : params.lastAssistant && params.reasoningLevel === "on" && lastAssistantPhase !== "commentary"
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {

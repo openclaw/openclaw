@@ -527,6 +527,42 @@ describe("handleMessageUpdate", () => {
     });
   });
 
+  it("clears commentary phase when later visible partial text arrives without phase metadata", async () => {
+    const onAgentEvent = vi.fn();
+    const flushBlockReplyBuffer = vi.fn();
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      flushBlockReplyBuffer,
+      shouldEmitPartialReplies: false,
+    });
+    ctx.state.currentAssistantPhase = "commentary";
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: "Done.",
+        partial: createOpenAiResponsesPartial({
+          text: "Done.",
+          id: "item_final",
+        }),
+      }),
+    );
+
+    await Promise.resolve();
+
+    expect(ctx.state.currentAssistantPhase).toBeUndefined();
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
+      stream: "assistant",
+      data: {
+        text: "Done.",
+        delta: "Done.",
+      },
+    });
+    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
+  });
+
   it("contains synchronous text_end flush failures", async () => {
     const debug = vi.fn();
     const ctx = createMessageUpdateContext({
@@ -598,6 +634,109 @@ describe("handleMessageEnd", () => {
 
     expect(onAgentEvent).not.toHaveBeenCalled();
     expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(finalizeAssistantTexts).not.toHaveBeenCalled();
+  });
+
+  it("clears commentary assistant text state and skips message_end flush when commentary phase only exists in prior partials", () => {
+    const onBlockReplyFlush = vi.fn();
+    const emitBlockReply = vi.fn();
+    const flushBlockReplyBuffer = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onBlockReply: vi.fn(),
+        onBlockReplyFlush,
+      },
+      state: {
+        assistantTexts: ["Need send."],
+        assistantTextBaseline: 0,
+        currentAssistantPhase: "commentary",
+        emittedAssistantUpdate: false,
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        includeReasoning: false,
+        streamReasoning: false,
+        blockReplyBreak: "message_end",
+        deltaBuffer: "Need send.",
+        blockBuffer: "Need send.",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastAssistantTextMessageIndex: 0,
+        lastAssistantTextNormalized: "needsend",
+        lastAssistantTextTrimmed: "Need send.",
+        lastBlockReplyText: "Need send.",
+        lastStreamedAssistant: undefined,
+        lastStreamedAssistantCleaned: undefined,
+      },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      commitAssistantUsage: vi.fn(),
+      log: { debug: vi.fn(), warn: vi.fn() },
+      stripBlockTags: (text: string) => text,
+      finalizeAssistantTexts: vi.fn(),
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn(() => ({ text: "Need send." })),
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer,
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(ctx.state.assistantTexts).toEqual([]);
+    expect(ctx.state.assistantTextBaseline).toBe(0);
+    expect(ctx.state.lastAssistantTextMessageIndex).toBe(-1);
+    expect(ctx.state.lastAssistantTextNormalized).toBeUndefined();
+    expect(ctx.state.lastAssistantTextTrimmed).toBeUndefined();
+    expect(ctx.state.lastBlockReplyText).toBeUndefined();
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
+    expect(onBlockReplyFlush).not.toHaveBeenCalled();
+  });
+
+  it("clears buffered delivery state before returning after deterministic approval prompt", () => {
+    const finalizeAssistantTexts = vi.fn();
+    const blockChunker = {
+      reset: vi.fn(),
+      hasBuffered: vi.fn(() => false),
+    };
+    const ctx = createMessageEndContext({
+      finalizeAssistantTexts,
+      state: {
+        deterministicApprovalPromptSent: true,
+        deltaBuffer: "Need send.",
+        blockBuffer: "Need send.",
+        lastStreamedAssistant: "Need send.",
+        lastStreamedAssistantCleaned: "Need send.",
+      },
+    });
+    ctx.blockChunker = blockChunker as never;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Need send." }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.state.blockBuffer).toBe("");
+    expect(ctx.state.lastStreamedAssistant).toBeUndefined();
+    expect(ctx.state.lastStreamedAssistantCleaned).toBeUndefined();
+    expect(blockChunker.reset).toHaveBeenCalledTimes(1);
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
   });
 

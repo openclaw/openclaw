@@ -3,6 +3,7 @@ import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-direct
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AssistantPhase } from "./assistant-phase.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
@@ -52,6 +53,7 @@ export type EmbeddedPiSubscribeState = {
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   reasoningStreamOpen: boolean;
+  currentAssistantPhase?: AssistantPhase;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
