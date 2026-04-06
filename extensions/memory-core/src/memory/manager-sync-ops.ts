@@ -117,6 +117,7 @@ export abstract class MemoryManagerSyncOps {
   protected provider: EmbeddingProvider | null = null;
   protected fallbackFrom?: EmbeddingProviderId;
   protected providerRuntime?: EmbeddingProviderRuntime;
+  protected embeddingCacheMirrorDb: DatabaseSync | null = null;
   protected abstract batch: {
     enabled: boolean;
     wait: boolean;
@@ -148,6 +149,7 @@ export abstract class MemoryManagerSyncOps {
   protected closed = false;
   protected dirty = false;
   protected sessionsDirty = false;
+  protected sessionFullRetryPending = false;
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<
@@ -279,6 +281,12 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
     try {
+      const cacheTable = sourceDb
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+        .get(EMBEDDING_CACHE_TABLE) as { name: string } | undefined;
+      if (!cacheTable) {
+        return;
+      }
       const rows = sourceDb
         .prepare(
           `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE}`,
@@ -640,7 +648,107 @@ export abstract class MemoryManagerSyncOps {
         this.sessionsDirtyFiles.delete(targetSessionFile);
       }
     }
-    this.sessionsDirty = this.sessionsDirtyFiles.size > 0;
+    this.sessionsDirty = this.sessionFullRetryPending || this.sessionsDirtyFiles.size > 0;
+  }
+
+  private snapshotSyncState(): {
+    dirty: boolean;
+    sessionsDirty: boolean;
+    sessionFullRetryPending: boolean;
+    sessionsDirtyFiles: Set<string>;
+    sessionDeltas: Map<string, { lastSize: number; pendingBytes: number; pendingMessages: number }>;
+    lastMetaSerialized: string | null;
+    vectorDims: number | undefined;
+  } {
+    return {
+      dirty: this.dirty,
+      sessionsDirty: this.sessionsDirty,
+      sessionFullRetryPending: this.sessionFullRetryPending,
+      sessionsDirtyFiles: new Set(this.sessionsDirtyFiles),
+      sessionDeltas: new Map(
+        Array.from(this.sessionDeltas, ([sessionFile, state]) => [sessionFile, { ...state }]),
+      ),
+      lastMetaSerialized: this.lastMetaSerialized,
+      vectorDims: this.vector.dims,
+    };
+  }
+
+  private mergeSessionDeltas(
+    snapshot: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>["sessionDeltas"],
+    live: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>["sessionDeltas"],
+  ) {
+    const merged = new Map(
+      Array.from(snapshot, ([sessionFile, state]) => [sessionFile, { ...state }]),
+    );
+    for (const [sessionFile, liveState] of live) {
+      const snapshotState = merged.get(sessionFile);
+      if (!snapshotState) {
+        merged.set(sessionFile, { ...liveState });
+        continue;
+      }
+      const snapshotIndexedSize = Math.max(0, snapshotState.lastSize - snapshotState.pendingBytes);
+      const liveIndexedSize = Math.max(0, liveState.lastSize - liveState.pendingBytes);
+      const lastSize = liveState.lastSize;
+      const indexedSize = Math.max(0, Math.min(lastSize, snapshotIndexedSize, liveIndexedSize));
+      merged.set(sessionFile, {
+        // Preserve the latest observed size, but infer the earliest unindexed
+        // byte baseline from both states so rollback cannot lose or recount
+        // delta ranges that raced with the failed rebuild.
+        lastSize,
+        pendingBytes: Math.max(
+          snapshotState.pendingBytes,
+          liveState.pendingBytes,
+          lastSize - indexedSize,
+        ),
+        pendingMessages: Math.max(snapshotState.pendingMessages, liveState.pendingMessages),
+      });
+    }
+    return merged;
+  }
+
+  private restoreSyncState(
+    snapshot: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>,
+    liveState?: ReturnType<MemoryManagerSyncOps["snapshotSyncState"]>,
+    options?: { restoreVectorDims?: boolean },
+  ) {
+    this.dirty = snapshot.dirty || liveState?.dirty === true;
+    const mergedDirtyFiles = new Set(snapshot.sessionsDirtyFiles);
+    for (const sessionFile of liveState?.sessionsDirtyFiles ?? []) {
+      mergedDirtyFiles.add(sessionFile);
+    }
+    this.sessionsDirtyFiles = mergedDirtyFiles;
+    this.sessionFullRetryPending =
+      snapshot.sessionFullRetryPending || liveState?.sessionFullRetryPending === true;
+    this.sessionsDirty =
+      snapshot.sessionsDirty ||
+      liveState?.sessionsDirty === true ||
+      this.sessionFullRetryPending ||
+      mergedDirtyFiles.size > 0;
+    this.sessionDeltas = liveState
+      ? this.mergeSessionDeltas(snapshot.sessionDeltas, liveState.sessionDeltas)
+      : new Map(
+          Array.from(snapshot.sessionDeltas, ([sessionFile, state]) => [sessionFile, { ...state }]),
+        );
+    this.lastMetaSerialized = snapshot.lastMetaSerialized;
+    if (options?.restoreVectorDims ?? true) {
+      this.vector.dims = snapshot.vectorDims;
+    }
+  }
+
+  private restoreRetryStateAfterReindexRollback(params: {
+    memoryReindexStarted?: boolean;
+    sessionReindexStarted?: boolean;
+  }) {
+    if (params.memoryReindexStarted) {
+      this.dirty = true;
+    }
+    if (params.sessionReindexStarted) {
+      // A failed full session rebuild can stop dispatching mid-stream. Clearing
+      // the per-file filter forces the next retry to sweep the full session set.
+      this.sessionFullRetryPending = true;
+      this.sessionsDirty = true;
+      this.sessionsDirtyFiles.clear();
+    }
   }
 
   protected ensureIntervalSync() {
@@ -687,7 +795,7 @@ export abstract class MemoryManagerSyncOps {
     if (reason === "session-start" || reason === "watch") {
       return false;
     }
-    return this.sessionsDirty && this.sessionsDirtyFiles.size > 0;
+    return this.sessionsDirty;
   }
 
   private async syncMemoryFiles(params: {
@@ -831,7 +939,10 @@ export abstract class MemoryManagerSyncOps {
     const existingHashes =
       existingRows === null ? null : new Map(existingRows.map((row) => [row.path, row.hash]));
     const indexAll =
-      params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
+      params.needsFullReindex ||
+      this.sessionFullRetryPending ||
+      Boolean(targetSessionFiles) ||
+      this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
@@ -1064,9 +1175,12 @@ export abstract class MemoryManagerSyncOps {
           targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
           progress: progress ?? undefined,
         });
+        this.sessionFullRetryPending = false;
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {
+        this.sessionsDirty = true;
+      } else if (this.sessionFullRetryPending) {
         this.sessionsDirty = true;
       } else {
         this.sessionsDirty = false;
@@ -1165,6 +1279,9 @@ export abstract class MemoryManagerSyncOps {
       vectorDims: this.vector.dims,
       vectorReady: this.vectorReady,
     };
+    const originalSyncState = this.snapshotSyncState();
+    let memoryReindexStarted = false;
+    let sessionReindexStarted = false;
 
     const restoreOriginalState = () => {
       if (originalDbClosed) {
@@ -1193,6 +1310,10 @@ export abstract class MemoryManagerSyncOps {
 
     try {
       this.seedEmbeddingCache(originalDb);
+      const cacheTable = originalDb
+        .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+        .get(EMBEDDING_CACHE_TABLE) as { name: string } | undefined;
+      this.embeddingCacheMirrorDb = cacheTable ? originalDb : null;
       const shouldSyncMemory = this.sources.has("memory");
       const shouldSyncSessions = this.shouldSyncSessions(
         { reason: params.reason, force: params.force },
@@ -1200,15 +1321,20 @@ export abstract class MemoryManagerSyncOps {
       );
 
       if (shouldSyncMemory) {
+        memoryReindexStarted = true;
         await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
         this.dirty = false;
       }
 
       if (shouldSyncSessions) {
+        sessionReindexStarted = true;
         await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        this.sessionFullRetryPending = false;
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {
+        this.sessionsDirty = true;
+      } else if (this.sessionFullRetryPending) {
         this.sessionsDirty = true;
       } else {
         this.sessionsDirty = false;
@@ -1234,6 +1360,7 @@ export abstract class MemoryManagerSyncOps {
 
       this.writeMeta(nextMeta);
       this.pruneEmbeddingCacheIfNeeded?.();
+      this.embeddingCacheMirrorDb = null;
 
       this.db.close();
       originalDb.close();
@@ -1248,11 +1375,18 @@ export abstract class MemoryManagerSyncOps {
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
+      this.embeddingCacheMirrorDb = null;
+      const liveSyncState = this.snapshotSyncState();
       try {
         this.db.close();
       } catch {}
       await this.removeIndexFiles(tempDbPath);
       restoreOriginalState();
+      this.restoreSyncState(originalSyncState, liveSyncState);
+      this.restoreRetryStateAfterReindexRollback({
+        memoryReindexStarted,
+        sessionReindexStarted,
+      });
       throw err;
     }
   }
@@ -1264,45 +1398,67 @@ export abstract class MemoryManagerSyncOps {
   }): Promise<void> {
     // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
     // under the per-test HOME anyway, and this cuts substantial fs+sqlite churn.
-    this.resetIndex();
+    const originalSyncState = this.snapshotSyncState();
+    let memoryReindexStarted = false;
+    let sessionReindexStarted = false;
+    try {
+      this.resetIndex();
 
-    const shouldSyncMemory = this.sources.has("memory");
-    const shouldSyncSessions = this.shouldSyncSessions(
-      { reason: params.reason, force: params.force },
-      true,
-    );
+      const shouldSyncMemory = this.sources.has("memory");
+      const shouldSyncSessions = this.shouldSyncSessions(
+        { reason: params.reason, force: params.force },
+        true,
+      );
 
-    if (shouldSyncMemory) {
-      await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-      this.dirty = false;
+      if (shouldSyncMemory) {
+        memoryReindexStarted = true;
+        await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+        this.dirty = false;
+      }
+
+      if (shouldSyncSessions) {
+        sessionReindexStarted = true;
+        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        this.sessionFullRetryPending = false;
+        this.sessionsDirty = false;
+        this.sessionsDirtyFiles.clear();
+      } else if (this.sessionsDirtyFiles.size > 0) {
+        this.sessionsDirty = true;
+      } else if (this.sessionFullRetryPending) {
+        this.sessionsDirty = true;
+      } else {
+        this.sessionsDirty = false;
+      }
+
+      const nextMeta: MemoryIndexMeta = {
+        model: this.provider?.model ?? "fts-only",
+        provider: this.provider?.id ?? "none",
+        providerKey: this.providerKey!,
+        sources: this.resolveConfiguredSourcesForMeta(),
+        scopeHash: this.resolveConfiguredScopeHash(),
+        chunkTokens: this.settings.chunking.tokens,
+        chunkOverlap: this.settings.chunking.overlap,
+        ftsTokenizer: this.settings.store.fts.tokenizer,
+      };
+      if (this.vector.available && this.vector.dims) {
+        nextMeta.vectorDims = this.vector.dims;
+      }
+
+      this.writeMeta(nextMeta);
+      this.pruneEmbeddingCacheIfNeeded?.();
+    } catch (err) {
+      const liveSyncState = this.snapshotSyncState();
+      this.restoreSyncState(originalSyncState, liveSyncState, {
+        // Unsafe reindex mutates the live DB in place, so restoring stale dims
+        // can make the next incremental retry skip vector table recreation.
+        restoreVectorDims: false,
+      });
+      this.restoreRetryStateAfterReindexRollback({
+        memoryReindexStarted,
+        sessionReindexStarted,
+      });
+      throw err;
     }
-
-    if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
-      this.sessionsDirty = false;
-      this.sessionsDirtyFiles.clear();
-    } else if (this.sessionsDirtyFiles.size > 0) {
-      this.sessionsDirty = true;
-    } else {
-      this.sessionsDirty = false;
-    }
-
-    const nextMeta: MemoryIndexMeta = {
-      model: this.provider?.model ?? "fts-only",
-      provider: this.provider?.id ?? "none",
-      providerKey: this.providerKey!,
-      sources: this.resolveConfiguredSourcesForMeta(),
-      scopeHash: this.resolveConfiguredScopeHash(),
-      chunkTokens: this.settings.chunking.tokens,
-      chunkOverlap: this.settings.chunking.overlap,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-    };
-    if (this.vector.available && this.vector.dims) {
-      nextMeta.vectorDims = this.vector.dims;
-    }
-
-    this.writeMeta(nextMeta);
-    this.pruneEmbeddingCacheIfNeeded?.();
   }
 
   private resetIndex() {

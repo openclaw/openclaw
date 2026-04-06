@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { DatabaseSync } from "node:sqlite";
 import {
   enforceEmbeddingMaxInputTokens,
   estimateStructuredEmbeddingInputBytes,
@@ -117,7 +118,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     return out;
   }
 
-  private upsertEmbeddingCache(entries: Array<{ hash: string; embedding: number[] }>): void {
+  private upsertEmbeddingCacheInto(
+    db: DatabaseSync,
+    entries: Array<{ hash: string; embedding: number[] }>,
+  ): void {
     if (!this.cache.enabled || !this.provider) {
       return;
     }
@@ -125,7 +129,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return;
     }
     const now = Date.now();
-    const stmt = this.db.prepare(
+    const stmt = db.prepare(
       `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)\n` +
         ` VALUES (?, ?, ?, ?, ?, ?, ?)\n` +
         ` ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET\n` +
@@ -147,7 +151,22 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
+  private upsertEmbeddingCache(entries: Array<{ hash: string; embedding: number[] }>): void {
+    this.upsertEmbeddingCacheInto(this.db, entries);
+    if (this.embeddingCacheMirrorDb && this.embeddingCacheMirrorDb !== this.db) {
+      this.upsertEmbeddingCacheInto(this.embeddingCacheMirrorDb, entries);
+      this.pruneEmbeddingCacheIfNeededIn(this.embeddingCacheMirrorDb);
+    }
+  }
+
   protected pruneEmbeddingCacheIfNeeded(): void {
+    this.pruneEmbeddingCacheIfNeededIn(this.db);
+    if (this.embeddingCacheMirrorDb && this.embeddingCacheMirrorDb !== this.db) {
+      this.pruneEmbeddingCacheIfNeededIn(this.embeddingCacheMirrorDb);
+    }
+  }
+
+  private pruneEmbeddingCacheIfNeededIn(db: DatabaseSync): void {
     if (!this.cache.enabled) {
       return;
     }
@@ -155,7 +174,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!max || max <= 0) {
       return;
     }
-    const row = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
+    const row = db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
       | { c: number }
       | undefined;
     const count = row?.c ?? 0;
@@ -163,16 +182,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return;
     }
     const excess = count - max;
-    this.db
-      .prepare(
-        `DELETE FROM ${EMBEDDING_CACHE_TABLE}\n` +
-          ` WHERE rowid IN (\n` +
-          `   SELECT rowid FROM ${EMBEDDING_CACHE_TABLE}\n` +
-          `   ORDER BY updated_at ASC\n` +
-          `   LIMIT ?\n` +
-          ` )`,
-      )
-      .run(excess);
+    db.prepare(
+      `DELETE FROM ${EMBEDDING_CACHE_TABLE}\n` +
+        ` WHERE rowid IN (\n` +
+        `   SELECT rowid FROM ${EMBEDDING_CACHE_TABLE}\n` +
+        `   ORDER BY updated_at ASC\n` +
+        `   LIMIT ?\n` +
+        ` )`,
+    ).run(excess);
   }
 
   private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
@@ -187,7 +204,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     const missingChunks = missing.map((m) => m.chunk);
     const batches = this.buildEmbeddingBatches(missingChunks);
-    const toCache: Array<{ hash: string; embedding: number[] }> = [];
     const provider = this.provider;
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
@@ -204,17 +220,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const batchEmbeddings = hasStructuredInputs
         ? await this.embedBatchInputsWithRetry(inputs)
         : await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
+      const batchCacheEntries: Array<{ hash: string; embedding: number[] }> = [];
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
         if (item) {
           embeddings[item.index] = embedding;
-          toCache.push({ hash: item.chunk.hash, embedding });
+          batchCacheEntries.push({ hash: item.chunk.hash, embedding });
         }
       }
+      this.upsertEmbeddingCache(batchCacheEntries);
       cursor += batch.length;
     }
-    this.upsertEmbeddingCache(toCache);
     return embeddings;
   }
 

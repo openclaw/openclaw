@@ -33,8 +33,24 @@ export function installEmbeddingManagerFixture(opts: {
   let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
   let resetEmbeddingMocks: EmbeddingTestMocksModule["resetEmbeddingMocks"];
 
-  const resetManager = (manager: MemoryIndexManager) => {
+  const resetManager = (manager: MemoryIndexManager, opts?: { clearCache?: boolean }) => {
     (manager as unknown as { resetIndex: () => void }).resetIndex();
+    if (opts?.clearCache) {
+      const db = (
+        manager as unknown as {
+          db: {
+            exec: (sql: string) => void;
+            prepare: (sql: string) => { get: (name: string) => { name?: string } | undefined };
+          };
+        }
+      ).db;
+      const embeddingCacheTable = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get("embedding_cache");
+      if (embeddingCacheTable?.name === "embedding_cache") {
+        db.exec("DELETE FROM embedding_cache");
+      }
+    }
     (manager as unknown as { dirty: boolean }).dirty = true;
   };
 
@@ -119,8 +135,8 @@ export function installEmbeddingManagerFixture(opts: {
     await fs.mkdir(dir, { recursive: true });
 
     if (resetIndexEachTest) {
-      resetManager(requireValue(managerLarge, "managerLarge"));
-      resetManager(requireValue(managerSmall, "managerSmall"));
+      resetManager(requireValue(managerLarge, "managerLarge"), { clearCache: true });
+      resetManager(requireValue(managerSmall, "managerSmall"), { clearCache: true });
     }
   });
 

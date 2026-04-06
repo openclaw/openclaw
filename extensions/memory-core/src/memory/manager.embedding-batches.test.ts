@@ -20,6 +20,7 @@ const fx = installEmbeddingManagerFixture({
           chunking: { tokens, overlap: 0 },
           sync: { watch: false, onSessionStart: false, onSearch: false },
           query: { minScore: 0, hybrid: { enabled: false } },
+          cache: { enabled: true },
         },
       },
       list: [{ id: "main", default: true }],
@@ -144,6 +145,38 @@ describe("memory embedding batches", () => {
 
     expect(calls).toBe(2);
   }, 10000);
+
+  it("persists successful batch embeddings to cache before a later batch fails", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerLarge = fx.getManagerLarge();
+    const line = "f".repeat(4200);
+    const content = [line, line].join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-09.md"), content);
+
+    let calls = 0;
+    fx.embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls === 2) {
+        throw new Error("embedding failure");
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    await expect(requireSync(managerLarge)({ reason: "test" })).rejects.toThrow(
+      "embedding failure",
+    );
+    expect(calls).toBe(2);
+
+    fx.resetManager(managerLarge);
+    fx.embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    await requireSync(managerLarge)({ reason: "test" });
+
+    expect(calls).toBe(3);
+  });
 
   it("skips empty chunks so embeddings input stays valid", async () => {
     const memoryDir = fx.getMemoryDir();
