@@ -127,7 +127,9 @@ export function normalizeBlueBubblesHandle(raw: string): string {
   if (trimmed.includes("@")) {
     return trimmed.toLowerCase();
   }
-  return trimmed.replace(/\s+/g, "");
+  const noSpaces = trimmed.replace(/\s+/g, "");
+  if (/^\d+$/.test(noSpaces)) return `+${noSpaces}`;
+  return noSpaces;
 }
 
 /**
