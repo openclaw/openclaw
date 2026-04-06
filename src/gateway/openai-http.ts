@@ -627,6 +627,7 @@ export async function handleOpenAiHttpRequest(
       if (closed) {
         return;
       }
+      sawAssistantDelta = true;
       writeAssistantContentChunk(res, {
         runId,
         model,
