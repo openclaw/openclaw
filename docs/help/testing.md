@@ -422,6 +422,19 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 
+## Music generation live
+
+- Test: `extensions/music-generation-providers.live.test.ts`
+- Enable: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/music-generation-providers.live.test.ts`
+- Scope:
+  - Exercises the shared bundled music-generation provider path
+  - Currently covers Google and MiniMax
+  - Loads provider env vars from your login shell (`~/.profile`) before probing
+  - Skips providers with no usable auth/profile/model
+- Optional narrowing:
+  - `OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS="google,minimax"`
+  - `OPENCLAW_LIVE_MUSIC_GENERATION_MODELS="google/lyria-3-clip-preview,minimax/music-2.5+"`
+
 ## Docker runners (optional "works in Linux" checks)
 
 These Docker runners split into two buckets:

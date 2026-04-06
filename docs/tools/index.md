@@ -106,7 +106,7 @@ Plugins can register additional tools. Some examples:
 
 - [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
 - [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
-- [Music Generation](/tools/music-generation) — plugin-provided `music_generate` tool surfaces
+- [Music Generation](/tools/music-generation) — shared `music_generate` tool plus plugin-provided workflow variants
 - [Diffs](/tools/diffs) — diff viewer and renderer
 - [OpenProse](/prose) — markdown-first workflow orchestration
 
