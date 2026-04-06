@@ -98,11 +98,31 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
 
 function isPluginEntryDangerousFlag(
   flag: string,
+  config: Record<string, unknown>,
 ): flag is `plugins.entries.${string}.config.${string}` {
-  return /^plugins\.entries\.[^.]+\.config\./.test(flag);
+  // Resolve against actual plugin entry keys so plugin IDs containing dots are handled correctly.
+  const pluginEntries = (config as { plugins?: { entries?: Record<string, unknown> } }).plugins
+    ?.entries;
+  if (!pluginEntries) {
+    return false;
+  }
+  return Object.keys(pluginEntries).some((id) => flag.startsWith(`plugins.entries.${id}.config.`));
 }
 
-function getPluginIdFromDangerousFlag(flag: `plugins.entries.${string}.config.${string}`): string {
+function getPluginIdFromDangerousFlag(
+  flag: `plugins.entries.${string}.config.${string}`,
+  config: Record<string, unknown>,
+): string {
+  // Use actual plugin entry keys to handle IDs that contain dots.
+  const pluginEntries = (config as { plugins?: { entries?: Record<string, unknown> } }).plugins
+    ?.entries;
+  if (pluginEntries) {
+    for (const id of Object.keys(pluginEntries)) {
+      if (flag.startsWith(`plugins.entries.${id}.config.`)) {
+        return id;
+      }
+    }
+  }
   return flag.split(".")[2] ?? "";
 }
 
@@ -113,7 +133,7 @@ function isPluginDangerousFlagActive(
   if ((config.plugins as { enabled?: unknown } | undefined)?.enabled === false) {
     return false;
   }
-  const pluginId = getPluginIdFromDangerousFlag(flag);
+  const pluginId = getPluginIdFromDangerousFlag(flag, config);
   const pluginEntry = (config.plugins as { entries?: Record<string, unknown> } | undefined)
     ?.entries?.[pluginId];
   if (!pluginEntry || typeof pluginEntry !== "object" || Array.isArray(pluginEntry)) {
@@ -227,9 +247,9 @@ function collectNewlyEnabledDangerousConfigFlags(
   nextConfig: Record<string, unknown>,
 ): string[] {
   const currentFlags = collectEnabledInsecureOrDangerousFlags(currentConfig as OpenClawConfig);
-  const remainingCurrentTokens = collectEnabledInsecureOrDangerousFlags(
-    currentConfig as OpenClawConfig,
-  ).map((flag) => createDangerousConfigFlagToken(flag, currentConfig));
+  const remainingCurrentTokens = currentFlags.map((flag) =>
+    createDangerousConfigFlagToken(flag, currentConfig),
+  );
   // Honor the legacy tools.bash.applyPatch.workspaceOnly alias in the baseline so that
   // canonicalizing an already-dangerous legacy config to tools.exec.* is not treated as
   // a newly enabled dangerous flag.
@@ -254,11 +274,15 @@ function collectNewlyEnabledDangerousConfigFlags(
   const currentActivePluginFlags = new Set(
     currentFlags.filter(
       (flag): flag is `plugins.entries.${string}.config.${string}` =>
-        isPluginEntryDangerousFlag(flag) && isPluginDangerousFlagActive(currentConfig, flag),
+        isPluginEntryDangerousFlag(flag, currentConfig) &&
+        isPluginDangerousFlagActive(currentConfig, flag),
     ),
   );
   for (const flag of nextFlags) {
-    if (!isPluginEntryDangerousFlag(flag) || !isPluginDangerousFlagActive(nextConfig, flag)) {
+    if (
+      !isPluginEntryDangerousFlag(flag, nextConfig) ||
+      !isPluginDangerousFlagActive(nextConfig, flag)
+    ) {
       continue;
     }
     if (currentActivePluginFlags.has(flag) || newlyEnabledFlags.includes(flag)) {
