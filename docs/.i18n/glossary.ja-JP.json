@@ -1,79 +1,1082 @@
 [
-  { "source": "OpenClaw", "target": "OpenClaw" },
-  { "source": "Gateway", "target": "Gateway ゲートウェイ" },
-  { "source": "Pi", "target": "Pi" },
-  { "source": "Skills", "target": "Skills" },
-  { "source": "Skills config", "target": "Skillsの設定" },
-  { "source": "Skills Config", "target": "Skillsの設定" },
-  { "source": "local loopback", "target": "local loopback" },
-  { "source": "Tailscale", "target": "Tailscale" },
-  { "source": "Getting Started", "target": "はじめに" },
-  { "source": "Getting started", "target": "はじめに" },
-  { "source": "Quick start", "target": "クイックスタート" },
-  { "source": "Quick Start", "target": "クイックスタート" },
-  { "source": "Diffs", "target": "Diffs" },
-  { "source": "Capability Cookbook", "target": "機能拡張クックブック" },
-  { "source": "Setup Wizard Reference", "target": "セットアップウィザード リファレンス" },
-  { "source": "CLI Setup Reference", "target": "CLI セットアップ リファレンス" },
-  { "source": "Setup Wizard (CLI)", "target": "セットアップウィザード（CLI）" },
-  { "source": "Docs directory", "target": "ドキュメント一覧" },
-  { "source": "Credits", "target": "クレジット" },
-  { "source": "Features", "target": "機能" },
-  { "source": "DMs", "target": "ダイレクトメッセージ" },
-  { "source": "DM", "target": "ダイレクトメッセージ" },
-  { "source": "sandbox", "target": "サンドボックス" },
-  { "source": "Sandbox", "target": "サンドボックス" },
-  { "source": "sandboxing", "target": "サンドボックス化" },
-  { "source": "Sandboxing", "target": "サンドボックス化" },
-  { "source": "sandboxed", "target": "サンドボックス化" },
-  { "source": "Sandboxed", "target": "サンドボックス化" },
-  { "source": "Sandboxing note", "target": "サンドボックスに関する注意" },
-  { "source": "Companion apps", "target": "コンパニオンアプリ" },
-  { "source": "expected keys", "target": "期待されるキー" },
-  { "source": "block streaming", "target": "ブロックストリーミング" },
-  { "source": "Block streaming", "target": "ブロックストリーミング" },
-  { "source": "Discovery + transports", "target": "ディスカバリーとトランスポート" },
-  { "source": "Discovery", "target": "ディスカバリー" },
-  { "source": "Network model", "target": "ネットワークモデル" },
-  { "source": "Doctor", "target": "Doctor" },
-  { "source": "Polls", "target": "投票" },
-  { "source": "Release Policy", "target": "リリースポリシー" },
-  { "source": "Release policy", "target": "リリースポリシー" },
-  { "source": "for full details", "target": "詳細はこちら" },
-  { "source": "First 60 seconds", "target": "最初の60秒" },
-  { "source": "Auth: where it lives (important)", "target": "認証情報: 保存場所（重要）" },
-  { "source": "agent", "target": "エージェント" },
-  { "source": "channel", "target": "チャネル" },
-  { "source": "session", "target": "セッション" },
-  { "source": "provider", "target": "プロバイダー" },
-  { "source": "model", "target": "モデル" },
-  { "source": "tool", "target": "ツール" },
-  { "source": "CLI", "target": "CLI" },
-  { "source": "install sanity", "target": "インストール確認" },
-  { "source": "get unstuck", "target": "問題を解決する" },
-  { "source": "troubleshooting", "target": "トラブルシューティング" },
-  { "source": "FAQ", "target": "よくある質問" },
-  { "source": "onboarding", "target": "オンボーディング" },
-  { "source": "Onboarding", "target": "オンボーディング" },
-  { "source": "wizard", "target": "ウィザード" },
-  { "source": "environment variables", "target": "環境変数" },
-  { "source": "environment variable", "target": "環境変数" },
-  { "source": "env vars", "target": "環境変数" },
-  { "source": "env var", "target": "環境変数" },
-  { "source": "Plugin SDK", "target": "プラグインSDK" },
-  { "source": "Plugin SDK Overview", "target": "プラグインSDK 概要" },
-  { "source": "SDK Overview", "target": "SDK 概要" },
-  { "source": "Plugin Entry Points", "target": "プラグインエントリーポイント" },
-  { "source": "Entry Points", "target": "エントリーポイント" },
-  { "source": "Plugin Runtime", "target": "プラグインランタイム" },
-  { "source": "Runtime", "target": "ランタイム" },
-  { "source": "Plugin Setup", "target": "プラグインセットアップ" },
-  { "source": "Setup", "target": "セットアップ" },
-  { "source": "Channel Plugin SDK", "target": "チャネルプラグインSDK" },
-  { "source": "Channel Plugins", "target": "チャネルプラグイン" },
-  { "source": "Provider Plugin SDK", "target": "プロバイダープラグインSDK" },
-  { "source": "Provider Plugins", "target": "プロバイダープラグイン" },
-  { "source": "Plugin SDK Testing", "target": "プラグインSDK テスト" },
-  { "source": "Testing", "target": "テスト" },
-  { "source": "TinyFish", "target": "TinyFish" }
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway ゲートウェイ"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "Skillsの設定"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Skillsの設定"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "はじめに"
+  },
+  {
+    "source": "Getting started",
+    "target": "はじめに"
+  },
+  {
+    "source": "Quick start",
+    "target": "クイックスタート"
+  },
+  {
+    "source": "Quick Start",
+    "target": "クイックスタート"
+  },
+  {
+    "source": "Diffs",
+    "target": "Diffs"
+  },
+  {
+    "source": "Capability Cookbook",
+    "target": "機能拡張クックブック"
+  },
+  {
+    "source": "Setup Wizard Reference",
+    "target": "セットアップウィザード リファレンス"
+  },
+  {
+    "source": "CLI Setup Reference",
+    "target": "CLI セットアップ リファレンス"
+  },
+  {
+    "source": "Setup Wizard (CLI)",
+    "target": "セットアップウィザード（CLI）"
+  },
+  {
+    "source": "Docs directory",
+    "target": "ドキュメント一覧"
+  },
+  {
+    "source": "Credits",
+    "target": "クレジット"
+  },
+  {
+    "source": "Features",
+    "target": "機能"
+  },
+  {
+    "source": "DMs",
+    "target": "ダイレクトメッセージ"
+  },
+  {
+    "source": "DM",
+    "target": "ダイレクトメッセージ"
+  },
+  {
+    "source": "sandbox",
+    "target": "サンドボックス"
+  },
+  {
+    "source": "Sandbox",
+    "target": "サンドボックス"
+  },
+  {
+    "source": "sandboxing",
+    "target": "サンドボックス化"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "サンドボックス化"
+  },
+  {
+    "source": "sandboxed",
+    "target": "サンドボックス化"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "サンドボックス化"
+  },
+  {
+    "source": "Sandboxing note",
+    "target": "サンドボックスに関する注意"
+  },
+  {
+    "source": "Companion apps",
+    "target": "コンパニオンアプリ"
+  },
+  {
+    "source": "expected keys",
+    "target": "期待されるキー"
+  },
+  {
+    "source": "block streaming",
+    "target": "ブロックストリーミング"
+  },
+  {
+    "source": "Block streaming",
+    "target": "ブロックストリーミング"
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "ディスカバリーとトランスポート"
+  },
+  {
+    "source": "Discovery",
+    "target": "ディスカバリー"
+  },
+  {
+    "source": "Network model",
+    "target": "ネットワークモデル"
+  },
+  {
+    "source": "Doctor",
+    "target": "Doctor"
+  },
+  {
+    "source": "Polls",
+    "target": "投票"
+  },
+  {
+    "source": "Release Policy",
+    "target": "リリースポリシー"
+  },
+  {
+    "source": "Release policy",
+    "target": "リリースポリシー"
+  },
+  {
+    "source": "for full details",
+    "target": "詳細はこちら"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "最初の60秒"
+  },
+  {
+    "source": "Auth: where it lives (important)",
+    "target": "認証情報: 保存場所（重要）"
+  },
+  {
+    "source": "agent",
+    "target": "エージェント"
+  },
+  {
+    "source": "channel",
+    "target": "チャネル"
+  },
+  {
+    "source": "session",
+    "target": "セッション"
+  },
+  {
+    "source": "provider",
+    "target": "プロバイダー"
+  },
+  {
+    "source": "model",
+    "target": "モデル"
+  },
+  {
+    "source": "tool",
+    "target": "ツール"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "install sanity",
+    "target": "インストール確認"
+  },
+  {
+    "source": "get unstuck",
+    "target": "問題を解決する"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "トラブルシューティング"
+  },
+  {
+    "source": "FAQ",
+    "target": "よくある質問"
+  },
+  {
+    "source": "onboarding",
+    "target": "オンボーディング"
+  },
+  {
+    "source": "Onboarding",
+    "target": "オンボーディング"
+  },
+  {
+    "source": "wizard",
+    "target": "ウィザード"
+  },
+  {
+    "source": "environment variables",
+    "target": "環境変数"
+  },
+  {
+    "source": "environment variable",
+    "target": "環境変数"
+  },
+  {
+    "source": "env vars",
+    "target": "環境変数"
+  },
+  {
+    "source": "env var",
+    "target": "環境変数"
+  },
+  {
+    "source": "Plugin SDK",
+    "target": "プラグインSDK"
+  },
+  {
+    "source": "Plugin SDK Overview",
+    "target": "プラグインSDK 概要"
+  },
+  {
+    "source": "SDK Overview",
+    "target": "SDK 概要"
+  },
+  {
+    "source": "Plugin Entry Points",
+    "target": "プラグインエントリーポイント"
+  },
+  {
+    "source": "Entry Points",
+    "target": "エントリーポイント"
+  },
+  {
+    "source": "Plugin Runtime",
+    "target": "プラグインランタイム"
+  },
+  {
+    "source": "Runtime",
+    "target": "ランタイム"
+  },
+  {
+    "source": "Plugin Setup",
+    "target": "プラグインセットアップ"
+  },
+  {
+    "source": "Setup",
+    "target": "セットアップ"
+  },
+  {
+    "source": "Channel Plugin SDK",
+    "target": "チャネルプラグインSDK"
+  },
+  {
+    "source": "Channel Plugins",
+    "target": "チャネルプラグイン"
+  },
+  {
+    "source": "Provider Plugin SDK",
+    "target": "プロバイダープラグインSDK"
+  },
+  {
+    "source": "Provider Plugins",
+    "target": "プロバイダープラグイン"
+  },
+  {
+    "source": "Plugin SDK Testing",
+    "target": "プラグインSDK テスト"
+  },
+  {
+    "source": "Testing",
+    "target": "テスト"
+  },
+  {
+    "source": "TinyFish",
+    "target": "TinyFish"
+  },
+  {
+    "source": "ACP Agents",
+    "target": "ACP エージェント"
+  },
+  {
+    "source": "AGENTS.dev Template",
+    "target": "AGENTS.dev テンプレート"
+  },
+  {
+    "source": "AGENTS.md Template",
+    "target": "AGENTS.mdテンプレート"
+  },
+  {
+    "source": "API Usage and Costs",
+    "target": "APIの使用状況とコスト"
+  },
+  {
+    "source": "Agent Bootstrapping",
+    "target": "エージェントブートストラップ"
+  },
+  {
+    "source": "Agent Loop",
+    "target": "エージェントループ"
+  },
+  {
+    "source": "Agent Runtime",
+    "target": "エージェントランタイム"
+  },
+  {
+    "source": "Agent Workspace",
+    "target": "エージェントワークスペース"
+  },
+  {
+    "source": "Android App",
+    "target": "Androidアプリ"
+  },
+  {
+    "source": "Audio and Voice Notes",
+    "target": "音声とボイスメモ"
+  },
+  {
+    "source": "Auth Credential Semantics",
+    "target": "認証資格情報セマンティクス"
+  },
+  {
+    "source": "Auth Monitoring",
+    "target": "認証モニタリング"
+  },
+  {
+    "source": "Authentication",
+    "target": "認証"
+  },
+  {
+    "source": "Automation & Tasks",
+    "target": "自動化の概要"
+  },
+  {
+    "source": "Automation Troubleshooting",
+    "target": "自動化のトラブルシューティング"
+  },
+  {
+    "source": "BOOT.md Template",
+    "target": "BOOT.md テンプレート"
+  },
+  {
+    "source": "BOOTSTRAP.md Template",
+    "target": "BOOTSTRAP.md テンプレート"
+  },
+  {
+    "source": "Background Exec and Process Tool",
+    "target": "バックグラウンドExecとProcessツール"
+  },
+  {
+    "source": "Background Tasks",
+    "target": "バックグラウンドタスク"
+  },
+  {
+    "source": "Bonjour Discovery",
+    "target": "Bonjourディスカバリー"
+  },
+  {
+    "source": "Brave Search (legacy path)",
+    "target": "Brave Search（レガシーパス）"
+  },
+  {
+    "source": "Bridge Protocol",
+    "target": "ブリッジプロトコル"
+  },
+  {
+    "source": "Broadcast Groups",
+    "target": "ブロードキャストグループ"
+  },
+  {
+    "source": "Browser (OpenClaw-managed)",
+    "target": "ブラウザ（OpenClaw 管理）"
+  },
+  {
+    "source": "Browser Login",
+    "target": "ブラウザログイン"
+  },
+  {
+    "source": "Browser Troubleshooting",
+    "target": "ブラウザのトラブルシューティング"
+  },
+  {
+    "source": "Building Channel Plugins",
+    "target": "チャネルプラグインの構築"
+  },
+  {
+    "source": "Building Plugins",
+    "target": "プラグインのビルド"
+  },
+  {
+    "source": "Building Plugins (redirect)",
+    "target": "プラグイン構築（リダイレクト）"
+  },
+  {
+    "source": "Building Provider Plugins",
+    "target": "プロバイダープラグインの構築"
+  },
+  {
+    "source": "Builtin Memory Engine",
+    "target": "ビルトインメモリエンジン"
+  },
+  {
+    "source": "Bun (Experimental)",
+    "target": "Bun（実験的）"
+  },
+  {
+    "source": "CI Pipeline",
+    "target": "CIパイプライン"
+  },
+  {
+    "source": "CLI Automation",
+    "target": "CLI 自動化"
+  },
+  {
+    "source": "Camera Capture",
+    "target": "カメラキャプチャ"
+  },
+  {
+    "source": "Channel Routing",
+    "target": "チャネルルーティング"
+  },
+  {
+    "source": "Chat Channels",
+    "target": "チャットチャンネル"
+  },
+  {
+    "source": "Claude Max API Proxy",
+    "target": "Claude Max APIプロキシ"
+  },
+  {
+    "source": "Code Execution",
+    "target": "コード実行"
+  },
+  {
+    "source": "Command Queue",
+    "target": "コマンドキュー"
+  },
+  {
+    "source": "Community Plugins",
+    "target": "コミュニティプラグイン"
+  },
+  {
+    "source": "Compaction",
+    "target": "コンパクション"
+  },
+  {
+    "source": "Configuration",
+    "target": "設定"
+  },
+  {
+    "source": "Configuration Examples",
+    "target": "設定例"
+  },
+  {
+    "source": "Context",
+    "target": "コンテキスト"
+  },
+  {
+    "source": "Context Engine",
+    "target": "コンテキストエンジン"
+  },
+  {
+    "source": "Contributing to the Threat Model",
+    "target": "脅威モデルへの貢献"
+  },
+  {
+    "source": "Creating Skills",
+    "target": "Skills の作成"
+  },
+  {
+    "source": "Cron vs Heartbeat",
+    "target": "Cronとハートビートの比較"
+  },
+  {
+    "source": "Date and Time",
+    "target": "日付と時刻"
+  },
+  {
+    "source": "Debugging",
+    "target": "デバッグ"
+  },
+  {
+    "source": "Default AGENTS.md",
+    "target": "デフォルト AGENTS.md"
+  },
+  {
+    "source": "Delegate Architecture",
+    "target": "デリゲートアーキテクチャ"
+  },
+  {
+    "source": "Device Model Database",
+    "target": "デバイスモデルデータベース"
+  },
+  {
+    "source": "Diagnostics Flags",
+    "target": "診断フラグ"
+  },
+  {
+    "source": "DigitalOcean (Platform)",
+    "target": "DigitalOcean（プラットフォーム）"
+  },
+  {
+    "source": "Discovery and Transports",
+    "target": "ディスカバリーとトランスポート"
+  },
+  {
+    "source": "Docker VM Runtime",
+    "target": "Docker VM ランタイム"
+  },
+  {
+    "source": "Docs Hubs",
+    "target": "ドキュメントハブ"
+  },
+  {
+    "source": "DuckDuckGo Search",
+    "target": "DuckDuckGo検索"
+  },
+  {
+    "source": "Elevated Mode",
+    "target": "昇格モード"
+  },
+  {
+    "source": "Environment Variables",
+    "target": "環境変数"
+  },
+  {
+    "source": "Exa Search",
+    "target": "Exa検索"
+  },
+  {
+    "source": "Exec Tool",
+    "target": "Execツール"
+  },
+  {
+    "source": "Formal Verification (Security Models)",
+    "target": "形式検証（セキュリティモデル）"
+  },
+  {
+    "source": "GLM Models",
+    "target": "GLMモデル"
+  },
+  {
+    "source": "Gateway Architecture",
+    "target": "Gateway ゲートウェイ アーキテクチャ"
+  },
+  {
+    "source": "Gateway Lifecycle",
+    "target": "Gateway ゲートウェイライフサイクル"
+  },
+  {
+    "source": "Gateway Lock",
+    "target": "Gateway ゲートウェイロック"
+  },
+  {
+    "source": "Gateway Logging",
+    "target": "Gateway ゲートウェイロギング"
+  },
+  {
+    "source": "Gateway Runbook",
+    "target": "Gateway ゲートウェイ ランブック"
+  },
+  {
+    "source": "Gateway on macOS",
+    "target": "macOS での Gateway ゲートウェイ"
+  },
+  {
+    "source": "General Troubleshooting",
+    "target": "一般的なトラブルシューティング"
+  },
+  {
+    "source": "HEARTBEAT.md Template",
+    "target": "HEARTBEAT.md テンプレート"
+  },
+  {
+    "source": "Health Checks",
+    "target": "ヘルスチェック"
+  },
+  {
+    "source": "Health Checks (macOS)",
+    "target": "ヘルスチェック（macOS）"
+  },
+  {
+    "source": "Help",
+    "target": "ヘルプ"
+  },
+  {
+    "source": "Honcho Memory",
+    "target": "Honcho メモリ"
+  },
+  {
+    "source": "Hooks",
+    "target": "フック"
+  },
+  {
+    "source": "IDENTITY Template",
+    "target": "IDENTITY テンプレート"
+  },
+  {
+    "source": "IDENTITY.dev Template",
+    "target": "IDENTITY.dev テンプレート"
+  },
+  {
+    "source": "Image Generation",
+    "target": "画像生成"
+  },
+  {
+    "source": "Image and Media Support",
+    "target": "画像・メディアサポート"
+  },
+  {
+    "source": "Install",
+    "target": "インストール"
+  },
+  {
+    "source": "Linux App",
+    "target": "Linux アプリ"
+  },
+  {
+    "source": "Linux Server",
+    "target": "Linuxサーバー"
+  },
+  {
+    "source": "Local Models",
+    "target": "ローカルモデル"
+  },
+  {
+    "source": "Location Command",
+    "target": "ロケーションコマンド"
+  },
+  {
+    "source": "Logging Overview",
+    "target": "ロギング概要"
+  },
+  {
+    "source": "Markdown Formatting",
+    "target": "Markdownフォーマット"
+  },
+  {
+    "source": "Matrix migration",
+    "target": "Matrix移行"
+  },
+  {
+    "source": "Media Understanding",
+    "target": "メディア理解"
+  },
+  {
+    "source": "Memory Overview",
+    "target": "メモリ概要"
+  },
+  {
+    "source": "Memory Search",
+    "target": "メモリ検索"
+  },
+  {
+    "source": "Memory configuration reference",
+    "target": "メモリ設定リファレンス"
+  },
+  {
+    "source": "Menu Bar",
+    "target": "メニューバー"
+  },
+  {
+    "source": "Menu Bar Icon",
+    "target": "メニューバーアイコン"
+  },
+  {
+    "source": "Messages",
+    "target": "メッセージ"
+  },
+  {
+    "source": "Migration Guide",
+    "target": "移行ガイド"
+  },
+  {
+    "source": "Model Failover",
+    "target": "モデルフェイルオーバー"
+  },
+  {
+    "source": "Model Provider Quickstart",
+    "target": "モデルプロバイダー クイックスタート"
+  },
+  {
+    "source": "Models CLI",
+    "target": "モデル CLI"
+  },
+  {
+    "source": "Multi-Agent Sandbox & Tools",
+    "target": "マルチエージェント サンドボックス & ツール"
+  },
+  {
+    "source": "Multiple Gateways",
+    "target": "複数の Gateway ゲートウェイ"
+  },
+  {
+    "source": "Network",
+    "target": "ネットワーク"
+  },
+  {
+    "source": "Node + tsx Crash",
+    "target": "Node + tsx クラッシュ"
+  },
+  {
+    "source": "Node Troubleshooting",
+    "target": "ノードのトラブルシューティング"
+  },
+  {
+    "source": "Nodes",
+    "target": "ノード"
+  },
+  {
+    "source": "Onboarding (CLI)",
+    "target": "オンボーディング（CLI）"
+  },
+  {
+    "source": "Onboarding (macOS App)",
+    "target": "オンボーディング（macOS アプリ）"
+  },
+  {
+    "source": "Onboarding Overview",
+    "target": "オンボーディング概要"
+  },
+  {
+    "source": "Onboarding Reference",
+    "target": "オンボーディング リファレンス"
+  },
+  {
+    "source": "OpenClaw Lore",
+    "target": "OpenClaw ロア"
+  },
+  {
+    "source": "Oracle Cloud (Platform)",
+    "target": "Oracle Cloud（プラットフォーム）"
+  },
+  {
+    "source": "PDF Tool",
+    "target": "PDF ツール"
+  },
+  {
+    "source": "Perplexity (Provider)",
+    "target": "Perplexity（プロバイダー）"
+  },
+  {
+    "source": "Perplexity Search (legacy path)",
+    "target": "Perplexity Search（レガシーパス）"
+  },
+  {
+    "source": "Personal Assistant Setup",
+    "target": "パーソナルアシスタントのセットアップ"
+  },
+  {
+    "source": "Pi Development Workflow",
+    "target": "Pi開発ワークフロー"
+  },
+  {
+    "source": "Pi Integration Architecture",
+    "target": "Pi インテグレーションアーキテクチャ"
+  },
+  {
+    "source": "Platforms",
+    "target": "プラットフォーム"
+  },
+  {
+    "source": "Plugin Bundles",
+    "target": "プラグインバンドル"
+  },
+  {
+    "source": "Plugin Internals",
+    "target": "プラグインの内部構造"
+  },
+  {
+    "source": "Plugin Manifest",
+    "target": "プラグインマニフェスト"
+  },
+  {
+    "source": "Plugin Runtime Helpers",
+    "target": "プラグインランタイムヘルパー"
+  },
+  {
+    "source": "Plugin SDK Migration",
+    "target": "プラグインSDK 移行"
+  },
+  {
+    "source": "Plugin Setup and Config",
+    "target": "プラグインセットアップと設定"
+  },
+  {
+    "source": "Plugin Testing",
+    "target": "プラグインSDK テスト"
+  },
+  {
+    "source": "Plugins",
+    "target": "プラグイン"
+  },
+  {
+    "source": "Presence",
+    "target": "プレゼンス"
+  },
+  {
+    "source": "Prompt Caching",
+    "target": "プロンプトキャッシュ"
+  },
+  {
+    "source": "Provider Directory",
+    "target": "プロバイダー一覧"
+  },
+  {
+    "source": "QMD Memory Engine",
+    "target": "QMDメモリエンジン"
+  },
+  {
+    "source": "RPC Adapters",
+    "target": "RPCアダプター"
+  },
+  {
+    "source": "Raspberry Pi (Platform)",
+    "target": "Raspberry Pi（プラットフォーム）"
+  },
+  {
+    "source": "Reactions",
+    "target": "リアクション"
+  },
+  {
+    "source": "Registering Tools",
+    "target": "ツールの登録"
+  },
+  {
+    "source": "Release Channels",
+    "target": "リリースチャネル"
+  },
+  {
+    "source": "Remote Control",
+    "target": "リモートコントロール"
+  },
+  {
+    "source": "Retry Policy",
+    "target": "リトライポリシー"
+  },
+  {
+    "source": "SOUL.dev Template",
+    "target": "SOUL.dev テンプレート"
+  },
+  {
+    "source": "SOUL.md Template",
+    "target": "SOUL.md テンプレート"
+  },
+  {
+    "source": "Sandbox CLI",
+    "target": "サンドボックス CLI"
+  },
+  {
+    "source": "Scheduled Tasks",
+    "target": "Cron ジョブ"
+  },
+  {
+    "source": "Scripts",
+    "target": "スクリプト"
+  },
+  {
+    "source": "SecretRef Credential Surface",
+    "target": "SecretRefクレデンシャルサーフェス"
+  },
+  {
+    "source": "Session Management",
+    "target": "セッション管理"
+  },
+  {
+    "source": "Session Management Deep Dive",
+    "target": "セッション管理の詳細解説"
+  },
+  {
+    "source": "Session Pruning",
+    "target": "セッションプルーニング"
+  },
+  {
+    "source": "Session Tools",
+    "target": "セッションツール"
+  },
+  {
+    "source": "Showcase",
+    "target": "ショーケース"
+  },
+  {
+    "source": "Skills (macOS)",
+    "target": "Skills（macOS）"
+  },
+  {
+    "source": "Standing Orders",
+    "target": "スタンディングオーダー"
+  },
+  {
+    "source": "Streaming and Chunking",
+    "target": "ストリーミングとチャンキング"
+  },
+  {
+    "source": "System Prompt",
+    "target": "システムプロンプト"
+  },
+  {
+    "source": "TOOLS.dev Template",
+    "target": "TOOLS.dev テンプレート"
+  },
+  {
+    "source": "TOOLS.md Template",
+    "target": "TOOLS.md テンプレート"
+  },
+  {
+    "source": "Talk Mode",
+    "target": "トークモード"
+  },
+  {
+    "source": "Tests",
+    "target": "テスト"
+  },
+  {
+    "source": "Text-to-Speech",
+    "target": "テキスト読み上げ"
+  },
+  {
+    "source": "Text-to-Speech (legacy path)",
+    "target": "テキスト読み上げ（レガシーパス）"
+  },
+  {
+    "source": "Thinking Levels",
+    "target": "思考レベル"
+  },
+  {
+    "source": "Threat Model (MITRE ATLAS)",
+    "target": "脅威モデル（MITRE ATLAS）"
+  },
+  {
+    "source": "Timezones",
+    "target": "タイムゾーン"
+  },
+  {
+    "source": "Token Use and Costs",
+    "target": "トークン使用量とコスト"
+  },
+  {
+    "source": "Tool-loop detection",
+    "target": "ツールループ検出"
+  },
+  {
+    "source": "Tools and Plugins",
+    "target": "ツールとプラグイン"
+  },
+  {
+    "source": "Transcript Hygiene",
+    "target": "トランスクリプトハイジーン"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "トラブルシューティング"
+  },
+  {
+    "source": "Trusted Proxy Auth",
+    "target": "信頼されたプロキシ認証"
+  },
+  {
+    "source": "Typing Indicators",
+    "target": "タイピングインジケーター"
+  },
+  {
+    "source": "USER Template",
+    "target": "USER テンプレート"
+  },
+  {
+    "source": "USER.dev Template",
+    "target": "USER.dev テンプレート"
+  },
+  {
+    "source": "Uninstall",
+    "target": "アンインストール"
+  },
+  {
+    "source": "Updating",
+    "target": "アップデート"
+  },
+  {
+    "source": "Usage Tracking",
+    "target": "使用量トラッキング"
+  },
+  {
+    "source": "Vercel AI Gateway",
+    "target": "Vercel AI Gateway ゲートウェイ"
+  },
+  {
+    "source": "Voice Call Plugin",
+    "target": "Voice Callプラグイン"
+  },
+  {
+    "source": "Voice Overlay",
+    "target": "音声オーバーレイ"
+  },
+  {
+    "source": "Voice Wake (macOS)",
+    "target": "ボイスウェイク（macOS）"
+  },
+  {
+    "source": "WSL2 + Windows + remote Chrome CDP troubleshooting",
+    "target": "WSL2 + Windows + リモートChrome CDPのトラブルシューティング"
+  },
+  {
+    "source": "Web Search",
+    "target": "ウェブ検索"
+  },
+  {
+    "source": "WebChat (macOS)",
+    "target": "WebChat（macOS）"
+  },
+  {
+    "source": "Zalo Personal Plugin",
+    "target": "Zalo Personal プラグイン"
+  },
+  {
+    "source": "apply_patch Tool",
+    "target": "apply_patchツール"
+  },
+  {
+    "source": "flows (redirect)",
+    "target": "flows"
+  },
+  {
+    "source": "iOS App",
+    "target": "iOSアプリ"
+  },
+  {
+    "source": "macOS App",
+    "target": "macOSアプリ"
+  },
+  {
+    "source": "macOS Dev Setup",
+    "target": "macOS開発セットアップ"
+  },
+  {
+    "source": "macOS Logging",
+    "target": "macOSログ記録"
+  },
+  {
+    "source": "macOS Permissions",
+    "target": "macOSパーミッション"
+  },
+  {
+    "source": "macOS Signing",
+    "target": "macOS署名"
+  },
+  {
+    "source": "macOS VMs",
+    "target": "macOS VM"
+  }
 ]
