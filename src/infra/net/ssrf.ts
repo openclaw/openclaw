@@ -362,22 +362,6 @@ function dedupeAndPreferIpv4(results: readonly LookupAddress[]): string[] {
   return [...ipv4, ...otherFamilies];
 }
 
-function isLookupAddress(value: unknown): value is LookupAddress {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as LookupAddress).address === "string" &&
-    typeof (value as LookupAddress).family === "number"
-  );
-}
-
-function normalizeLookupResults(results: unknown): readonly LookupAddress[] {
-  if (Array.isArray(results)) {
-    return results.filter(isLookupAddress);
-  }
-  return isLookupAddress(results) ? [results] : [];
-}
-
 export async function resolvePinnedHostnameWithPolicy(
   hostname: string,
   params: { lookupFn?: LookupFn; policy?: SsrFPolicy } = {},

@@ -60,7 +60,7 @@ function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): bo
 
 function shouldSuppressWhatsAppPayload(
   payload: ReplyPayload,
-  info: { kind: ReplyLifecycleKind },
+  _info: { kind: ReplyLifecycleKind },
 ): boolean {
   if (payload.isReasoning === true || payload.isCompactionNotice === true) {
     return true;
