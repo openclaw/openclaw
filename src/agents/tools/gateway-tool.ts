@@ -370,6 +370,7 @@ function assertGatewayConfigMutationAllowed(params: {
       "plugins.enabled",
       "plugins.allow",
       "plugins.deny",
+      "plugins.slots",
     ] as const;
     const changedActivationPaths = REMOTE_PLUGIN_ACTIVATION_PATHS.filter(
       (path) =>

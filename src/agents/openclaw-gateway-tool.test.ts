@@ -12,6 +12,9 @@ const { callGatewayToolMock, readGatewayCallOptionsMock, configState } = vi.hois
   readGatewayCallOptionsMock: vi.fn(() => ({})),
   configState: { value: {} as Record<string, unknown> },
 }));
+const { resolvePluginConfigContractsByIdMock } = vi.hoisted(() => ({
+  resolvePluginConfigContractsByIdMock: vi.fn(),
+}));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -27,6 +30,14 @@ vi.mock("./tools/gateway.js", async (importOriginal) => {
     ...actual,
     callGatewayTool: callGatewayToolMock,
     readGatewayCallOptions: readGatewayCallOptionsMock,
+  };
+});
+
+vi.mock("../plugins/config-contracts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/config-contracts.js")>();
+  return {
+    ...actual,
+    resolvePluginConfigContractsById: resolvePluginConfigContractsByIdMock,
   };
 });
 
@@ -63,7 +74,21 @@ describe("gateway tool", () => {
   beforeEach(() => {
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
+    resolvePluginConfigContractsByIdMock.mockReset();
     configState.value = {};
+    resolvePluginConfigContractsByIdMock.mockImplementation(
+      ({ pluginIds }: { pluginIds: string[] }) =>
+        new Map(
+          pluginIds.map((pluginId) => [
+            pluginId,
+            {
+              configContracts: {
+                dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
+              },
+            },
+          ]),
+        ),
+    );
     callGatewayToolMock.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         return {
@@ -653,6 +678,7 @@ describe("gateway tool", () => {
     ["plugins.enabled", "{ plugins: { enabled: false } }"],
     ["plugins.allow", '{ plugins: { allow: ["acpx"] } }'],
     ["plugins.deny", '{ plugins: { deny: ["acpx"] } }'],
+    ["plugins.slots", '{ plugins: { slots: { memory: "acpx" } } }'],
   ])("rejects remote config.patch that changes plugin activation via %s", async (_label, raw) => {
     readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "wss://gateway.example" });
     const tool = requireGatewayTool();
@@ -665,6 +691,52 @@ describe("gateway tool", () => {
       }),
     ).rejects.toThrow(
       "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch when overlapping plugin IDs activate a newly dangerous plugin", async () => {
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            plugins: {
+              allow: ["foo"],
+              entries: {
+                foo: {
+                  config: {
+                    permissionMode: "approve-all",
+                  },
+                },
+                "foo.config": {
+                  enabled: false,
+                  config: {
+                    permissionMode: "approve-all",
+                  },
+                },
+              },
+            },
+            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-enable-overlapping-dangerous-plugin", {
+        action: "config.patch",
+        raw: '{ plugins: { entries: { "foo.config": { enabled: true } } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot enable dangerous config flags: plugins.entries.foo.config.config.permissionMode=approve-all",
     );
     expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
     expect(callGatewayTool).not.toHaveBeenCalledWith(
