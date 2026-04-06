@@ -248,6 +248,12 @@ Opt-in live coverage for the shared bundled providers:
 OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/music-generation-providers.live.test.ts
 ```
 
+Repo wrapper:
+
+```bash
+pnpm test:live:media music
+```
+
 This live file loads missing provider env vars from `~/.profile`, prefers
 live/env API keys ahead of stored auth profiles by default, and runs both
 `generate` and declared `edit` coverage when the provider enables edit mode.
