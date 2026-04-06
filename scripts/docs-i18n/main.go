@@ -91,6 +91,7 @@ func main() {
 	start := time.Now()
 	processed := 0
 	skipped := 0
+	var runErr error
 
 	if *parallel < 1 {
 		*parallel = 1
@@ -101,40 +102,43 @@ func main() {
 	case "doc":
 		if *parallel > 1 {
 			proc, skip, err := runDocParallel(context.Background(), ordered, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite, *parallel, glossary, *thinking)
-			if err != nil {
-				fatal(err)
-			}
 			processed += proc
 			skipped += skip
+			if err != nil {
+				runErr = err
+			}
 		} else {
 			proc, skip, err := runDocSequential(context.Background(), ordered, translator, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite)
-			if err != nil {
-				fatal(err)
-			}
 			processed += proc
 			skipped += skip
+			if err != nil {
+				runErr = err
+			}
 		}
 	case "segment":
 		if *parallel > 1 {
 			fatal(fmt.Errorf("parallel processing is only supported in doc mode"))
 		}
 		proc, err := runSegmentSequential(context.Background(), ordered, translator, tm, resolvedDocsRoot, *sourceLang, *targetLang)
-		if err != nil {
-			fatal(err)
-		}
 		processed += proc
+		if err != nil {
+			runErr = err
+		}
 	default:
 		fatal(fmt.Errorf("unknown mode: %s", *mode))
 	}
 
-	if err := tm.Save(); err != nil {
-		fatal(err)
+	if err := tm.Save(); err != nil && runErr == nil {
+		runErr = err
 	}
-	if err := postprocessLocalizedDocs(resolvedDocsRoot, *targetLang); err != nil {
-		fatal(err)
+	if err := postprocessLocalizedDocs(resolvedDocsRoot, *targetLang); err != nil && runErr == nil {
+		runErr = err
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
 	log.Printf("docs-i18n: completed processed=%d skipped=%d elapsed=%s", processed, skipped, elapsed)
+	if runErr != nil {
+		fatal(runErr)
+	}
 }
 
 func runDocSequential(ctx context.Context, ordered []string, translator *PiTranslator, docsRoot, srcLang, tgtLang string, overwrite bool) (int, int, error) {
