@@ -59,7 +59,32 @@ export async function generateVoiceResponse(
   // Build voice-specific session key based on phone number
   const normalizedPhone = from.replace(/\D/g, "");
   const sessionKey = `voice:${normalizedPhone}`;
-  const agentId = "main";
+
+  // Resolve agent from config bindings (voice-call channel) or default agent.
+  // Distinguish two cases:
+  //   - No voice-call binding configured -> keep "main" (current behavior)
+  //   - Binding configured but without an explicit agentId -> fall back to default agent
+  let agentId = "main";
+  const rawCfg = coreConfig as Record<string, unknown>;
+  const bindings = rawCfg.bindings as
+    | Array<{ agentId?: string; match?: { channel?: string } }>
+    | undefined;
+  const agentsList = (rawCfg.agents as Record<string, unknown>)?.list as
+    | Array<{ id: string; default?: boolean }>
+    | undefined;
+  if (bindings) {
+    const voiceBinding = bindings.find((b) => b.match?.channel === "voice-call");
+    if (voiceBinding) {
+      if (voiceBinding.agentId) {
+        agentId = voiceBinding.agentId;
+      } else if (agentsList) {
+        const defaultAgent = agentsList.find((a) => a.default === true);
+        if (defaultAgent) {
+          agentId = defaultAgent.id;
+        }
+      }
+    }
+  }
 
   // Resolve paths
   const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
