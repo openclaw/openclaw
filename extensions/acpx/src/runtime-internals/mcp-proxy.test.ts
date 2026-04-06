@@ -56,6 +56,7 @@ rl.on("line", (line) => process.stdout.write(line + "\n"));
     const child = spawn(process.execPath, [proxyPath, "--payload", payload], {
       stdio: ["pipe", "pipe", "inherit"],
       cwd: process.cwd(),
+      windowsHide: true,
     });
 
     let stdout = "";
