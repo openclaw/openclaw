@@ -269,7 +269,6 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     id: PROVIDER_ID,
     label: "OpenAI Codex",
     docsPath: "/providers/models",
-    deprecatedProfileIds: [CODEX_CLI_PROFILE_ID],
     auth: [
       {
         id: "oauth",

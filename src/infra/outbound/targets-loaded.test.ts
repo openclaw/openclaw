@@ -5,6 +5,7 @@ import { tryResolveLoadedOutboundTarget } from "./targets-loaded.js";
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   getActivePluginRegistry: vi.fn(),
+  getActivePluginChannelRegistry: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -13,12 +14,14 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: mocks.getActivePluginRegistry,
+  getActivePluginChannelRegistry: mocks.getActivePluginChannelRegistry,
 }));
 
 describe("tryResolveLoadedOutboundTarget", () => {
   beforeEach(() => {
     mocks.getChannelPlugin.mockReset();
     mocks.getActivePluginRegistry.mockReset();
+    mocks.getActivePluginChannelRegistry.mockReset();
   });
 
   it("returns undefined when no loaded plugin exists", () => {

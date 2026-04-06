@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
-import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import {
   applyAuthChoiceLoadedPluginProvider,
   applyAuthChoicePluginProvider,
   runProviderPluginAuthMethod,
-} from "./auth-choice.apply.plugin-provider.js";
+} from "../plugins/provider-auth-choice.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import type { ProviderAuthMethod } from "../plugins/types.js";
+import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const resolveProviderPluginChoice = vi.hoisted(() =>

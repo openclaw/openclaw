@@ -1,15 +1,13 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as googleChatSecrets from "../../extensions/googlechat/src/secret-contract.ts";
+import * as ircSecrets from "../../extensions/irc/src/secret-contract.ts";
+import * as slackSecrets from "../../extensions/slack/src/secret-contract.ts";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const [ircSecrets, slackSecrets, googleChatSecrets] = await Promise.all([
-    import("../../extensions/irc/src/secret-contract.ts"),
-    import("../../extensions/slack/src/secret-contract.ts"),
-    import("../../extensions/googlechat/src/secret-contract.ts"),
-  ]);
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {
     getBootstrapChannelPlugin: (id: string) => {
       if (id === "irc") {
@@ -31,6 +29,24 @@ vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
           secrets: {
             collectRuntimeConfigAssignments: googleChatSecrets.collectRuntimeConfigAssignments,
           },
+        };
+      }
+      return undefined;
+    },
+    getBootstrapChannelSecrets: (id: string) => {
+      if (id === "irc") {
+        return {
+          collectRuntimeConfigAssignments: ircSecrets.collectRuntimeConfigAssignments,
+        };
+      }
+      if (id === "slack") {
+        return {
+          collectRuntimeConfigAssignments: slackSecrets.collectRuntimeConfigAssignments,
+        };
+      }
+      if (id === "googlechat") {
+        return {
+          collectRuntimeConfigAssignments: googleChatSecrets.collectRuntimeConfigAssignments,
         };
       }
       return undefined;

@@ -60,7 +60,7 @@ function applyNullableStringField(
 function applyNullableSecretInputField(
   target: Record<string, unknown>,
   key: "accessToken" | "password",
-  value: MatrixConfig["accessToken"] | MatrixConfig["password"] | null | undefined,
+  value: MatrixConfig["accessToken"] | null | undefined,
   defaults?: NonNullable<CoreConfig["secrets"]>["defaults"],
 ): void {
   if (value === undefined) {
@@ -97,9 +97,7 @@ function cloneMatrixDmConfig(dm: MatrixConfig["dm"]): MatrixConfig["dm"] {
   };
 }
 
-function cloneMatrixRoomMap(
-  rooms: MatrixConfig["groups"] | MatrixConfig["rooms"],
-): MatrixConfig["groups"] | MatrixConfig["rooms"] {
+function cloneMatrixRoomMap(rooms: MatrixConfig["groups"]): MatrixConfig["groups"] {
   if (!rooms) {
     return rooms;
   }
@@ -210,7 +208,7 @@ export function updateMatrixAccountConfig(
       delete nextAccount.dm;
     } else {
       nextAccount.dm = cloneMatrixDmConfig({
-        ...((nextAccount.dm as MatrixConfig["dm"] | undefined) ?? {}),
+        ...(nextAccount.dm as MatrixConfig["dm"] | undefined),
         ...patch.dm,
       });
     }

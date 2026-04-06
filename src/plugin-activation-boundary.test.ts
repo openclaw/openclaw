@@ -50,8 +50,8 @@ describe("plugin activation boundary", () => {
   function importAmbientModules() {
     ambientImportsPromise ??= Promise.all([
       import("./commands/onboard-custom.js"),
-      import("./commands/opencode-go-model-default.js"),
-      import("./commands/opencode-zen-model-default.js"),
+      import("./plugins/provider-model-defaults.js"),
+      import("./plugins/provider-model-primary.js"),
     ]).then(() => undefined);
     return ambientImportsPromise;
   }

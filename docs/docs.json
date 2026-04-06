@@ -1108,6 +1108,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/webhooks",
                   "plugins/voice-call",
                   {
                     "group": "Building Plugins",
@@ -1157,6 +1158,7 @@
               {
                 "group": "Tools",
                 "pages": [
+                  "tools/media-overview",
                   "tools/apply-patch",
                   {
                     "group": "Web Browser",

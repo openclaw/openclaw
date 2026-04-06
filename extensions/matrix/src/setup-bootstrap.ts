@@ -38,7 +38,7 @@ export async function maybeBootstrapNewEncryptedMatrixAccount(params: {
     const bootstrap = await bootstrapMatrixVerification({ accountId: params.accountId });
     return {
       attempted: true,
-      success: bootstrap.success === true,
+      success: bootstrap.success,
       recoveryKeyCreatedAt: bootstrap.verification.recoveryKeyCreatedAt,
       backupVersion: bootstrap.verification.backupVersion,
       ...(bootstrap.success

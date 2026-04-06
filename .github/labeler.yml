@@ -241,6 +241,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
+"extensions: webhooks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/webhooks/**"
 "extensions: device-pair":
   - changed-files:
       - any-glob-to-any-file:

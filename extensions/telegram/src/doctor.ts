@@ -36,7 +36,7 @@ function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record
 }
 
 function sanitizeForLog(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return value.replace(/\p{Cc}+/gu, " ").trim();
 }
 
 function describeUnknownError(error: unknown): string {

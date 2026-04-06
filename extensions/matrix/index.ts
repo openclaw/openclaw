@@ -1,5 +1,4 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import { registerMatrixCliMetadata } from "./cli-metadata.js";
 
 export default defineBundledChannelEntry({
@@ -10,6 +9,10 @@ export default defineBundledChannelEntry({
   plugin: {
     specifier: "./channel-plugin-api.js",
     exportName: "matrixPlugin",
+  },
+  secrets: {
+    specifier: "./src/secret-contract.js",
+    exportName: "channelSecrets",
   },
   runtime: {
     specifier: "./runtime-api.js",

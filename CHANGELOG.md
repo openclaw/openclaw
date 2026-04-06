@@ -4,6 +4,11 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Plugins/webhooks: add a bundled webhook ingress plugin so external automation can create and drive bound TaskFlows through per-route shared-secret endpoints. (#61892) Thanks @mbelinky.
+- Tools/media: document per-provider music and video generation capabilities, and add shared live video-to-video sweep coverage for providers that support local reference clips.
+
 ### Fixes
 
 - Providers/Google: recognize Gemma model ids in native Google forward-compat resolution, keep the requested provider when cloning fallback templates, and force Gemma reasoning off so Gemma 4 routes stop failing through the Google catalog fallback. (#61507) Thanks @eyjohn.
@@ -12,10 +17,30 @@ Docs: https://docs.openclaw.ai
 - Agents/history: suppress commentary-only visible-text leaks in streaming and chat history views, and keep sanitized SSE history sequence numbers monotonic after transcript-only refreshes. (#61829) Thanks @100yenadmin.
 - Plugins/Windows: load plugin entrypoints through `file://` import specifiers on Windows without breaking plugin SDK alias resolution, fixing `ERR_UNSUPPORTED_ESM_URL_SCHEME` for absolute plugin paths. (#61832) Thanks @Zeesejo.
 - Discord/forwarding: recover forwarded referenced message text and attachments when Discord omits snapshot payloads, so forwarded-message relays keep the original content. (#61670) Thanks @artwalker.
+- Plugins/install: preserve plugin-schema defaults during fresh-install raw config validation so bundled plugin installs stop failing when required fields rely on schema defaults. (#61856) Thanks @SuperMarioYL.
+- Slack/threading: keep legacy thread stickiness for real replies when older callers omit `isThreadReply`, while still honoring `replyToMode` for Slack's auto-created top-level `thread_ts`. (#61835) Thanks @kaonash.
+- Agents/message tool: add a `read` plus `threadId` discoverability hint when the configured channel actions support threaded message reads.
 - Docs/i18n: remove the zh-CN homepage redirect override so Mintlify can resolve the localized Chinese homepage without self-redirecting `/zh-CN/index`.
 - Agents/heartbeat: stop truncating live session transcripts after no-op heartbeat acks, move heartbeat cleanup to prompt assembly and compaction, and keep post-filter context-engine ingestion aligned with the real session baseline. (#60998) Thanks @nxmxbbd.
 - macOS/gateway version: strip trailing commit metadata from CLI version output before semver parsing so the Mac app recognizes installed gateway versions like `OpenClaw 2026.4.2 (d74a122)` again. (#61111) Thanks @oliviareid-svg.
 - Memory/dreaming: strip managed Light Sleep and REM blocks before daily-note ingestion so dreaming summaries stop re-ingesting their own staged output into new candidates. (#61720) Thanks @MonkeyLeeT.
+- Plugins/Windows: disable native Jiti loading for setup and doctor contract registries on Windows so onboarding and config-doctor plugin probes stop crashing with `ERR_UNSUPPORTED_ESM_URL_SCHEME`. (#61836, #61853)
+- Gateway/history: seed SSE startup history and raw transcript sequence tracking from one initial transcript snapshot so first history events cannot diverge from subsequent message sequence numbering. (#61855) Thanks @100yenadmin.
+- Agents/context overflow: combine oversized and aggregate tool-result recovery in one repair pass, and restore a total-context overflow backstop during tool loops so recoverable sessions retry instead of failing early. (#61651) Thanks @Takhoffman.
+- Gateway/containers: auto-bind to `0.0.0.0` during container startup for Docker and Podman compatibility, while keeping host-side status and doctor checks on the hardened loopback default when `gateway.bind` is unset. (#61818) Thanks @openperf.
+- TUI/status: route `/status` through the shared session-status command and move the old gateway-wide diagnostic summary to `/gateway-status` (`/gwstatus`). Thanks @vincentkoc.
+- TUI/history and heartbeat: keep assistant commentary hidden on both streamed and reloaded TUI history views, preserve the phase-sanitized REST history contract, and stop forced heartbeat runs from targeting subagent sessions. (#61463) Thanks @100yenadmin.
+- Agents/history: use one shared assistant-visible sanitizer across embedded delivery and chat-history extraction so leaked `<tool_call>` and `<tool_result>` XML blocks stay hidden from user-facing replies. (#61729) Thanks @openperf.
+- Gateway/TUI: defer terminal chat finalization for per-attempt lifecycle errors so fallback retries keep streaming before the run is marked failed. (#60043) Thanks @jwchmodx.
+- TUI/command messages: strip inbound envelope metadata before rendering command/system messages so async completion notices stop leaking raw wrappers into the operator terminal. (#59985) Thanks @MoerAI.
+- TUI/terminal: restore Kitty keyboard protocol and `modifyOtherKeys` state on TUI exit and fatal CLI crashes so parent shells stop inheriting broken keyboard input after `openclaw tui` exits. (#49130) Thanks @biefan.
+- Docs/i18n: relocalize final localized-page links after translation so generated locale pages stop keeping stale English-root links when targets appear later in the same run. (#61796) thanks @hxy91819.
+- iOS/Watch exec approvals: keep Apple Watch review and approval recovery working while the iPhone is locked or backgrounded, including background-safe reconnects, persisted pending approvals, notification cleanup, and APNs-backed watch refresh recovery. (#61757) Thanks @ngutman.
+- Gateway/status: probe local TLS gateways over `wss://`, forward the local cert fingerprint for self-signed loopback probes, and warn when the local TLS runtime cannot load the configured cert. (#61935) Thanks @ThanhNguyxn07.
+- Agents/history: keep truly legacy unsigned replay text unphased when mixed with phased OpenAI WS assistant blocks, while still inheriting message phase for id-only replay signatures. (#61529) Thanks @100yenadmin.
+- Discord/thread titles: stop forcing a hardcoded temperature for generated auto-thread names so Codex-backed thread title generation works on `openai-codex/*` models again. (#59525)
+- Providers/OpenAI: keep WebSocket text buffered until a real assistant phase arrives, even when text deltas land before a phaseless `output_item.added` announcement. (#61954) Thanks @100yenadmin.
+- Agents/history: keep history-based reply reads and subagent completion summaries on `final_answer` text only so internal commentary stops leaking into user-visible follow-up replies. (#61747) Thanks @afurm.
 
 ## 2026.4.5
 

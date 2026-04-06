@@ -616,6 +616,7 @@ export async function runEmbeddedPiAgent(
           const {
             aborted,
             promptError,
+            preflightRecovery,
             timedOut,
             timedOutDuringCompaction,
             sessionIdUsed,
@@ -663,6 +664,13 @@ export async function runEmbeddedPiAgent(
             !attempt.lastToolError &&
             attempt.toolMetas.length === 0 &&
             attempt.assistantTexts.length === 0;
+          if (preflightRecovery?.handled) {
+            log.info(
+              `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
+                `completed for ${provider}/${modelId}; retrying prompt`,
+            );
+            continue;
+          }
           const requestedSelection = shouldSwitchToLiveModel({
             cfg: params.config,
             sessionKey: params.sessionKey,
@@ -919,6 +927,25 @@ export async function runEmbeddedPiAgent(
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (compactResult.compacted) {
+                if (preflightRecovery?.route === "compact_then_truncate") {
+                  const truncResult = await truncateOversizedToolResultsInSession({
+                    sessionFile: params.sessionFile,
+                    contextWindowTokens: ctxInfo.tokens,
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey,
+                  });
+                  if (truncResult.truncated) {
+                    log.info(
+                      `[context-overflow-precheck] post-compaction tool-result truncation succeeded for ` +
+                        `${provider}/${modelId}; truncated ${truncResult.truncatedCount} tool result(s)`,
+                    );
+                  } else {
+                    log.warn(
+                      `[context-overflow-precheck] post-compaction tool-result truncation did not help for ` +
+                        `${provider}/${modelId}: ${truncResult.reason ?? "unknown"}`,
+                    );
+                  }
+                }
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
@@ -927,9 +954,6 @@ export async function runEmbeddedPiAgent(
                 `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
               );
             }
-            // Fallback: try truncating oversized tool results in the session.
-            // This handles the case where a single tool result exceeds the
-            // context window and compaction cannot reduce it further.
             if (!toolResultTruncationAttempted) {
               const contextWindowTokens = ctxInfo.tokens;
               const hasOversized = attempt.messagesSnapshot
@@ -940,13 +964,6 @@ export async function runEmbeddedPiAgent(
                 : false;
 
               if (hasOversized) {
-                if (log.isEnabled("debug")) {
-                  log.debug(
-                    `[compaction-diag] decision diagId=${overflowDiagId} branch=truncate_tool_results ` +
-                      `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
-                      `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
-                  );
-                }
                 toolResultTruncationAttempted = true;
                 log.warn(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
@@ -962,25 +979,16 @@ export async function runEmbeddedPiAgent(
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
-                  // Do NOT reset overflowCompactionAttempts here — the global cap must remain
-                  // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
                   continue;
                 }
                 log.warn(
                   `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
                 );
-              } else if (log.isEnabled("debug")) {
-                log.debug(
-                  `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
-                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
-                    `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
-                );
               }
             }
             if (
               (isCompactionFailure ||
-                overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS ||
-                toolResultTruncationAttempted) &&
+                overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS) &&
               log.isEnabled("debug")
             ) {
               log.debug(

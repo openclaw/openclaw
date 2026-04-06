@@ -50,9 +50,10 @@ export type MusicGenerationIgnoredOverride = {
   value: string | boolean | number;
 };
 
-export type MusicGenerationProviderCapabilities = {
+export type MusicGenerationMode = "generate" | "edit";
+
+export type MusicGenerationModeCapabilities = {
   maxTracks?: number;
-  maxInputImages?: number;
   maxDurationSeconds?: number;
   supportsLyrics?: boolean;
   supportsInstrumental?: boolean;
@@ -60,6 +61,17 @@ export type MusicGenerationProviderCapabilities = {
   supportsFormat?: boolean;
   supportedFormats?: readonly MusicGenerationOutputFormat[];
   supportedFormatsByModel?: Readonly<Record<string, readonly MusicGenerationOutputFormat[]>>;
+};
+
+export type MusicGenerationEditCapabilities = MusicGenerationModeCapabilities & {
+  enabled: boolean;
+  maxInputImages?: number;
+};
+
+export type MusicGenerationProviderCapabilities = MusicGenerationModeCapabilities & {
+  maxInputImages?: number;
+  generate?: MusicGenerationModeCapabilities;
+  edit?: MusicGenerationEditCapabilities;
 };
 
 export type MusicGenerationProvider = {

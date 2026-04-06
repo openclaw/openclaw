@@ -43,6 +43,7 @@ import {
   listImportedRuntimePluginIds,
   setActivePluginRegistry,
 } from "./runtime.js";
+import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
@@ -1753,20 +1754,52 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     },
     {
-      name: "does not reuse cached registries across gateway subagent binding modes",
+      name: "does not reuse cached registries across different plugin SDK resolution preferences",
       setup: () => {
         useNoBundledPlugins();
         const plugin = writePlugin({
-          id: "cache-gateway-bindable",
-          filename: "cache-gateway-bindable.cjs",
-          body: `module.exports = { id: "cache-gateway-bindable", register() {} };`,
+          id: "cache-sdk-resolution",
+          filename: "cache-sdk-resolution.cjs",
+          body: `module.exports = { id: "cache-sdk-resolution", register() {} };`,
         });
 
         const options = {
           workspaceDir: plugin.dir,
           config: {
             plugins: {
-              allow: ["cache-gateway-bindable"],
+              allow: ["cache-sdk-resolution"],
+              load: {
+                paths: [plugin.file],
+              },
+            },
+          },
+        };
+
+        return {
+          loadFirst: () => loadOpenClawPlugins(options),
+          loadVariant: () =>
+            loadOpenClawPlugins({
+              ...options,
+              pluginSdkResolution: "workspace" as PluginSdkResolutionPreference,
+            }),
+        };
+      },
+    },
+    {
+      name: "does not reuse cached registries across gateway subagent binding modes",
+      setup: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "cache-gateway-shared",
+          filename: "cache-gateway-shared.cjs",
+          body: `module.exports = { id: "cache-gateway-shared", register() {} };`,
+        });
+
+        const options = {
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              allow: ["cache-gateway-shared"],
               load: {
                 paths: [plugin.file],
               },

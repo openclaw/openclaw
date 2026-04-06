@@ -334,12 +334,17 @@ function applyCommentFileTypeDefault<
 
 function formatDriveApiError(error: unknown): string {
   if (!isRecord(error)) {
-    return String(error);
+    return typeof error === "string" ? error : JSON.stringify(error);
   }
   const response = isRecord(error.response) ? error.response : undefined;
   const responseData = isRecord(response?.data) ? response?.data : undefined;
   return JSON.stringify({
-    message: typeof error.message === "string" ? error.message : String(error),
+    message:
+      typeof error.message === "string"
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : JSON.stringify(error),
     code: readString(error.code),
     method: readString(isRecord(error.config) ? error.config.method : undefined),
     url: readString(isRecord(error.config) ? error.config.url : undefined),
@@ -360,12 +365,17 @@ function extractDriveApiErrorMeta(error: unknown): {
   feishuLogId?: string;
 } {
   if (!isRecord(error)) {
-    return { message: String(error) };
+    return { message: typeof error === "string" ? error : JSON.stringify(error) };
   }
   const response = isRecord(error.response) ? error.response : undefined;
   const responseData = isRecord(response?.data) ? response?.data : undefined;
   return {
-    message: typeof error.message === "string" ? error.message : String(error),
+    message:
+      typeof error.message === "string"
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : JSON.stringify(error),
     httpStatus: typeof response?.status === "number" ? response.status : undefined,
     feishuCode:
       typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
@@ -665,7 +675,7 @@ export async function replyComment(
   )}/replies`;
   const query = { file_type: params.file_type };
   try {
-    const response = (await requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
+    const response = await requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
       client,
       method: "POST",
       url,
@@ -682,7 +692,7 @@ export async function replyComment(
           ],
         },
       },
-    })) as FeishuDriveApiResponse<Record<string, unknown>>;
+    });
     if (response.code === 0) {
       return {
         success: true,

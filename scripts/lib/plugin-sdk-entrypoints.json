@@ -51,6 +51,7 @@
   "text-runtime",
   "text-chunking",
   "agent-runtime",
+  "simple-completion-runtime",
   "speech-core",
   "plugin-runtime",
   "security-runtime",

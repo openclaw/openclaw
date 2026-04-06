@@ -69,8 +69,7 @@ export async function handleMcpJsonRpc(params: {
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
       try {
-        // oxlint-disable-next-line typescript/no-explicit-any
-        const result = await (tool as any).execute(toolCallId, toolArgs);
+        const result = await tool.execute(toolCallId, toolArgs);
         return jsonRpcResult(id, {
           content: normalizeToolCallContent(result),
           isError: false,

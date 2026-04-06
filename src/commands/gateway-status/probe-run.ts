@@ -37,6 +37,7 @@ export async function runGatewayStatusProbePass(params: {
   sshTarget: string | null;
   sshIdentity: string | null;
   loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
+  localTlsFingerprint?: string;
 }): Promise<{
   discovery: GatewayBonjourBeacon[];
   probed: GatewayStatusProbedTarget[];
@@ -124,6 +125,10 @@ export async function runGatewayStatusProbePass(params: {
             token: authResolution.token,
             password: authResolution.password,
           },
+          tlsFingerprint:
+            target.kind === "localLoopback" && target.url.startsWith("wss://")
+              ? params.localTlsFingerprint
+              : undefined,
           timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
         });
         return {

@@ -108,7 +108,9 @@ export function normalizeMediaTags(text: string): string {
   let cleaned = text.replace(SELF_CLOSING_TAG_REGEX, (_match, rawTag: string, content: string) => {
     const tag = resolveTagName(rawTag);
     const trimmed = content.trim();
-    if (!trimmed) return _match;
+    if (!trimmed) {
+      return _match;
+    }
     const expanded = expandTilde(trimmed);
     return `<${tag}>${expanded}</${tag}>`;
   });
@@ -124,7 +126,9 @@ export function normalizeMediaTags(text: string): string {
   return cleaned.replace(FUZZY_MEDIA_TAG_REGEX, (_match, rawTag: string, content: string) => {
     const tag = resolveTagName(rawTag);
     const trimmed = content.trim();
-    if (!trimmed) return _match;
+    if (!trimmed) {
+      return _match;
+    }
     const expanded = expandTilde(trimmed);
     return `<${tag}>${expanded}</${tag}>`;
   });

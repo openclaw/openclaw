@@ -96,3 +96,8 @@ export function collectRuntimeConfigAssignments(params: {
     accountInactiveReason: "Nextcloud Talk account is disabled.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

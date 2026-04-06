@@ -244,6 +244,21 @@ describe("createDiscordGatewayPlugin", () => {
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("uses ws for gateway sockets even without proxy", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
+      .createWebSocket;
+    createWebSocket("wss://gateway.discord.gg");
+
+    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", undefined);
+    expect(wsProxyAgentSpy).not.toHaveBeenCalled();
+  });
+
   it("maps plain-text Discord 503 responses to fetch failed", async () => {
     await expectGatewayRegisterFallback({
       ok: false,

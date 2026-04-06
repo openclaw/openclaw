@@ -3,13 +3,8 @@ import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
-  fetchMattermostChannel,
   fetchMattermostMe,
-  fetchMattermostUser,
   normalizeMattermostBaseUrl,
-  sendMattermostTyping,
-  updateMattermostPost,
-  type MattermostChannel,
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
@@ -63,23 +58,23 @@ import type {
 import {
   buildAgentMediaPayload,
   buildModelsProviderData,
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  logInboundDrop,
-  logTypingFailure,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  createChannelPairingController,
+  createChannelReplyPipeline,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntryIfEnabled,
+  DM_GROUP_ACCESS_REASON,
   isDangerousNameMatchingEnabled,
-  registerPluginHttpRoute,
-  resolveControlCommandGate,
+  logInboundDrop,
+  logTypingFailure,
   readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
+  recordPendingHistoryEntryIfEnabled,
+  registerPluginHttpRoute,
   resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
+  resolveControlCommandGate,
+  resolveDefaultGroupPolicy,
+  resolveDmGroupAccessWithLists,
   warnMissingProviderGroupPolicyFallbackOnce,
   type HistoryEntry,
 } from "./runtime-api.js";
@@ -1735,7 +1730,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     unregisterInteractions?.();
   }
 
-  if (slashShutdownCleanup) {
-    await slashShutdownCleanup;
+  const slashShutdownCleanupPromise = slashShutdownCleanup;
+  if (slashShutdownCleanupPromise) {
+    await Promise.resolve(slashShutdownCleanupPromise);
   }
 }

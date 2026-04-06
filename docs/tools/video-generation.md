@@ -57,6 +57,25 @@ While a job is in flight, duplicate `video_generate` calls in the same session r
 
 Outside of session-backed agent runs (for example, direct tool invocations), the tool falls back to inline generation and returns the final media path in the same turn.
 
+### Task lifecycle
+
+Each `video_generate` request moves through four states:
+
+1. **queued** -- task created, waiting for the provider to accept it.
+2. **running** -- provider is processing (typically 30 seconds to 5 minutes depending on provider and resolution).
+3. **succeeded** -- video ready; the agent wakes and posts it to the conversation.
+4. **failed** -- provider error or timeout; the agent wakes with error details.
+
+Check status from the CLI:
+
+```bash
+openclaw tasks list
+openclaw tasks show <taskId>
+openclaw tasks cancel <taskId>
+```
+
+Duplicate prevention: if a video task is already `queued` or `running` for the current session, `video_generate` returns the existing task status instead of starting a new one. Use `action: "status"` to check explicitly without triggering a new generation.
+
 ## Supported providers
 
 | Provider | Default model                   | Text | Image ref         | Video ref        | API key                                  |
@@ -78,6 +97,26 @@ Some providers accept additional or alternate API key env vars. See individual [
 
 Run `video_generate action=list` to inspect available providers, models, and
 runtime modes at runtime.
+
+### Declared capability matrix
+
+This is the explicit mode contract used by `video_generate`, contract tests,
+and the shared live sweep.
+
+| Provider | `generate` | `imageToVideo` | `videoToVideo` | Shared live lanes today                                                                                    |
+| -------- | ---------- | -------------- | -------------- | ---------------------------------------------------------------------------------------------------------- |
+| Alibaba  | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs |
+| BytePlus | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
+| ComfyUI  | Yes        | Yes            | No             | Not in the shared sweep; workflow-specific coverage lives with Comfy tests                                 |
+| fal      | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
+| Google   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`, `videoToVideo`                                                                 |
+| MiniMax  | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
+| OpenAI   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`, `videoToVideo`                                                                 |
+| Qwen     | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs |
+| Runway   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`        |
+| Together | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
+| Vydra    | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                 |
+| xAI      | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider currently needs a remote MP4 URL  |
 
 ## Tool parameters
 
@@ -201,9 +240,34 @@ capabilities: {
 }
 ```
 
-Legacy flat fields such as `maxInputImages` and `maxInputVideos` still work as
-backward-compatible aggregate caps, but they cannot express per-mode limits as
-precisely.
+Flat aggregate fields such as `maxInputImages` and `maxInputVideos` are not
+enough to advertise transform-mode support. Providers should declare
+`generate`, `imageToVideo`, and `videoToVideo` explicitly so live tests,
+contract tests, and the shared `video_generate` tool can validate mode support
+deterministically.
+
+## Live tests
+
+Opt-in live coverage for the shared bundled providers:
+
+```bash
+OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/video-generation-providers.live.test.ts
+```
+
+This live file loads missing provider env vars from `~/.profile`, prefers
+live/env API keys ahead of stored auth profiles by default, and runs the
+declared modes it can exercise safely with local media:
+
+- `generate` for every provider in the sweep
+- `imageToVideo` when `capabilities.imageToVideo.enabled`
+- `videoToVideo` when `capabilities.videoToVideo.enabled` and the provider/model
+  accepts buffer-backed local video input in the shared sweep
+
+Today the shared `videoToVideo` live lane covers:
+
+- `google`
+- `openai`
+- `runway` only when you select `runway/gen4_aleph`
 
 ## Configuration
 

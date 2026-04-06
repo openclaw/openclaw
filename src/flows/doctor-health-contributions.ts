@@ -10,7 +10,6 @@ import {
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  maybeRemoveDeprecatedCliAuthProfiles,
   maybeRepairLegacyOAuthProfileIds,
   noteAuthProfileHealth,
 } from "../commands/doctor-auth.js";
@@ -143,7 +142,6 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
-  ctx.cfg = await maybeRemoveDeprecatedCliAuthProfiles(ctx.cfg, ctx.prompter);
   await noteAuthProfileHealth({
     cfg: ctx.cfg,
     prompter: ctx.prompter,

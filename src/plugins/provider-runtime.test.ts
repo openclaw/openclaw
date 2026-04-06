@@ -8,6 +8,7 @@ import {
 } from "./provider-runtime.test-support.js";
 import type {
   AnyAgentTool,
+  ProviderExternalAuthProfile,
   ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
   ProviderRuntimeModel,
@@ -646,7 +647,7 @@ describe("provider-runtime", () => {
           },
           createEmbeddingProvider,
           resolveSyntheticAuth,
-          resolveExternalAuthProfiles: ({ store }) =>
+          resolveExternalAuthProfiles: ({ store }): ProviderExternalAuthProfile[] =>
             store.profiles["demo:managed"]
               ? []
               : [

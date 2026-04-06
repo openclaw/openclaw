@@ -1,22 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
-import { runSecurityAudit } from "./audit.js";
+import {
+  collectExposureMatrixFindings,
+  collectLikelyMultiUserSetupFindings,
+} from "./audit-extra.sync.js";
 
-const execDockerRawUnavailable = async () => ({
-  stdout: Buffer.alloc(0),
-  stderr: Buffer.from("docker unavailable"),
-  code: 1,
-});
-
-async function audit(cfg: OpenClawConfig) {
-  saveExecApprovals({ version: 1, agents: {} });
-  return runSecurityAudit({
-    config: cfg,
-    includeFilesystem: false,
-    includeChannelSecurity: false,
-    execDockerRawFn: execDockerRawUnavailable,
-  });
+function audit(cfg: OpenClawConfig) {
+  return [...collectExposureMatrixFindings(cfg), ...collectLikelyMultiUserSetupFindings(cfg)];
 }
 
 describe("security audit trust model findings", () => {
@@ -28,10 +18,10 @@ describe("security audit trust model findings", () => {
           tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
           channels: { whatsapp: { groupPolicy: "open" } },
         } satisfies OpenClawConfig,
-        assert: async () => {
-          const res = await audit(cases[0].cfg);
+        assert: () => {
+          const findings = audit(cases[0].cfg);
           expect(
-            res.findings.some(
+            findings.some(
               (finding) =>
                 finding.checkId === "security.exposure.open_groups_with_elevated" &&
                 finding.severity === "critical",
@@ -45,10 +35,10 @@ describe("security audit trust model findings", () => {
           channels: { whatsapp: { groupPolicy: "open" } },
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
-        assert: async () => {
-          const res = await audit(cases[1].cfg);
+        assert: () => {
+          const findings = audit(cases[1].cfg);
           expect(
-            res.findings.some(
+            findings.some(
               (finding) =>
                 finding.checkId === "security.exposure.open_groups_with_runtime_or_fs" &&
                 finding.severity === "critical",
@@ -70,10 +60,10 @@ describe("security audit trust model findings", () => {
             },
           },
         } satisfies OpenClawConfig,
-        assert: async () => {
-          const res = await audit(cases[2].cfg);
+        assert: () => {
+          const findings = audit(cases[2].cfg);
           expect(
-            res.findings.some(
+            findings.some(
               (finding) => finding.checkId === "security.exposure.open_groups_with_runtime_or_fs",
             ),
           ).toBe(false);
@@ -90,10 +80,10 @@ describe("security audit trust model findings", () => {
             fs: { workspaceOnly: true },
           },
         } satisfies OpenClawConfig,
-        assert: async () => {
-          const res = await audit(cases[3].cfg);
+        assert: () => {
+          const findings = audit(cases[3].cfg);
           expect(
-            res.findings.some(
+            findings.some(
               (finding) => finding.checkId === "security.exposure.open_groups_with_runtime_or_fs",
             ),
           ).toBe(false);
@@ -116,9 +106,9 @@ describe("security audit trust model findings", () => {
           },
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
-        assert: async () => {
-          const res = await audit(cases[4].cfg);
-          const finding = res.findings.find(
+        assert: () => {
+          const findings = audit(cases[4].cfg);
+          const finding = findings.find(
             (entry) => entry.checkId === "security.trust_model.multi_user_heuristic",
           );
           expect(finding?.severity).toBe("warn");
@@ -139,10 +129,10 @@ describe("security audit trust model findings", () => {
           },
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
-        assert: async () => {
-          const res = await audit(cases[5].cfg);
+        assert: () => {
+          const findings = audit(cases[5].cfg);
           expect(
-            res.findings.some(
+            findings.some(
               (finding) => finding.checkId === "security.trust_model.multi_user_heuristic",
             ),
           ).toBe(false);
@@ -151,7 +141,7 @@ describe("security audit trust model findings", () => {
     ] as const;
 
     for (const testCase of cases) {
-      await testCase.assert();
+      testCase.assert();
     }
   });
 });

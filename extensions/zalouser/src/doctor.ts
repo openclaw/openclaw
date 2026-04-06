@@ -16,7 +16,7 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function sanitizeForLog(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return value.replace(/\p{Cc}+/gu, " ").trim();
 }
 
 function hasLegacyZalouserGroupAllowAlias(value: unknown): boolean {

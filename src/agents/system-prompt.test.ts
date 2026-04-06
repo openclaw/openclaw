@@ -993,8 +993,7 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Avoid polling loops");
     expect(prompt).toContain("spawned by the main agent");
     expect(prompt).toContain("reported to the main agent");
-    expect(prompt).toContain("[compacted: tool output removed to free context]");
-    expect(prompt).toContain("[truncated: output exceeded context limit]");
+    expect(prompt).toContain("[... N more characters truncated]");
     expect(prompt).toContain("offset/limit");
     expect(prompt).toContain("instead of full-file `cat`");
   });

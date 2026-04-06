@@ -158,9 +158,9 @@ function mergeVoiceSettingsOverride(
   next: Record<string, unknown>,
 ): SpeechProviderOverrides {
   return {
-    ...(ctx.currentOverrides ?? {}),
+    ...ctx.currentOverrides,
     voiceSettings: {
-      ...(asObject(ctx.currentOverrides?.voiceSettings) ?? {}),
+      ...asObject(ctx.currentOverrides?.voiceSettings),
       ...next,
     },
   };
@@ -181,7 +181,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         }
         return {
           handled: true,
-          overrides: { ...(ctx.currentOverrides ?? {}), voiceId: ctx.value },
+          overrides: { ...ctx.currentOverrides, voiceId: ctx.value },
         };
       case "model":
       case "modelid":
@@ -193,7 +193,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         }
         return {
           handled: true,
-          overrides: { ...(ctx.currentOverrides ?? {}), modelId: ctx.value },
+          overrides: { ...ctx.currentOverrides, modelId: ctx.value },
         };
       case "stability": {
         if (!ctx.policy.allowVoiceSettings) {
@@ -269,7 +269,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         return {
           handled: true,
           overrides: {
-            ...(ctx.currentOverrides ?? {}),
+            ...ctx.currentOverrides,
             applyTextNormalization: normalizeApplyTextNormalization(ctx.value),
           },
         };
@@ -282,7 +282,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         return {
           handled: true,
           overrides: {
-            ...(ctx.currentOverrides ?? {}),
+            ...ctx.currentOverrides,
             languageCode: normalizeLanguageCode(ctx.value),
           },
         };
@@ -293,7 +293,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         return {
           handled: true,
           overrides: {
-            ...(ctx.currentOverrides ?? {}),
+            ...ctx.currentOverrides,
             seed: normalizeSeed(Number.parseInt(ctx.value, 10)),
           },
         };

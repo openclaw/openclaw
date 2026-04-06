@@ -15,8 +15,7 @@
   --warning: #ffd36f;
   --shadow: 0 32px 90px rgba(0, 0, 0, 0.38);
   --radius: 22px;
-  font-family:
-    "Avenir Next", "Segoe UI", sans-serif;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
 }
 
 * {

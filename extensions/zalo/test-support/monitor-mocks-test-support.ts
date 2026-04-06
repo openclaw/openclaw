@@ -5,7 +5,7 @@ import {
 } from "../../../test/helpers/plugins/plugin-registry.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../src/types.js";
 
 type MonitorModule = typeof import("../src/monitor.js");

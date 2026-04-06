@@ -210,7 +210,7 @@ function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
   });
 }
 
-function resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvider {
+function _resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvider {
   return sortSpeechProvidersForAutoSelection(cfg)[0]?.id ?? "";
 }
 
@@ -390,7 +390,7 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
   if (autoMode === "off") {
     return undefined;
   }
-  const config = resolveTtsConfig(cfg);
+  const _config = resolveTtsConfig(cfg);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
   const autoHint =

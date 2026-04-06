@@ -49,6 +49,11 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
   return { provider, model };
 }
 
+function readContextString(context: Record<string, unknown>, key: string, fallback = ""): string {
+  const value = context[key];
+  return typeof value === "string" ? value : fallback;
+}
+
 function normalizePage(value: number | undefined): number {
   if (!Number.isFinite(value)) {
     return 1;
@@ -160,8 +165,8 @@ export function parseMattermostModelPickerContext(
     return null;
   }
 
-  const ownerUserId = String(context.ownerUserId ?? "").trim();
-  const action = String(context.action ?? "").trim();
+  const ownerUserId = readContextString(context, "ownerUserId").trim();
+  const action = readContextString(context, "action").trim();
   if (!ownerUserId) {
     return null;
   }
@@ -170,8 +175,8 @@ export function parseMattermostModelPickerContext(
     return { action, ownerUserId };
   }
 
-  const provider = normalizeProviderId(String(context.provider ?? ""));
-  const page = Number.parseInt(String(context.page ?? "1"), 10);
+  const provider = normalizeProviderId(readContextString(context, "provider"));
+  const page = Number.parseInt(readContextString(context, "page", "1"), 10);
   if (!provider) {
     return null;
   }
@@ -186,7 +191,7 @@ export function parseMattermostModelPickerContext(
   }
 
   if (action === "select") {
-    const model = String(context.model ?? "").trim();
+    const model = readContextString(context, "model").trim();
     if (!model) {
       return null;
     }

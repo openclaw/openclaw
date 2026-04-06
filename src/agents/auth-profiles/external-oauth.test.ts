@@ -39,7 +39,7 @@ describe("auth external oauth helpers", () => {
       },
     ]);
 
-    const { overlayExternalOAuthProfiles } = await import("./external-oauth.js");
+    const { overlayExternalOAuthProfiles } = await import("./external-auth.js");
     const store = overlayExternalOAuthProfiles(createStore());
 
     expect(store.profiles["openai-codex:default"]).toMatchObject({
@@ -58,7 +58,7 @@ describe("auth external oauth helpers", () => {
       },
     ]);
 
-    const { shouldPersistExternalOAuthProfile } = await import("./external-oauth.js");
+    const { shouldPersistExternalOAuthProfile } = await import("./external-auth.js");
     const shouldPersist = shouldPersistExternalOAuthProfile({
       store: createStore({ "openai-codex:default": credential }),
       profileId: "openai-codex:default",
@@ -78,7 +78,7 @@ describe("auth external oauth helpers", () => {
       },
     ]);
 
-    const { shouldPersistExternalOAuthProfile } = await import("./external-oauth.js");
+    const { shouldPersistExternalOAuthProfile } = await import("./external-auth.js");
     const shouldPersist = shouldPersistExternalOAuthProfile({
       store: createStore({ "openai-codex:default": credential }),
       profileId: "openai-codex:default",
@@ -97,7 +97,7 @@ describe("auth external oauth helpers", () => {
       },
     ]);
 
-    const { shouldPersistExternalOAuthProfile } = await import("./external-oauth.js");
+    const { shouldPersistExternalOAuthProfile } = await import("./external-auth.js");
     const shouldPersist = shouldPersistExternalOAuthProfile({
       store: createStore({ "openai-codex:default": credential }),
       profileId: "openai-codex:default",

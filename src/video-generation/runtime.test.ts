@@ -136,7 +136,9 @@ describe("video-generation runtime", () => {
         defaultModel: "vid-v1",
         models: ["vid-v1"],
         capabilities: {
-          supportsAudio: true,
+          generate: {
+            supportsAudio: true,
+          },
         },
         generateVideo: async () => ({
           videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
@@ -157,7 +159,9 @@ describe("video-generation runtime", () => {
     mocks.getVideoGenerationProvider.mockReturnValue({
       id: "video-plugin",
       capabilities: {
-        supportedDurationSeconds: [4, 6, 8],
+        generate: {
+          supportedDurationSeconds: [4, 6, 8],
+        },
       },
       generateVideo: async (req) => {
         seenDurationSeconds = req.durationSeconds;
@@ -203,7 +207,9 @@ describe("video-generation runtime", () => {
     mocks.getVideoGenerationProvider.mockReturnValue({
       id: "openai",
       capabilities: {
-        supportsSize: true,
+        generate: {
+          supportsSize: true,
+        },
       },
       generateVideo: async (req) => {
         seenRequest = {

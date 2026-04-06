@@ -25,6 +25,12 @@ vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
             },
           }
         : undefined,
+    getBootstrapChannelSecrets: (id: string) =>
+      id === "telegram"
+        ? {
+            collectRuntimeConfigAssignments: telegramSecrets.collectRuntimeConfigAssignments,
+          }
+        : undefined,
   };
 });
 

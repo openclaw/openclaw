@@ -1042,13 +1042,15 @@ export function createOpenAIWebSocketStreamFn(
                       ? normalizeAssistantPhase((event.item as { phase?: unknown }).phase)
                       : undefined;
                   outputItemPhaseById.set(event.item.id, itemPhase);
-                  for (const key of outputTextByPart.keys()) {
-                    if (key.startsWith(`${event.item.id}:`)) {
-                      const [, contentIndexText] = key.split(":");
-                      emitBufferedTextDelta({
-                        itemId: event.item.id,
-                        contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
-                      });
+                  if (itemPhase !== undefined) {
+                    for (const key of outputTextByPart.keys()) {
+                      if (key.startsWith(`${event.item.id}:`)) {
+                        const [, contentIndexText] = key.split(":");
+                        emitBufferedTextDelta({
+                          itemId: event.item.id,
+                          contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
+                        });
+                      }
                     }
                   }
                 }
@@ -1059,7 +1061,7 @@ export function createOpenAIWebSocketStreamFn(
                 const key = getOutputTextKey(event.item_id, event.content_index);
                 const nextText = `${outputTextByPart.get(key) ?? ""}${event.delta}`;
                 outputTextByPart.set(key, nextText);
-                if (outputItemPhaseById.has(event.item_id)) {
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
                   emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,
@@ -1073,7 +1075,7 @@ export function createOpenAIWebSocketStreamFn(
                 if (event.text && event.text !== outputTextByPart.get(key)) {
                   outputTextByPart.set(key, event.text);
                 }
-                if (outputItemPhaseById.has(event.item_id)) {
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
                   emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,

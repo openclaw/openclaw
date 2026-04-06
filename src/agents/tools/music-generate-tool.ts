@@ -4,6 +4,7 @@ import { loadConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { resolveMusicGenerationModeCapabilities } from "../../music-generation/capabilities.js";
 import { parseMusicGenerationModelRef } from "../../music-generation/model-ref.js";
 import {
   generateMusic,
@@ -213,14 +214,27 @@ function validateMusicGenerationCapabilities(params: {
   if (!provider) {
     return;
   }
-  const caps = provider.capabilities;
+  const { capabilities: caps } = resolveMusicGenerationModeCapabilities({
+    provider,
+    inputImageCount: params.inputImageCount,
+  });
   if (params.inputImageCount > 0) {
-    const maxInputImages = caps.maxInputImages ?? MAX_INPUT_IMAGES;
+    if (!caps) {
+      throw new ToolInputError(`${provider.id} does not support reference-image edit inputs.`);
+    }
+    if ("enabled" in caps && !caps.enabled) {
+      throw new ToolInputError(`${provider.id} does not support reference-image edit inputs.`);
+    }
+    const maxInputImages =
+      ("maxInputImages" in caps ? caps.maxInputImages : undefined) ?? MAX_INPUT_IMAGES;
     if (params.inputImageCount > maxInputImages) {
       throw new ToolInputError(
         `${provider.id} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
       );
     }
+  }
+  if (!caps) {
+    return;
   }
   if (
     typeof params.durationSeconds === "number" &&

@@ -138,3 +138,8 @@ export function collectRuntimeConfigAssignments(params: {
     accountInactiveReason: "Feishu account is disabled or not running in webhook mode.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

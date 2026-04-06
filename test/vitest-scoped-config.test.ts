@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAcpVitestConfig } from "../vitest.acp.config.ts";
@@ -6,6 +7,7 @@ import { createAgentsVitestConfig } from "../vitest.agents.config.ts";
 import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
 import { createCliVitestConfig } from "../vitest.cli.config.ts";
+import { createCommandsLightVitestConfig } from "../vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "../vitest.commands.config.ts";
 import { createCronVitestConfig } from "../vitest.cron.config.ts";
 import { createDaemonVitestConfig } from "../vitest.daemon.config.ts";
@@ -32,6 +34,7 @@ import { createInfraVitestConfig } from "../vitest.infra.config.ts";
 import { createLoggingVitestConfig } from "../vitest.logging.config.ts";
 import { createMediaUnderstandingVitestConfig } from "../vitest.media-understanding.config.ts";
 import { createMediaVitestConfig } from "../vitest.media.config.ts";
+import { createPluginSdkLightVitestConfig } from "../vitest.plugin-sdk-light.config.ts";
 import { createPluginSdkVitestConfig } from "../vitest.plugin-sdk.config.ts";
 import { createPluginsVitestConfig } from "../vitest.plugins.config.ts";
 import { createProcessVitestConfig } from "../vitest.process.config.ts";
@@ -101,6 +104,25 @@ describe("createScopedVitestConfig", () => {
     expect(config.test?.passWithNoTests).toBe(true);
   });
 
+  it("loads scoped include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(includeFile, JSON.stringify(["src/utils/utils-misc.test.ts"]), "utf8");
+
+      const config = createScopedVitestConfig(["src/utils/**/*.test.ts"], {
+        dir: "src",
+        env: {
+          OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+        },
+      });
+
+      expect(config.test?.include).toEqual(["utils/utils-misc.test.ts"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("overrides setup files when a scoped config requests them", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], {
       env: {},
@@ -140,6 +162,7 @@ describe("scoped vitest configs", () => {
   const defaultHooksConfig = createHooksVitestConfig({});
   const defaultInfraConfig = createInfraVitestConfig({});
   const defaultLoggingConfig = createLoggingVitestConfig({});
+  const defaultPluginSdkLightConfig = createPluginSdkLightVitestConfig({});
   const defaultPluginSdkConfig = createPluginSdkVitestConfig({});
   const defaultSecretsConfig = createSecretsVitestConfig({});
   const defaultRuntimeConfig = createRuntimeConfigVitestConfig({});
@@ -149,6 +172,7 @@ describe("scoped vitest configs", () => {
   const defaultMediaUnderstandingConfig = createMediaUnderstandingVitestConfig({});
   const defaultSharedCoreConfig = createSharedCoreVitestConfig({});
   const defaultTasksConfig = createTasksVitestConfig({});
+  const defaultCommandsLightConfig = createCommandsLightVitestConfig({});
   const defaultCommandsConfig = createCommandsVitestConfig({});
   const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
   const defaultAgentsConfig = createAgentsVitestConfig({});
@@ -182,6 +206,19 @@ describe("scoped vitest configs", () => {
       expect(config.test?.isolate).toBe(false);
       expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
     }
+  });
+
+  it("keeps the process lane off the openclaw runtime setup", () => {
+    expect(defaultProcessConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(defaultPluginSdkConfig.test?.setupFiles).toEqual([
+      "test/setup.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
+  });
+
+  it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
+    expect(defaultPluginSdkLightConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(defaultCommandsLightConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
   });
 
   it("defaults channel tests to threads with the non-isolated runner", () => {
@@ -508,6 +545,7 @@ describe("scoped vitest configs", () => {
   it("normalizes shared-core include patterns relative to the scoped dir", () => {
     expect(defaultSharedCoreConfig.test?.dir).toBe("src");
     expect(defaultSharedCoreConfig.test?.include).toEqual(["shared/**/*.test.ts"]);
+    expect(defaultSharedCoreConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
   });
 
   it("normalizes process include patterns relative to the scoped dir", () => {
@@ -585,5 +623,6 @@ describe("scoped vitest configs", () => {
   it("normalizes utils include patterns relative to the scoped dir", () => {
     expect(defaultUtilsConfig.test?.dir).toBe("src");
     expect(defaultUtilsConfig.test?.include).toEqual(["utils/**/*.test.ts"]);
+    expect(defaultUtilsConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
   });
 });

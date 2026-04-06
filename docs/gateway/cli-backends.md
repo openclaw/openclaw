@@ -143,12 +143,12 @@ The provider id becomes the left side of your model ref:
 4. **Parses output** (JSON or plain text) and returns the final text.
 5. **Persists session ids** per backend, so follow-ups reuse the same CLI session.
 
-<Warning>
-The bundled Anthropic `claude-cli` backend was removed after Anthropic's
-OpenClaw billing boundary changed. OpenClaw still supports generic CLI
-backends, but Anthropic API traffic should use the Anthropic provider directly
-instead of the removed local Claude CLI path.
-</Warning>
+<Note>
+The bundled Anthropic `claude-cli` backend is supported again. Anthropic staff
+told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats
+`claude -p` usage as sanctioned for this integration unless Anthropic publishes
+a new policy.
+</Note>
 
 ## Sessions
 

@@ -480,12 +480,11 @@ describe("preflightDiscordMessage", () => {
         bot: true,
       },
     }));
-    const client = {
-      ...createThreadClient({ threadId, parentId }),
+    const client = Object.assign(createThreadClient({ threadId, parentId }), {
       rest: {
         get: restGet,
       },
-    } as unknown as DiscordClient;
+    }) as unknown as DiscordClient;
 
     const result = await preflightDiscordMessage({
       ...createPreflightArgs({
