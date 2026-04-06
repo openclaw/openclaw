@@ -151,10 +151,7 @@ export function buildQaGatewayConfig(params: {
 
   return {
     plugins: {
-      allow:
-        providerMode === "live-openai"
-          ? ["memory-core", ...selectedProviderIds, "qa-channel"]
-          : ["memory-core", "qa-channel"],
+      allow: allowedPlugins,
       entries: {
         acpx: {
           enabled: false,
