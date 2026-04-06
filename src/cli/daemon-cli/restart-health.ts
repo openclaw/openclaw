@@ -15,6 +15,8 @@ export const DEFAULT_RESTART_HEALTH_DELAY_MS = 500;
 export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
 );
+const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
+const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 25_000;
 
 export type GatewayRestartWaitOutcome = "healthy" | "stale-pids" | "stopped-free" | "timeout";
 
@@ -217,6 +219,12 @@ function shouldEarlyExitStoppedFree(
   );
 }
 
+function stoppedFreeEarlyExitGraceMs(): number {
+  return process.platform === "win32"
+    ? WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS
+    : STOPPED_FREE_EARLY_EXIT_GRACE_MS;
+}
+
 function withWaitContext(
   snapshot: GatewayRestartSnapshot,
   waitOutcome: GatewayRestartWaitOutcome,
@@ -245,7 +253,10 @@ export async function waitForGatewayHealthyRestart(params: {
 
   let consecutiveStoppedFreeCount = 0;
   const STOPPED_FREE_THRESHOLD = 6;
-  const minAttemptForEarlyExit = Math.min(Math.ceil(10_000 / delayMs), Math.floor(attempts / 2));
+  const minAttemptForEarlyExit = Math.min(
+    Math.ceil(stoppedFreeEarlyExitGraceMs() / delayMs),
+    Math.floor(attempts / 2),
+  );
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {

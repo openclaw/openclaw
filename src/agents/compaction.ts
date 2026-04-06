@@ -398,7 +398,7 @@ export async function summarizeWithFallback(params: {
     return await summarizeChunks(params);
   } catch (fullError) {
     log.warn(
-      `Full summarization failed, trying partial: ${
+      `Full summarization failed: ${
         fullError instanceof Error ? fullError.message : String(fullError)
       }`,
     );
@@ -420,7 +420,9 @@ export async function summarizeWithFallback(params: {
     }
   }
 
-  if (smallMessages.length > 0) {
+  // When nothing was oversized, `smallMessages` is the same transcript as the full attempt.
+  // Re-summarizing it would duplicate the same failing API work (and duplicate warn logs).
+  if (smallMessages.length > 0 && smallMessages.length !== messages.length) {
     try {
       const partialSummary = await summarizeChunks({
         ...params,

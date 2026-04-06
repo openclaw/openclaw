@@ -51,6 +51,20 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it('accepts memorySearch provider "bedrock"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "bedrock",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts memorySearch.qmd.extraCollections", () => {
     const res = validateConfigObject({
       agents: {

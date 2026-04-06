@@ -54,10 +54,8 @@ export type MantleBearerTokenProvider = () => Promise<string>;
  * Resolve a bearer token for Mantle authentication.
  *
  * Returns the value of AWS_BEARER_TOKEN_BEDROCK if set, undefined otherwise.
- *
- * Mantle's OpenAI-compatible surface expects a bearer token today in OpenClaw.
- * Plain IAM credentials (instance roles, SSO, access keys) are not enough
- * until we wire in SigV4-derived token generation via `@aws/bedrock-token-generator`.
+ * When no explicit token is set, `resolveImplicitMantleProvider` will attempt
+ * to generate one from IAM credentials via `@aws/bedrock-token-generator`.
  */
 export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const explicitToken = env.AWS_BEARER_TOKEN_BEDROCK?.trim();
@@ -65,6 +63,54 @@ export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): 
     return explicitToken;
   }
   return undefined;
+}
+
+/** Token cache for IAM-derived bearer tokens, keyed by region. */
+const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
+const IAM_TOKEN_TTL_MS = 3600_000; // Refresh every 1 hour (tokens valid up to 12h)
+
+/**
+ * Generate a bearer token from IAM credentials using `@aws/bedrock-token-generator`.
+ *
+ * Uses the AWS default credential chain (instance roles, SSO, access keys, EKS IRSA).
+ * Returns undefined if the package is not installed or credentials are unavailable.
+ */
+export async function generateBearerTokenFromIam(params: {
+  region: string;
+  now?: () => number;
+}): Promise<string | undefined> {
+  const now = params.now?.() ?? Date.now();
+  const cached = iamTokenCache.get(params.region);
+
+  if (cached && cached.expiresAt > now) {
+    return cached.token;
+  }
+
+  try {
+    const { getTokenProvider } = (await import("@aws/bedrock-token-generator")) as {
+      getTokenProvider: (opts?: {
+        region?: string;
+        expiresInSeconds?: number;
+      }) => () => Promise<string>;
+    };
+    const token = await getTokenProvider({
+      region: params.region,
+      expiresInSeconds: 7200, // 2 hours
+    })();
+    iamTokenCache.set(params.region, { token, expiresAt: now + IAM_TOKEN_TTL_MS });
+    return token;
+  } catch (error) {
+    log.debug?.("Mantle IAM token generation unavailable", {
+      region: params.region,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+/** Reset the IAM token cache (for testing). */
+export function resetIamTokenCacheForTest(): void {
+  iamTokenCache.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -198,10 +244,11 @@ export async function discoverMantleModels(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve an implicit Bedrock Mantle provider if bearer-token auth is available.
+ * Resolve an implicit Bedrock Mantle provider if authentication is available.
  *
- * Detection:
- * - AWS_BEARER_TOKEN_BEDROCK is set → Mantle is available
+ * Detection priority:
+ * 1. AWS_BEARER_TOKEN_BEDROCK env var → use directly
+ * 2. IAM credentials → generate bearer token via `@aws/bedrock-token-generator`
  * - Region from AWS_REGION / AWS_DEFAULT_REGION / default us-east-1
  * - Models discovered from `/v1/models`
  */
@@ -210,16 +257,18 @@ export async function resolveImplicitMantleProvider(params: {
   fetchFn?: typeof fetch;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
-  const bearerToken = resolveMantleBearerToken(env);
-
-  if (!bearerToken) {
-    return null;
-  }
-
   const region = env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  const explicitBearerToken = resolveMantleBearerToken(env);
 
   if (!isSupportedRegion(region)) {
     log.debug?.("Mantle not available in region", { region });
+    return null;
+  }
+
+  // Try explicit token first, then generate from IAM credentials
+  const bearerToken = explicitBearerToken ?? (await generateBearerTokenFromIam({ region }));
+
+  if (!bearerToken) {
     return null;
   }
 
@@ -233,11 +282,13 @@ export async function resolveImplicitMantleProvider(params: {
     return null;
   }
 
+  log.debug?.("Mantle provider resolved", { region, modelCount: models.length });
+
   return {
     baseUrl: `${mantleEndpoint(region)}/v1`,
     api: "openai-completions",
     auth: "api-key",
-    apiKey: "env:AWS_BEARER_TOKEN_BEDROCK",
+    apiKey: explicitBearerToken ? "env:AWS_BEARER_TOKEN_BEDROCK" : bearerToken,
     models,
   };
 }

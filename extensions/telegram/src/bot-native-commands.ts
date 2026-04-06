@@ -1,4 +1,5 @@
 import type { Bot, Context } from "grammy";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
   resolveCommandAuthorization,
   resolveCommandAuthorizedFromAuthorizers,
@@ -211,6 +212,13 @@ export function parseTelegramNativeCommandCallbackData(data?: string | null): st
   }
   const commandText = trimmed.slice(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX.length).trim();
   return commandText.startsWith("/") ? commandText : null;
+}
+
+export function resolveTelegramNativeCommandDisableBlockStreaming(
+  telegramCfg: TelegramAccountConfig,
+): boolean | undefined {
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(telegramCfg);
+  return typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined;
 }
 
 export type RegisterTelegramNativeCommandsParams = {
@@ -900,9 +908,7 @@ export const registerTelegramNativeCommands = ({
         });
 
         const disableBlockStreaming =
-          typeof runtimeTelegramCfg.blockStreaming === "boolean"
-            ? !runtimeTelegramCfg.blockStreaming
-            : undefined;
+          resolveTelegramNativeCommandDisableBlockStreaming(runtimeTelegramCfg);
         const deliveryState = {
           delivered: false,
           skippedNonSilent: 0,

@@ -120,8 +120,28 @@ export async function runEmbeddedPiAgent(
       : "markdown");
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
 
-  return enqueueSession(() =>
-    enqueueGlobal(async () => {
+  const throwIfAborted = () => {
+    if (!params.abortSignal?.aborted) {
+      return;
+    }
+    const reason = params.abortSignal.reason;
+    if (reason instanceof Error) {
+      throw reason;
+    }
+    const abortErr =
+      reason !== undefined
+        ? new Error("Operation aborted", { cause: reason })
+        : new Error("Operation aborted");
+    abortErr.name = "AbortError";
+    throw abortErr;
+  };
+
+  throwIfAborted();
+
+  return enqueueSession(() => {
+    throwIfAborted();
+    return enqueueGlobal(async () => {
+      throwIfAborted();
       const started = Date.now();
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
@@ -569,6 +589,7 @@ export async function runEmbeddedPiAgent(
             timeoutMs: params.timeoutMs,
             runId: params.runId,
             abortSignal: params.abortSignal,
+            replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
             onPartialReply: params.onPartialReply,
@@ -1503,6 +1524,6 @@ export async function runEmbeddedPiAgent(
           });
         }
       }
-    }),
-  );
+    });
+  });
 }

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensureBrowserControlAuth: vi.fn(async () => ({ generatedToken: false })),
@@ -42,13 +42,9 @@ vi.mock("./runtime-lifecycle.js", () => ({
   stopBrowserRuntime: vi.fn(async () => {}),
 }));
 
-let startBrowserControlServiceFromConfig: typeof import("../control-service.js").startBrowserControlServiceFromConfig;
+const { startBrowserControlServiceFromConfig } = await import("../control-service.js");
 
 describe("startBrowserControlServiceFromConfig", () => {
-  beforeAll(async () => {
-    ({ startBrowserControlServiceFromConfig } = await import("../control-service.js"));
-  });
-
   beforeEach(() => {
     mocks.ensureBrowserControlAuth.mockClear();
     mocks.createBrowserRuntimeState.mockClear();

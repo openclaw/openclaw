@@ -8,31 +8,37 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry.js";
 
 type CapabilityProviderRegistryKey =
+  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "imageGenerationProviders"
-  | "videoGenerationProviders";
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 type CapabilityContractKey =
+  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "imageGenerationProviders"
-  | "videoGenerationProviders";
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number] extends { provider: infer T } ? T : never;
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
+  memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
   realtimeTranscriptionProviders: "realtimeTranscriptionProviders",
   realtimeVoiceProviders: "realtimeVoiceProviders",
   mediaUnderstandingProviders: "mediaUnderstandingProviders",
   imageGenerationProviders: "imageGenerationProviders",
   videoGenerationProviders: "videoGenerationProviders",
+  musicGenerationProviders: "musicGenerationProviders",
 };
 
 function resolveBundledCapabilityCompatPluginIds(params: {

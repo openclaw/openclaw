@@ -6,7 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { parseModelRef } from "../agents/model-selection.js";
-import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
+import { clearRuntimeConfigSnapshot, loadConfig, type OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -352,7 +352,14 @@ describeLive("gateway live (cli backend)", () => {
     }
 
     const cfg = loadConfig();
-    const existingBackends = cfg.agents?.defaults?.cliBackends ?? {};
+    const cfgWithCliBackends = cfg as OpenClawConfig & {
+      agents?: {
+        defaults?: {
+          cliBackends?: Record<string, Record<string, unknown>>;
+        };
+      };
+    };
+    const existingBackends = cfgWithCliBackends.agents?.defaults?.cliBackends ?? {};
     const nextCfg = {
       ...cfg,
       agents: {

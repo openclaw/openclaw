@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.4.4",
+  "version": "2026.4.6",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -67,9 +67,17 @@
       "types": "./dist/plugin-sdk/runtime.d.ts",
       "default": "./dist/plugin-sdk/runtime.js"
     },
+    "./plugin-sdk/runtime-doctor": {
+      "types": "./dist/plugin-sdk/runtime-doctor.d.ts",
+      "default": "./dist/plugin-sdk/runtime-doctor.js"
+    },
     "./plugin-sdk/runtime-env": {
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
+    },
+    "./plugin-sdk/runtime-secret-resolution": {
+      "types": "./dist/plugin-sdk/runtime-secret-resolution.d.ts",
+      "default": "./dist/plugin-sdk/runtime-secret-resolution.js"
     },
     "./plugin-sdk/setup": {
       "types": "./dist/plugin-sdk/setup.d.ts",
@@ -86,6 +94,10 @@
     "./plugin-sdk/channel-setup": {
       "types": "./dist/plugin-sdk/channel-setup.d.ts",
       "default": "./dist/plugin-sdk/channel-setup.js"
+    },
+    "./plugin-sdk/channel-streaming": {
+      "types": "./dist/plugin-sdk/channel-streaming.d.ts",
+      "default": "./dist/plugin-sdk/channel-streaming.js"
     },
     "./plugin-sdk/setup-tools": {
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
@@ -199,6 +211,14 @@
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"
     },
+    "./plugin-sdk/media-generation-runtime": {
+      "types": "./dist/plugin-sdk/media-generation-runtime.d.ts",
+      "default": "./dist/plugin-sdk/media-generation-runtime.js"
+    },
+    "./plugin-sdk/conversation-binding-runtime": {
+      "types": "./dist/plugin-sdk/conversation-binding-runtime.d.ts",
+      "default": "./dist/plugin-sdk/conversation-binding-runtime.js"
+    },
     "./plugin-sdk/conversation-runtime": {
       "types": "./dist/plugin-sdk/conversation-runtime.d.ts",
       "default": "./dist/plugin-sdk/conversation-runtime.js"
@@ -279,6 +299,10 @@
       "types": "./dist/plugin-sdk/acp-runtime.d.ts",
       "default": "./dist/plugin-sdk/acp-runtime.js"
     },
+    "./plugin-sdk/acp-binding-runtime": {
+      "types": "./dist/plugin-sdk/acp-binding-runtime.d.ts",
+      "default": "./dist/plugin-sdk/acp-binding-runtime.js"
+    },
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
@@ -335,9 +359,41 @@
       "types": "./dist/plugin-sdk/bluebubbles-policy.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles-policy.js"
     },
+    "./plugin-sdk/browser-cdp": {
+      "types": "./dist/plugin-sdk/browser-cdp.d.ts",
+      "default": "./dist/plugin-sdk/browser-cdp.js"
+    },
+    "./plugin-sdk/browser-config": {
+      "types": "./dist/plugin-sdk/browser-config.d.ts",
+      "default": "./dist/plugin-sdk/browser-config.js"
+    },
+    "./plugin-sdk/browser-config-runtime": {
+      "types": "./dist/plugin-sdk/browser-config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-config-runtime.js"
+    },
     "./plugin-sdk/browser-config-support": {
       "types": "./dist/plugin-sdk/browser-config-support.d.ts",
       "default": "./dist/plugin-sdk/browser-config-support.js"
+    },
+    "./plugin-sdk/browser-control-auth": {
+      "types": "./dist/plugin-sdk/browser-control-auth.d.ts",
+      "default": "./dist/plugin-sdk/browser-control-auth.js"
+    },
+    "./plugin-sdk/browser-node-runtime": {
+      "types": "./dist/plugin-sdk/browser-node-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-node-runtime.js"
+    },
+    "./plugin-sdk/browser-profiles": {
+      "types": "./dist/plugin-sdk/browser-profiles.d.ts",
+      "default": "./dist/plugin-sdk/browser-profiles.js"
+    },
+    "./plugin-sdk/browser-security-runtime": {
+      "types": "./dist/plugin-sdk/browser-security-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-security-runtime.js"
+    },
+    "./plugin-sdk/browser-setup-tools": {
+      "types": "./dist/plugin-sdk/browser-setup-tools.d.ts",
+      "default": "./dist/plugin-sdk/browser-setup-tools.js"
     },
     "./plugin-sdk/browser-support": {
       "types": "./dist/plugin-sdk/browser-support.d.ts",
@@ -431,6 +487,10 @@
       "types": "./dist/plugin-sdk/channel-core.d.ts",
       "default": "./dist/plugin-sdk/channel-core.js"
     },
+    "./plugin-sdk/channel-entry-contract": {
+      "types": "./dist/plugin-sdk/channel-entry-contract.d.ts",
+      "default": "./dist/plugin-sdk/channel-entry-contract.js"
+    },
     "./plugin-sdk/channel-contract": {
       "types": "./dist/plugin-sdk/channel-contract.d.ts",
       "default": "./dist/plugin-sdk/channel-contract.js"
@@ -499,6 +559,14 @@
       "types": "./dist/plugin-sdk/googlechat.d.ts",
       "default": "./dist/plugin-sdk/googlechat.js"
     },
+    "./plugin-sdk/googlechat-runtime-shared": {
+      "types": "./dist/plugin-sdk/googlechat-runtime-shared.d.ts",
+      "default": "./dist/plugin-sdk/googlechat-runtime-shared.js"
+    },
+    "./plugin-sdk/media-generation-runtime-shared": {
+      "types": "./dist/plugin-sdk/media-generation-runtime-shared.d.ts",
+      "default": "./dist/plugin-sdk/media-generation-runtime-shared.js"
+    },
     "./plugin-sdk/image-generation": {
       "types": "./dist/plugin-sdk/image-generation.d.ts",
       "default": "./dist/plugin-sdk/image-generation.js"
@@ -506,6 +574,14 @@
     "./plugin-sdk/image-generation-core": {
       "types": "./dist/plugin-sdk/image-generation-core.d.ts",
       "default": "./dist/plugin-sdk/image-generation-core.js"
+    },
+    "./plugin-sdk/music-generation": {
+      "types": "./dist/plugin-sdk/music-generation.d.ts",
+      "default": "./dist/plugin-sdk/music-generation.js"
+    },
+    "./plugin-sdk/music-generation-core": {
+      "types": "./dist/plugin-sdk/music-generation-core.d.ts",
+      "default": "./dist/plugin-sdk/music-generation-core.js"
     },
     "./plugin-sdk/video-generation": {
       "types": "./dist/plugin-sdk/video-generation.d.ts",
@@ -647,6 +723,10 @@
       "types": "./dist/plugin-sdk/memory-core-host-secret.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-secret.js"
     },
+    "./plugin-sdk/memory-core-host-events": {
+      "types": "./dist/plugin-sdk/memory-core-host-events.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-events.js"
+    },
     "./plugin-sdk/memory-core-host-status": {
       "types": "./dist/plugin-sdk/memory-core-host-status.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-status.js"
@@ -662,6 +742,30 @@
     "./plugin-sdk/memory-core-host-runtime-files": {
       "types": "./dist/plugin-sdk/memory-core-host-runtime-files.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-runtime-files.js"
+    },
+    "./plugin-sdk/memory-host-core": {
+      "types": "./dist/plugin-sdk/memory-host-core.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-core.js"
+    },
+    "./plugin-sdk/memory-host-events": {
+      "types": "./dist/plugin-sdk/memory-host-events.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-events.js"
+    },
+    "./plugin-sdk/memory-host-files": {
+      "types": "./dist/plugin-sdk/memory-host-files.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-files.js"
+    },
+    "./plugin-sdk/memory-host-markdown": {
+      "types": "./dist/plugin-sdk/memory-host-markdown.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-markdown.js"
+    },
+    "./plugin-sdk/memory-host-search": {
+      "types": "./dist/plugin-sdk/memory-host-search.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-search.js"
+    },
+    "./plugin-sdk/memory-host-status": {
+      "types": "./dist/plugin-sdk/memory-host-status.d.ts",
+      "default": "./dist/plugin-sdk/memory-host-status.js"
     },
     "./plugin-sdk/memory-lancedb": {
       "types": "./dist/plugin-sdk/memory-lancedb.d.ts",
@@ -690,6 +794,10 @@
     "./plugin-sdk/nostr": {
       "types": "./dist/plugin-sdk/nostr.d.ts",
       "default": "./dist/plugin-sdk/nostr.js"
+    },
+    "./plugin-sdk/qa-channel": {
+      "types": "./dist/plugin-sdk/qa-channel.d.ts",
+      "default": "./dist/plugin-sdk/qa-channel.js"
     },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
@@ -739,10 +847,6 @@
       "types": "./dist/plugin-sdk/provider-onboard.d.ts",
       "default": "./dist/plugin-sdk/provider-onboard.js"
     },
-    "./plugin-sdk/provider-stream": {
-      "types": "./dist/plugin-sdk/provider-stream.d.ts",
-      "default": "./dist/plugin-sdk/provider-stream.js"
-    },
     "./plugin-sdk/provider-stream-family": {
       "types": "./dist/plugin-sdk/provider-stream-family.d.ts",
       "default": "./dist/plugin-sdk/provider-stream-family.js"
@@ -750,6 +854,10 @@
     "./plugin-sdk/provider-stream-shared": {
       "types": "./dist/plugin-sdk/provider-stream-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-stream-shared.js"
+    },
+    "./plugin-sdk/provider-stream": {
+      "types": "./dist/plugin-sdk/provider-stream.d.ts",
+      "default": "./dist/plugin-sdk/provider-stream.js"
     },
     "./plugin-sdk/provider-tools": {
       "types": "./dist/plugin-sdk/provider-tools.d.ts",
@@ -997,6 +1105,9 @@
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
+    "qa:e2e": "node --import tsx scripts/qa-e2e.ts",
+    "qa:lab:build": "vite build --config extensions/qa-lab/web/vite.config.ts",
+    "qa:lab:ui": "pnpm openclaw qa ui",
     "release:check": "pnpm check:base-config-schema && pnpm check:bundled-channel-config-metadata && pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
@@ -1072,7 +1183,7 @@
     "test:startup:bench:smoke": "node --import tsx scripts/bench-cli-startup.ts --preset real --case gatewayStatusJson --runs 1 --warmup 0 --output .artifacts/cli-startup-bench-smoke.json",
     "test:startup:bench:update": "node scripts/test-update-cli-startup-bench.mjs",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
-    "test:ui": "pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
+    "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
     "test:voicecall:closedloop": "node scripts/test-voicecall-closedloop.mjs",
     "test:watch": "node scripts/run-vitest.mjs --config vitest.config.ts",
     "tool-display:check": "node --import tsx scripts/tool-display.ts --check",
@@ -1083,20 +1194,24 @@
     "tui:dev": "OPENCLAW_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
     "ui:dev": "node scripts/ui.js dev",
+    "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
+    "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:install": "node scripts/ui.js install"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.18.0",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
-    "@aws-sdk/client-bedrock": "3.1023.0",
+    "@aws-sdk/client-bedrock": "3.1024.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+    "@aws-sdk/credential-provider-node": "3.972.29",
     "@clack/prompts": "^1.2.0",
     "@homebridge/ciao": "^1.3.6",
-    "@line/bot-sdk": "^10.6.0",
-    "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.65.0",
-    "@mariozechner/pi-ai": "0.65.0",
-    "@mariozechner/pi-coding-agent": "0.65.0",
-    "@mariozechner/pi-tui": "0.65.0",
+    "@line/bot-sdk": "^11.0.0",
+    "@lydell/node-pty": "1.2.0-beta.10",
+    "@mariozechner/pi-agent-core": "0.65.2",
+    "@mariozechner/pi-ai": "0.65.2",
+    "@mariozechner/pi-coding-agent": "0.65.2",
+    "@mariozechner/pi-tui": "0.65.2",
     "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
@@ -1129,14 +1244,14 @@
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",
-    "undici": "^8.0.1",
+    "undici": "^8.0.2",
     "uuid": "^13.0.0",
     "ws": "^8.20.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@grammyjs/types": "^3.25.0",
+    "@grammyjs/types": "^3.26.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
     "@types/express": "^5.0.6",
@@ -1144,7 +1259,7 @@
     "@types/node": "^25.5.2",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260404.1",
+    "@typescript/native-preview": "7.0.0-dev.20260406.1",
     "@vitest/coverage-v8": "^4.1.2",
     "jscpd": "4.0.8",
     "jsdom": "^29.0.1",

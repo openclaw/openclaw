@@ -513,6 +513,13 @@ API key auth, and dynamic model resolution.
       | 42 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
       | 43 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
+      Prompt tuning note:
+
+      - `resolveSystemPromptContribution` lets a provider inject cache-aware
+        system-prompt guidance for a model family. Prefer it over
+        `before_prompt_build` when the behavior belongs to one provider/model
+        family and should preserve the stable/dynamic cache split.
+
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).
     </Accordion>
@@ -585,9 +592,20 @@ API key auth, and dynamic model resolution.
         id: "acme-ai",
         label: "Acme Video",
         capabilities: {
-          maxVideos: 1,
-          maxDurationSeconds: 10,
-          supportsResolution: true,
+          generate: {
+            maxVideos: 1,
+            maxDurationSeconds: 10,
+            supportsResolution: true,
+          },
+          imageToVideo: {
+            enabled: true,
+            maxVideos: 1,
+            maxInputImages: 1,
+            maxDurationSeconds: 5,
+          },
+          videoToVideo: {
+            enabled: false,
+          },
         },
         generateVideo: async (req) => ({ videos: [] }),
       });
@@ -623,6 +641,12 @@ API key auth, and dynamic model resolution.
     OpenClaw classifies this as a **hybrid-capability** plugin. This is the
     recommended pattern for company plugins (one plugin per vendor). See
     [Internals: Capability Ownership](/plugins/architecture#capability-ownership-model).
+
+    For video generation, prefer the mode-aware capability shape shown above:
+    `generate`, `imageToVideo`, and `videoToVideo`. The older flat fields such
+    as `maxInputImages`, `maxInputVideos`, and `maxDurationSeconds` still work
+    as aggregate fallback caps, but they cannot describe per-mode limits or
+    disabled transform modes as cleanly.
 
   </Step>
 

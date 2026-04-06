@@ -20,6 +20,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { styleHealthChannelLine } from "../terminal/health-style.js";
 import { isRich } from "../terminal/theme.js";
+import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 
 export type ChannelAccountHealthSummary = {
   accountId: string;
@@ -624,10 +625,11 @@ export async function healthCommand(
     const rich = isRich();
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({ config: cfg });
-      runtime.log(info("Gateway connection:"));
-      for (const line of details.message.split("\n")) {
-        runtime.log(`  ${line}`);
-      }
+      logGatewayConnectionDetails({
+        runtime,
+        info,
+        message: details.message,
+      });
     }
     const localAgents = resolveAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;

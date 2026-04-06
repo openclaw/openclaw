@@ -1,7 +1,11 @@
 import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
-import { buildTalkConfigResponse, resolveActiveTalkProviderConfig } from "../../config/talk.js";
-import type { TalkProviderConfig } from "../../config/types.gateway.js";
+import {
+  buildTalkConfigResponse,
+  normalizeTalkSection,
+  resolveActiveTalkProviderConfig,
+} from "../../config/talk.js";
+import type { TalkConfigResponse, TalkProviderConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
 import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
@@ -48,6 +52,20 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function asStringRecord(value: unknown): Record<string, string> | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const next: Record<string, string> = {};
+  for (const [key, entryValue] of Object.entries(record)) {
+    if (typeof entryValue === "string") {
+      next[key] = entryValue;
+    }
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 function normalizeAliasKey(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -59,7 +77,7 @@ function resolveTalkVoiceId(
   if (!requested) {
     return undefined;
   }
-  const aliases = providerConfig.voiceAliases;
+  const aliases = asStringRecord(providerConfig.voiceAliases);
   if (!aliases) {
     return requested;
   }
@@ -218,6 +236,60 @@ function inferMimeType(
   return undefined;
 }
 
+function resolveTalkResponseFromConfig(params: {
+  includeSecrets: boolean;
+  sourceConfig: OpenClawConfig;
+  runtimeConfig: OpenClawConfig;
+}): TalkConfigResponse | undefined {
+  const normalizedTalk = normalizeTalkSection(params.sourceConfig.talk);
+  if (!normalizedTalk) {
+    return undefined;
+  }
+
+  const payload = buildTalkConfigResponse(normalizedTalk);
+  if (!payload) {
+    return undefined;
+  }
+
+  if (params.includeSecrets) {
+    return payload;
+  }
+
+  const sourceResolved = resolveActiveTalkProviderConfig(normalizedTalk);
+  const runtimeResolved = resolveActiveTalkProviderConfig(params.runtimeConfig.talk);
+  const activeProviderId = sourceResolved?.provider ?? runtimeResolved?.provider;
+  const provider = canonicalizeSpeechProviderId(activeProviderId, params.runtimeConfig);
+  if (!provider) {
+    return payload;
+  }
+
+  const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
+  const sourceBaseTts = asRecord(params.sourceConfig.messages?.tts) ?? {};
+  const runtimeBaseTts = asRecord(params.runtimeConfig.messages?.tts) ?? {};
+  const talkProviderConfig = sourceResolved?.config ?? runtimeResolved?.config ?? {};
+  const resolvedConfig =
+    speechProvider?.resolveTalkConfig?.({
+      cfg: params.runtimeConfig,
+      baseTtsConfig: Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
+      talkProviderConfig,
+      timeoutMs:
+        typeof sourceBaseTts.timeoutMs === "number"
+          ? sourceBaseTts.timeoutMs
+          : typeof runtimeBaseTts.timeoutMs === "number"
+            ? runtimeBaseTts.timeoutMs
+            : 30_000,
+    }) ?? talkProviderConfig;
+
+  return {
+    ...payload,
+    provider,
+    resolved: {
+      provider,
+      config: resolvedConfig,
+    },
+  };
+}
+
 export const talkHandlers: GatewayRequestHandlers = {
   "talk.config": async ({ params, respond, client }) => {
     if (!validateTalkConfigParams(params)) {
@@ -243,14 +315,16 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     const snapshot = await readConfigFileSnapshot();
+    const runtimeConfig = loadConfig();
     const configPayload: Record<string, unknown> = {};
 
-    const talkSource = includeSecrets
-      ? snapshot.config.talk
-      : redactConfigObject(snapshot.config.talk);
-    const talk = buildTalkConfigResponse(talkSource);
+    const talk = resolveTalkResponseFromConfig({
+      includeSecrets,
+      sourceConfig: snapshot.config,
+      runtimeConfig,
+    });
     if (talk) {
-      configPayload.talk = talk;
+      configPayload.talk = includeSecrets ? talk : redactConfigObject(talk);
     }
 
     const sessionMainKey = snapshot.config.session?.mainKey;

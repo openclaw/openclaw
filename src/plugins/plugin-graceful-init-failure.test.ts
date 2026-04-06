@@ -1,27 +1,14 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
-function mkdtempSafe(prefix: string) {
-  const dir = fs.mkdtempSync(prefix);
-  try {
-    fs.chmodSync(dir, 0o755);
-  } catch {
-    // Best-effort
-  }
-  return dir;
-}
-
-const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-graceful-"));
+const fixtureTempDirs: string[] = [];
+const fixtureRoot = makeTrackedTempDir("openclaw-plugin-graceful", fixtureTempDirs);
 let tempDirIndex = 0;
 
 afterAll(() => {
-  try {
-    fs.rmSync(fixtureRoot, { recursive: true, force: true });
-  } catch {
-    // Ignore cleanup errors
-  }
+  cleanupTrackedTempDirs(fixtureTempDirs);
 });
 
 function makeTempDir() {

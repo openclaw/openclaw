@@ -1,7 +1,4 @@
-import { fileURLToPath } from "node:url";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
-import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
-import { resolveBundledPluginPublicSurfacePath } from "../../plugins/bundled-plugin-metadata.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
@@ -47,7 +44,6 @@ type BundledSessionKeyModule = {
   ) => SessionConversationHookResult | null;
 };
 
-const OPENCLAW_PACKAGE_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 const SESSION_KEY_API_ARTIFACT_BASENAME = "session-key-api.js";
 
 type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
@@ -140,16 +136,6 @@ function resolveBundledSessionConversationFallback(params: {
   rawId: string;
 }): NormalizedSessionConversationResolution | null {
   const dirName = normalizeResolvedChannel(params.channel);
-  if (
-    !resolveBundledPluginPublicSurfacePath({
-      rootDir: OPENCLAW_PACKAGE_ROOT,
-      bundledPluginsDir: resolveBundledPluginsDir(),
-      dirName,
-      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-    })
-  ) {
-    return null;
-  }
   let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"];
   try {
     resolveSessionConversation =

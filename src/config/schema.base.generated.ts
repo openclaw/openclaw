@@ -3053,6 +3053,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              musicGenerationModel: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      primary: {
+                        type: "string",
+                        title: "Music Generation Model",
+                        description:
+                          "Optional music-generation model (provider/model) used by the shared music generation capability.",
+                      },
+                      fallbacks: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Music Generation Model Fallbacks",
+                        description: "Ordered fallback music-generation models (provider/model).",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -3144,6 +3171,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
               skipBootstrap: {
                 type: "boolean",
+              },
+              contextInjection: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "always",
+                  },
+                  {
+                    type: "string",
+                    const: "continuation-skip",
+                  },
+                ],
+                title: "Context Injection",
+                description:
+                  'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
               },
               bootstrapMaxChars: {
                 type: "integer",
@@ -3616,7 +3658,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "string",
                     title: "Memory Search Provider",
                     description:
-                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
                   },
                   remote: {
                     type: "object",
@@ -3771,7 +3813,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     maximum: 9007199254740991,
                     title: "Memory Search Output Dimensionality",
                     description:
-                      "Gemini embedding-2 only: chooses the output vector size for memory embeddings. Use 768, 1536, or 3072 (default), and expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+                      "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
                   },
                   local: {
                     type: "object",
@@ -17086,6 +17128,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             additionalProperties: false,
           },
+          experimental: {
+            type: "object",
+            properties: {
+              planTool: {
+                type: "boolean",
+                title: "Enable Structured Plan Tool",
+                description:
+                  "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+              },
+            },
+            additionalProperties: false,
+            title: "Experimental Tools",
+            description:
+              "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+          },
         },
         additionalProperties: false,
         title: "Tools",
@@ -20156,7 +20213,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           provider: {
             type: "string",
             title: "Talk Active Provider",
-            description: 'Active Talk provider id (for example "elevenlabs").',
+            description: 'Active Talk provider id (for example "acme-speech").',
           },
           providers: {
             type: "object",
@@ -20166,32 +20223,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             additionalProperties: {
               type: "object",
               properties: {
-                voiceId: {
-                  type: "string",
-                  title: "Talk Provider Voice ID",
-                  description: "Provider default voice ID for Talk mode.",
-                },
-                voiceAliases: {
-                  type: "object",
-                  propertyNames: {
-                    type: "string",
-                  },
-                  additionalProperties: {
-                    type: "string",
-                  },
-                  title: "Talk Provider Voice Aliases",
-                  description: "Optional provider voice alias map for Talk directives.",
-                },
-                modelId: {
-                  type: "string",
-                  title: "Talk Provider Model ID",
-                  description: "Provider default model ID for Talk mode.",
-                },
-                outputFormat: {
-                  type: "string",
-                  title: "Talk Provider Output Format",
-                  description: "Provider default output format for Talk mode.",
-                },
                 apiKey: {
                   anyOf: [
                     {
@@ -20262,6 +20293,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
               },
               additionalProperties: {},
+              title: "Talk Provider Config",
+              description: "Provider-owned Talk config fields for the matching provider id.",
             },
             title: "Talk Provider Settings",
             description:
@@ -23134,6 +23167,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
       tags: ["performance", "media", "tools"],
     },
+    "tools.media.asyncCompletion.directSend": {
+      label: "Async Media Completion Direct Send",
+      help: "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+      tags: ["storage", "media", "tools"],
+    },
     "tools.media.audio.enabled": {
       label: "Enable Audio Understanding",
       help: "Enable audio understanding so voice notes or audio clips can be transcribed/summarized for agent context. Disable when audio ingestion is outside policy or unnecessary for your workflows.",
@@ -23465,6 +23503,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent-to-Agent Target Allowlist",
       help: "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
       tags: ["access", "tools"],
+    },
+    "tools.experimental": {
+      label: "Experimental Tools",
+      help: "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+      tags: ["security", "tools", "advanced"],
+    },
+    "tools.experimental.planTool": {
+      label: "Enable Structured Plan Tool",
+      help: "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+      tags: ["security", "tools", "advanced"],
     },
     "tools.elevated": {
       label: "Elevated Tool Access",
@@ -24105,6 +24153,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
       tags: ["advanced"],
     },
+    "agents.defaults.contextInjection": {
+      label: "Context Injection",
+      help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+      tags: ["advanced"],
+    },
     "agents.defaults.bootstrapMaxChars": {
       label: "Bootstrap Max Chars",
       help: "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
@@ -24207,7 +24260,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.provider": {
       label: "Memory Search Provider",
-      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+      help: 'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.remote.baseUrl": {
@@ -24258,7 +24311,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch.outputDimensionality": {
       label: "Memory Search Output Dimensionality",
-      help: "Gemini embedding-2 only: chooses the output vector size for memory embeddings. Use 768, 1536, or 3072 (default), and expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+      help: "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.fallback": {
@@ -24931,6 +24984,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Video Generation Model Fallbacks",
       help: "Ordered fallback video-generation models (provider/model).",
       tags: ["reliability", "media"],
+    },
+    "agents.defaults.musicGenerationModel.primary": {
+      label: "Music Generation Model",
+      help: "Optional music-generation model (provider/model) used by the shared music generation capability.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.musicGenerationModel.fallbacks": {
+      label: "Music Generation Model Fallbacks",
+      help: "Ordered fallback music-generation models (provider/model).",
+      tags: ["reliability"],
     },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",
@@ -26110,7 +26173,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "talk.provider": {
       label: "Talk Active Provider",
-      help: 'Active Talk provider id (for example "elevenlabs").',
+      help: 'Active Talk provider id (for example "acme-speech").',
       tags: ["media"],
     },
     "talk.providers": {
@@ -26118,24 +26181,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
       tags: ["media"],
     },
-    "talk.providers.*.voiceId": {
-      label: "Talk Provider Voice ID",
-      help: "Provider default voice ID for Talk mode.",
-      tags: ["media"],
-    },
-    "talk.providers.*.voiceAliases": {
-      label: "Talk Provider Voice Aliases",
-      help: "Optional provider voice alias map for Talk directives.",
-      tags: ["media"],
-    },
-    "talk.providers.*.modelId": {
-      label: "Talk Provider Model ID",
-      help: "Provider default model ID for Talk mode.",
-      tags: ["models", "media"],
-    },
-    "talk.providers.*.outputFormat": {
-      label: "Talk Provider Output Format",
-      help: "Provider default output format for Talk mode.",
+    "talk.providers.*": {
+      label: "Talk Provider Config",
+      help: "Provider-owned Talk config fields for the matching provider id.",
       tags: ["media"],
     },
     "talk.providers.*.apiKey": {
@@ -26791,6 +26839,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.4",
+  version: "2026.4.5",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

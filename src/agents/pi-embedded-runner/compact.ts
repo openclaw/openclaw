@@ -15,10 +15,14 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
+import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
+import {
+  prepareProviderRuntimeAuth,
+  resolveProviderSystemPromptContribution,
+} from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -648,6 +652,22 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
+    const promptContribution = resolveProviderSystemPromptContribution({
+      provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      context: {
+        config: params.config,
+        agentDir,
+        workspaceDir: effectiveWorkspace,
+        provider,
+        modelId,
+        promptMode,
+        runtimeChannel,
+        runtimeCapabilities,
+        agentId: sessionAgentId,
+      },
+    });
     const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) =>
       createSystemPromptOverride(
         buildEmbeddedSystemPrompt({
@@ -678,6 +698,7 @@ export async function compactEmbeddedPiSessionDirect(
           userTimeFormat,
           contextFiles,
           memoryCitationsMode: params.config?.memory?.citations,
+          promptContribution,
         }),
       );
 
@@ -984,8 +1005,14 @@ export async function compactEmbeddedPiSessionDirect(
           // Truncate session file to remove compacted entries (#39953)
           if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
             try {
+              const heartbeatSummary = resolveHeartbeatSummaryForAgent(
+                params.config,
+                sessionAgentId,
+              );
               const truncResult = await truncateSessionAfterCompaction({
                 sessionFile: params.sessionFile,
+                ackMaxChars: heartbeatSummary.ackMaxChars,
+                heartbeatPrompt: heartbeatSummary.prompt,
               });
               if (truncResult.truncated) {
                 log.info(

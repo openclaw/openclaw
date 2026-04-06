@@ -1,6 +1,7 @@
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { listChannelCatalogEntries } from "../plugins/channel-catalog-registry.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
+import { resolveChannelExposure } from "./plugins/exposure.js";
 import type { ChannelMeta } from "./plugins/types.js";
 
 export type ChatChannelMeta = ChannelMeta;
@@ -15,6 +16,7 @@ function toChatChannelMeta(params: {
   if (!label) {
     throw new Error(`Missing label for bundled chat channel "${params.id}"`);
   }
+  const exposure = resolveChannelExposure(params.channel);
 
   return {
     id: params.id,
@@ -43,9 +45,7 @@ function toChatChannelMeta(params: {
     ...(params.channel.markdownCapable !== undefined
       ? { markdownCapable: params.channel.markdownCapable }
       : {}),
-    ...(params.channel.showConfigured !== undefined
-      ? { showConfigured: params.channel.showConfigured }
-      : {}),
+    exposure,
     ...(params.channel.quickstartAllowFrom !== undefined
       ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }
       : {}),
@@ -64,14 +64,8 @@ function toChatChannelMeta(params: {
 export function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
   const entries = new Map<ChatChannelId, ChatChannelMeta>();
 
-  for (const entry of listBundledPluginMetadata({
-    includeChannelConfigs: true,
-    includeSyntheticChannelConfigs: false,
-  })) {
-    const channel =
-      entry.packageManifest && "channel" in entry.packageManifest
-        ? entry.packageManifest.channel
-        : undefined;
+  for (const entry of listChannelCatalogEntries({ origin: "bundled" })) {
+    const channel = entry.channel;
     if (!channel) {
       continue;
     }

@@ -690,9 +690,17 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean }> };
 
     expect(params.tools?.[0]?.strict).toBe(true);
+    expect(params.tools?.[0]).toMatchObject({
+      parameters: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+        required: [],
+      },
+    });
   });
 
-  it("omits responses strict tool shaping when a native OpenAI tool schema is not strict-compatible", () => {
+  it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -713,14 +721,19 @@ describe("openai transport stream", () => {
           {
             name: "read",
             description: "Read file",
-            parameters: { type: "object", properties: {} },
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: { path: { type: "string" } },
+              required: [],
+            },
           },
         ],
       } as never,
       undefined,
     ) as { tools?: Array<{ strict?: boolean }> };
 
-    expect(params.tools?.[0]).not.toHaveProperty("strict");
+    expect(params.tools?.[0]?.strict).toBe(false);
   });
 
   it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
@@ -1155,7 +1168,7 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]?.function?.strict).toBe(true);
   });
 
-  it("omits completions strict tool shaping when a native OpenAI tool schema is not strict-compatible", () => {
+  it("falls back to completions strict:false when a native OpenAI tool schema is not strict-compatible", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "gpt-5",
@@ -1183,7 +1196,7 @@ describe("openai transport stream", () => {
       undefined,
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
-    expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+    expect(params.tools?.[0]?.function?.strict).toBe(false);
   });
 
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {

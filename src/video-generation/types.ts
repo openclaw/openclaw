@@ -18,6 +18,11 @@ export type VideoGenerationSourceAsset = {
   metadata?: Record<string, unknown>;
 };
 
+export type VideoGenerationProviderConfiguredContext = {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+};
+
 export type VideoGenerationRequest = {
   provider: string;
   model: string;
@@ -42,16 +47,35 @@ export type VideoGenerationResult = {
   metadata?: Record<string, unknown>;
 };
 
-export type VideoGenerationProviderCapabilities = {
+export type VideoGenerationIgnoredOverride = {
+  key: "size" | "aspectRatio" | "resolution" | "audio" | "watermark";
+  value: string | boolean;
+};
+
+export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
+
+export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;
   maxInputVideos?: number;
   maxDurationSeconds?: number;
+  supportedDurationSeconds?: readonly number[];
+  supportedDurationSecondsByModel?: Readonly<Record<string, readonly number[]>>;
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;
   supportsAudio?: boolean;
   supportsWatermark?: boolean;
+};
+
+export type VideoGenerationTransformCapabilities = VideoGenerationModeCapabilities & {
+  enabled: boolean;
+};
+
+export type VideoGenerationProviderCapabilities = VideoGenerationModeCapabilities & {
+  generate?: VideoGenerationModeCapabilities;
+  imageToVideo?: VideoGenerationTransformCapabilities;
+  videoToVideo?: VideoGenerationTransformCapabilities;
 };
 
 export type VideoGenerationProvider = {
@@ -61,5 +85,6 @@ export type VideoGenerationProvider = {
   defaultModel?: string;
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
+  isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };

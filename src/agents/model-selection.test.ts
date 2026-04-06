@@ -4,6 +4,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
+  isCliProvider,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
@@ -127,6 +128,12 @@ describe("model-selection", () => {
       expect(normalizeProviderIdForAuth("volcengine-plan")).toBe("volcengine");
       expect(normalizeProviderIdForAuth("byteplus-plan")).toBe("byteplus");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
+    });
+  });
+
+  describe("isCliProvider", () => {
+    it("returns false for provider ids", () => {
+      expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
     });
   });
 

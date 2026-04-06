@@ -6,7 +6,6 @@ import "../cron/isolated-agent.mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import * as authProfilesModule from "../agents/auth-profiles.js";
-import * as cliRunnerModule from "../agents/cli-runner.js";
 import * as sessionStoreModule from "../agents/command/session-store.js";
 import { resolveSession } from "../agents/command/session.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
@@ -96,7 +95,6 @@ const runtime: RuntimeEnv = {
 
 const configSpy = vi.spyOn(configModule, "loadConfig");
 const readConfigFileSnapshotForWriteSpy = vi.spyOn(configModule, "readConfigFileSnapshotForWrite");
-const runCliAgentSpy = vi.spyOn(cliRunnerModule, "runCliAgent");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
@@ -336,7 +334,6 @@ beforeEach(() => {
   resetPluginRuntimeStateForTest();
   acpManagerTesting.resetAcpSessionManagerForTests();
   configModule.clearRuntimeConfigSnapshot();
-  runCliAgentSpy.mockResolvedValue(createDefaultAgentResult() as never);
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue(createDefaultAgentResult());
   vi.mocked(loadModelCatalog).mockResolvedValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
@@ -568,15 +565,14 @@ describe("agentCommand", () => {
     });
   });
 
-  it("persists explicit session-id-only CLI runs with the synthetic session key", async () => {
+  it("persists explicit session-id-only runs with the synthetic session key", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store, {
         model: { primary: "claude-cli/claude-sonnet-4-6" },
         models: { "claude-cli/claude-sonnet-4-6": {} },
       });
-      vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => true);
-      runCliAgentSpy.mockResolvedValue({
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "ok" }],
         meta: {
           durationMs: 5,
@@ -589,7 +585,7 @@ describe("agentCommand", () => {
             },
           },
         },
-      } as never);
+      });
 
       await agentCommand({ message: "resume me", sessionId: "explicit-session-123" }, runtime);
 

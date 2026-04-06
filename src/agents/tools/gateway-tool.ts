@@ -2,7 +2,6 @@ import { Type } from "@sinclair/typebox";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
-import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import {
@@ -97,10 +96,8 @@ function assertGatewayConfigMutationAllowed(params: {
       : (applyMergePatch(params.currentConfig, parsed, {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
-  const migratedNextConfig = applyLegacyMigrations(nextConfig).next ?? nextConfig;
   const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
-    (path) =>
-      getValueAtPath(params.currentConfig, path) !== getValueAtPath(migratedNextConfig, path),
+    (path) => getValueAtPath(params.currentConfig, path) !== getValueAtPath(nextConfig, path),
   );
   if (changedProtectedPaths.length === 0) {
     return;

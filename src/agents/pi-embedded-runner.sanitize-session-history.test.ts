@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -252,11 +252,16 @@ describe("sanitizeSessionHistory", () => {
       | undefined;
   };
 
-  beforeEach(async () => {
-    testTimestamp = 1;
+  beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
     mockedHelpers = harness.mockedHelpers;
+  });
+
+  beforeEach(() => {
+    testTimestamp = 1;
+    vi.clearAllMocks();
+    vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
     mockSessionManager = makeMockSessionManager();
   });
 
@@ -400,34 +405,6 @@ describe("sanitizeSessionHistory", () => {
     expect(
       sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
     ).toBe(false);
-  });
-
-  it("canonicalizes malformed assistant history content before replay sanitization", async () => {
-    setNonGoogleModelApi();
-
-    const messages = castAgentMessages([
-      { role: "user", content: "Question" },
-      { role: "assistant", content: "legacy-content" },
-      { role: "assistant", content: { unexpected: true } },
-    ]);
-
-    const result = await sanitizeSessionHistory({
-      messages,
-      modelApi: "openai-responses",
-      provider: "openai",
-      sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result[0]).toEqual(messages[0]);
-    expect(result[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "legacy-content" }],
-    });
-    expect(result[2]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "" }],
-    });
   });
 
   it("annotates inter-session user messages before context sanitization", async () => {

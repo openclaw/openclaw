@@ -17,3 +17,4 @@ export * from "./src/resolve-users.js";
 export * from "./src/outbound-session-route.js";
 export * from "./src/send.js";
 export * from "./src/send.components.js";
+export { setDiscordRuntime } from "./src/runtime.js";

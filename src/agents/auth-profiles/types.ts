@@ -82,9 +82,7 @@ export type ProfileUsageStats = {
   lastFailureAt?: number;
 };
 
-export type AuthProfileStore = {
-  version: number;
-  profiles: Record<string, AuthProfileCredential>;
+export type AuthProfileState = {
   /**
    * Optional per-agent preferred profile order overrides.
    * This lets you lock/override auth rotation for a specific agent without
@@ -95,6 +93,17 @@ export type AuthProfileStore = {
   /** Usage statistics per profile for round-robin rotation */
   usageStats?: Record<string, ProfileUsageStats>;
 };
+
+export type AuthProfileSecretsStore = {
+  version: number;
+  profiles: Record<string, AuthProfileCredential>;
+};
+
+export type AuthProfileStateStore = {
+  version: number;
+} & AuthProfileState;
+
+export type AuthProfileStore = AuthProfileSecretsStore & AuthProfileState;
 
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;

@@ -18,10 +18,12 @@ import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   createOllamaEmbeddingProvider,
 } from "./src/embedding-provider.js";
+import { ollamaMemoryEmbeddingProviderAdapter } from "./src/memory-embedding-adapter.js";
 import { resolveOllamaApiBase } from "./src/provider-models.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
+  resolveConfiguredOllamaProviderConfig,
 } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
@@ -57,6 +59,7 @@ export default definePluginEntry({
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
+    api.registerMemoryEmbeddingProvider(ollamaMemoryEmbeddingProviderAdapter);
     const pluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
     api.registerWebSearchProvider(createOllamaWebSearchProvider());
     api.registerProvider({
@@ -181,10 +184,11 @@ export default definePluginEntry({
         }
         await ensureOllamaModelPulled({ config, model, prompter });
       },
-      createStreamFn: ({ config, model }) => {
+      createStreamFn: ({ config, model, provider }) => {
         return createConfiguredOllamaStreamFn({
           model,
-          providerBaseUrl: config?.models?.providers?.ollama?.baseUrl,
+          providerBaseUrl: resolveConfiguredOllamaProviderConfig({ config, providerId: provider })
+            ?.baseUrl,
         });
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,

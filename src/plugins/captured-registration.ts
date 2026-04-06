@@ -1,11 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { buildPluginApi } from "./api-builder.js";
+import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
   CliBackendPlugin,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MusicGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
@@ -35,8 +37,10 @@ export type CapturedPluginRegistration = {
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
   videoGenerationProviders: VideoGenerationProviderPlugin[];
+  musicGenerationProviders: MusicGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
+  memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   tools: AnyAgentTool[];
 };
 
@@ -53,8 +57,10 @@ export function createCapturedPluginRegistration(params?: {
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
+  const musicGenerationProviders: MusicGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
+  const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const tools: AnyAgentTool[] = [];
   const noopLogger = {
     info() {},
@@ -73,8 +79,10 @@ export function createCapturedPluginRegistration(params?: {
     mediaUnderstandingProviders,
     imageGenerationProviders,
     videoGenerationProviders,
+    musicGenerationProviders,
     webFetchProviders,
     webSearchProviders,
+    memoryEmbeddingProviders,
     tools,
     api: buildPluginApi({
       id: "captured-plugin-registration",
@@ -133,11 +141,17 @@ export function createCapturedPluginRegistration(params?: {
         registerVideoGenerationProvider(provider: VideoGenerationProviderPlugin) {
           videoGenerationProviders.push(provider);
         },
+        registerMusicGenerationProvider(provider: MusicGenerationProviderPlugin) {
+          musicGenerationProviders.push(provider);
+        },
         registerWebFetchProvider(provider: WebFetchProviderPlugin) {
           webFetchProviders.push(provider);
         },
         registerWebSearchProvider(provider: WebSearchProviderPlugin) {
           webSearchProviders.push(provider);
+        },
+        registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
+          memoryEmbeddingProviders.push(adapter);
         },
         registerTool(tool) {
           if (typeof tool !== "function") {

@@ -2,11 +2,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 
 describe("anthropic-vertex implicit provider", () => {
-  it("offers Claude models when GOOGLE_CLOUD_PROJECT_ID is set", async () => {
+  it("does not auto-enable from GOOGLE_CLOUD_PROJECT_ID alone", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
     const providers = await resolveImplicitProvidersForTest({
       agentDir,
@@ -141,40 +140,29 @@ describe("anthropic-vertex implicit provider", () => {
 
   it("merges the bundled catalog into explicit anthropic-vertex provider overrides", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    const adcDir = mkdtempSync(join(tmpdir(), "openclaw-adc-"));
-    const credentialsPath = join(adcDir, "application_default_credentials.json");
-    writeFileSync(credentialsPath, JSON.stringify({ project_id: "vertex-project" }), "utf8");
-
-    try {
-      const providers = await resolveImplicitProvidersForTest({
-        agentDir,
-        env: {
-          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
-          GOOGLE_CLOUD_LOCATION: "us-east5",
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+        GOOGLE_CLOUD_LOCATION: "us-east5",
+      },
+      explicitProviders: {
+        "anthropic-vertex": {
+          baseUrl: "https://europe-west4-aiplatform.googleapis.com",
+          headers: { "x-test-header": "1" },
+          models: [],
         },
-        config: {
-          models: {
-            providers: {
-              "anthropic-vertex": {
-                baseUrl: "https://europe-west4-aiplatform.googleapis.com",
-                headers: { "x-test-header": "1" },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-      });
+      },
+    });
 
-      expect(providers?.["anthropic-vertex"]?.baseUrl).toBe(
-        "https://europe-west4-aiplatform.googleapis.com",
-      );
-      expect(providers?.["anthropic-vertex"]?.headers).toEqual({ "x-test-header": "1" });
-      expect(providers?.["anthropic-vertex"]?.models?.map((model) => model.id)).toEqual([
-        "claude-opus-4-6",
-        "claude-sonnet-4-6",
-      ]);
-    } finally {
-      rmSync(adcDir, { recursive: true, force: true });
-    }
+    expect(providers?.["anthropic-vertex"]?.baseUrl).toBe(
+      "https://europe-west4-aiplatform.googleapis.com",
+    );
+    expect(providers?.["anthropic-vertex"]?.headers).toEqual({ "x-test-header": "1" });
+    expect(providers?.["anthropic-vertex"]?.models?.map((model) => model.id)).toEqual([
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+    ]);
   });
 
   it("does not accept generic Kubernetes env without a GCP ADC signal", async () => {

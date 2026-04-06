@@ -103,6 +103,7 @@ function setBundledCapabilityFixture(contractKey: string) {
 
 function expectCompatChainApplied(params: {
   key:
+    | "memoryEmbeddingProviders"
     | "speechProviders"
     | "realtimeTranscriptionProviders"
     | "realtimeVoiceProviders"
@@ -205,6 +206,7 @@ describe("resolvePluginCapabilityProviders", () => {
   });
 
   it.each([
+    ["memoryEmbeddingProviders", "memoryEmbeddingProviders"],
     ["speechProviders", "speechProviders"],
     ["realtimeTranscriptionProviders", "realtimeTranscriptionProviders"],
     ["realtimeVoiceProviders", "realtimeVoiceProviders"],

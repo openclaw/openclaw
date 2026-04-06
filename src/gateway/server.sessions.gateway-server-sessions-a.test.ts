@@ -182,16 +182,6 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../../extensions/browser/runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../../extensions/browser/runtime-api.js")>(
-    "../../extensions/browser/runtime-api.js",
-  );
-  return {
-    ...actual,
-    closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
-  };
-});
-
 vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: browserSessionTabMocks.closeTrackedBrowserTabsForSessions,
   movePathToTrash: vi.fn(async () => {}),

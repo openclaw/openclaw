@@ -2,7 +2,7 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -270,6 +271,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         channel: "discord",
         to: "channel:thread-1",
         accountId: "work",
+      }),
+    );
+  });
+
+  it("routes ACP replies when cfg.channels is missing", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: {} as OpenClawConfig,
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:thread-1",
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(deliveryMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:thread-1",
+        accountId: undefined,
       }),
     );
   });

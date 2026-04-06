@@ -179,7 +179,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         { command: "generate", description: "Create an image" },
       ],
       historyLimit: 50,
-      replyToMode: "first", // off | first | all
+      replyToMode: "first", // off | first | all | batched
       linkPreview: true,
       streaming: "partial", // off | partial | block | progress (default: off; opt in explicitly to avoid preview-edit rate limits)
       actions: { reactions: true, sendMessage: true },
@@ -220,7 +220,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
     discord: {
       enabled: true,
       token: "your-bot-token",
-      mediaMaxMb: 8,
+      mediaMaxMb: 100,
       allowBots: false,
       actions: {
         reactions: true,
@@ -239,7 +239,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         events: true,
         moderation: false,
       },
-      replyToMode: "off", // off | first | all
+      replyToMode: "off", // off | first | all | batched
       dmPolicy: "pairing",
       allowFrom: ["1234567890", "123456789012345678"],
       dm: { enabled: true, groupEnabled: false, groupChannels: ["openclaw-dm"] },
@@ -405,7 +405,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       allowBots: false,
       reactionNotifications: "own",
       reactionAllowlist: ["U123"],
-      replyToMode: "off", // off | first | all
+      replyToMode: "off", // off | first | all | batched
       thread: {
         historyScope: "thread", // thread | channel
         inheritParent: false,
@@ -655,6 +655,7 @@ Matrix is extension-backed and configured under `channels.matrix`.
   - `sessionFilter`: optional session key patterns (substring or regex).
   - `target`: where to send approval prompts. `"dm"` (default), `"channel"` (originating room), or `"both"`.
   - Per-account overrides: `channels.matrix.accounts.<id>.execApprovals`.
+- `channels.matrix.dm.sessionScope` controls how Matrix DMs group into sessions: `per-user` (default) shares by routed peer, while `per-room` isolates each DM room.
 - Matrix status probes and live directory lookups use the same proxy policy as runtime traffic.
 - Full Matrix configuration, targeting rules, and setup examples are documented in [Matrix](/channels/matrix).
 
@@ -900,6 +901,18 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 }
 ```
 
+### `agents.defaults.contextInjection`
+
+Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
+
+- `"continuation-skip"`: safe continuation turns (after a completed assistant response) skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs and post-compaction retries still rebuild context.
+
+```json5
+{
+  agents: { defaults: { contextInjection: "continuation-skip" } },
+}
+```
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.
@@ -1025,10 +1038,15 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
   - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
   - If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order.
+- `musicGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - Used by the shared music-generation capability and the built-in `music_generate` tool.
+  - Typical values: `google/lyria-3-clip-preview`, `google/lyria-3-pro-preview`, or `minimax/music-2.5+`.
+  - If omitted, `music_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered music-generation providers in provider-id order.
+  - If you select a provider/model directly, configure the matching provider auth/API key too.
 - `videoGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
-  - Used by the shared video-generation capability.
+  - Used by the shared video-generation capability and the built-in `video_generate` tool.
   - Typical values: `qwen/wan2.6-t2v`, `qwen/wan2.6-i2v`, `qwen/wan2.6-r2v`, `qwen/wan2.6-r2v-flash`, or `qwen/wan2.7-r2v`.
-  - Set this explicitly before using shared video generation. Unlike `imageGenerationModel`, the video-generation runtime does not infer a provider default yet.
+  - If omitted, `video_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered video-generation providers in provider-id order.
   - If you select a provider/model directly, configure the matching provider auth/API key too.
   - The bundled Qwen video-generation provider currently supports up to 1 output video, 1 input image, 4 input videos, 10 seconds duration, and provider-level `size`, `aspectRatio`, `resolution`, `audio`, and `watermark` options.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
@@ -1073,8 +1091,8 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
   agents: {
     defaults: {
       cliBackends: {
-        "claude-cli": {
-          command: "/opt/homebrew/bin/claude",
+        "codex-cli": {
+          command: "/opt/homebrew/bin/codex",
         },
         "my-cli": {
           command: "my-cli",
@@ -1936,12 +1954,12 @@ Defaults for Talk mode (macOS/iOS/Android).
 
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 
-| Profile     | Includes                                                                                                      |
-| ----------- | ------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                                         |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate` |
-| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                     |
-| `full`      | No restriction (same as unset)                                                                                |
+| Profile     | Includes                                                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status` only                                                                                                           |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `video_generate` |
+| `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                       |
+| `full`      | No restriction (same as unset)                                                                                                  |
 
 ### Tool groups
 
@@ -1957,7 +1975,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:messaging`  | `message`                                                                                                               |
 | `group:nodes`      | `nodes`                                                                                                                 |
 | `group:agents`     | `agents_list`                                                                                                           |
-| `group:media`      | `image`, `image_generate`, `tts`                                                                                        |
+| `group:media`      | `image`, `image_generate`, `video_generate`, `tts`                                                                      |
 | `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
 
 ### `tools.allow` / `tools.deny`
@@ -2100,6 +2118,9 @@ Configures inbound media understanding (image/audio/video):
   tools: {
     media: {
       concurrency: 2,
+      asyncCompletion: {
+        directSend: false, // opt-in: send finished async music/video directly to the channel
+      },
       audio: {
         enabled: true,
         maxBytes: 20971520,
@@ -2142,6 +2163,12 @@ Configures inbound media understanding (image/audio/video):
 - Failures fall back to the next entry.
 
 Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
+
+**Async completion fields:**
+
+- `asyncCompletion.directSend`: when `true`, completed async `music_generate`
+  and `video_generate` tasks try direct channel delivery first. Default: `false`
+  (legacy requester-session wake/model-delivery path).
 
 </Accordion>
 
@@ -2211,6 +2238,26 @@ Notes:
 - Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
 - File permissions are `0700` for directories and `0600` for files.
 - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+
+### `tools.experimental`
+
+Experimental built-in tool flags. Default off unless a runtime-specific auto-enable rule applies.
+
+```json5
+{
+  tools: {
+    experimental: {
+      planTool: true, // enable experimental update_plan
+    },
+  },
+}
+```
+
+Notes:
+
+- `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
+- Default: `false` for non-OpenAI providers. OpenAI and OpenAI Codex runs auto-enable it.
+- When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
 
 ### `agents.defaults.subagents`
 
@@ -2621,14 +2668,10 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
 - `plugins.entries.xai.config.xSearch`: xAI X Search (Grok web search) settings.
   - `enabled`: enable the X Search provider.
   - `model`: Grok model to use for search (e.g. `"grok-4-1-fast"`).
-- `plugins.entries.memory-core.config.dreaming`: memory dreaming (experimental) settings. See [Dreaming](/concepts/memory-dreaming) for modes and thresholds.
-  - `mode`: dreaming cadence preset (`"off"`, `"core"`, `"rem"`, `"deep"`). Default: `"off"`.
-  - `cron`: optional cron expression override for the dreaming schedule.
-  - `timezone`: timezone for schedule evaluation (falls back to `agents.defaults.userTimezone`).
-  - `limit`: maximum candidates to promote per cycle.
-  - `minScore`: minimum weighted score threshold for promotion.
-  - `minRecallCount`: minimum recall count threshold.
-  - `minUniqueQueries`: minimum distinct query count threshold.
+- `plugins.entries.memory-core.config.dreaming`: memory dreaming (experimental) settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
+  - `enabled`: master dreaming switch (default `false`).
+  - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
+  - phase policy and thresholds are implementation details (not user-facing config keys).
 - Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
 - `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.

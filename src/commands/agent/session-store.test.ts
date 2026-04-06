@@ -126,7 +126,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     );
   });
 
-  it("stores and reloads CLI bindings for explicit session-id-only runs", async () => {
+  it("stores and reloads the runtime model for explicit session-id-only runs", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
     const storePath = path.join(dir, "sessions.json");
     const cfg = {

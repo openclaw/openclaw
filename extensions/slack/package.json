@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/slack",
-  "version": "2026.4.4",
+  "version": "2026.4.5",
   "private": true,
   "description": "OpenClaw Slack channel plugin",
   "type": "module",
@@ -22,7 +22,11 @@
       "docsLabel": "slack",
       "blurb": "supported (Socket Mode).",
       "systemImage": "number",
-      "markdownCapable": true
+      "markdownCapable": true,
+      "configuredState": {
+        "specifier": "./configured-state",
+        "exportName": "hasSlackConfiguredState"
+      }
     },
     "bundle": {
       "stageRuntimeDependencies": true
