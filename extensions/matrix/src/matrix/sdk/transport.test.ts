@@ -1,13 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { performMatrixRequest } from "./transport.js";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
+function clearTestUndiciRuntimeDepsOverride(): void {
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+}
+
 describe("performMatrixRequest", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
-    Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  afterEach(() => {
+    clearTestUndiciRuntimeDepsOverride();
   });
 
   it("rejects oversized raw responses before buffering the whole body", async () => {
