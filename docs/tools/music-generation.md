@@ -1,5 +1,5 @@
 ---
-summary: "Generate music with shared providers or plugin-provided workflows"
+summary: "Generate music with shared providers, including workflow-backed plugins"
 read_when:
   - Generating music or audio via the agent
   - Configuring music generation providers and models
@@ -9,10 +9,9 @@ title: "Music Generation"
 
 # Music Generation
 
-The `music_generate` tool lets the agent create music or audio through either:
-
-- the shared music-generation capability with configured providers such as Google and MiniMax
-- plugin-provided tool surfaces such as a workflow-configured ComfyUI graph
+The `music_generate` tool lets the agent create music or audio through the
+shared music-generation capability with configured providers such as Google,
+MiniMax, and workflow-configured ComfyUI.
 
 For shared provider-backed agent sessions, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again when
@@ -21,10 +20,6 @@ original channel.
 
 <Note>
 The built-in shared tool only appears when at least one music-generation provider is available. If you don't see `music_generate` in your agent's tools, configure `agents.defaults.musicGenerationModel` or set up a provider API key.
-</Note>
-
-<Note>
-Plugin-provided `music_generate` implementations can expose different parameters or runtime behavior. The async task/status flow below applies to the built-in shared provider-backed path.
 </Note>
 
 ## Quick start
@@ -66,10 +61,10 @@ Generate a cinematic piano track with soft strings and no vocals.
 Generate an energetic chiptune loop about launching a rocket at sunrise.
 ```
 
-### Workflow-driven plugin generation
+### Workflow-driven Comfy generation
 
-The bundled `comfy` plugin can also provide `music_generate` using a
-workflow-configured ComfyUI graph.
+The bundled `comfy` plugin plugs into the shared `music_generate` tool through
+the music-generation provider registry.
 
 1. Configure `models.providers.comfy.music` with a workflow JSON and
    prompt/output nodes.
@@ -84,16 +79,11 @@ Example:
 
 ## Shared bundled provider support
 
-| Provider | Default model          | Reference inputs | Supported controls                                        | API key                            |
-| -------- | ---------------------- | ---------------- | --------------------------------------------------------- | ---------------------------------- |
-| Google   | `lyria-3-clip-preview` | Up to 10 images  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY` |
-| MiniMax  | `music-2.5+`           | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY`                  |
-
-## Plugin-provided support
-
-| Provider | Model      | Notes                           |
-| -------- | ---------- | ------------------------------- |
-| ComfyUI  | `workflow` | Workflow-defined music or audio |
+| Provider | Default model          | Reference inputs | Supported controls                                        | API key                                |
+| -------- | ---------------------- | ---------------- | --------------------------------------------------------- | -------------------------------------- |
+| ComfyUI  | `workflow`             | Up to 1 image    | Workflow-defined music or audio                           | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
+| Google   | `lyria-3-clip-preview` | Up to 10 images  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
+| MiniMax  | `music-2.5+`           | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY`                      |
 
 Use `action: "list"` to inspect available shared providers and models at
 runtime:
@@ -129,8 +119,8 @@ Direct generation example:
 | `format`          | string   | Output format hint (`mp3` or `wav`) when the provider supports it                                 |
 | `filename`        | string   | Output filename hint                                                                              |
 
-Not all providers or plugins support all parameters. The shared built-in tool
-validates provider capability limits before it submits the request.
+Not all providers support all parameters. The shared tool validates provider
+capability limits before it submits the request.
 
 ## Async behavior for the shared provider-backed path
 
