@@ -92,6 +92,55 @@ export function resolveServerChatModelValue(
   return buildQualifiedChatModelValue(model, provider);
 }
 
+function resolveCatalogValueById(
+  model: string,
+  provider: string | null | undefined,
+  catalog: ModelCatalogEntry[],
+): ChatModelResolution | null {
+  const trimmedModel = model.trim();
+  const trimmedProvider = provider?.trim();
+  if (!trimmedModel) {
+    return null;
+  }
+
+  let providerMatch = "";
+  let uniqueMatch = "";
+  let matchCount = 0;
+  for (const entry of catalog) {
+    const entryId = entry.id.trim();
+    if (entryId.toLowerCase() !== trimmedModel.toLowerCase()) {
+      continue;
+    }
+    matchCount += 1;
+    const candidate = buildQualifiedChatModelValue(entryId, entry.provider);
+    if (trimmedProvider && entry.provider?.trim().toLowerCase() === trimmedProvider.toLowerCase()) {
+      providerMatch = candidate;
+    }
+    if (!uniqueMatch) {
+      uniqueMatch = candidate;
+      continue;
+    }
+    if (uniqueMatch.toLowerCase() !== candidate.toLowerCase()) {
+      uniqueMatch = "";
+    }
+  }
+
+  if (providerMatch) {
+    if (matchCount > 1) {
+      return {
+        value: buildQualifiedChatModelValue(trimmedModel, trimmedProvider),
+        source: "server",
+        reason: "ambiguous",
+      };
+    }
+    return { value: providerMatch, source: "catalog" };
+  }
+  if (uniqueMatch) {
+    return { value: uniqueMatch, source: "catalog" };
+  }
+  return null;
+}
+
 export function resolvePreferredServerChatModel(
   model: string | null | undefined,
   provider: string | null | undefined,
@@ -103,6 +152,19 @@ export function resolvePreferredServerChatModel(
   const trimmedModel = model.trim();
   if (!trimmedModel) {
     return { value: "", source: "empty", reason: "empty" };
+  }
+
+  const trimmedProvider = provider?.trim();
+  if (
+    trimmedProvider &&
+    trimmedModel.toLowerCase().startsWith(`${trimmedProvider.toLowerCase()}/`)
+  ) {
+    return { value: trimmedModel, source: "qualified" };
+  }
+
+  const catalogResolution = resolveCatalogValueById(trimmedModel, trimmedProvider, catalog);
+  if (catalogResolution) {
+    return catalogResolution;
   }
 
   const overrideResolution = resolveChatModelOverride(

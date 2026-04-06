@@ -81,6 +81,49 @@ describe("chat-model-ref helpers", () => {
     });
   });
 
+  it("qualifies provider-scoped model ids whose raw ids also contain slashes", () => {
+    expect(
+      resolvePreferredServerChatModel("anthropic/claude-sonnet-4-6", "openrouter", [
+        {
+          id: "anthropic/claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
+          provider: "openrouter",
+        },
+      ]),
+    ).toEqual({
+      value: "openrouter/anthropic/claude-sonnet-4-6",
+      source: "catalog",
+    });
+  });
+
+  it("uses a unique catalog match when the server provider is generic", () => {
+    expect(
+      resolvePreferredServerChatModel("gpt-5.4", "openai", [
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          provider: "openai-codex",
+        },
+      ]),
+    ).toEqual({
+      value: "openai-codex/gpt-5.4",
+      source: "catalog",
+    });
+  });
+
+  it("keeps already-qualified server values unchanged", () => {
+    expect(
+      resolvePreferredServerChatModel(
+        "openrouter/anthropic/claude-opus-4-6",
+        "openrouter",
+        catalog,
+      ),
+    ).toEqual({
+      value: "openrouter/anthropic/claude-opus-4-6",
+      source: "qualified",
+    });
+  });
+
   it("falls back to the server provider when the catalog misses or is ambiguous", () => {
     expect(resolvePreferredServerChatModel("gpt-5-mini", "openai", [])).toEqual({
       value: "openai/gpt-5-mini",
