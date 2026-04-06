@@ -21,6 +21,8 @@ type MockWsClient = {
   start: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   getReconnectInfo: ReturnType<typeof vi.fn>;
+  /** Mocks the private wsConfig.getWSInstance() path used by the stall-clock clear logic */
+  wsConfig?: { getWSInstance: ReturnType<typeof vi.fn> };
 };
 
 function createAccount(accountId: string): ResolvedFeishuAccount {
@@ -314,6 +316,121 @@ describe("feishu websocket cleanup", () => {
     // supervisorAttempt was reset to 0 because onConfirmedConnect fired.
     // computeBackoff should have been called with attempt = 0.
     expect(computeBackoffMock).toHaveBeenCalledWith(expect.anything(), 0);
+
+    abortController.abort();
+    await vi.runAllTimersAsync();
+    await monitorPromise;
+
+    vi.useRealTimers();
+  });
+
+  it("clears stall clock after successful reconnect — no false eviction (P1 regression)", async () => {
+    // Scenario: initial connect → reconnect attempt (stall clock starts) →
+    // reconnect succeeds (WS readyState OPEN + lastConnectTime stable for ≥2 ticks)
+    // → connection stays healthy for 90+ s. The supervisor must NOT restart.
+    vi.useFakeTimers();
+
+    const accountId = "alpha";
+
+    let connectTime = 0;
+    const mockWsInstance = { readyState: 1 /* WebSocket.OPEN */ };
+    const wsClient: MockWsClient = {
+      start: vi.fn(),
+      close: vi.fn(),
+      getReconnectInfo: vi.fn(() => ({ lastConnectTime: connectTime })),
+      wsConfig: { getWSInstance: vi.fn(() => mockWsInstance) },
+    };
+
+    const abortController = new AbortController();
+    createFeishuWSClientMock.mockReturnValue(wsClient);
+
+    const monitorPromise = monitorWebSocket({
+      account: createAccount(accountId),
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    // Tick 0: lastConnectTime = 0, no-op.
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    // Initial connect.
+    connectTime = 1000;
+    await vi.advanceTimersByTimeAsync(10_000); // connectChangeCount = 1, stable = 0
+
+    // Reconnect attempt — starts stall clock.
+    connectTime = 2000;
+    await vi.advanceTimersByTimeAsync(10_000); // connectChangeCount = 2, stable = 0, staleSinceMs set
+
+    // Reconnect succeeded (readyState OPEN): lastConnectTime stabilizes for 2 ticks.
+    await vi.advanceTimersByTimeAsync(10_000); // stable = 1
+    await vi.advanceTimersByTimeAsync(10_000); // stable = 2 → readyState OPEN → staleSinceMs cleared
+
+    // Now let 90+ s pass with a healthy connection. No supervisor restart should occur.
+    await vi.advanceTimersByTimeAsync(100_000);
+
+    // wsClient.close should not have been called (no supervisor restart).
+    expect(wsClient.close).not.toHaveBeenCalled();
+    // createFeishuWSClient should have been called exactly once.
+    expect(createFeishuWSClientMock).toHaveBeenCalledTimes(1);
+
+    abortController.abort();
+    await vi.runAllTimersAsync();
+    await monitorPromise;
+
+    vi.useRealTimers();
+  });
+
+  it("stall fires when reconnect socket is not OPEN (exhausted retries)", async () => {
+    // Scenario: reconnect attempt → lastConnectTime stabilizes → WS readyState
+    // is CLOSED (retries exhausted, not recovered) → stall fires normally.
+    vi.useFakeTimers();
+
+    const accountId = "alpha";
+
+    let connectTime = 0;
+    const mockWsInstance = { readyState: 3 /* WebSocket.CLOSED */ };
+    const firstClient: MockWsClient = {
+      start: vi.fn(),
+      close: vi.fn(),
+      getReconnectInfo: vi.fn(() => ({ lastConnectTime: connectTime })),
+      wsConfig: { getWSInstance: vi.fn(() => mockWsInstance) },
+    };
+    const abortController = new AbortController();
+    const secondClient = createWsClient();
+    secondClient.getReconnectInfo.mockReturnValue({ lastConnectTime: 0 });
+
+    createFeishuWSClientMock.mockReturnValueOnce(firstClient).mockReturnValueOnce(secondClient);
+
+    const monitorPromise = monitorWebSocket({
+      account: createAccount(accountId),
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    });
+
+    // Tick 0: lastConnectTime = 0, no-op.
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    // Initial connect.
+    connectTime = 1000;
+    await vi.advanceTimersByTimeAsync(10_000); // connectChangeCount = 1
+
+    // Reconnect attempt — starts stall clock.
+    connectTime = 2000;
+    await vi.advanceTimersByTimeAsync(10_000); // staleSinceMs set
+
+    // Stable ticks with CLOSED socket → stall clock NOT cleared.
+    await vi.advanceTimersByTimeAsync(10_000); // stable = 1
+    await vi.advanceTimersByTimeAsync(10_000); // stable = 2 → readyState CLOSED → no clear
+
+    // Advance 90 s to trip the stall (stable = 2 for 90 more s).
+    await vi.advanceTimersByTimeAsync(90_000);
+
+    // Stall should have fired — supervisor started second cycle.
+    expect(wsClients.get(accountId)).toBe(secondClient);
 
     abortController.abort();
     await vi.runAllTimersAsync();
