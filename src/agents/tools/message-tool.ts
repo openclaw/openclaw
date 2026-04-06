@@ -554,25 +554,35 @@ function resolveAgentAccountId(value?: string): string | undefined {
 
 /**
  * Returns true if the given channel uses threadId for the read action,
- * false if it uses messageId (or has no read support).
+ * false if it uses messageId (or has no explicit metadata).
  * This is used to decide whether to add threadId-based hint in the tool description.
+ *
+ * Slack uses threadId for read but doesn't declare it in messageActionTargetAliases,
+ * so we special-case it here. Feishu and MSTeams use messageId and are correctly
+ * identified via messageActionTargetAliases.
  */
+const KNOWN_THREAD_ID_CHANNELS = new Set(["slack", "discord"]);
+
 function channelUsesThreadIdForRead(channel: string): boolean {
   const plugin = getChannelPlugin(channel);
   if (!plugin) {
     return false;
   }
   const aliases = plugin.actions?.messageActionTargetAliases?.read?.aliases;
-  // If aliases include threadId, the channel uses threadId for read
-  if (aliases?.includes("threadId")) {
-    return true;
-  }
-  // If aliases include messageId, the channel uses messageId for read (e.g. Feishu)
+  // If aliases explicitly include messageId, channel uses messageId (e.g. Feishu)
   if (aliases?.includes("messageId")) {
     return false;
   }
-  // Default: assume threadId-based if no aliases defined (e.g. Slack)
-  return true;
+  // If aliases explicitly include threadId, channel uses threadId
+  if (aliases?.includes("threadId")) {
+    return true;
+  }
+  // Fallback: check known threadId-based channels that lack explicit metadata
+  if (KNOWN_THREAD_ID_CHANNELS.has(channel)) {
+    return true;
+  }
+  // Unknown channels: don't add hint to avoid misleading agents
+  return false;
 }
 
 function buildMessageToolDescription(options?: {
