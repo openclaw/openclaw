@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, test } from "vitest";
-import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  appendExactAssistantMessageToSessionTranscript,
+} from "../config/sessions/transcript.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -85,25 +86,23 @@ function makeTranscriptAssistantMessage(params: {
   };
 }
 
-function appendTranscriptMessage(params: {
-  sessionFile: string;
+async function appendTranscriptMessage(params: {
   sessionKey: string;
   message: ReturnType<typeof makeTranscriptAssistantMessage>;
   emitInlineMessage?: boolean;
-}): string {
-  const sessionManager = SessionManager.open(params.sessionFile);
-  const messageId = sessionManager.appendMessage(params.message);
-  emitSessionTranscriptUpdate(
-    params.emitInlineMessage === false
-      ? params.sessionFile
-      : {
-          sessionFile: params.sessionFile,
-          sessionKey: params.sessionKey,
-          message: params.message,
-          messageId,
-        },
-  );
-  return messageId;
+  storePath?: string;
+}): Promise<string> {
+  const appended = await appendExactAssistantMessageToSessionTranscript({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath ?? testState.sessionStorePath,
+    updateMode: params.emitInlineMessage === false ? "file-only" : "inline",
+    message: params.message,
+  });
+  expect(appended.ok).toBe(true);
+  if (!appended.ok) {
+    throw new Error(`append failed: ${appended.reason}`);
+  }
+  return appended.messageId;
 }
 
 async function fetchSessionHistory(
@@ -404,9 +403,9 @@ describe("session history HTTP endpoints", () => {
       if (!hidden.ok) {
         throw new Error(`append failed: ${hidden.reason}`);
       }
-      const visibleMessageId = appendTranscriptMessage({
-        sessionFile: hidden.sessionFile,
+      const visibleMessageId = await appendTranscriptMessage({
         sessionKey: "agent:main:main",
+        storePath,
         message: makeTranscriptAssistantMessage({
           text: "Done.",
           content: [
@@ -582,9 +581,9 @@ describe("session history HTTP endpoints", () => {
       if (!second.ok) {
         throw new Error(`append failed: ${second.reason}`);
       }
-      appendTranscriptMessage({
-        sessionFile: second.sessionFile,
+      await appendTranscriptMessage({
         sessionKey: "agent:main:main",
+        storePath,
         message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
         emitInlineMessage: false,
       });
