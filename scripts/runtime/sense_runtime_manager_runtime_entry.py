@@ -266,6 +266,31 @@ def normalize_error_detail_code(
     return 'NONE'
 
 
+def normalize_error_source_layer(
+    runtime_entry_state: str,
+    error_text: str | None,
+    dispatch_result: dict | None,
+) -> str:
+    dispatch_payload = (dispatch_result or {}).get('dispatch_result') if isinstance(dispatch_result, dict) else None
+    if isinstance(dispatch_payload, dict):
+        nested_source = dispatch_payload.get('error_source_layer')
+        if isinstance(nested_source, str) and nested_source.strip() and nested_source != 'NONE':
+            return nested_source
+
+    lowered = str(error_text or '').lower()
+    if 'sense_runtime_bridge.py' in lowered or 'submit failed' in lowered or 'status=401' in lowered or 'unauthorized' in lowered:
+        return 'RUNTIME_BRIDGE'
+    if runtime_entry_state == 'stopped':
+        return 'EXECUTOR'
+    if runtime_entry_state == 'failed':
+        if isinstance(dispatch_result, dict) and (
+            dispatch_result.get('dispatch_mode') is not None or dispatch_result.get('error')
+        ):
+            return 'DISPATCH'
+        return 'ENTRY'
+    return 'NONE'
+
+
 def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
     entry_status = 'completed' if isinstance(entry_result, dict) else None
     bridge_status = None
@@ -386,6 +411,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_path_codes': manager_handoff.get('path_codes', []),
         'last_error_code': manager_handoff.get('error_code'),
         'last_error_detail_code': manager_handoff.get('error_detail_code'),
+        'last_error_source_layer': manager_handoff.get('error_source_layer'),
     }
 
 
@@ -465,6 +491,7 @@ def main() -> int:
             'path_codes': build_path_codes(path_tags),
             'error_code': normalize_error_code(runtime_entry_state, None),
             'error_detail_code': normalize_error_detail_code(runtime_entry_state, None, dispatch_result),
+            'error_source_layer': normalize_error_source_layer(runtime_entry_state, None, dispatch_result),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
@@ -518,6 +545,7 @@ def main() -> int:
             'path_codes': build_path_codes(path_tags),
             'error_code': normalize_error_code(runtime_entry_state, error_text),
             'error_detail_code': normalize_error_detail_code(runtime_entry_state, error_text, dispatch_result),
+            'error_source_layer': normalize_error_source_layer(runtime_entry_state, error_text, dispatch_result),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),

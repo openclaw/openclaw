@@ -120,9 +120,28 @@ def normalize_executor_error_detail_code(output: dict) -> str:
     return 'NONE'
 
 
+def normalize_executor_error_source_layer(output: dict) -> str:
+    error_code = str(output.get('error_code') or '')
+    error_detail_code = str(output.get('error_detail_code') or '')
+    if error_code == 'NONE':
+        return 'NONE'
+    if error_code == 'EXECUTOR_STOPPED':
+        return 'EXECUTOR'
+    if error_detail_code in {
+        'AUTH_401',
+        'AUTH_TOKEN_MISSING',
+        'TIMEOUT_EXECUTOR',
+        'SUBMIT_HTTP_4XX',
+        'SUBMIT_HTTP_5XX',
+    }:
+        return 'RUNTIME_BRIDGE'
+    return 'EXECUTOR'
+
+
 def finalize_output(output: dict) -> dict:
     output['error_code'] = normalize_executor_error_code(output)
     output['error_detail_code'] = normalize_executor_error_detail_code(output)
+    output['error_source_layer'] = normalize_executor_error_source_layer(output)
     output['manager_handoff'] = build_manager_handoff(output)
     return output
 
@@ -577,6 +596,7 @@ def build_manager_handoff(report: dict) -> dict:
         'executor_state': report.get('executor_state'),
         'error_code': report.get('error_code'),
         'error_detail_code': report.get('error_detail_code'),
+        'error_source_layer': report.get('error_source_layer'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),

@@ -854,6 +854,8 @@ Additional top-level observability fields are also included:
   - normalized top-level code such as `NONE`, `UNAUTHORIZED`, `TIMEOUT`, `RUNTIME_SUBMIT_FAILED`, `EXECUTOR_STOPPED`, or `EXECUTOR_FAILED`
 - `error_detail_code`
   - finer-grained code such as `AUTH_401`, `AUTH_TOKEN_MISSING`, `TIMEOUT_ENTRY`, `TIMEOUT_EXECUTOR`, `SUBMIT_HTTP_4XX`, `SUBMIT_HTTP_5XX`, `EXECUTOR_STOP_CONFIDENCE_GATE`, or `EXECUTOR_STOP_MANUAL_REVIEW`
+- `error_source_layer`
+  - normalized failure source such as `ENTRY`, `DISPATCH`, `EXECUTOR`, `RUNTIME_BRIDGE`, or `NONE`
 - `summary_counters`
   - compact counters such as `warning_count`, `remaining_issue_count`, `secondary_action_count`, `followup_executed_count`, and `path_depth`
 - `entry_status`
@@ -867,7 +869,7 @@ Additional top-level observability fields are also included:
 
 These fields are for observability and aggregation only. They do not change runtime behavior.
 
-The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, and `error_detail_code` for lightweight aggregation.
+The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, while each layer gets its own `trace_span_id` plus parent span linkage for a lightweight trace tree. `manager_handoff` and `feedback_memory` also carry compact `path_codes`, `error_code`, `error_detail_code`, and `error_source_layer` for lightweight aggregation.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
