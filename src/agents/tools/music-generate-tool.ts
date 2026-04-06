@@ -592,6 +592,7 @@ export function createMusicGenerateTool(options?: {
             });
             try {
               await wakeMusicGenerationTaskCompletion({
+                config: effectiveCfg,
                 handle: taskHandle,
                 status: "ok",
                 statusLabel: "completed successfully",
@@ -611,6 +612,7 @@ export function createMusicGenerateTool(options?: {
               error,
             });
             await wakeMusicGenerationTaskCompletion({
+              config: effectiveCfg,
               handle: taskHandle,
               status: "error",
               statusLabel: "failed",

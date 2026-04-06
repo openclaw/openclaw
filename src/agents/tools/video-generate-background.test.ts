@@ -80,13 +80,42 @@ describe("video generate background helpers", () => {
     );
   });
 
-  it("delivers completed video directly to the requester channel", async () => {
+  it("queues a completion event by default when direct send is disabled", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: true,
+      path: "direct",
+    });
+
+    await wakeVideoGenerationTaskCompletion({
+      handle: {
+        taskId: "task-123",
+        runId: "tool:video_generate:abc",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:1",
+          threadId: "thread-1",
+        },
+        taskLabel: "friendly lobster surfing",
+      },
+      status: "ok",
+      statusLabel: "completed successfully",
+      result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
+      mediaUrls: ["/tmp/generated-lobster.mp4"],
+    });
+
+    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
+  });
+
+  it("delivers completed video directly to the requester channel when enabled", async () => {
     taskDeliveryRuntimeMocks.sendMessage.mockResolvedValue({
       channel: "discord",
       messageId: "msg-1",
     });
 
     await wakeVideoGenerationTaskCompletion({
+      config: { tools: { media: { asyncCompletion: { directSend: true } } } },
       handle: {
         taskId: "task-123",
         runId: "tool:video_generate:abc",
@@ -123,6 +152,7 @@ describe("video generate background helpers", () => {
     });
 
     await wakeVideoGenerationTaskCompletion({
+      config: { tools: { media: { asyncCompletion: { directSend: true } } } },
       handle: {
         taskId: "task-123",
         runId: "tool:video_generate:abc",
