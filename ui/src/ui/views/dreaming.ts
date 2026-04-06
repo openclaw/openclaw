@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
 
@@ -74,27 +75,27 @@ export type DreamingProps = {
   onRequestUpdate?: () => void;
 };
 
-const DREAM_PHRASES = [
-  "consolidating memories\u2026",
-  "tidying the knowledge graph\u2026",
-  "replaying today's conversations\u2026",
-  "weaving short-term into long-term\u2026",
-  "defragmenting the mind palace\u2026",
-  "filing away loose thoughts\u2026",
-  "connecting distant dots\u2026",
-  "composting old context windows\u2026",
-  "alphabetizing the subconscious\u2026",
-  "promoting promising hunches\u2026",
-  "forgetting what doesn't matter\u2026",
-  "dreaming in embeddings\u2026",
-  "reorganizing the memory attic\u2026",
-  "softly indexing the day\u2026",
-  "nurturing fledgling insights\u2026",
-  "simmering half-formed ideas\u2026",
-  "whispering to the vector store\u2026",
-];
+const DREAM_PHRASE_KEYS = [
+  "dreaming.phrases.consolidatingMemories",
+  "dreaming.phrases.tidyingKnowledgeGraph",
+  "dreaming.phrases.replayingConversations",
+  "dreaming.phrases.weavingShortTerm",
+  "dreaming.phrases.defragmentingMindPalace",
+  "dreaming.phrases.filingLooseThoughts",
+  "dreaming.phrases.connectingDots",
+  "dreaming.phrases.compostingContext",
+  "dreaming.phrases.alphabetizingSubconscious",
+  "dreaming.phrases.promotingHunches",
+  "dreaming.phrases.forgettingNoise",
+  "dreaming.phrases.dreamingEmbeddings",
+  "dreaming.phrases.reorganizingAttic",
+  "dreaming.phrases.indexingDay",
+  "dreaming.phrases.nurturingInsights",
+  "dreaming.phrases.simmeringIdeas",
+  "dreaming.phrases.whisperingVectorStore",
+] as const;
 
-let _dreamIndex = Math.floor(Math.random() * DREAM_PHRASES.length);
+let _dreamIndex = Math.floor(Math.random() * DREAM_PHRASE_KEYS.length);
 let _dreamLastSwap = 0;
 const DREAM_SWAP_MS = 6_000;
 
@@ -121,9 +122,9 @@ function currentDreamPhrase(): string {
   const now = Date.now();
   if (now - _dreamLastSwap > DREAM_SWAP_MS) {
     _dreamLastSwap = now;
-    _dreamIndex = (_dreamIndex + 1) % DREAM_PHRASES.length;
+    _dreamIndex = (_dreamIndex + 1) % DREAM_PHRASE_KEYS.length;
   }
-  return DREAM_PHRASES[_dreamIndex];
+  return t(DREAM_PHRASE_KEYS[_dreamIndex] ?? DREAM_PHRASE_KEYS[0]);
 }
 
 const STARS: {
@@ -198,7 +199,7 @@ export function renderDreaming(props: DreamingProps) {
             props.onRequestUpdate?.();
           }}
         >
-          Scene
+          ${t("dreaming.tabs.scene")}
         </button>
         <button
           class="dreams__tab ${_subTab === "diary" ? "dreams__tab--active" : ""}"
@@ -207,7 +208,7 @@ export function renderDreaming(props: DreamingProps) {
             props.onRequestUpdate?.();
           }}
         >
-          Diary
+          ${t("dreaming.tabs.diary")}
         </button>
       </nav>
 
@@ -263,13 +264,15 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
 
       <div class="dreams__status">
         <span class="dreams__status-label"
-          >${props.active ? "Dreaming Active" : "Dreaming Idle"}</span
+          >${props.active ? t("dreaming.status.active") : t("dreaming.status.idle")}</span
         >
         <div class="dreams__status-detail">
           <div class="dreams__status-dot"></div>
           <span>
-            ${props.promotedCount} promoted
-            ${props.nextCycle ? html`· next sweep ${props.nextCycle}` : nothing}
+            ${props.promotedCount} ${t("dreaming.status.promotedSuffix")}
+            ${props.nextCycle
+              ? html`· ${t("dreaming.status.nextSweepPrefix")} ${props.nextCycle}`
+              : nothing}
             ${props.timezone ? html`· ${props.timezone}` : nothing}
           </span>
         </div>
@@ -280,21 +283,21 @@ function renderScene(props: DreamingProps, idle: boolean, dreamText: string) {
           <span class="dreams__stat-value" style="color: var(--text-strong);"
             >${props.shortTermCount}</span
           >
-          <span class="dreams__stat-label">Short-term</span>
+          <span class="dreams__stat-label">${t("dreaming.stats.shortTerm")}</span>
         </div>
         <div class="dreams__stat-divider"></div>
         <div class="dreams__stat">
           <span class="dreams__stat-value" style="color: var(--accent);"
             >${props.totalSignalCount}</span
           >
-          <span class="dreams__stat-label">Signals</span>
+          <span class="dreams__stat-label">${t("dreaming.stats.signals")}</span>
         </div>
         <div class="dreams__stat-divider"></div>
         <div class="dreams__stat">
           <span class="dreams__stat-value" style="color: var(--accent-2);"
             >${props.phaseSignalCount}</span
           >
-          <span class="dreams__stat-label">Phase Hits</span>
+          <span class="dreams__stat-label">${t("dreaming.stats.phaseHits")}</span>
         </div>
       </div>
 
@@ -337,10 +340,8 @@ function renderDiarySection(props: DreamingProps) {
               />
             </svg>
           </div>
-          <div class="dreams-diary__empty-text">No dreams yet</div>
-          <div class="dreams-diary__empty-hint">
-            Dreams will appear here after the first dreaming cycle runs.
-          </div>
+          <div class="dreams-diary__empty-text">${t("dreaming.diary.noDreamsYet")}</div>
+          <div class="dreams-diary__empty-hint">${t("dreaming.diary.noDreamsHint")}</div>
         </div>
       </section>
     `;
@@ -353,10 +354,8 @@ function renderDiarySection(props: DreamingProps) {
     return html`
       <section class="dreams-diary">
         <div class="dreams-diary__empty">
-          <div class="dreams-diary__empty-text">The diary is waiting</div>
-          <div class="dreams-diary__empty-hint">
-            Narrative entries will appear after the next dreaming cycle.
-          </div>
+          <div class="dreams-diary__empty-text">${t("dreaming.diary.waitingTitle")}</div>
+          <div class="dreams-diary__empty-hint">${t("dreaming.diary.waitingHint")}</div>
         </div>
       </section>
     `;
@@ -373,7 +372,7 @@ function renderDiarySection(props: DreamingProps) {
   return html`
     <section class="dreams-diary">
       <div class="dreams-diary__header">
-        <span class="dreams-diary__title">Dream Diary</span>
+        <span class="dreams-diary__title">${t("dreaming.diary.title")}</span>
         <div class="dreams-diary__nav">
           <button
             class="dreams-diary__nav-btn"
@@ -382,7 +381,7 @@ function renderDiarySection(props: DreamingProps) {
               setDiaryPage(page + 1);
               props.onRequestUpdate?.();
             }}
-            title="Older"
+            title=${t("dreaming.diary.older")}
           >
             ‹
           </button>
@@ -394,7 +393,7 @@ function renderDiarySection(props: DreamingProps) {
               setDiaryPage(page - 1);
               props.onRequestUpdate?.();
             }}
-            title="Newer"
+            title=${t("dreaming.diary.newer")}
           >
             ›
           </button>
@@ -407,7 +406,7 @@ function renderDiarySection(props: DreamingProps) {
             props.onRefreshDiary();
           }}
         >
-          ${props.dreamDiaryLoading ? "\u2026" : "Reload"}
+          ${props.dreamDiaryLoading ? t("dreaming.diary.reloading") : t("dreaming.diary.reload")}
         </button>
       </div>
 
