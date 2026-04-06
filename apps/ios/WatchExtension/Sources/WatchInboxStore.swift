@@ -165,6 +165,7 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     var execApprovalReviewStatusText: String?
     var execApprovalReviewStatusAt: Date?
     private var lastExecApprovalSnapshotID: String?
+    private var hasCompletedExecApprovalSnapshotRefreshInSession = false
     private var lastDeliveryKey: String?
 
     init(defaults: UserDefaults = .standard) {
@@ -201,6 +202,11 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
             && self.actions.isEmpty
             && self.title == Self.defaultTitle
             && self.body == Self.defaultBody
+            && !self.hasCompletedExecApprovalSnapshotRefreshInSession
+    }
+
+    var hasCompletedExecApprovalSnapshotRefresh: Bool {
+        self.hasCompletedExecApprovalSnapshotRefreshInSession
     }
 
     var shouldShowExecApprovalReviewStatus: Bool {
@@ -312,6 +318,7 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
                 existingRecord: existingRecordsByID[approval.id])
         }
         self.lastExecApprovalSnapshotID = snapshotID
+        self.hasCompletedExecApprovalSnapshotRefreshInSession = true
         if let selectedExecApprovalID,
            !self.execApprovals.contains(where: { $0.id == selectedExecApprovalID })
         {
@@ -320,9 +327,7 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
             self.selectedExecApprovalID = self.sortedExecApprovals.first?.id
         }
         self.pruneExpiredExecApprovals(nowMs: Self.nowMs())
-        if !self.execApprovals.isEmpty {
-            self.markExecApprovalReviewLoaded()
-        }
+        self.markExecApprovalReviewLoaded()
         self.persistState()
     }
 

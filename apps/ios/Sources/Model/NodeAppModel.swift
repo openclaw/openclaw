@@ -3005,6 +3005,10 @@ extension NodeAppModel {
             await self.publishWatchExecApprovalPrompt(prompt, reason: "push_request")
             return true
         case .stale:
+            await ExecApprovalNotificationBridge.removeNotifications(
+                forApprovalID: normalizedApprovalID,
+                notificationCenter: self.notificationCenter)
+            self.clearPendingExecApprovalPromptIfMatches(normalizedApprovalID)
             await self.publishWatchExecApprovalExpired(
                 approvalId: normalizedApprovalID,
                 reason: .notFound)
