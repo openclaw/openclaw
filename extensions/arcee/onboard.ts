@@ -2,8 +2,12 @@ import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { buildArceeModelDefinition, ARCEE_BASE_URL, ARCEE_MODEL_CATALOG } from "./api.js";
-import { OPENROUTER_BASE_URL, toArceeOpenRouterModelId } from "./provider-catalog.js";
+import { ARCEE_BASE_URL } from "./api.js";
+import {
+  buildArceeCatalogModels,
+  buildArceeOpenRouterCatalogModels,
+  OPENROUTER_BASE_URL,
+} from "./provider-catalog.js";
 
 export const ARCEE_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
 export const ARCEE_OPENROUTER_DEFAULT_MODEL_REF = "arcee/trinity-large-thinking";
@@ -14,7 +18,7 @@ const arceePresetAppliers = createModelCatalogPresetAppliers({
     providerId: "arcee",
     api: "openai-completions",
     baseUrl: ARCEE_BASE_URL,
-    catalogModels: ARCEE_MODEL_CATALOG.map(buildArceeModelDefinition),
+    catalogModels: buildArceeCatalogModels(),
     aliases: [{ modelRef: ARCEE_DEFAULT_MODEL_REF, alias: "Arcee AI" }],
   }),
 });
@@ -25,10 +29,7 @@ const arceeOpenRouterPresetAppliers = createModelCatalogPresetAppliers({
     providerId: "arcee",
     api: "openai-completions",
     baseUrl: OPENROUTER_BASE_URL,
-    catalogModels: ARCEE_MODEL_CATALOG.map((model) => ({
-      ...buildArceeModelDefinition(model),
-      id: toArceeOpenRouterModelId(model.id),
-    })),
+    catalogModels: buildArceeOpenRouterCatalogModels(),
     aliases: [{ modelRef: ARCEE_OPENROUTER_DEFAULT_MODEL_REF, alias: "Arcee AI (OpenRouter)" }],
   }),
 });
