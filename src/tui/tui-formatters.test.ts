@@ -8,6 +8,26 @@ import {
 } from "./tui-formatters.js";
 
 describe("extractTextFromMessage", () => {
+  it("prefers final_answer text over commentary text for assistant messages", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Commentary that should not render",
+          textSignature: JSON.stringify({ v: 1, id: "c1", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Final answer for the TUI",
+          textSignature: JSON.stringify({ v: 1, id: "f1", phase: "final_answer" }),
+        },
+      ],
+    });
+
+    expect(text).toBe("Final answer for the TUI");
+  });
+
   it("renders errorMessage when assistant content is empty", () => {
     const text = extractTextFromMessage({
       role: "assistant",
@@ -224,26 +244,6 @@ describe("extractContentFromMessage", () => {
     });
 
     expect(text).toContain("HTTP 429");
-  });
-
-  it("prefers final_answer text over commentary text for assistant messages", () => {
-    const text = extractContentFromMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "Commentary that should not render",
-          textSignature: JSON.stringify({ v: 1, id: "c1", phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: "Final answer for the TUI",
-          textSignature: JSON.stringify({ v: 1, id: "f1", phase: "final_answer" }),
-        },
-      ],
-    });
-
-    expect(text).toBe("Final answer for the TUI");
   });
 });
 

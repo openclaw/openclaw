@@ -1,6 +1,6 @@
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { extractAssistantVisibleText } from "../agents/pi-embedded-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
+import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -277,13 +277,7 @@ export function extractContentFromMessage(message: unknown): string {
       return sanitizeRenderableText(content).trim();
     }
     if (Array.isArray(content)) {
-      const visible = sanitizeRenderableText(
-        extractAssistantVisibleText(record as Parameters<typeof extractAssistantVisibleText>[0]),
-      ).trim();
-      if (visible) {
-        return visible;
-      }
-      return formatAssistantErrorFromRecord(record);
+      return extractAssistantRenderableContent(record);
     }
   }
 
@@ -298,6 +292,14 @@ export function extractContentFromMessage(message: unknown): string {
   });
   if (parts.length > 0) {
     return parts.join("\n").trim();
+  }
+  return formatAssistantErrorFromRecord(record);
+}
+
+function extractAssistantRenderableContent(record: Record<string, unknown>): string {
+  const visible = sanitizeRenderableText(extractAssistantVisibleText(record) ?? "").trim();
+  if (visible) {
+    return visible;
   }
   return formatAssistantErrorFromRecord(record);
 }
@@ -338,6 +340,13 @@ export function extractTextFromMessage(
   const record = asMessageRecord(message);
   if (!record) {
     return "";
+  }
+  if (record.role === "assistant") {
+    return composeThinkingAndContent({
+      thinkingText: extractThinkingFromMessage(record),
+      contentText: extractAssistantRenderableContent(record),
+      showThinking: opts?.includeThinking ?? false,
+    });
   }
   const text = extractTextBlocks(record.content, opts);
   if (text) {
