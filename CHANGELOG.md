@@ -61,6 +61,7 @@ Docs: https://docs.openclaw.ai
 - Agents/session keys: backfill `sessionKey` from `sessionId` in the embedded PI runner when callers omit it, so hooks, LCM, and compaction receive a valid key; also normalize whitespace-only session keys to `undefined` before downstream consumers see them. (#60555) Thanks @100yenadmin.
 - Plugins/provider hooks: stop recursive provider snapshot loads from overflowing the stack during plugin initialization, while still preserving cached nested provider-hook results. (#61922, #61938, #61946, #61951)
 - Discord/voice: re-arm DAVE receive passthrough without suppressing decrypt-failure rejoin recovery, and clear capture state before finalize teardown so rapid speaker restarts keep their next utterance. (#41536) Thanks @wit-oc.
+- Agents/exec: keep `strictInlineEval` commands blocked after approval timeouts on both gateway and node exec hosts, so timeout fallback no longer turns timed-out inline interpreter prompts into automatic execution.
 
 ## 2026.4.5
 
