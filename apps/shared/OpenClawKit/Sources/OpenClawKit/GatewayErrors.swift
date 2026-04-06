@@ -127,6 +127,12 @@ public struct GatewayResponseError: LocalizedError, @unchecked Sendable {
         self.details = details ?? [:]
     }
 
+    public var detailsReason: String? {
+        let raw = self.details["reason"]?.value as? String
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     public var errorDescription: String? {
         if self.code == "GATEWAY_ERROR" { return "\(self.method): \(self.message)" }
         return "\(self.method): [\(self.code)] \(self.message)"

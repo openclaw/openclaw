@@ -1,5 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { buildAnthropicReplayPolicyForModel } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildNativeAnthropicReplayPolicyForModel } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   mergeImplicitAnthropicVertexProvider,
   resolveAnthropicVertexConfigApiKey,
@@ -21,7 +21,7 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const implicit = await resolveImplicitAnthropicVertexProvider({
+          const implicit = resolveImplicitAnthropicVertexProvider({
             env: ctx.env,
           });
           if (!implicit) {
@@ -36,7 +36,7 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
-      buildReplayPolicy: ({ modelId }) => buildAnthropicReplayPolicyForModel(modelId),
+      buildReplayPolicy: ({ modelId }) => buildNativeAnthropicReplayPolicyForModel(modelId),
     });
   },
 });

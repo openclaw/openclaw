@@ -22,13 +22,18 @@ import type {
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
-import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai-completions-compat.js";
+import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import {
+  normalizeOpenAIStrictToolParameters,
+  resolveOpenAIStrictToolFlagForInventory,
+  resolveOpenAIStrictToolSetting,
+} from "./openai-tool-schema.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
@@ -225,7 +230,7 @@ function convertResponsesMessages(
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push({
       role: model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-      content: sanitizeTransportPayloadText(context.systemPrompt),
+      content: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
     });
   }
   let msgIndex = 0;
@@ -331,7 +336,7 @@ function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = options?.strict;
+  const strict = resolveOpenAIStrictToolFlagForInventory(tools, options?.strict);
   if (strict === undefined) {
     return tools.map((tool) => ({
       type: "function",
@@ -344,7 +349,7 @@ function convertResponsesTools(
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: tool.parameters,
+    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict),
     strict,
   }));
 }
@@ -758,7 +763,9 @@ export function buildOpenAIResponsesParams(
   }
   if (context.tools) {
     params.tools = convertResponsesTools(context.tools, {
-      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel),
+      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+        transport: "stream",
+      }),
     });
   }
   if (model.reasoning) {
@@ -1112,24 +1119,9 @@ async function processOpenAICompletionsStream(
 
 function detectCompat(model: OpenAIModeModel) {
   const provider = model.provider;
-  const capabilities = resolveProviderRequestCapabilities({
-    provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    modelId: model.id,
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
+  const { capabilities, defaults: compatDefaults } = detectOpenAICompletionsCompat(model);
   const endpointClass = capabilities.endpointClass;
   const isDefaultRoute = endpointClass === "default";
-  const compatDefaults = resolveOpenAICompletionsCompatDefaultsFromCapabilities({
-    provider,
-    ...capabilities,
-  });
   const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
   const reasoningEffortMap: Record<string, string> =
     isGroq && model.id === "qwen/qwen3-32b"
@@ -1234,55 +1226,24 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
   return reasoningEffortMap[effort] ?? effort;
 }
 
-function resolvesToNativeOpenAIStrictTools(model: OpenAIModeModel): boolean {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    modelId: model.id,
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
-  if (!capabilities.usesKnownNativeOpenAIRoute) {
-    return false;
-  }
-  return (
-    capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
-    capabilities.provider === "azure-openai" ||
-    capabilities.provider === "azure-openai-responses"
-  );
-}
-
-function resolveOpenAIStrictToolSetting(
-  model: OpenAIModeModel,
-  compat?: ReturnType<typeof getCompat>,
-): boolean | undefined {
-  if (resolvesToNativeOpenAIStrictTools(model)) {
-    return true;
-  }
-  if (compat?.supportsStrictMode) {
-    return false;
-  }
-  return undefined;
-}
-
 function convertTools(
   tools: NonNullable<Context["tools"]>,
   compat: ReturnType<typeof getCompat>,
   model: OpenAIModeModel,
 ) {
-  const strict = resolveOpenAIStrictToolSetting(model, compat);
+  const strict = resolveOpenAIStrictToolFlagForInventory(
+    tools,
+    resolveOpenAIStrictToolSetting(model, {
+      transport: "stream",
+      supportsStrictMode: compat?.supportsStrictMode,
+    }),
+  );
   return tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
+      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true),
       ...(strict === undefined ? {} : { strict }),
     },
   }));
@@ -1294,9 +1255,15 @@ export function buildOpenAICompletionsParams(
   options: OpenAICompletionsOptions | undefined,
 ) {
   const compat = getCompat(model);
+  const completionsContext = context.systemPrompt
+    ? {
+        ...context,
+        systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+      }
+    : context;
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertMessages(model as never, context, compat as never),
+    messages: convertMessages(model as never, completionsContext, compat as never),
     stream: true,
   };
   if (compat.supportsUsageInStreaming) {

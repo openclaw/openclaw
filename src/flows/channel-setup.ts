@@ -8,7 +8,10 @@ import {
 import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import { listChatChannels } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
+import {
+  resolveChannelSetupEntries,
+  shouldShowChannelInSetup,
+} from "../commands/channel-setup/discovery.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
@@ -98,10 +101,14 @@ export async function setupChannels(
   const listVisibleInstalledPlugins = (): ChannelSetupPlugin[] => {
     const merged = new Map<string, ChannelSetupPlugin>();
     for (const plugin of listChannelSetupPlugins()) {
-      merged.set(plugin.id, plugin);
+      if (shouldShowChannelInSetup(plugin.meta)) {
+        merged.set(plugin.id, plugin);
+      }
     }
     for (const plugin of scopedPluginsById.values()) {
-      merged.set(plugin.id, plugin);
+      if (shouldShowChannelInSetup(plugin.meta)) {
+        merged.set(plugin.id, plugin);
+      }
     }
     return Array.from(merged.values());
   };
@@ -181,11 +188,13 @@ export async function setupChannels(
     return cfg;
   }
 
-  const corePrimer = listChatChannels().map((meta) => ({
-    id: meta.id,
-    label: meta.label,
-    blurb: meta.blurb,
-  }));
+  const corePrimer = listChatChannels()
+    .filter((meta) => shouldShowChannelInSetup(meta))
+    .map((meta) => ({
+      id: meta.id,
+      label: meta.label,
+      blurb: meta.blurb,
+    }));
   const coreIds = new Set(corePrimer.map((entry) => entry.id));
   const primerChannels = [
     ...corePrimer,
@@ -527,7 +536,7 @@ export async function setupChannels(
 
   if (options?.quickstartDefaults) {
     const { entries } = getChannelEntries();
-    const choice = (await prompter.select({
+    const choice = await prompter.select({
       message: "Select channel (QuickStart)",
       options: [
         ...resolveChannelSetupSelectionContributions({
@@ -542,7 +551,7 @@ export async function setupChannels(
         },
       ],
       initialValue: quickstartDefault,
-    })) as ChannelChoice | "__skip__";
+    });
     if (choice !== "__skip__") {
       await handleChannelChoice(choice);
     }
@@ -551,7 +560,7 @@ export async function setupChannels(
     const initialValue = options?.initialSelection?.[0] ?? quickstartDefault;
     while (true) {
       const { entries } = getChannelEntries();
-      const choice = (await prompter.select({
+      const choice = await prompter.select({
         message: "Select a channel",
         options: [
           ...resolveChannelSetupSelectionContributions({
@@ -566,7 +575,7 @@ export async function setupChannels(
           },
         ],
         initialValue,
-      })) as ChannelChoice | typeof doneValue;
+      });
       if (choice === doneValue) {
         break;
       }

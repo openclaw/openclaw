@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
-import { registerProviders, requireProvider } from "../../../src/plugins/contracts/testkit.js";
 import { createNonExitingRuntime } from "../../../src/runtime.js";
 import type {
   WizardMultiSelectParams,
@@ -9,6 +8,7 @@ import type {
   WizardProgress,
   WizardSelectParams,
 } from "../../../src/wizard/prompts.js";
+import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
 type LoginOpenAICodexOAuth =
   (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
@@ -170,7 +170,7 @@ export function describeOpenAICodexProviderAuthContract() {
       const { default: openAIPlugin } = await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviders>[0];
       }>(providerAuthContractModules.openAIIndexModuleUrl);
-      const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+      const provider = requireProvider(await registerProviders(openAIPlugin), "openai-codex");
       loginOpenAICodexOAuthMock.mockResolvedValueOnce({
         refresh: "refresh-token",
         access: params.access,
@@ -191,7 +191,7 @@ export function describeOpenAICodexProviderAuthContract() {
       const { default: openAIPlugin } = await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviders>[0];
       }>(providerAuthContractModules.openAIIndexModuleUrl);
-      return requireProvider(registerProviders(openAIPlugin), "openai-codex");
+      return requireProvider(await registerProviders(openAIPlugin), "openai-codex");
     }
 
     it("keeps OAuth auth results provider-owned", async () => {
@@ -323,7 +323,7 @@ export function describeGithubCopilotProviderAuthContract() {
       const { default: githubCopilotPlugin } = await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviders>[0];
       }>(providerAuthContractModules.githubCopilotIndexModuleUrl);
-      return requireProvider(registerProviders(githubCopilotPlugin), "github-copilot");
+      return requireProvider(await registerProviders(githubCopilotPlugin), "github-copilot");
     }
 
     it("keeps device auth results provider-owned", async () => {

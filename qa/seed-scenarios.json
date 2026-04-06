@@ -1,0 +1,292 @@
+[
+  {
+    "id": "channel-chat-baseline",
+    "title": "Channel baseline conversation",
+    "surface": "channel",
+    "objective": "Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.",
+    "successCriteria": [
+      "Agent replies in the shared channel transcript.",
+      "Agent keeps the conversation scoped to the channel.",
+      "Agent respects mention-driven group routing semantics."
+    ],
+    "docsRefs": ["docs/channels/group-messages.md", "docs/channels/qa-channel.md"],
+    "codeRefs": ["extensions/qa-channel/src/inbound.ts", "extensions/qa-lab/src/bus-state.ts"]
+  },
+  {
+    "id": "cron-one-minute-ping",
+    "title": "Cron one-minute ping",
+    "surface": "cron",
+    "objective": "Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.",
+    "successCriteria": [
+      "Agent schedules a cron reminder roughly one minute ahead.",
+      "Reminder returns through qa-channel.",
+      "Agent recognizes the reminder as part of the original task."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/channels/qa-channel.md"],
+    "codeRefs": ["extensions/qa-lab/src/bus-server.ts", "extensions/qa-lab/src/self-check.ts"]
+  },
+  {
+    "id": "dm-chat-baseline",
+    "title": "DM baseline conversation",
+    "surface": "dm",
+    "objective": "Verify the QA agent can chat coherently in a DM, explain the QA setup, and stay in character.",
+    "successCriteria": [
+      "Agent replies in DM without channel routing mistakes.",
+      "Agent explains the QA lab and message bus correctly.",
+      "Agent keeps the dev C-3PO personality."
+    ],
+    "docsRefs": ["docs/channels/qa-channel.md", "docs/help/testing.md"],
+    "codeRefs": ["extensions/qa-channel/src/gateway.ts", "extensions/qa-lab/src/lab-server.ts"]
+  },
+  {
+    "id": "lobster-invaders-build",
+    "title": "Build Lobster Invaders",
+    "surface": "workspace",
+    "objective": "Verify the agent can read the repo, create a tiny playable artifact, and report what changed.",
+    "successCriteria": [
+      "Agent inspects source before coding.",
+      "Agent builds a tiny playable Lobster Invaders artifact.",
+      "Agent explains how to run or view the artifact."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/web/dashboard.md"],
+    "codeRefs": ["extensions/qa-lab/src/report.ts", "extensions/qa-lab/web/src/app.ts"]
+  },
+  {
+    "id": "memory-recall",
+    "title": "Memory recall after context switch",
+    "surface": "memory",
+    "objective": "Verify the agent can store a fact, switch topics, then recall the fact accurately later.",
+    "successCriteria": [
+      "Agent acknowledges the seeded fact.",
+      "Agent later recalls the same fact correctly.",
+      "Recall stays scoped to the active QA conversation."
+    ],
+    "docsRefs": ["docs/help/testing.md"],
+    "codeRefs": ["extensions/qa-lab/src/scenario.ts"]
+  },
+  {
+    "id": "model-switch-follow-up",
+    "title": "Model switch follow-up",
+    "surface": "models",
+    "objective": "Verify the agent can switch to a different configured model and continue coherently.",
+    "successCriteria": [
+      "Agent reflects the model switch request.",
+      "Follow-up answer remains coherent with prior context.",
+      "Final report notes whether the switch actually happened."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/web/dashboard.md"],
+    "codeRefs": ["extensions/qa-lab/src/report.ts"]
+  },
+  {
+    "id": "reaction-edit-delete",
+    "title": "Reaction, edit, delete lifecycle",
+    "surface": "message-actions",
+    "objective": "Verify the agent can use channel-owned message actions and that the QA transcript reflects them.",
+    "successCriteria": [
+      "Agent adds at least one reaction.",
+      "Agent edits or replaces a message when asked.",
+      "Transcript shows the action lifecycle correctly."
+    ],
+    "docsRefs": ["docs/channels/qa-channel.md"],
+    "codeRefs": [
+      "extensions/qa-channel/src/channel-actions.ts",
+      "extensions/qa-lab/src/self-check-scenario.ts"
+    ]
+  },
+  {
+    "id": "source-docs-discovery-report",
+    "title": "Source and docs discovery report",
+    "surface": "discovery",
+    "objective": "Verify the agent can read repo docs and source, expand the QA plan, and publish a worked or did-not-work report.",
+    "successCriteria": [
+      "Agent reads docs and source before proposing more tests.",
+      "Agent identifies extra candidate scenarios beyond the seed list.",
+      "Agent ends with a worked or failed QA report."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/web/dashboard.md", "docs/channels/qa-channel.md"],
+    "codeRefs": [
+      "extensions/qa-lab/src/report.ts",
+      "extensions/qa-lab/src/self-check.ts",
+      "src/agents/system-prompt.ts"
+    ]
+  },
+  {
+    "id": "subagent-handoff",
+    "title": "Subagent handoff",
+    "surface": "subagents",
+    "objective": "Verify the agent can delegate a bounded task to a subagent and fold the result back into the main thread.",
+    "successCriteria": [
+      "Agent launches a bounded subagent task.",
+      "Subagent result is acknowledged in the main flow.",
+      "Final answer attributes delegated work clearly."
+    ],
+    "docsRefs": ["docs/tools/subagents.md", "docs/help/testing.md"],
+    "codeRefs": ["src/agents/system-prompt.ts", "extensions/qa-lab/src/report.ts"]
+  },
+  {
+    "id": "thread-follow-up",
+    "title": "Threaded follow-up",
+    "surface": "thread",
+    "objective": "Verify the agent can keep follow-up work inside a thread and not leak context into the root channel.",
+    "successCriteria": [
+      "Agent creates or uses a thread for deeper work.",
+      "Follow-up messages stay attached to the thread.",
+      "Thread report references the correct prior context."
+    ],
+    "docsRefs": ["docs/channels/qa-channel.md", "docs/channels/group-messages.md"],
+    "codeRefs": ["extensions/qa-channel/src/protocol.ts", "extensions/qa-lab/src/bus-state.ts"]
+  },
+  {
+    "id": "memory-tools-channel-context",
+    "title": "Memory tools in channel context",
+    "surface": "memory",
+    "objective": "Verify the agent uses memory_search and memory_get in a shared channel when the answer lives only in memory files, not the live transcript.",
+    "successCriteria": [
+      "Agent uses memory_search before answering.",
+      "Agent narrows with memory_get before answering.",
+      "Final reply returns the memory-only fact correctly in-channel."
+    ],
+    "docsRefs": ["docs/concepts/memory.md", "docs/concepts/memory-search.md"],
+    "codeRefs": ["extensions/memory-core/src/tools.ts", "extensions/qa-lab/src/suite.ts"]
+  },
+  {
+    "id": "memory-failure-fallback",
+    "title": "Memory failure fallback",
+    "surface": "memory",
+    "objective": "Verify the agent degrades gracefully when memory tools are unavailable and the answer exists only in memory-backed notes.",
+    "successCriteria": [
+      "Memory tools are absent from the effective tool inventory.",
+      "Agent does not hallucinate the hidden fact.",
+      "Agent says it could not confirm and surfaces the limitation."
+    ],
+    "docsRefs": ["docs/concepts/memory.md", "docs/tools/index.md"],
+    "codeRefs": ["extensions/memory-core/src/tools.ts", "extensions/qa-lab/src/suite.ts"]
+  },
+  {
+    "id": "model-switch-tool-continuity",
+    "title": "Model switch with tool continuity",
+    "surface": "models",
+    "objective": "Verify switching models preserves session context and tool use instead of dropping into plain-text only behavior.",
+    "successCriteria": [
+      "Alternate model is actually requested.",
+      "A tool call still happens after the model switch.",
+      "Final answer acknowledges the handoff and uses the tool-derived evidence."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/concepts/model-failover.md"],
+    "codeRefs": ["extensions/qa-lab/src/suite.ts", "extensions/qa-lab/src/mock-openai-server.ts"]
+  },
+  {
+    "id": "mcp-plugin-tools-call",
+    "title": "MCP plugin-tools call",
+    "surface": "mcp",
+    "objective": "Verify OpenClaw can expose plugin tools over MCP and a real MCP client can call one successfully.",
+    "successCriteria": [
+      "Plugin tools MCP server lists memory_search.",
+      "A real MCP client calls memory_search successfully.",
+      "The returned MCP payload includes the expected memory-only fact."
+    ],
+    "docsRefs": ["docs/cli/mcp.md", "docs/gateway/protocol.md"],
+    "codeRefs": ["src/mcp/plugin-tools-serve.ts", "extensions/qa-lab/src/suite.ts"]
+  },
+  {
+    "id": "skill-visibility-invocation",
+    "title": "Skill visibility and invocation",
+    "surface": "skills",
+    "objective": "Verify a workspace skill becomes visible in skills.status and influences the next agent turn.",
+    "successCriteria": [
+      "skills.status reports the seeded skill as visible and eligible.",
+      "The next agent turn reflects the skill instruction marker.",
+      "The result stays scoped to the active QA workspace skill."
+    ],
+    "docsRefs": ["docs/tools/skills.md", "docs/gateway/protocol.md"],
+    "codeRefs": ["src/agents/skills-status.ts", "extensions/qa-lab/src/suite.ts"]
+  },
+  {
+    "id": "skill-install-hot-availability",
+    "title": "Skill install hot availability",
+    "surface": "skills",
+    "objective": "Verify a newly added workspace skill shows up without a broken intermediate state and can influence the next turn immediately.",
+    "successCriteria": [
+      "Skill is absent before install.",
+      "skills.status reports it after install without a restart.",
+      "The next agent turn reflects the new skill marker."
+    ],
+    "docsRefs": ["docs/tools/skills.md", "docs/gateway/configuration.md"],
+    "codeRefs": ["src/agents/skills-status.ts", "extensions/qa-lab/src/suite.ts"]
+  },
+  {
+    "id": "native-image-generation",
+    "title": "Native image generation",
+    "surface": "image-generation",
+    "objective": "Verify image_generate appears when configured and returns a real saved media artifact.",
+    "successCriteria": [
+      "image_generate appears in the effective tool inventory.",
+      "Agent triggers native image_generate.",
+      "Tool output returns a saved MEDIA path and the file exists."
+    ],
+    "docsRefs": ["docs/tools/image-generation.md", "docs/providers/openai.md"],
+    "codeRefs": [
+      "src/agents/tools/image-generate-tool.ts",
+      "extensions/qa-lab/src/mock-openai-server.ts"
+    ]
+  },
+  {
+    "id": "image-understanding-attachment",
+    "title": "Image understanding from attachment",
+    "surface": "image-understanding",
+    "objective": "Verify an attached image reaches the agent model and the agent can describe what it sees.",
+    "successCriteria": [
+      "Agent receives at least one image attachment.",
+      "Final answer describes the visible image content in one short sentence.",
+      "The description mentions the expected red and blue regions."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/tools/index.md"],
+    "codeRefs": [
+      "src/gateway/server-methods/agent.ts",
+      "extensions/qa-lab/src/suite.ts",
+      "extensions/qa-lab/src/mock-openai-server.ts"
+    ]
+  },
+  {
+    "id": "config-patch-hot-apply",
+    "title": "Config patch skill disable",
+    "surface": "config",
+    "objective": "Verify config.patch can disable a workspace skill and the restarted gateway exposes the new disabled state cleanly.",
+    "successCriteria": [
+      "config.patch succeeds for the skill toggle change.",
+      "A workspace skill works before the patch.",
+      "The same skill is reported disabled after the restart triggered by the patch."
+    ],
+    "docsRefs": ["docs/gateway/configuration.md", "docs/gateway/protocol.md"],
+    "codeRefs": ["src/gateway/server-methods/config.ts", "extensions/qa-lab/src/suite.ts"]
+  },
+  {
+    "id": "config-apply-restart-wakeup",
+    "title": "Config apply restart wake-up",
+    "surface": "config",
+    "objective": "Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.",
+    "successCriteria": [
+      "config.apply schedules a restart-required change.",
+      "Gateway becomes healthy again after restart.",
+      "Restart sentinel wake-up message arrives in the QA channel."
+    ],
+    "docsRefs": ["docs/gateway/configuration.md", "docs/gateway/protocol.md"],
+    "codeRefs": ["src/gateway/server-methods/config.ts", "src/gateway/server-restart-sentinel.ts"]
+  },
+  {
+    "id": "runtime-inventory-drift-check",
+    "title": "Runtime inventory drift check",
+    "surface": "inventory",
+    "objective": "Verify tools.effective and skills.status stay aligned with runtime behavior after config changes.",
+    "successCriteria": [
+      "Enabled tool appears before the config change.",
+      "After config change, disabled tool disappears from tools.effective.",
+      "Disabled skill appears in skills.status with disabled state."
+    ],
+    "docsRefs": ["docs/gateway/protocol.md", "docs/tools/skills.md", "docs/tools/index.md"],
+    "codeRefs": [
+      "src/gateway/server-methods/tools-effective.ts",
+      "src/gateway/server-methods/skills.ts"
+    ]
+  }
+]

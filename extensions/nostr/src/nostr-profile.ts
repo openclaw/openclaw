@@ -182,8 +182,7 @@ export async function publishProfileEvent(
         setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
       });
 
-      // oxlint-disable-next-line typescript/no-floating-promises
-      await Promise.race([pool.publish([relay], event), timeoutPromise]);
+      await Promise.race([...pool.publish([relay], event), timeoutPromise]);
 
       successes.push(relay);
     } catch (err) {

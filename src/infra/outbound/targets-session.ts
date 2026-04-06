@@ -47,7 +47,7 @@ function parseExplicitTargetWithPlugin(params: {
 
 export function resolveSessionDeliveryTarget(params: {
   entry?: SessionEntry;
-  requestedChannel?: GatewayMessageChannel | "last";
+  requestedChannel?: GatewayMessageChannel;
   explicitTo?: string;
   explicitThreadId?: string | number;
   fallbackChannel?: DeliverableMessageChannel;

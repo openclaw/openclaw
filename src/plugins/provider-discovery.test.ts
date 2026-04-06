@@ -12,6 +12,8 @@ function makeProvider(params: {
   label?: string;
   order?: ProviderDiscoveryOrder;
   mode?: "catalog" | "discovery";
+  aliases?: string[];
+  hookAliases?: string[];
 }): ProviderPlugin {
   const hook = {
     ...(params.order ? { order: params.order } : {}),
@@ -21,6 +23,8 @@ function makeProvider(params: {
     id: params.id,
     label: params.label ?? params.id,
     auth: [],
+    ...(params.aliases ? { aliases: params.aliases } : {}),
+    ...(params.hookAliases ? { hookAliases: params.hookAliases } : {}),
     ...(params.mode === "discovery" ? { discovery: hook } : { catalog: hook }),
   };
 }
@@ -150,6 +154,37 @@ describe("normalizePluginDiscoveryResult", () => {
         ollama: {
           baseUrl: "http://127.0.0.1:11434",
           api: "ollama",
+          models: [],
+        },
+      },
+    },
+    {
+      name: "maps a single provider result to aliases and hook aliases",
+      provider: makeProvider({
+        id: "Anthropic",
+        aliases: ["anthropic-api"],
+        hookAliases: ["claude-cli"],
+      }),
+      result: {
+        provider: makeModelProviderConfig({
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+        }),
+      },
+      expected: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [],
+        },
+        "anthropic-api": {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [],
+        },
+        "claude-cli": {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
           models: [],
         },
       },

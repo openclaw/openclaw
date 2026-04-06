@@ -1,5 +1,18 @@
 {
   "id": "voice-call",
+  "channelEnvVars": {
+    "voice-call": [
+      "TELNYX_API_KEY",
+      "TELNYX_CONNECTION_ID",
+      "TELNYX_PUBLIC_KEY",
+      "TWILIO_ACCOUNT_SID",
+      "TWILIO_AUTH_TOKEN",
+      "PLIVO_AUTH_ID",
+      "PLIVO_AUTH_TOKEN",
+      "NGROK_AUTHTOKEN",
+      "NGROK_DOMAIN"
+    ]
+  },
   "uiHints": {
     "provider": {
       "label": "Provider",
@@ -143,6 +156,7 @@
     },
     "responseModel": {
       "label": "Response Model",
+      "help": "Optional override. Falls back to the runtime default model when unset.",
       "advanced": true
     },
     "responseSystemPrompt": {
@@ -342,24 +356,6 @@
           },
           "provider": {
             "type": "string"
-          },
-          "sttProvider": {
-            "type": "string"
-          },
-          "openaiApiKey": {
-            "type": "string"
-          },
-          "sttModel": {
-            "type": "string"
-          },
-          "silenceDurationMs": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "vadThreshold": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
           },
           "streamPath": {
             "type": "string"

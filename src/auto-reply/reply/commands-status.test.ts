@@ -1,4 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
+import { withTempHome } from "../../../test/helpers/temp-home.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -11,7 +15,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
-import { buildStatusReply } from "./commands-status.js";
+import { buildStatusReply, buildStatusText } from "./commands-status.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const baseCfg = {
@@ -32,7 +36,7 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     sessionScope: commandParams.sessionScope,
     storePath: commandParams.storePath,
     provider: "anthropic",
-    model: "claude-opus-4-5",
+    model: "claude-opus-4-6",
     contextTokens: 0,
     resolvedThinkLevel: commandParams.resolvedThinkLevel,
     resolvedFastMode: false,
@@ -43,6 +47,41 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     isGroup: commandParams.isGroup,
     defaultGroupActivation: commandParams.defaultGroupActivation,
   });
+}
+
+function writeTranscriptUsageLog(params: {
+  dir: string;
+  agentId: string;
+  sessionId: string;
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+  };
+}) {
+  const logPath = path.join(
+    params.dir,
+    ".openclaw",
+    "agents",
+    params.agentId,
+    "sessions",
+    `${params.sessionId}.jsonl`,
+  );
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.writeFileSync(
+    logPath,
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-5",
+        usage: params.usage,
+      },
+    }),
+    "utf-8",
+  );
 }
 
 describe("buildStatusReply subagent summary", () => {
@@ -374,5 +413,48 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("hidden progress detail");
     expect(reply?.text).not.toContain("subagent");
     expect(reply?.text).not.toContain("cron");
+  });
+
+  it("uses transcript usage fallback in /status output", async () => {
+    await withTempHome(async (dir) => {
+      const sessionId = "sess-status-transcript";
+      writeTranscriptUsageLog({
+        dir,
+        agentId: "main",
+        sessionId,
+        usage: {
+          input: 1,
+          output: 2,
+          cacheRead: 1000,
+          cacheWrite: 0,
+          totalTokens: 1003,
+        },
+      });
+
+      const text = await buildStatusText({
+        cfg: baseCfg,
+        sessionEntry: {
+          sessionId,
+          updatedAt: 0,
+          totalTokens: 3,
+          contextTokens: 32_000,
+        },
+        sessionKey: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        statusChannel: "whatsapp",
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        contextTokens: 32_000,
+        resolvedFastMode: false,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolveDefaultThinkingLevel: async () => undefined,
+        isGroup: false,
+        defaultGroupActivation: () => "mention",
+      });
+
+      expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+    });
   });
 });

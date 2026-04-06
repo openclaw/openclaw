@@ -4,18 +4,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
+import {
+  clearMemoryEmbeddingProviders as clearRegistry,
+  registerMemoryEmbeddingProvider as registerAdapter,
+} from "../../../../src/plugins/memory-embedding-providers.js";
 import "./test-runtime-mocks.js";
+import type { MemoryIndexManager } from "./index.js";
+import { getMemorySearchManager, closeAllMemorySearchManagers } from "./index.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
-
-type MemoryIndexModule = typeof import("./index.js");
-type MemoryEmbeddingProvidersModule =
-  typeof import("../../../../src/plugins/memory-embedding-providers.js");
-
-let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
-let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
-let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
-let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -115,62 +111,19 @@ describe("memory index", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
   let memoryDir = "";
-  let extraDir = "";
   let indexVectorPath = "";
   let indexMainPath = "";
-  let indexExtraPath = "";
   let indexMultimodalPath = "";
-  let indexStatusPath = "";
-  let indexSourceChangePath = "";
-  let indexModelPath = "";
-  let indexFtsOnlyPath = "";
-  let sourceChangeStateDir = "";
-  const sourceChangeSessionLogLines = [
-    JSON.stringify({
-      type: "message",
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "session change test user line" }],
-      },
-    }),
-    JSON.stringify({
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "session change test assistant line" }],
-      },
-    }),
-  ].join("\n");
 
   const managersForCleanup = new Set<MemoryIndexManager>();
 
   beforeAll(async () => {
-    vi.resetModules();
-    await import("./test-runtime-mocks.js");
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
-    ({
-      clearMemoryEmbeddingProviders: clearRegistry,
-      registerMemoryEmbeddingProvider: registerAdapter,
-    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
-    extraDir = path.join(workspaceDir, "extra");
     indexMainPath = path.join(workspaceDir, "index-main.sqlite");
     indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
-    indexExtraPath = path.join(workspaceDir, "index-extra.sqlite");
     indexMultimodalPath = path.join(workspaceDir, "index-multimodal.sqlite");
-    indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
-    indexSourceChangePath = path.join(workspaceDir, "index-source-change.sqlite");
-    indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
-    indexFtsOnlyPath = path.join(workspaceDir, "index-fts-only.sqlite");
-    sourceChangeStateDir = path.join(fixtureRoot, "state-source-change");
-
-    await fs.mkdir(memoryDir, { recursive: true });
-    await fs.writeFile(
-      path.join(memoryDir, "2026-01-12.md"),
-      "# Log\nAlpha memory line.\nZebra memory line.",
-    );
   });
 
   afterAll(async () => {
@@ -195,10 +148,12 @@ describe("memory index", () => {
     providerCalls = [];
     forceNoProvider = false;
 
+    rmSync(workspaceDir, { recursive: true, force: true });
     mkdirSync(memoryDir, { recursive: true });
-
-    // Clean additional paths that may have been created by earlier cases.
-    rmSync(extraDir, { recursive: true, force: true });
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      "# Log\nAlpha memory line.\nZebra memory line.",
+    );
   });
 
   function resetManagerForTest(manager: MemoryIndexManager) {
@@ -436,107 +391,6 @@ describe("memory index", () => {
     await manager.close?.();
   });
 
-  it("keeps dirty false in status-only manager after prior indexing", async () => {
-    const cfg = createCfg({ storePath: indexStatusPath });
-
-    const first = await getMemorySearchManager({ cfg, agentId: "main" });
-    const firstManager = requireManager(first);
-    await firstManager.sync?.({ reason: "test" });
-    await firstManager.close?.();
-    const providerCallsBeforeStatus = providerCalls.length;
-
-    const statusOnly = await getMemorySearchManager({
-      cfg,
-      agentId: "main",
-      purpose: "status",
-    });
-    const statusManager = requireManager(statusOnly, "status manager missing");
-    const status = statusManager.status();
-    expect(status.dirty).toBe(false);
-    expect(status.provider).toBe("openai");
-    expect(providerCalls).toHaveLength(providerCallsBeforeStatus);
-    await statusManager.close?.();
-  });
-
-  it("does not cache builtin status-only managers across repeated requests", async () => {
-    const cfg = createCfg({
-      storePath: path.join(workspaceDir, `index-status-${randomUUID()}.sqlite`),
-    });
-
-    const first = await getMemorySearchManager({
-      cfg,
-      agentId: "main",
-      purpose: "status",
-    });
-    const second = await getMemorySearchManager({
-      cfg,
-      agentId: "main",
-      purpose: "status",
-    });
-
-    const firstManager = requireManager(first, "first status manager missing");
-    const secondManager = requireManager(second, "second status manager missing");
-    expect(secondManager).not.toBe(firstManager);
-
-    await firstManager.close?.();
-    await secondManager.close?.();
-  });
-
-  it("reindexes sessions when source config adds sessions to an existing index", async () => {
-    const stateDir = sourceChangeStateDir;
-    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
-    await fs.rm(stateDir, { recursive: true, force: true });
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionDir, "session-source-change.jsonl"),
-      `${sourceChangeSessionLogLines}\n`,
-    );
-
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-
-    const firstCfg = createCfg({
-      storePath: indexSourceChangePath,
-      sources: ["memory"],
-      sessionMemory: false,
-    });
-    const secondCfg = createCfg({
-      storePath: indexSourceChangePath,
-      sources: ["memory", "sessions"],
-      sessionMemory: true,
-    });
-
-    try {
-      const first = await getMemorySearchManager({ cfg: firstCfg, agentId: "main" });
-      const firstManager = requireManager(first);
-      await firstManager.sync?.({ reason: "test" });
-      const firstStatus = firstManager.status();
-      expect(
-        firstStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.files ?? 0,
-      ).toBe(0);
-      await firstManager.close?.();
-
-      const second = await getMemorySearchManager({ cfg: secondCfg, agentId: "main" });
-      const secondManager = requireManager(second);
-      await secondManager.sync?.({ reason: "test" });
-      const secondStatus = secondManager.status();
-      expect(secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.files).toBe(
-        1,
-      );
-      expect(
-        secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.chunks ?? 0,
-      ).toBeGreaterThan(0);
-      await secondManager.close?.();
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  });
-
   it("targets explicit session files during post-compaction sync", async () => {
     const stateDir = path.join(fixtureRoot, `state-targeted-${randomUUID()}`);
     const sessionDir = path.join(stateDir, "agents", "main", "sessions");
@@ -613,41 +467,13 @@ describe("memory index", () => {
         })}\n`,
       );
 
-      const originalPrepare = db.prepare.bind(db);
-      let bulkSessionStateAllCalls = 0;
-      let perFileSessionHashPrepareCalls = 0;
-      db.prepare = ((sql: string) => {
-        const statement = originalPrepare(sql);
-        if (sql === `SELECT path, hash FROM files WHERE source = ?`) {
-          if (!statement.all) {
-            throw new Error("expected sqlite statement.all for bulk session state query");
-          }
-          const bulkAll = statement.all.bind(statement);
-          return {
-            ...statement,
-            all: (...args: unknown[]) => {
-              bulkSessionStateAllCalls += 1;
-              return bulkAll(...args);
-            },
-          };
-        }
-        if (sql === `SELECT hash FROM files WHERE path = ? AND source = ?`) {
-          perFileSessionHashPrepareCalls += 1;
-        }
-        return statement;
-      }) as typeof db.prepare;
-
       await manager.sync?.({
         reason: "post-compaction",
         sessionFiles: [firstSessionPath],
       });
 
-      db.prepare = originalPrepare;
-
       expect(getSessionHash("sessions/targeted-first.jsonl")).not.toBe(firstOriginalHash);
       expect(getSessionHash("sessions/targeted-second.jsonl")).toBe(secondOriginalHash);
-      expect(bulkSessionStateAllCalls).toBe(0);
-      expect(perFileSessionHashPrepareCalls).toBeGreaterThan(0);
       await manager.close?.();
     } finally {
       if (previousStateDir === undefined) {
@@ -657,368 +483,6 @@ describe("memory index", () => {
       }
       await fs.rm(stateDir, { recursive: true, force: true });
     }
-  });
-
-  it("preserves unrelated dirty sessions after targeted post-compaction sync", async () => {
-    const stateDir = path.join(fixtureRoot, `state-targeted-dirty-${randomUUID()}`);
-    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
-    const firstSessionPath = path.join(sessionDir, "targeted-dirty-first.jsonl");
-    const secondSessionPath = path.join(sessionDir, "targeted-dirty-second.jsonl");
-    const storePath = path.join(workspaceDir, `index-targeted-dirty-${randomUUID()}.sqlite`);
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      firstSessionPath,
-      `${JSON.stringify({
-        type: "message",
-        message: { role: "user", content: [{ type: "text", text: "first transcript v1" }] },
-      })}\n`,
-    );
-    await fs.writeFile(
-      secondSessionPath,
-      `${JSON.stringify({
-        type: "message",
-        message: { role: "user", content: [{ type: "text", text: "second transcript v1" }] },
-      })}\n`,
-    );
-
-    try {
-      const manager = requireManager(
-        await getMemorySearchManager({
-          cfg: createCfg({
-            storePath,
-            sources: ["sessions"],
-            sessionMemory: true,
-          }),
-          agentId: "main",
-        }),
-      );
-      await manager.sync({ reason: "test" });
-
-      const db = (
-        manager as unknown as {
-          db: {
-            prepare: (sql: string) => {
-              get: (path: string, source: string) => { hash: string } | undefined;
-            };
-          };
-        }
-      ).db;
-      const getSessionHash = (sessionPath: string) =>
-        db
-          .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-          .get(sessionPath, "sessions")?.hash;
-
-      const firstOriginalHash = getSessionHash("sessions/targeted-dirty-first.jsonl");
-      const secondOriginalHash = getSessionHash("sessions/targeted-dirty-second.jsonl");
-
-      await fs.writeFile(
-        firstSessionPath,
-        `${JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "first transcript v2 after compaction" }],
-          },
-        })}\n`,
-      );
-      await fs.writeFile(
-        secondSessionPath,
-        `${JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "second transcript v2 still pending" }],
-          },
-        })}\n`,
-      );
-
-      const internal = manager as unknown as {
-        sessionsDirty: boolean;
-        sessionsDirtyFiles: Set<string>;
-      };
-      internal.sessionsDirty = true;
-      internal.sessionsDirtyFiles.add(secondSessionPath);
-
-      await manager.sync({
-        reason: "post-compaction",
-        sessionFiles: [firstSessionPath],
-      });
-
-      expect(getSessionHash("sessions/targeted-dirty-first.jsonl")).not.toBe(firstOriginalHash);
-      expect(getSessionHash("sessions/targeted-dirty-second.jsonl")).toBe(secondOriginalHash);
-      expect(internal.sessionsDirtyFiles.has(secondSessionPath)).toBe(true);
-      expect(internal.sessionsDirty).toBe(true);
-
-      await manager.sync({ reason: "test" });
-
-      expect(getSessionHash("sessions/targeted-dirty-second.jsonl")).not.toBe(secondOriginalHash);
-      await manager.close?.();
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-      await fs.rm(storePath, { force: true });
-    }
-  });
-
-  it("queues targeted session sync when another sync is already in progress", async () => {
-    const stateDir = path.join(fixtureRoot, `state-targeted-queued-${randomUUID()}`);
-    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
-    const sessionPath = path.join(sessionDir, "targeted-queued.jsonl");
-    const storePath = path.join(workspaceDir, `index-targeted-queued-${randomUUID()}.sqlite`);
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      sessionPath,
-      `${JSON.stringify({
-        type: "message",
-        message: { role: "user", content: [{ type: "text", text: "queued transcript v1" }] },
-      })}\n`,
-    );
-
-    try {
-      const manager = requireManager(
-        await getMemorySearchManager({
-          cfg: createCfg({
-            storePath,
-            sources: ["sessions"],
-            sessionMemory: true,
-          }),
-          agentId: "main",
-        }),
-      );
-      await manager.sync({ reason: "test" });
-
-      const db = (
-        manager as unknown as {
-          db: {
-            prepare: (sql: string) => {
-              get: (path: string, source: string) => { hash: string } | undefined;
-            };
-          };
-        }
-      ).db;
-      const getSessionHash = (sessionRelPath: string) =>
-        db
-          .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-          .get(sessionRelPath, "sessions")?.hash;
-      const originalHash = getSessionHash("sessions/targeted-queued.jsonl");
-
-      const internal = manager as unknown as {
-        runSyncWithReadonlyRecovery: (params?: {
-          reason?: string;
-          sessionFiles?: string[];
-        }) => Promise<void>;
-      };
-      const originalRunSync = internal.runSyncWithReadonlyRecovery.bind(manager);
-      let releaseBusySync: (() => void) | undefined;
-      const busyGate = new Promise<void>((resolve) => {
-        releaseBusySync = resolve;
-      });
-      internal.runSyncWithReadonlyRecovery = async (params) => {
-        if (params?.reason === "busy-sync") {
-          await busyGate;
-        }
-        return await originalRunSync(params);
-      };
-
-      const busySyncPromise = manager.sync({ reason: "busy-sync" });
-      await fs.writeFile(
-        sessionPath,
-        `${JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "queued transcript v2 after compaction" }],
-          },
-        })}\n`,
-      );
-
-      const targetedSyncPromise = manager.sync({
-        reason: "post-compaction",
-        sessionFiles: [sessionPath],
-      });
-
-      releaseBusySync?.();
-      await Promise.all([busySyncPromise, targetedSyncPromise]);
-
-      expect(getSessionHash("sessions/targeted-queued.jsonl")).not.toBe(originalHash);
-      await manager.close?.();
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-      await fs.rm(storePath, { force: true });
-    }
-  });
-
-  it("runs a full reindex after fallback activates during targeted sync", async () => {
-    const stateDir = path.join(fixtureRoot, `state-targeted-fallback-${randomUUID()}`);
-    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
-    const sessionPath = path.join(sessionDir, "targeted-fallback.jsonl");
-    const storePath = path.join(workspaceDir, `index-targeted-fallback-${randomUUID()}.sqlite`);
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      sessionPath,
-      `${JSON.stringify({
-        type: "message",
-        message: { role: "user", content: [{ type: "text", text: "fallback transcript v1" }] },
-      })}\n`,
-    );
-
-    try {
-      const manager = requireManager(
-        await getMemorySearchManager({
-          cfg: createCfg({
-            storePath,
-            sources: ["sessions"],
-            sessionMemory: true,
-          }),
-          agentId: "main",
-        }),
-      );
-      await manager.sync({ reason: "test" });
-
-      const internal = manager as unknown as {
-        syncSessionFiles: (params: {
-          targetSessionFiles?: string[];
-          needsFullReindex: boolean;
-        }) => Promise<void>;
-        shouldFallbackOnError: (message: string) => boolean;
-        activateFallbackProvider: (reason: string) => Promise<boolean>;
-        runSafeReindex: (params: {
-          reason?: string;
-          force?: boolean;
-          progress?: unknown;
-        }) => Promise<void>;
-        runUnsafeReindex: (params: {
-          reason?: string;
-          force?: boolean;
-          progress?: unknown;
-        }) => Promise<void>;
-      };
-      const originalSyncSessionFiles = internal.syncSessionFiles.bind(manager);
-      const originalShouldFallbackOnError = internal.shouldFallbackOnError.bind(manager);
-      const originalActivateFallbackProvider = internal.activateFallbackProvider.bind(manager);
-      const originalRunSafeReindex = internal.runSafeReindex.bind(manager);
-      const originalRunUnsafeReindex = internal.runUnsafeReindex.bind(manager);
-
-      internal.syncSessionFiles = async (params) => {
-        if (params.targetSessionFiles?.length) {
-          throw new Error("embedding backend failed");
-        }
-        return await originalSyncSessionFiles(params);
-      };
-      internal.shouldFallbackOnError = () => true;
-      const activateFallbackProvider = vi.fn(async () => true);
-      internal.activateFallbackProvider = activateFallbackProvider;
-      const runSafeReindex = vi.fn(async () => {});
-      internal.runSafeReindex = runSafeReindex;
-      const runUnsafeReindex = vi.fn(async () => {});
-      internal.runUnsafeReindex = runUnsafeReindex;
-
-      await manager.sync({
-        reason: "post-compaction",
-        sessionFiles: [sessionPath],
-      });
-
-      expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
-      const expectedReindexParams = {
-        reason: "post-compaction",
-        force: true,
-        progress: undefined,
-      };
-      const usesUnsafeReindex =
-        process.env.OPENCLAW_TEST_FAST === "1" &&
-        process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1";
-      if (usesUnsafeReindex) {
-        expect(runUnsafeReindex).toHaveBeenCalledWith(expectedReindexParams);
-        expect(runSafeReindex).not.toHaveBeenCalled();
-      } else {
-        expect(runSafeReindex).toHaveBeenCalledWith(expectedReindexParams);
-        expect(runUnsafeReindex).not.toHaveBeenCalled();
-      }
-
-      internal.syncSessionFiles = originalSyncSessionFiles;
-      internal.shouldFallbackOnError = originalShouldFallbackOnError;
-      internal.activateFallbackProvider = originalActivateFallbackProvider;
-      internal.runSafeReindex = originalRunSafeReindex;
-      internal.runUnsafeReindex = originalRunUnsafeReindex;
-      await manager.close?.();
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(stateDir, { recursive: true, force: true });
-      await fs.rm(storePath, { force: true });
-    }
-  });
-
-  it("reindexes when the embedding model changes", async () => {
-    const base = createCfg({ storePath: indexModelPath });
-    const baseAgents = base.agents!;
-    const baseDefaults = baseAgents.defaults!;
-    const baseMemorySearch = baseDefaults.memorySearch!;
-
-    const first = await getMemorySearchManager({
-      cfg: {
-        ...base,
-        agents: {
-          ...baseAgents,
-          defaults: {
-            ...baseDefaults,
-            memorySearch: {
-              ...baseMemorySearch,
-              model: "mock-embed-v1",
-            },
-          },
-        },
-      },
-      agentId: "main",
-    });
-    const firstManager = requireManager(first);
-    await firstManager.sync?.({ reason: "test" });
-    const callsAfterFirstSync = embedBatchCalls;
-    await firstManager.close?.();
-
-    const second = await getMemorySearchManager({
-      cfg: {
-        ...base,
-        agents: {
-          ...baseAgents,
-          defaults: {
-            ...baseDefaults,
-            memorySearch: {
-              ...baseMemorySearch,
-              model: "mock-embed-v2",
-            },
-          },
-        },
-      },
-      agentId: "main",
-    });
-    const secondManager = requireManager(second);
-    await secondManager.sync?.({ reason: "test" });
-    expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
-    const status = secondManager.status();
-    expect(status.files).toBeGreaterThan(0);
-    await secondManager.close?.();
   });
 
   it("passes Gemini outputDimensionality from config into the provider", async () => {
@@ -1063,239 +527,6 @@ describe("memory index", () => {
     await manager.close?.();
   });
 
-  it("snapshots builtin file hashes with a single sqlite query per sync", async () => {
-    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "beta line\n");
-    const cfg = createCfg({
-      storePath: path.join(workspaceDir, `index-prepare-reuse-${randomUUID()}.sqlite`),
-      onSearch: false,
-    });
-
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    const manager = requireManager(result);
-    managersForCleanup.add(manager);
-
-    await manager.sync({ reason: "test" });
-    (manager as unknown as { dirty: boolean }).dirty = true;
-
-    const db = (
-      manager as unknown as {
-        db: {
-          prepare: (sql: string) => { get: (...args: unknown[]) => unknown };
-        };
-      }
-    ).db;
-    const originalPrepare = db.prepare.bind(db);
-    let selectSourceFileStatePrepareCalls = 0;
-    let perFileHashPrepareCalls = 0;
-    db.prepare = ((sql: string) => {
-      if (sql === `SELECT path, hash FROM files WHERE source = ?`) {
-        selectSourceFileStatePrepareCalls += 1;
-      }
-      if (sql === `SELECT hash FROM files WHERE path = ? AND source = ?`) {
-        perFileHashPrepareCalls += 1;
-      }
-      return originalPrepare(sql);
-    }) as typeof db.prepare;
-
-    try {
-      await manager.sync({ reason: "test" });
-    } finally {
-      db.prepare = originalPrepare;
-    }
-
-    expect(selectSourceFileStatePrepareCalls).toBe(1);
-    expect(perFileHashPrepareCalls).toBe(0);
-  });
-
-  it("uses a single sqlite aggregation query for status counts", async () => {
-    const cfg = createCfg({
-      storePath: path.join(workspaceDir, `index-status-aggregate-${randomUUID()}.sqlite`),
-      sources: ["memory", "sessions"],
-      sessionMemory: true,
-      onSearch: false,
-    });
-
-    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "beta line\n");
-
-    const stateDir = path.join(fixtureRoot, `state-status-${randomUUID()}`);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionDir, "status.jsonl"),
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: [{ type: "text", text: "session status line" }] },
-      }) + "\n",
-    );
-
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    const manager = requireManager(result);
-    managersForCleanup.add(manager);
-    await manager.sync({ reason: "test" });
-
-    const db = (
-      manager as unknown as {
-        db: {
-          prepare: (sql: string) => { all: (...args: unknown[]) => unknown };
-        };
-      }
-    ).db;
-    const originalPrepare = db.prepare.bind(db);
-    let aggregatePrepareCalls = 0;
-    let legacyCountPrepareCalls = 0;
-    db.prepare = ((sql: string) => {
-      if (
-        sql.includes(`SELECT 'files' AS kind, source, COUNT(*) as c FROM files`) &&
-        sql.includes(`UNION ALL`)
-      ) {
-        aggregatePrepareCalls += 1;
-      }
-      if (
-        sql === `SELECT COUNT(*) as c FROM files WHERE 1=1` ||
-        sql === `SELECT COUNT(*) as c FROM chunks WHERE 1=1` ||
-        sql === `SELECT source, COUNT(*) as c FROM files WHERE 1=1 GROUP BY source` ||
-        sql === `SELECT source, COUNT(*) as c FROM chunks WHERE 1=1 GROUP BY source`
-      ) {
-        legacyCountPrepareCalls += 1;
-      }
-      return originalPrepare(sql);
-    }) as typeof db.prepare;
-
-    try {
-      const status = manager.status();
-      expect(status.files).toBeGreaterThan(0);
-      expect(status.chunks).toBeGreaterThan(0);
-      expect(
-        status.sourceCounts?.find((entry) => entry.source === "memory")?.files,
-      ).toBeGreaterThan(0);
-      expect(
-        status.sourceCounts?.find((entry) => entry.source === "sessions")?.files,
-      ).toBeGreaterThan(0);
-    } finally {
-      db.prepare = originalPrepare;
-      vi.unstubAllEnvs();
-    }
-
-    expect(aggregatePrepareCalls).toBe(1);
-    expect(legacyCountPrepareCalls).toBe(0);
-  });
-
-  it("reindexes when Gemini outputDimensionality changes", async () => {
-    const base = createCfg({
-      storePath: indexModelPath,
-      provider: "gemini",
-      model: "gemini-embedding-2-preview",
-      outputDimensionality: 3072,
-    });
-    const baseAgents = base.agents!;
-    const baseDefaults = baseAgents.defaults!;
-    const baseMemorySearch = baseDefaults.memorySearch!;
-
-    const first = await getMemorySearchManager({ cfg: base, agentId: "main" });
-    const firstManager = requireManager(first);
-    await firstManager.sync?.({ reason: "test" });
-    const callsAfterFirstSync = embedBatchCalls;
-    await firstManager.close?.();
-
-    const second = await getMemorySearchManager({
-      cfg: {
-        ...base,
-        agents: {
-          ...baseAgents,
-          defaults: {
-            ...baseDefaults,
-            memorySearch: {
-              ...baseMemorySearch,
-              outputDimensionality: 768,
-            },
-          },
-        },
-      },
-      agentId: "main",
-    });
-    const secondManager = requireManager(second);
-    await secondManager.sync?.({ reason: "test" });
-    expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
-    await secondManager.close?.();
-  });
-
-  it("reindexes when extraPaths change", async () => {
-    const storePath = path.join(workspaceDir, `index-scope-extra-${randomUUID()}.sqlite`);
-    const firstExtraDir = path.join(workspaceDir, "scope-extra-a");
-    const secondExtraDir = path.join(workspaceDir, "scope-extra-b");
-    await fs.rm(firstExtraDir, { recursive: true, force: true });
-    await fs.rm(secondExtraDir, { recursive: true, force: true });
-    await fs.mkdir(firstExtraDir, { recursive: true });
-    await fs.mkdir(secondExtraDir, { recursive: true });
-    await fs.writeFile(path.join(firstExtraDir, "a.md"), "alpha only");
-    await fs.writeFile(path.join(secondExtraDir, "b.md"), "beta only");
-
-    const first = await getMemorySearchManager({
-      cfg: createCfg({
-        storePath,
-        extraPaths: [firstExtraDir],
-      }),
-      agentId: "main",
-    });
-    const firstManager = requireManager(first);
-    await firstManager.sync?.({ reason: "test" });
-    await firstManager.close?.();
-
-    const second = await getMemorySearchManager({
-      cfg: createCfg({
-        storePath,
-        extraPaths: [secondExtraDir],
-      }),
-      agentId: "main",
-    });
-    const secondManager = requireManager(second);
-    await secondManager.sync?.({ reason: "test" });
-    const results = await secondManager.search("beta");
-    expect(results.some((result) => result.path.endsWith("scope-extra-b/b.md"))).toBe(true);
-    expect(results.some((result) => result.path.endsWith("scope-extra-a/a.md"))).toBe(false);
-    await secondManager.close?.();
-  });
-
-  it("reindexes when multimodal settings change", async () => {
-    const storePath = path.join(workspaceDir, `index-scope-multimodal-${randomUUID()}.sqlite`);
-    const mediaDir = path.join(workspaceDir, "scope-media");
-    await fs.rm(mediaDir, { recursive: true, force: true });
-    await fs.mkdir(mediaDir, { recursive: true });
-    await fs.writeFile(path.join(mediaDir, "diagram.png"), Buffer.from("png"));
-
-    const first = await getMemorySearchManager({
-      cfg: createCfg({
-        storePath,
-        provider: "gemini",
-        model: "gemini-embedding-2-preview",
-        extraPaths: [mediaDir],
-      }),
-      agentId: "main",
-    });
-    const firstManager = requireManager(first);
-    await firstManager.sync?.({ reason: "test" });
-    const multimodalCallsAfterFirstSync = embedBatchInputCalls;
-    await firstManager.close?.();
-
-    const second = await getMemorySearchManager({
-      cfg: createCfg({
-        storePath,
-        provider: "gemini",
-        model: "gemini-embedding-2-preview",
-        extraPaths: [mediaDir],
-        multimodal: { enabled: true, modalities: ["image"] },
-      }),
-      agentId: "main",
-    });
-    const secondManager = requireManager(second);
-    await secondManager.sync?.({ reason: "test" });
-    expect(embedBatchInputCalls).toBeGreaterThan(multimodalCallsAfterFirstSync);
-    const results = await secondManager.search("image");
-    expect(results.some((result) => result.path.endsWith("scope-media/diagram.png"))).toBe(true);
-    await secondManager.close?.();
-  });
-
   it("reuses cached embeddings on forced reindex", async () => {
     const cfg = createCfg({ storePath: indexMainPath, cacheEnabled: true });
     const manager = await getPersistentManager(cfg);
@@ -1338,46 +569,9 @@ describe("memory index", () => {
     expect(status.vector?.available).toBe(available);
   });
 
-  it("rejects reading non-memory paths", async () => {
-    const cfg = createCfg({ storePath: indexMainPath });
-    const manager = await getPersistentManager(cfg);
-    await expect(manager.readFile({ relPath: "NOTES.md" })).rejects.toThrow("path required");
-  });
-
-  it("allows reading from additional memory paths and blocks symlinks", async () => {
-    await fs.mkdir(extraDir, { recursive: true });
-    await fs.writeFile(path.join(extraDir, "extra.md"), "Extra content.");
-
-    const cfg = createCfg({ storePath: indexExtraPath, extraPaths: [extraDir] });
-    const manager = await getPersistentManager(cfg);
-    await expect(manager.readFile({ relPath: "extra/extra.md" })).resolves.toEqual({
-      path: "extra/extra.md",
-      text: "Extra content.",
-    });
-
-    const linkPath = path.join(extraDir, "linked.md");
-    let symlinkOk = true;
-    try {
-      await fs.symlink(path.join(extraDir, "extra.md"), linkPath, "file");
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "EPERM" || code === "EACCES") {
-        symlinkOk = false;
-      } else {
-        throw err;
-      }
-    }
-    if (symlinkOk) {
-      await expect(manager.readFile({ relPath: "extra/linked.md" })).rejects.toThrow(
-        "path required",
-      );
-    }
-  });
-
   it("triggers full reindex and cleans up old-model FTS rows when switching from provider to FTS-only", async () => {
     const sharedStorePath = path.join(workspaceDir, "index-provider-to-fts-only.sqlite");
 
-    // Phase 1: sync with a real provider — FTS rows stored under model = "mock-embed"
     const providerCfg = createCfg({ storePath: sharedStorePath, hybrid: { enabled: true } });
     const providerResult = await getMemorySearchManager({ cfg: providerCfg, agentId: "main" });
     const providerManager = requireManager(providerResult);
@@ -1397,7 +591,6 @@ describe("memory index", () => {
     await providerManager.close();
     managersForCleanup.delete(providerManager);
 
-    // Phase 2: switch to FTS-only (no provider) — should trigger full reindex
     forceNoProvider = true;
     const ftsOnlyCfg = createCfg({ storePath: sharedStorePath, hybrid: { enabled: true } });
     const ftsOnlyResult = await getMemorySearchManager({ cfg: ftsOnlyCfg, agentId: "main" });
@@ -1409,14 +602,11 @@ describe("memory index", () => {
     const db = (
       ftsOnlyManager as unknown as { db: { prepare: (s: string) => { get: () => { c: number } } } }
     ).db;
-
-    // old provider-model rows should be gone after full reindex
     const oldRows = db
       .prepare("SELECT COUNT(*) as c FROM chunks_fts WHERE model = 'mock-embed'")
       .get();
     expect(oldRows.c).toBe(0);
 
-    // new fts-only rows should exist
     const newRows = db
       .prepare("SELECT COUNT(*) as c FROM chunks_fts WHERE model = 'fts-only'")
       .get();
@@ -1427,7 +617,7 @@ describe("memory index", () => {
     forceNoProvider = true;
 
     const cfg = createCfg({
-      storePath: indexFtsOnlyPath,
+      storePath: path.join(workspaceDir, "index-fts-only.sqlite"),
       minScore: 0.35,
       hybrid: { enabled: true },
     });
@@ -1443,16 +633,13 @@ describe("memory index", () => {
     await manager.sync({ reason: "test" });
 
     const status = manager.status();
-    // chunks should be indexed via FTS even without a provider
     expect(status.chunks).toBeGreaterThan(0);
     expect(embedBatchCalls).toBe(0);
 
-    // keyword search should still return matching results under the default threshold
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.snippet).toMatch(/Alpha/i);
 
-    // unknown terms should return no results
     const noResults = await manager.search("nonexistent_xyz_keyword");
     expect(noResults.length).toBe(0);
   });

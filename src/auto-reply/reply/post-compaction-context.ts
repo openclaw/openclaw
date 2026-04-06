@@ -136,7 +136,7 @@ export async function readPostCompactionContext(
     // would be misleading for deployments that use different section names.
     const prose = isDefaultSections
       ? "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-        "Run your Session Startup sequence — read the required files before responding to the user."
+        "Run your Session Startup sequence - read the required files before responding to the user."
       : `Session was just compacted. The conversation summary above is a hint, NOT a substitute for your full startup sequence. ` +
         `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
 

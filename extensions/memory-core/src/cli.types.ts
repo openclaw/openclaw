@@ -4,6 +4,7 @@ export type MemoryCommandOptions = {
   deep?: boolean;
   index?: boolean;
   force?: boolean;
+  fix?: boolean;
   verbose?: boolean;
 };
 
@@ -19,5 +20,13 @@ export type MemoryPromoteCommandOptions = MemoryCommandOptions & {
   minRecallCount?: number;
   minUniqueQueries?: number;
   apply?: boolean;
+  includePromoted?: boolean;
+};
+
+export type MemoryPromoteExplainOptions = MemoryCommandOptions & {
+  includePromoted?: boolean;
+};
+
+export type MemoryRemHarnessOptions = MemoryCommandOptions & {
   includePromoted?: boolean;
 };

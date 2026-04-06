@@ -19,7 +19,7 @@ async function runSetup(params: {
 }) {
   return await runSetupWizardConfigure({
     configure: zalouserConfigure,
-    cfg: params.cfg as OpenClawConfig | undefined,
+    cfg: params.cfg,
     prompter: params.prompter,
     options: params.options,
     forceAllowFrom: params.forceAllowFrom,
@@ -160,6 +160,23 @@ describe("zalouser setup wizard", () => {
     ).toBe(true);
   });
 
+  it("writes canonical enabled entries for configured groups", async () => {
+    const prompter = createQuickstartPrompter({
+      groupAccess: true,
+      groupPolicy: "allowlist",
+      textByMessage: {
+        "Zalo groups allowlist (comma-separated)": "Family, Work",
+      },
+    });
+
+    const result = await runSetup({ prompter });
+
+    expect(result.cfg.channels?.zalouser?.groups).toEqual({
+      Family: { enabled: true, requireMention: true },
+      Work: { enabled: true, requireMention: true },
+    });
+  });
+
   it("preserves non-quickstart forceAllowFrom behavior", async () => {
     const note = vi.fn(async (_message: string, _title?: string) => {});
     const seen: string[] = [];
@@ -278,7 +295,10 @@ describe("zalouser setup wizard", () => {
 
     const next = zalouserSetupWizard.dmPolicy?.setPolicy(cfg, "open");
     expect(next?.channels?.zalouser?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.zalouser?.accounts?.work?.dmPolicy).toBe("open");
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
@@ -300,8 +320,11 @@ describe("zalouser setup wizard", () => {
     );
 
     expect(next?.channels?.zalouser?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.zalouser?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next?.channels?.zalouser?.accounts?.work?.allowFrom).toEqual(["123456789", "*"]);
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["123456789", "*"]);
   });
 
   it("shows the account-scoped current DM policy in quickstart notes", async () => {

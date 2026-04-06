@@ -7,6 +7,10 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginReloadRegistration,
+  OpenClawPluginSecurityAuditCollector,
+  OpenClawPluginSecurityAuditContext,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   OpenClawPluginToolContext,
@@ -18,6 +22,7 @@ import type {
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
+  ProviderApplyConfigDefaultsContext,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
   ProviderBuiltInModelSuppressionContext,
@@ -28,6 +33,7 @@ import type {
   ProviderDeferSyntheticProfileAuthContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderDiscoveryContext,
+  ProviderFailoverErrorContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeConfigContext,
@@ -63,11 +69,16 @@ import type {
   SpeechProviderPlugin,
   PluginCommandContext,
 } from "../plugins/types.js";
+import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginReloadRegistration,
+  OpenClawPluginSecurityAuditCollector,
+  OpenClawPluginSecurityAuditContext,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginCommandContext,
@@ -77,6 +88,7 @@ export type {
   ProviderCatalogResult,
   ProviderDeferSyntheticProfileAuthContext,
   ProviderAugmentModelCatalogContext,
+  ProviderApplyConfigDefaultsContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderBuiltInModelSuppressionResult,
   ProviderBuildMissingAuthMessageContext,
@@ -84,6 +96,7 @@ export type {
   ProviderCacheTtlEligibilityContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderFailoverErrorContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeConfigContext,
   ProviderNormalizeToolSchemasContext,
@@ -138,6 +151,9 @@ type DefinePluginEntryOptions = {
   description: string;
   kind?: OpenClawPluginDefinition["kind"];
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
+  reload?: OpenClawPluginDefinition["reload"];
+  nodeHostCommands?: OpenClawPluginDefinition["nodeHostCommands"];
+  securityAuditCollectors?: OpenClawPluginDefinition["securityAuditCollectors"];
   register: (api: OpenClawPluginApi) => void;
 };
 
@@ -148,14 +164,10 @@ type DefinedPluginEntry = {
   description: string;
   configSchema: OpenClawPluginConfigSchema;
   register: NonNullable<OpenClawPluginDefinition["register"]>;
-} & Pick<OpenClawPluginDefinition, "kind">;
-
-/** Resolve either a concrete config schema or a lazy schema factory. */
-function resolvePluginConfigSchema(
-  configSchema: DefinePluginEntryOptions["configSchema"] = emptyPluginConfigSchema,
-): OpenClawPluginConfigSchema {
-  return typeof configSchema === "function" ? configSchema() : configSchema;
-}
+} & Pick<
+  OpenClawPluginDefinition,
+  "kind" | "reload" | "nodeHostCommands" | "securityAuditCollectors"
+>;
 
 /**
  * Canonical entry helper for non-channel plugins.
@@ -170,14 +182,23 @@ export function definePluginEntry({
   description,
   kind,
   configSchema = emptyPluginConfigSchema,
+  reload,
+  nodeHostCommands,
+  securityAuditCollectors,
   register,
 }: DefinePluginEntryOptions): DefinedPluginEntry {
+  const getConfigSchema = createCachedLazyValueGetter(configSchema);
   return {
     id,
     name,
     description,
     ...(kind ? { kind } : {}),
-    configSchema: resolvePluginConfigSchema(configSchema),
+    ...(reload ? { reload } : {}),
+    ...(nodeHostCommands ? { nodeHostCommands } : {}),
+    ...(securityAuditCollectors ? { securityAuditCollectors } : {}),
+    get configSchema() {
+      return getConfigSchema();
+    },
     register,
   };
 }

@@ -1,0 +1,157 @@
+{
+  "id": "memory-wiki",
+  "name": "Memory Wiki",
+  "description": "Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.",
+  "skills": ["./skills"],
+  "uiHints": {
+    "vaultMode": {
+      "label": "Vault Mode",
+      "help": "Choose isolated, bridge, or unsafe-local mode for the wiki vault."
+    },
+    "vault.path": {
+      "label": "Vault Path",
+      "help": "Filesystem path for the wiki vault root."
+    },
+    "vault.renderMode": {
+      "label": "Render Mode",
+      "help": "Render markdown in native OpenClaw format or Obsidian-friendly format."
+    },
+    "obsidian.useOfficialCli": {
+      "label": "Use Obsidian CLI",
+      "help": "Probe and use the official Obsidian CLI when available."
+    },
+    "bridge.enabled": {
+      "label": "Enable Bridge Mode",
+      "help": "Read public memory artifacts and events from the selected memory plugin."
+    },
+    "unsafeLocal.allowPrivateMemoryCoreAccess": {
+      "label": "Allow Private Memory Access",
+      "help": "Experimental same-repo escape hatch for reading memory-core private paths."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "vaultMode": {
+        "type": "string",
+        "enum": ["isolated", "bridge", "unsafe-local"]
+      },
+      "vault": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "renderMode": {
+            "type": "string",
+            "enum": ["native", "obsidian"]
+          }
+        }
+      },
+      "obsidian": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "useOfficialCli": {
+            "type": "boolean"
+          },
+          "vaultName": {
+            "type": "string"
+          },
+          "openAfterWrites": {
+            "type": "boolean"
+          }
+        }
+      },
+      "bridge": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "readMemoryCore": {
+            "type": "boolean"
+          },
+          "indexDreamReports": {
+            "type": "boolean"
+          },
+          "indexDailyNotes": {
+            "type": "boolean"
+          },
+          "indexMemoryRoot": {
+            "type": "boolean"
+          },
+          "followMemoryEvents": {
+            "type": "boolean"
+          }
+        }
+      },
+      "unsafeLocal": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowPrivateMemoryCoreAccess": {
+            "type": "boolean"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ingest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "autoCompile": {
+            "type": "boolean"
+          },
+          "maxConcurrentJobs": {
+            "type": "number",
+            "minimum": 1
+          },
+          "allowUrlIngest": {
+            "type": "boolean"
+          }
+        }
+      },
+      "search": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": ["shared", "local"]
+          },
+          "corpus": {
+            "type": "string",
+            "enum": ["wiki", "memory", "all"]
+          }
+        }
+      },
+      "render": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "preserveHumanBlocks": {
+            "type": "boolean"
+          },
+          "createBacklinks": {
+            "type": "boolean"
+          },
+          "createDashboards": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

@@ -130,6 +130,7 @@ export type ExecApprovalsSetParams = SchemaType<"ExecApprovalsSetParams">;
 export type ExecApprovalsNodeGetParams = SchemaType<"ExecApprovalsNodeGetParams">;
 export type ExecApprovalsNodeSetParams = SchemaType<"ExecApprovalsNodeSetParams">;
 export type ExecApprovalsSnapshot = SchemaType<"ExecApprovalsSnapshot">;
+export type ExecApprovalGetParams = SchemaType<"ExecApprovalGetParams">;
 export type ExecApprovalRequestParams = SchemaType<"ExecApprovalRequestParams">;
 export type ExecApprovalResolveParams = SchemaType<"ExecApprovalResolveParams">;
 export type PluginApprovalRequestParams = SchemaType<"PluginApprovalRequestParams">;

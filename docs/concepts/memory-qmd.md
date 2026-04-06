@@ -25,7 +25,7 @@ binary, and can index content beyond your workspace memory files.
 
 ### Prerequisites
 
-- Install QMD: `bun install -g @tobilu/qmd`
+- Install QMD: `npm install -g @tobilu/qmd` or `bun install -g @tobilu/qmd`
 - SQLite build that allows extensions (`brew install sqlite` on macOS).
 - QMD must be on the gateway's `PATH`.
 - macOS and Linux work out of the box. Windows is best supported via WSL2.
@@ -43,6 +43,8 @@ binary, and can index content beyond your workspace memory files.
 OpenClaw creates a self-contained QMD home under
 `~/.openclaw/agents/<agentId>/qmd/` and manages the sidecar lifecycle
 automatically -- collections, updates, and embedding runs are handled for you.
+It prefers current QMD collection and MCP query shapes, but still falls back to
+legacy `--mask` collection flags and older MCP tool names when needed.
 
 ## How the sidecar works
 
@@ -58,6 +60,20 @@ automatically -- collections, updates, and embedding runs are handled for you.
 The first search may be slow -- QMD auto-downloads GGUF models (~2 GB) for
 reranking and query expansion on the first `qmd query` run.
 </Info>
+
+## Model overrides
+
+QMD model environment variables pass through unchanged from the gateway
+process, so you can tune QMD globally without adding new OpenClaw config:
+
+```bash
+export QMD_EMBED_MODEL="hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
+export QMD_RERANK_MODEL="/absolute/path/to/reranker.gguf"
+export QMD_GENERATE_MODEL="/absolute/path/to/generator.gguf"
+```
+
+After changing the embedding model, rerun embeddings so the index matches the
+new vector space.
 
 ## Indexing extra paths
 

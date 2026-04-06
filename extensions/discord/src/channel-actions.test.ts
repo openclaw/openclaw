@@ -90,9 +90,7 @@ describe("discordMessageActions", () => {
       accountId: "work",
     });
 
-    expect(defaultDiscovery?.actions).toEqual(
-      expect.arrayContaining(["send", "poll"]),
-    );
+    expect(defaultDiscovery?.actions).toEqual(expect.arrayContaining(["send", "poll"]));
     expect(defaultDiscovery?.actions).not.toContain("react");
     expect(workDiscovery?.actions).toEqual(
       expect.arrayContaining(["send", "react", "reactions", "emoji-list"]),

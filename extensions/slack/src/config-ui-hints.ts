@@ -1,4 +1,4 @@
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const slackChannelConfigUiHints = {
   "": {
@@ -77,13 +77,25 @@ export const slackChannelConfigUiHints = {
     label: "Slack Streaming Mode",
     help: 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
   },
-  nativeStreaming: {
-    label: "Slack Native Streaming",
-    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
+  "streaming.mode": {
+    label: "Slack Streaming Mode",
+    help: 'Canonical Slack preview mode: "off" | "partial" | "block" | "progress".',
   },
-  streamMode: {
-    label: "Slack Stream Mode (Legacy)",
-    help: "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
+  "streaming.chunkMode": {
+    label: "Slack Chunk Mode",
+    help: 'Chunking mode for outbound Slack text delivery: "length" (default) or "newline".',
+  },
+  "streaming.block.enabled": {
+    label: "Slack Block Streaming Enabled",
+    help: 'Enable chunked block-style Slack preview delivery when channels.slack.streaming.mode="block".',
+  },
+  "streaming.block.coalesce": {
+    label: "Slack Block Streaming Coalesce",
+    help: "Merge streamed Slack block replies before final delivery.",
+  },
+  "streaming.nativeTransport": {
+    label: "Slack Native Streaming",
+    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true).",
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",

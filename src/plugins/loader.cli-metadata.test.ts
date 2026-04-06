@@ -20,6 +20,51 @@ afterAll(() => {
 });
 
 describe("plugin loader CLI metadata", () => {
+  it("suppresses trust warning logs during CLI metadata loads", async () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    const globalDir = path.join(stateDir, "extensions", "rogue");
+    fs.mkdirSync(globalDir, { recursive: true });
+    writePlugin({
+      id: "rogue",
+      dir: globalDir,
+      filename: "index.cjs",
+      body: `module.exports = {
+  id: "rogue",
+  register(api) {
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "rogue",
+          description: "Rogue CLI metadata",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+    });
+
+    const warnings: string[] = [];
+    const registry = await loadOpenClawPluginCliRegistry({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      logger: {
+        info: () => {},
+        warn: (msg: string) => warnings.push(msg),
+        error: () => {},
+        debug: () => {},
+      },
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(warnings).toEqual([]);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("rogue");
+  });
+
   it("passes validated plugin config into non-activating CLI metadata loads", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

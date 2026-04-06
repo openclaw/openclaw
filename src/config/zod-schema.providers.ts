@@ -1,5 +1,10 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { getBundledChannelRuntimeMap } from "./bundled-channel-config-runtime.js";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import { collectBundledChannelConfigs } from "../plugins/bundled-channel-config-metadata.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
@@ -12,7 +17,61 @@ const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
 
-const directChannelRuntimeSchemas = getBundledChannelRuntimeMap();
+let directChannelRuntimeSchemasCache: ReadonlyMap<string, ChannelConfigRuntimeSchema> | undefined;
+const OPENCLAW_PACKAGE_ROOT =
+  resolveLoaderPackageRoot({
+    modulePath: fileURLToPath(import.meta.url),
+    moduleUrl: import.meta.url,
+  }) ?? fileURLToPath(new URL("../..", import.meta.url));
+
+function getDirectChannelRuntimeSchema(channelId: string): ChannelConfigRuntimeSchema | undefined {
+  if (!directChannelRuntimeSchemasCache) {
+    directChannelRuntimeSchemasCache = new Map();
+  }
+
+  const cached = directChannelRuntimeSchemasCache.get(channelId);
+  if (cached) {
+    return cached;
+  }
+
+  for (const entry of listBundledPluginMetadata({
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  })) {
+    const manifestRuntime = entry.manifest.channelConfigs?.[channelId]?.runtime;
+    if (manifestRuntime) {
+      (directChannelRuntimeSchemasCache as Map<string, ChannelConfigRuntimeSchema>).set(
+        channelId,
+        manifestRuntime,
+      );
+      return manifestRuntime;
+    }
+    if (!entry.manifest.channels?.includes(channelId)) {
+      continue;
+    }
+    const collectedChannelConfigs = collectBundledChannelConfigs({
+      pluginDir: path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions", entry.dirName),
+      manifest: entry.manifest,
+      ...(entry.packageManifest ? { packageManifest: entry.packageManifest } : {}),
+    });
+    const collectedRuntime = collectedChannelConfigs?.[channelId]?.runtime;
+    if (collectedRuntime) {
+      (directChannelRuntimeSchemasCache as Map<string, ChannelConfigRuntimeSchema>).set(
+        channelId,
+        collectedRuntime,
+      );
+      return collectedRuntime;
+    }
+  }
+
+  return undefined;
+}
+
+function hasPluginOwnedChannelConfig(
+  value: ChannelsConfig,
+): value is ChannelsConfig & Record<string, unknown> {
+  return Object.keys(value).some((key) => key !== "defaults" && key !== "modelByChannel");
+}
 
 function addLegacyChannelAcpBindingIssues(
   value: unknown,
@@ -50,12 +109,16 @@ function normalizeBundledChannelConfigs(
   value: ChannelsConfig | undefined,
   ctx: z.RefinementCtx,
 ): ChannelsConfig | undefined {
-  if (!value) {
+  if (!value || !hasPluginOwnedChannelConfig(value)) {
     return value;
   }
 
   let next: ChannelsConfig | undefined;
-  for (const [channelId, runtimeSchema] of directChannelRuntimeSchemas) {
+  for (const channelId of Object.keys(value)) {
+    const runtimeSchema = getDirectChannelRuntimeSchema(channelId);
+    if (!runtimeSchema) {
+      continue;
+    }
     if (!Object.prototype.hasOwnProperty.call(value, channelId)) {
       continue;
     }
@@ -93,5 +156,5 @@ export const ChannelsSchema: z.ZodType<ChannelsConfig | undefined> = z
   .superRefine((value, ctx) => {
     addLegacyChannelAcpBindingIssues(value, ctx);
   })
-  .transform((value, ctx) => normalizeBundledChannelConfigs(value, ctx))
+  .transform((value, ctx) => normalizeBundledChannelConfigs(value as ChannelsConfig, ctx))
   .optional() as z.ZodType<ChannelsConfig | undefined>;

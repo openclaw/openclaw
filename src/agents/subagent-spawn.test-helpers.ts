@@ -9,6 +9,9 @@ type MockImplementationTarget = {
 type SessionStore = Record<string, Record<string, unknown>>;
 type SessionStoreMutator = (store: SessionStore) => unknown;
 type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks" | "runSubagentSpawning">;
+type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
+  resetSubagentRegistryForTests: MockFn;
+};
 
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
@@ -119,8 +122,13 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveSandboxRuntimeStatus?: () => { sandboxed: boolean };
   workspaceDir?: string;
   sessionStorePath?: string;
-}) {
-  vi.resetModules();
+  resetModules?: boolean;
+}): Promise<SubagentSpawnModuleForTest> {
+  if (params.resetModules ?? true) {
+    vi.resetModules();
+  }
+
+  const resetSubagentRegistryForTests = vi.fn();
 
   vi.doMock("./subagent-spawn.runtime.js", () => ({
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
@@ -178,17 +186,16 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getSubagentDepthFromSessionStore: () => 0,
   }));
 
-  const subagentRegistry = await import("./subagent-registry.js");
-  if (params.registerSubagentRunMock) {
-    vi.spyOn(subagentRegistry, "registerSubagentRun").mockImplementation(
-      (...args: Parameters<typeof subagentRegistry.registerSubagentRun>) =>
-        params.registerSubagentRunMock?.(...args) as ReturnType<
-          typeof subagentRegistry.registerSubagentRun
-        >,
-    );
-  }
+  vi.doMock("./subagent-registry.js", () => ({
+    countActiveRunsForSession: () => 0,
+    registerSubagentRun:
+      params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
+    resetSubagentRegistryForTests,
+  }));
+
+  const subagentSpawnModule = await import("./subagent-spawn.js");
   return {
-    ...(await import("./subagent-spawn.js")),
-    resetSubagentRegistryForTests: subagentRegistry.resetSubagentRegistryForTests,
+    ...subagentSpawnModule,
+    resetSubagentRegistryForTests,
   };
 }

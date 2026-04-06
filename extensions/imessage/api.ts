@@ -1,4 +1,5 @@
 export { imessagePlugin } from "./src/channel.js";
+export { imessageSetupPlugin } from "./src/channel.setup.js";
 export * from "./src/accounts.js";
 export * from "./src/conversation-bindings.js";
 export * from "./src/conversation-id.js";
@@ -8,4 +9,3 @@ export { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./src/outbound-send-deps
 export * from "./src/probe.js";
 export * from "./src/target-parsing-helpers.js";
 export * from "./src/targets.js";
-export { resolveIMessageRuntimeGroupPolicy } from "./src/monitor/monitor-provider.js";

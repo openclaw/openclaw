@@ -651,6 +651,7 @@ function findExistingTaskForCreate(params: {
 function mergeExistingTaskForCreate(
   existing: TaskRecord,
   params: {
+    taskKind?: string;
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
     sourceId?: string;
     parentFlowId?: string;
@@ -675,6 +676,9 @@ function mergeExistingTaskForCreate(
   }
   if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
     patch.sourceId = params.sourceId.trim();
+  }
+  if (params.taskKind?.trim() && !existing.taskKind?.trim()) {
+    patch.taskKind = params.taskKind.trim();
   }
   if (params.parentFlowId?.trim() && !existing.parentFlowId?.trim()) {
     assertParentFlowLinkAllowed({
@@ -1357,6 +1361,7 @@ function ensureListener() {
 
 export function createTaskRecord(params: {
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   requesterSessionKey?: string;
   ownerKey?: string;
@@ -1431,6 +1436,7 @@ export function createTaskRecord(params: {
   const record: TaskRecord = {
     taskId,
     runtime: params.runtime,
+    taskKind: params.taskKind?.trim() || undefined,
     sourceId: params.sourceId?.trim() || undefined,
     requesterSessionKey,
     ownerKey,

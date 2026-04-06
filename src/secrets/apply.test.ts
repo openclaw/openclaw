@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  buildTalkTestProviderConfig,
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
+  TALK_TEST_PROVIDER_ID,
+} from "../test-utils/talk-test-provider.js";
 import { runSecretsApply } from "./apply.js";
 import type { SecretsApplyPlan } from "./plan.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";
@@ -520,22 +526,9 @@ describe("secrets apply", () => {
   });
 
   it("applies talk provider target types", async () => {
-    await fs.writeFile(
+    await writeJsonFile(
       fixture.configPath,
-      `${JSON.stringify(
-        {
-          talk: {
-            providers: {
-              elevenlabs: {
-                apiKey: "sk-talk-plaintext", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
+      buildTalkTestProviderConfig("sk-talk-plaintext"), // pragma: allowlist secret
     );
 
     const plan: SecretsApplyPlan = {
@@ -546,8 +539,8 @@ describe("secrets apply", () => {
       targets: [
         {
           type: "talk.providers.*.apiKey",
-          path: "talk.providers.elevenlabs.apiKey",
-          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
           ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         },
       ],
@@ -562,9 +555,9 @@ describe("secrets apply", () => {
     expect(result.changed).toBe(true);
 
     const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
-      talk?: { providers?: { elevenlabs?: { apiKey?: unknown } } };
+      talk?: { providers?: Record<string, { apiKey?: unknown }> };
     };
-    expect(nextConfig.talk?.providers?.elevenlabs?.apiKey).toEqual({
+    expect(nextConfig.talk?.providers?.[TALK_TEST_PROVIDER_ID]?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "OPENAI_API_KEY",

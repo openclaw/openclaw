@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveProviderWebSearchPluginConfig } from "../plugin-sdk/provider-web-search.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
@@ -73,8 +72,10 @@ export function resolveEnvApiKeyVarName(
   return match ? match[1] : undefined;
 }
 
-export function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveAwsSdkEnvVarName(env) ?? "AWS_PROFILE";
+export function resolveAwsSdkApiKeyVarName(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return resolveAwsSdkEnvVarName(env);
 }
 
 export function normalizeHeaderValues(params: {
@@ -277,15 +278,28 @@ export function resolveMissingProviderApiKey(params: {
 
   const authMode = params.provider.auth;
   if (params.providerApiKeyResolver && (!authMode || authMode === "aws-sdk")) {
+    const resolvedApiKey = params.providerApiKeyResolver(params.env);
+    if (!resolvedApiKey) {
+      // Resolver returned nothing (e.g. no AWS env vars on an instance-role setup).
+      // Don't inject an undefined/empty apiKey — let the sdk credential chain handle it.
+      return params.provider;
+    }
     return {
       ...params.provider,
-      apiKey: params.providerApiKeyResolver(params.env),
+      apiKey: resolvedApiKey,
     };
   }
   if (authMode === "aws-sdk") {
+    const awsEnvVar = resolveAwsSdkApiKeyVarName(params.env);
+    if (!awsEnvVar) {
+      // No AWS env vars found — don't inject a fake apiKey marker.
+      // The aws-sdk credential chain (instance roles, ECS task roles, etc.)
+      // will resolve credentials at request time without needing an apiKey field.
+      return params.provider;
+    }
     return {
       ...params.provider,
-      apiKey: resolveAwsSdkApiKeyVarName(params.env),
+      apiKey: awsEnvVar,
     };
   }
 
@@ -424,16 +438,15 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
   // Providers own any provider-specific fallback auth logic via
   // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
   // non-secret markers from source config, but must never persist plaintext.
-  const synthetic =
-    resolveProviderSyntheticAuthWithPlugin({
-      provider: params.provider,
+  const synthetic = resolveProviderSyntheticAuthWithPlugin({
+    provider: params.provider,
+    config: params.config,
+    context: {
       config: params.config,
-      context: {
-        config: params.config,
-        provider: params.provider,
-        providerConfig: params.config?.models?.providers?.[params.provider],
-      },
-    }) ?? resolveXaiConfigFallbackAuth(params);
+      provider: params.provider,
+      providerConfig: params.config?.models?.providers?.[params.provider],
+    },
+  });
   const apiKey = synthetic?.apiKey?.trim();
   if (!apiKey) {
     return undefined;
@@ -451,50 +464,4 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
         mode: "api_key",
         source: "config",
       };
-}
-
-function resolveXaiConfigFallbackAuth(params: { provider: string; config?: OpenClawConfig }):
-  | {
-      apiKey: string;
-      source: string;
-      mode: "api-key";
-    }
-  | undefined {
-  if (params.provider.trim().toLowerCase() !== "xai") {
-    return undefined;
-  }
-  const xaiPluginEntry = params.config?.plugins?.entries?.xai;
-  if (xaiPluginEntry?.enabled === false) {
-    return undefined;
-  }
-  const pluginApiKey = normalizeOptionalSecretInput(
-    resolveProviderWebSearchPluginConfig(
-      params.config as Record<string, unknown> | undefined,
-      "xai",
-    )?.apiKey,
-  );
-  if (pluginApiKey) {
-    return {
-      apiKey: pluginApiKey,
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
-    };
-  }
-  const pluginApiKeyRef = coerceSecretRef(
-    resolveProviderWebSearchPluginConfig(
-      params.config as Record<string, unknown> | undefined,
-      "xai",
-    )?.apiKey,
-  );
-  if (pluginApiKeyRef) {
-    return {
-      apiKey:
-        pluginApiKeyRef.source === "env"
-          ? pluginApiKeyRef.id.trim()
-          : resolveNonEnvSecretRefApiKeyMarker(pluginApiKeyRef.source),
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
-    };
-  }
-  return undefined;
 }

@@ -336,9 +336,8 @@ describe("installHooksFromNpmSpec", () => {
           params: Parameters<typeof hookInstallRuntime.installFromValidatedNpmSpecArchive>[0],
         ) => {
           expect(
-            "dangerouslyForceUnsafeInstall" in
-              (params.archiveInstallParams as Record<string, unknown>),
-          ).toBe(false);
+            (params.archiveInstallParams as Record<string, unknown>).dangerouslyForceUnsafeInstall,
+          ).toBeUndefined();
           return {
             ok: true,
             hookPackId: "test-hooks",

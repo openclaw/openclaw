@@ -1,8 +1,4 @@
-import {
-  formatTrimmedAllowFromEntries,
-  resolveIMessageConfigAllowFrom,
-  resolveIMessageConfigDefaultTo,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+import { formatTrimmedAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import {
@@ -13,7 +9,12 @@ import {
 } from "openclaw/plugin-sdk/core";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import { collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";
+import {
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
+} from "./config-accessors.js";
 import { looksLikeIMessageTargetId, normalizeIMessageMessagingTarget } from "./normalize.js";
+export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 
 export {
   collectStatusIssuesFromLastError,
@@ -29,19 +30,3 @@ export {
 };
 
 export type { ChannelPlugin, ChannelStatusIssue, OpenClawConfig };
-
-export function chunkTextForOutbound(text: string, limit: number): string[] {
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > limit) {
-    const window = remaining.slice(0, limit);
-    const splitAt = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
-    const breakAt = splitAt > 0 ? splitAt : limit;
-    chunks.push(remaining.slice(0, breakAt).trimEnd());
-    remaining = remaining.slice(breakAt).trimStart();
-  }
-  if (remaining.length > 0 || text.length === 0) {
-    chunks.push(remaining);
-  }
-  return chunks;
-}

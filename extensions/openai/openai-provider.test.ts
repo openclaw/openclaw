@@ -163,6 +163,25 @@ describe("buildOpenAIProvider", () => {
     );
   });
 
+  it("owns native reasoning output mode for OpenAI and Azure OpenAI responses", () => {
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "azure-openai-responses",
+        modelApi: "azure-openai-responses",
+        modelId: "gpt-5.4",
+      } as never),
+    ).toBe("native");
+  });
+
   it("keeps GPT-5.4 family metadata aligned with native OpenAI docs", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();

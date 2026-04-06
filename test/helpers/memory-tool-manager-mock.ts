@@ -48,7 +48,7 @@ vi.mock(memoryIndexModuleId, () => ({
   getMemorySearchManager: getMemorySearchManagerMock,
 }));
 
-vi.mock("../../packages/memory-host-sdk/src/host/read-file.js", () => ({
+vi.mock("../../src/memory-host-sdk/host/read-file.js", () => ({
   readAgentMemoryFile: readAgentMemoryFileMock,
 }));
 

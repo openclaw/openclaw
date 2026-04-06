@@ -184,7 +184,7 @@ describe("gateway run option collisions", () => {
     expect(forceFreePortAndWait).toHaveBeenCalledWith(18789, expect.anything());
     expect(waitForPortBindable).toHaveBeenCalledWith(
       18789,
-      expect.objectContaining({ host: "127.0.0.1" }),
+      expect.objectContaining({ intervalMs: 150, timeoutMs: 3000 }),
     );
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(startGatewayServer).toHaveBeenCalledWith(
