@@ -44,18 +44,17 @@ export function extractAssistantText(message: unknown): string | undefined {
   }
   const hasPhaseMetadata = content.some(
     (block) =>
-      block &&
-      typeof block === "object" &&
-      typeof (block as { textSignature?: unknown }).textSignature === "string",
+      block && typeof block === "object" && typeof (block as { textSignature?: unknown }).textSignature === "string",
   );
   const joined = hasPhaseMetadata
-    ? (extractAssistantVisibleText(message as Parameters<typeof extractAssistantVisibleText>[0]) ??
-      "")
-    : (extractTextFromChatContent(content, {
-        sanitizeText: sanitizeTextContent,
-        joinWith: "",
-        normalizeText: (text) => text.trim(),
-      }) ?? "");
+    ? (extractAssistantVisibleText(message as Parameters<typeof extractAssistantVisibleText>[0]) ?? "")
+    : (
+        extractTextFromChatContent(content, {
+          sanitizeText: sanitizeTextContent,
+          joinWith: "",
+          normalizeText: (text) => text.trim(),
+        }) ?? ""
+      );
   if (!joined.trim()) {
     return undefined;
   }

@@ -140,9 +140,7 @@ function normalizeDiscordStreamingAliases(params: {
   const preview = ensureNestedRecord(streaming, "preview");
 
   if (
-    (hadLegacyStreamMode ||
-      typeof beforeStreaming === "boolean" ||
-      typeof beforeStreaming === "string") &&
+    (hadLegacyStreamMode || typeof beforeStreaming === "boolean" || typeof beforeStreaming === "string") &&
     streaming.mode === undefined
   ) {
     streaming.mode = resolved;
