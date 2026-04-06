@@ -2,7 +2,6 @@ import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/config-r
 import {
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
-  isNonSecretApiKeyMarker,
   normalizeOptionalSecretInput,
   type OpenClawConfig,
   type SecretInput,

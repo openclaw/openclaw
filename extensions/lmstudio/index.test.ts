@@ -27,7 +27,7 @@ function createRemoteProviderConfig(overrides?: Partial<ModelProviderConfig>): M
         maxTokens: 8192,
       },
     ],
-    ...(overrides ?? {}),
+    ...overrides,
   };
 }
 

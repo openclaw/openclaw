@@ -8,7 +8,6 @@ import { resolveLmstudioProviderHeaders, resolveLmstudioRuntimeApiKey } from "./
 
 const log = createSubsystemLogger("extensions/lmstudio/stream");
 
-type StreamContext = Parameters<StreamFn>[1];
 type StreamOptions = Parameters<StreamFn>[2];
 type StreamModel = Parameters<StreamFn>[0];
 
@@ -44,7 +43,7 @@ function resolveModelHeaders(model: StreamModel): Record<string, string> | undef
   if (!model.headers || typeof model.headers !== "object" || Array.isArray(model.headers)) {
     return undefined;
   }
-  return model.headers as Record<string, string>;
+  return model.headers;
 }
 
 function createPreloadKey(params: {
@@ -65,8 +64,8 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
 }): Promise<void> {
   const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
   const headersInput: Record<string, unknown> = {
-    ...(providerConfig?.headers ?? {}),
-    ...(params.modelHeaders ?? {}),
+    ...providerConfig?.headers,
+    ...params.modelHeaders,
   };
   const headers = await resolveLmstudioProviderHeaders({
     config: params.ctx.config,
@@ -135,7 +134,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
           `LM Studio inference preload failed for "${modelKey}"; continuing without preload: ${String(error)}`,
         );
       }
-      const stream = underlying(model, context as StreamContext, options);
+      const stream = underlying(model, context, options);
       return stream instanceof Promise ? await stream : stream;
     })();
   };

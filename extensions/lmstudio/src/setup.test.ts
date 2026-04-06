@@ -153,7 +153,9 @@ function createWizardPrompterHarness(textValue = "32768"): {
     note,
     select: async <T>(params: { options: Array<{ value: T }> }) => {
       const firstOption = params.options[0];
-      if (!firstOption) throw new Error("select called without options");
+      if (!firstOption) {
+        throw new Error("select called without options");
+      }
       return firstOption.value;
     },
     multiselect: async () => [],

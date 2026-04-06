@@ -13,7 +13,6 @@ import {
   createLmstudioEmbeddingProvider,
   createLocalEmbeddingProvider,
   createMistralEmbeddingProvider,
-  createOllamaEmbeddingProvider,
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
