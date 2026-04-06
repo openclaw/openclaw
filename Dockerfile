@@ -159,9 +159,16 @@ COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
 
-# In npm-installed Docker images, prefer the copied source extension tree for
-# bundled discovery so package metadata that points at source entries stays valid.
-ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/${OPENCLAW_BUNDLED_PLUGIN_DIR}
+# Use the compiled dist/ extension tree for bundled discovery.
+# Node 24 includes native TypeScript support (process.features.typescript = true)
+# which causes it to load .ts source files directly when the source extension tree
+# is used. However, Node 24's native TS loader does not remap .js→.ts for static
+# imports inside those .ts files, causing crashes like:
+#   Cannot find module '/app/extensions/matrix/src/account-selection.js'
+# Using dist/extensions (compiled JS) avoids this. The dist/ tree is already
+# present in the runtime image (see COPY --from=runtime-assets line above).
+# See: https://github.com/openclaw/openclaw/issues/62044
+ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
