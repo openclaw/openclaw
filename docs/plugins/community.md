@@ -102,6 +102,18 @@ formatting, built-in access control, and document/meeting/messaging skills.
 openclaw plugins install @wecom/wecom-openclaw-plugin
 ```
 
+### MDPersona
+
+Sync your encrypted MDPersona preference profiles into the workspace. Decrypts
+travel, dining, media, and communication preferences locally — your password
+never leaves your device.
+
+- **npm:** `mdpersona-plugin`
+- **repo:** [github.com/MDPersona/openclaw-plugin-official](https://github.com/MDPersona/openclaw-plugin-official)
+
+```bash
+openclaw plugins install mdpersona-plugin
+
 ## Submit your plugin
 
 We welcome community plugins that are useful, documented, and safe to operate.
