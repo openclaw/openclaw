@@ -176,6 +176,26 @@ describe("provider-usage.load", () => {
     expect(anthropic?.error).toBe("Timeout");
   });
 
+  it("reports AbortSignal.timeout() TimeoutError as timeout rather than fetch failure", async () => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      if (url.includes("api.anthropic.com")) {
+        // Simulate a TimeoutError thrown by AbortSignal.timeout().
+        const err = new DOMException("The operation timed out", "TimeoutError");
+        throw err;
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [{ provider: "anthropic", token: "token-a" }],
+      mockFetch,
+    );
+
+    const anthropic = summary.providers.find((p) => p.provider === "anthropic");
+    expect(anthropic?.error).toBe("Timeout");
+  });
+
   it("throws when fetch is unavailable", async () => {
     const previousFetch = globalThis.fetch;
     vi.stubGlobal("fetch", undefined);

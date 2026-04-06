@@ -9,6 +9,7 @@ import {
   fetchMinimaxUsage,
   fetchZaiUsage,
 } from "./provider-usage.fetch.js";
+import { isAbortError } from "./unhandled-rejections.js";
 import {
   DEFAULT_TIMEOUT_MS,
   ignoredErrors,
@@ -206,7 +207,10 @@ export async function loadProviderUsageSummary(
       { ...errorSnapshot, error: "Timeout" },
     ).catch((err: unknown) => ({
       ...errorSnapshot,
-      error: err instanceof Error && err.name === "AbortError" ? "Timeout" : "Fetch failed",
+      error:
+        isAbortError(err) || (err instanceof Error && err.name === "TimeoutError")
+          ? "Timeout"
+          : "Fetch failed",
     }));
   });
 
