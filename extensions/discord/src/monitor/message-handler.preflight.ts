@@ -12,7 +12,7 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
+import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
@@ -65,7 +65,7 @@ export type {
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
 let conversationRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/conversation-runtime")>
+  | Promise<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>
   | undefined;
 let pluralkitRuntimePromise: Promise<typeof import("../pluralkit.js")> | undefined;
 let discordSendRuntimePromise: Promise<typeof import("../send.js")> | undefined;
@@ -74,7 +74,7 @@ let systemEventsRuntimePromise: Promise<typeof import("./system-events.js")> | u
 let discordThreadingRuntimePromise: Promise<typeof import("./threading.js")> | undefined;
 
 async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-runtime");
+  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-binding-runtime");
   return await conversationRuntimePromise;
 }
 
