@@ -1,6 +1,9 @@
 import fs from "fs";
 import path from "path";
-import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
@@ -8,7 +11,12 @@ import { replyComment } from "./drive.js";
 import { sendMediaFeishu } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
+import {
+  sendCardFeishu,
+  sendMarkdownCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+} from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -92,9 +100,10 @@ async function sendOutboundText(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }) {
-  const { cfg, to, text, accountId, replyToMessageId } = params;
+  const { cfg, to, text, accountId, replyToMessageId, replyInThread } = params;
   const commentResult = await sendCommentThreadReply({
     cfg,
     to,
@@ -109,10 +118,10 @@ async function sendOutboundText(params: {
   const renderMode = account.config?.renderMode ?? "auto";
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
+    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
+  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
@@ -262,4 +271,34 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       });
     },
   }),
+  sendPayload: async ({ cfg, to, payload, accountId, replyToId, threadId }) => {
+    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+    // Extract Feishu Interactive Card from channelData if present
+    const feishuData = payload.channelData?.feishu as
+      | { card?: Record<string, unknown> }
+      | undefined;
+    const replyInThread = threadId != null && !replyToId;
+    if (feishuData?.card) {
+      const result = await sendCardFeishu({
+        cfg,
+        to,
+        card: feishuData.card,
+        accountId: accountId ?? undefined,
+        replyToMessageId,
+        replyInThread,
+      });
+      return attachChannelToResult("feishu", result);
+    }
+    // Fallback: send as text
+    const text = payload.text ?? "";
+    const result = await sendOutboundText({
+      cfg,
+      to,
+      text,
+      accountId: accountId ?? undefined,
+      replyToMessageId,
+      replyInThread,
+    });
+    return attachChannelToResult("feishu", result);
+  },
 };

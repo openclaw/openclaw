@@ -32,6 +32,7 @@ import {
   resolveDefaultFeishuAccountId,
 } from "./accounts.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
+import { feishuApprovalCapability } from "./approval-native.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
 import {
   buildChannelConfigSchema,
@@ -58,6 +59,7 @@ import {
   parseFeishuTargetId,
 } from "./conversation-id.js";
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
+import { shouldSuppressLocalFeishuExecApprovalPrompt } from "./exec-approvals.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -1110,6 +1112,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           hint: "<chatId|user:openId|chat:chatId>",
         },
       },
+      approvalCapability: {
+        ...feishuApprovalCapability,
+      },
       directory: createChannelDirectoryAdapter({
         listPeers: async ({ cfg, query, limit, accountId }) =>
           listFeishuDirectoryPeers({
@@ -1216,10 +1221,20 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+        shouldSuppressLocalFeishuExecApprovalPrompt({ cfg, accountId, payload }),
       ...createRuntimeOutboundDelegates({
         getRuntime: loadFeishuChannelRuntime,
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
         sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
       }),
+      sendPayload: async (ctx) => {
+        const runtime = await loadFeishuChannelRuntime();
+        const sendPayloadFn = runtime.feishuOutbound.sendPayload;
+        if (!sendPayloadFn) {
+          throw new Error("feishu sendPayload is unavailable");
+        }
+        return sendPayloadFn(ctx);
+      },
     },
   });

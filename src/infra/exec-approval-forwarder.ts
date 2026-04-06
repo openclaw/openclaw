@@ -101,7 +101,7 @@ type ApprovalStrategy<
   ) => ReplyPayload;
   buildResolvedPayload: (
     params: ApprovalResolvedRenderContext<TResolved, TRouteRequest>,
-  ) => ReplyPayload;
+  ) => ReplyPayload | null;
 };
 
 export type ExecApprovalForwarder = {
@@ -310,7 +310,7 @@ function defaultResolveSessionTarget(params: {
 async function deliverToTargets(params: {
   cfg: OpenClawConfig;
   targets: ForwardTarget[];
-  buildPayload: (target: ForwardTarget) => ReplyPayload;
+  buildPayload: (target: ForwardTarget) => ReplyPayload | null;
   deliver: DeliverOutboundPayloads;
   beforeDeliver?: (target: ForwardTarget, payload: ReplyPayload) => Promise<void> | void;
   shouldSend?: () => boolean;
@@ -325,6 +325,9 @@ async function deliverToTargets(params: {
     }
     try {
       const payload = params.buildPayload(target);
+      if (!payload) {
+        return;
+      }
       await params.beforeDeliver?.(target, payload);
       await params.deliver({
         cfg: params.cfg,
@@ -375,19 +378,24 @@ function buildExecResolvedPayload(params: {
   cfg: OpenClawConfig;
   resolved: ExecApprovalResolved;
   target: ForwardTarget;
-}): ReplyPayload {
+}): ReplyPayload | null {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
-  const pluginPayload = channel
-    ? resolveChannelApprovalAdapter(
-        getChannelPlugin(channel),
-      )?.render?.exec?.buildResolvedPayload?.({
-        cfg: params.cfg,
-        resolved: params.resolved,
-        target: params.target,
-      })
-    : null;
-  if (pluginPayload) {
-    return pluginPayload;
+  const pluginBuilder = channel
+    ? resolveChannelApprovalAdapter(getChannelPlugin(channel))?.render?.exec?.buildResolvedPayload
+    : undefined;
+  if (pluginBuilder) {
+    // Plugin explicitly handles resolved payloads — respect its decision:
+    // - ReplyPayload → use this payload
+    // - null → suppress this notification
+    // - undefined → fall through to default text message
+    const result = pluginBuilder({
+      cfg: params.cfg,
+      resolved: params.resolved,
+      target: params.target,
+    });
+    if (result !== undefined) {
+      return result;
+    }
   }
   return buildApprovalResolvedReplyPayload({
     approvalId: params.resolved.id,
