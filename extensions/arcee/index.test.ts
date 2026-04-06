@@ -29,6 +29,44 @@ describe("arcee provider plugin", () => {
     expect(orChoice?.method.id).toBe("openrouter");
   });
 
+  it("stores the OpenRouter onboarding path under the OpenRouter auth profile", async () => {
+    const provider = await registerSingleProviderPlugin(arceePlugin);
+    const openRouterMethod = provider.auth?.find((method) => method.id === "openrouter");
+    if (!openRouterMethod?.runNonInteractive) {
+      throw new Error("expected OpenRouter non-interactive auth");
+    }
+
+    const config = await openRouterMethod.runNonInteractive({
+      config: {},
+      opts: {},
+      env: {},
+      runtime: {
+        error: () => {},
+        exit: () => {},
+        log: () => {},
+      },
+      resolveApiKey: async () => ({
+        key: "sk-or-test",
+        source: "profile",
+      }),
+      toApiKeyCredential: () => null,
+    } as never);
+
+    expect(config?.auth?.profiles?.["openrouter:default"]).toMatchObject({
+      provider: "openrouter",
+      mode: "api_key",
+    });
+    expect(config?.models?.providers?.arcee).toMatchObject({
+      baseUrl: "https://openrouter.ai/api/v1",
+      api: "openai-completions",
+    });
+    expect(config?.models?.providers?.arcee?.models?.map((model) => model.id)).toEqual([
+      "arcee/trinity-mini",
+      "arcee/trinity-large-preview",
+      "arcee/trinity-large-thinking",
+    ]);
+  });
+
   it("builds the direct Arcee AI model catalog", async () => {
     const provider = await registerSingleProviderPlugin(arceePlugin);
     expect(provider.catalog).toBeDefined();
@@ -81,9 +119,41 @@ describe("arcee provider plugin", () => {
 
     expect(catalog.provider.baseUrl).toBe("https://openrouter.ai/api/v1");
     expect(catalog.provider.models?.map((model) => model.id)).toEqual([
-      "trinity-mini",
-      "trinity-large-preview",
-      "trinity-large-thinking",
+      "arcee/trinity-mini",
+      "arcee/trinity-large-preview",
+      "arcee/trinity-large-thinking",
     ]);
+  });
+
+  it("normalizes Arcee OpenRouter models to vendor-prefixed runtime ids", async () => {
+    const provider = await registerSingleProviderPlugin(arceePlugin);
+
+    expect(
+      provider.normalizeResolvedModel?.({
+        modelId: "arcee/trinity-large-thinking",
+        model: {
+          provider: "arcee",
+          id: "trinity-large-thinking",
+          name: "Trinity Large Thinking",
+          api: "openai-completions",
+          baseUrl: "https://openrouter.ai/api/v1",
+        },
+      } as never),
+    ).toMatchObject({
+      id: "arcee/trinity-large-thinking",
+    });
+
+    expect(
+      provider.normalizeResolvedModel?.({
+        modelId: "arcee/trinity-large-thinking",
+        model: {
+          provider: "arcee",
+          id: "trinity-large-thinking",
+          name: "Trinity Large Thinking",
+          api: "openai-completions",
+          baseUrl: "https://api.arcee.ai/api/v1",
+        },
+      } as never),
+    ).toBeUndefined();
   });
 });

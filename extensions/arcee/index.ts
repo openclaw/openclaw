@@ -1,5 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyArceeConfig,
@@ -7,7 +8,12 @@ import {
   ARCEE_DEFAULT_MODEL_REF,
   ARCEE_OPENROUTER_DEFAULT_MODEL_REF,
 } from "./onboard.js";
-import { buildArceeProvider, buildArceeOpenRouterProvider } from "./provider-catalog.js";
+import {
+  buildArceeProvider,
+  buildArceeOpenRouterProvider,
+  isArceeOpenRouterBaseUrl,
+  toArceeOpenRouterModelId,
+} from "./provider-catalog.js";
 
 const PROVIDER_ID = "arcee";
 const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
@@ -55,6 +61,7 @@ export default definePluginEntry({
           flagName: "--openrouter-api-key",
           envVar: "OPENROUTER_API_KEY",
           promptMessage: "Enter OpenRouter API key",
+          profileId: "openrouter:default",
           defaultModel: ARCEE_OPENROUTER_DEFAULT_MODEL_REF,
           expectedProviders: [PROVIDER_ID, "openrouter"],
           applyConfig: (cfg) => applyArceeOpenRouterConfig(cfg),
@@ -81,6 +88,18 @@ export default definePluginEntry({
           return null;
         },
       },
+      augmentModelCatalog: ({ config }) =>
+        readConfiguredProviderCatalogEntries({
+          config,
+          providerId: PROVIDER_ID,
+        }),
+      normalizeResolvedModel: ({ model }) =>
+        isArceeOpenRouterBaseUrl(model.baseUrl)
+          ? {
+              ...model,
+              id: toArceeOpenRouterModelId(model.id),
+            }
+          : undefined,
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
     });
   },
