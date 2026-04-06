@@ -87,6 +87,7 @@ beforeEach(() => {
   runGatewayUpdateMock.mockResolvedValue({
     status: "ok",
     mode: "npm",
+    root: "/tmp/openclaw-update-result",
     steps: [],
     durationMs: 100,
   });

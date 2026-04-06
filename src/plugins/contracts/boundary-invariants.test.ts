@@ -157,7 +157,7 @@ function readRepoSource(file: string): string {
 }
 
 function isAllowedBundledExtensionImport(specifier: string): boolean {
-  return /(?:^|\/)extensions\/[^/]+\/(?:api|runtime-api)\.js$/u.test(specifier);
+  return /(?:^|\/)extensions\/[^/]+\/(?:api|runtime-api|test-api)\.js$/u.test(specifier);
 }
 
 function collectBundledExtensionImports(source: string): string[] {
