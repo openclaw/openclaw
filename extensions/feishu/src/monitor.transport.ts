@@ -203,15 +203,19 @@ export async function monitorWebhook({
         // sender — only a party that knows the encryptKey can produce a valid
         // encrypted payload (#58905).
         const earlyPayload = parseFeishuWebhookPayload(rawBody);
-        if (earlyPayload && typeof earlyPayload.encrypt === "string") {
-          const { isChallenge, challenge } = Lark.generateChallenge(earlyPayload, {
-            encryptKey: account.encryptKey ?? "",
-          });
-          if (isChallenge) {
-            res.statusCode = 200;
-            res.setHeader("Content-Type", "application/json; charset=utf-8");
-            res.end(JSON.stringify(challenge));
-            return;
+        if (account.encryptKey && earlyPayload && typeof earlyPayload.encrypt === "string") {
+          try {
+            const { isChallenge, challenge } = Lark.generateChallenge(earlyPayload, {
+              encryptKey: account.encryptKey,
+            });
+            if (isChallenge) {
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "application/json; charset=utf-8");
+              res.end(JSON.stringify(challenge));
+              return;
+            }
+          } catch {
+            // Malformed encrypted payload — fall through to normal signature validation.
           }
         }
 
