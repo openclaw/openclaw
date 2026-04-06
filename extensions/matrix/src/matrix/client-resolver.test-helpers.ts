@@ -23,13 +23,20 @@ export const matrixClientResolverMocks: MatrixClientResolverMocks = {
   resolveMatrixAuthContextMock: vi.fn(),
 };
 
-export function createMockMatrixClient(): MatrixClient {
+export type MockMatrixClient = MatrixClient & {
+  prepareForOneOff: Mock<() => Promise<void>>;
+  start: Mock<() => Promise<void>>;
+  stop: Mock<() => void>;
+  stopAndPersist: Mock<() => Promise<void>>;
+};
+
+export function createMockMatrixClient(): MockMatrixClient {
   return {
     prepareForOneOff: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
     stopAndPersist: vi.fn(async () => undefined),
-  } as unknown as MatrixClient;
+  } as unknown as MockMatrixClient;
 }
 
 export function primeMatrixClientResolverMocks(params?: {

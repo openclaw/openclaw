@@ -38,13 +38,6 @@ type StoredMatrixThreadBindingState = {
   bindings: MatrixThreadBindingRecord[];
 };
 
-function normalizeDurationMs(raw: unknown, fallback: number): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return fallback;
-  }
-  return Math.max(0, Math.floor(raw));
-}
-
 function normalizeText(raw: unknown): string {
   return typeof raw === "string" ? raw.trim() : "";
 }
@@ -122,7 +115,7 @@ function toStoredBindingsState(
 ): StoredMatrixThreadBindingState {
   return {
     version: STORE_VERSION,
-    bindings: [...bindings].sort((a, b) => a.boundAt - b.boundAt),
+    bindings: [...bindings].toSorted((a, b) => a.boundAt - b.boundAt),
   };
 }
 

@@ -23,13 +23,12 @@ import {
   waitForFile,
   shouldTranscodeVoice,
 } from "./utils/audio-convert.js";
-import { debugLog, debugError, debugWarn } from "./utils/debug-log.js";
+import { debugLog, debugError, debugWarn, formatUnknownError } from "./utils/debug-log.js";
 import { downloadFile } from "./utils/file-utils.js";
 import {
   checkFileSize,
   readFileAsync,
   fileExistsAsync,
-  isLargeFile,
   formatFileSize,
 } from "./utils/file-utils.js";
 import { normalizeMediaTags } from "./utils/media-tags.js";
@@ -39,7 +38,6 @@ import {
   normalizePath,
   resolveQQBotLocalMediaPath,
   sanitizeFileName,
-  getQQBotDataDir,
   getQQBotMediaDir,
 } from "./utils/platform.js";
 
@@ -355,7 +353,9 @@ export async function sendPhoto(
         `${prefix} sendPhoto: URL direct upload failed (${msg}), downloading locally and retrying as Base64...`,
       );
       const retryResult = await downloadAndRetrySendPhoto(ctx, mediaPath, prefix);
-      if (retryResult) return retryResult;
+      if (retryResult) {
+        return retryResult;
+      }
     }
 
     debugError(`${prefix} sendPhoto failed: ${msg}`);
@@ -875,7 +875,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         sendQueue.push({ type: "text", content: textBefore });
       }
 
-      const tagName = match[1]!.toLowerCase();
+      const tagName = match[1].toLowerCase();
 
       let mediaPath = match[2]?.trim() ?? "";
       if (mediaPath.startsWith("MEDIA:")) {
@@ -921,7 +921,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           }
         }
       } catch (decodeErr) {
-        debugError(`[qqbot] sendText: Path decode error: ${decodeErr}`);
+        debugError(`[qqbot] sendText: Path decode error: ${formatUnknownError(decodeErr)}`);
       }
 
       if (mediaPath) {
@@ -1008,7 +1008,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: result.ext_info?.ref_idx,
               };
             }
           } else {
@@ -1025,7 +1025,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: result.ext_info?.ref_idx,
               };
             } else if (target.type === "group") {
               const result = await sendProactiveGroupMessage(
@@ -1038,7 +1038,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: result.ext_info?.ref_idx,
               };
             } else {
               const result = await sendChannelMessage(accessToken, target.id, item.content);
@@ -1046,7 +1046,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
                 channel: "qqbot",
                 messageId: result.id,
                 timestamp: result.timestamp,
-                refIdx: (result as any).ext_info?.ref_idx,
+                refIdx: result.ext_info?.ref_idx,
               };
             }
           }
@@ -1119,7 +1119,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           channel: "qqbot",
           messageId: result.id,
           timestamp: result.timestamp,
-          refIdx: (result as any).ext_info?.ref_idx,
+          refIdx: result.ext_info?.ref_idx,
         };
       } else if (target.type === "group") {
         const result = await sendProactiveGroupMessage(account.appId, accessToken, target.id, text);
@@ -1127,7 +1127,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           channel: "qqbot",
           messageId: result.id,
           timestamp: result.timestamp,
-          refIdx: (result as any).ext_info?.ref_idx,
+          refIdx: result.ext_info?.ref_idx,
         };
       } else {
         const result = await sendChannelMessage(accessToken, target.id, text);
@@ -1135,7 +1135,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           channel: "qqbot",
           messageId: result.id,
           timestamp: result.timestamp,
-          refIdx: (result as any).ext_info?.ref_idx,
+          refIdx: result.ext_info?.ref_idx,
         };
       }
       return outResult;
@@ -1166,7 +1166,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: result.ext_info?.ref_idx,
       };
     }
   } catch (err) {
@@ -1218,7 +1218,7 @@ export async function sendProactiveMessage(
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: result.ext_info?.ref_idx,
       };
     } else if (target.type === "group") {
       debugLog(
@@ -1232,7 +1232,7 @@ export async function sendProactiveMessage(
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: result.ext_info?.ref_idx,
       };
     } else {
       debugLog(
@@ -1246,7 +1246,7 @@ export async function sendProactiveMessage(
         channel: "qqbot",
         messageId: result.id,
         timestamp: result.timestamp,
-        refIdx: (result as any).ext_info?.ref_idx,
+        refIdx: result.ext_info?.ref_idx,
       };
     }
     return outResult;
@@ -1283,7 +1283,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
     const result = await sendVoice(target, mediaUrl, formats, transcodeEnabled);
     if (!result.error) {
-      if (text?.trim()) await sendTextAfterMedia(target, text);
+      if (text?.trim()) {
+        await sendTextAfterMedia(target, text);
+      }
       return result;
     }
     // Preserve the voice error and fall back to file send.
@@ -1291,7 +1293,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     debugWarn(`[qqbot] sendMedia: sendVoice failed (${voiceError}), falling back to sendDocument`);
     const fallback = await sendDocument(target, mediaUrl);
     if (!fallback.error) {
-      if (text?.trim()) await sendTextAfterMedia(target, text);
+      if (text?.trim()) {
+        await sendTextAfterMedia(target, text);
+      }
       return fallback;
     }
     return { channel: "qqbot", error: `voice: ${voiceError} | fallback file: ${fallback.error}` };
@@ -1299,7 +1303,9 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
 
   if (isVideoFile(mediaUrl, mimeType)) {
     const result = await sendVideoMsg(target, mediaUrl);
-    if (!result.error && text?.trim()) await sendTextAfterMedia(target, text);
+    if (!result.error && text?.trim()) {
+      await sendTextAfterMedia(target, text);
+    }
     return result;
   }
 
@@ -1310,13 +1316,17 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
     !isVideoFile(mediaUrl, mimeType)
   ) {
     const result = await sendDocument(target, mediaUrl);
-    if (!result.error && text?.trim()) await sendTextAfterMedia(target, text);
+    if (!result.error && text?.trim()) {
+      await sendTextAfterMedia(target, text);
+    }
     return result;
   }
 
   // Default to image handling. sendPhoto already contains URL fallback logic.
   const result = await sendPhoto(target, mediaUrl);
-  if (!result.error && text?.trim()) await sendTextAfterMedia(target, text);
+  if (!result.error && text?.trim()) {
+    await sendTextAfterMedia(target, text);
+  }
   return result;
 }
 
@@ -1334,20 +1344,22 @@ async function sendTextAfterMedia(ctx: MediaTargetContext, text: string): Promis
       await sendDmMessage(token, ctx.targetId, text, ctx.replyToId);
     }
   } catch (err) {
-    debugError(`[qqbot] sendTextAfterMedia failed: ${err}`);
+    debugError(`[qqbot] sendTextAfterMedia failed: ${formatUnknownError(err)}`);
   }
 }
 
 /** Extract a lowercase extension from a path or URL, ignoring query and hash segments. */
 function getCleanExt(filePath: string): string {
-  const cleanPath = filePath.split("?")[0]!.split("#")[0]!;
+  const cleanPath = filePath.split("?")[0].split("#")[0];
   return path.extname(cleanPath).toLowerCase();
 }
 
 /** Check whether a file is an image using MIME first and extension as fallback. */
 function isImageFile(filePath: string, mimeType?: string): boolean {
   if (mimeType) {
-    if (mimeType.startsWith("image/")) return true;
+    if (mimeType.startsWith("image/")) {
+      return true;
+    }
   }
   const ext = getCleanExt(filePath);
   return [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"].includes(ext);
@@ -1356,7 +1368,9 @@ function isImageFile(filePath: string, mimeType?: string): boolean {
 /** Check whether a file or URL is a video using MIME first and extension as fallback. */
 function isVideoFile(filePath: string, mimeType?: string): boolean {
   if (mimeType) {
-    if (mimeType.startsWith("video/")) return true;
+    if (mimeType.startsWith("video/")) {
+      return true;
+    }
   }
   const ext = getCleanExt(filePath);
   return [".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv"].includes(ext);

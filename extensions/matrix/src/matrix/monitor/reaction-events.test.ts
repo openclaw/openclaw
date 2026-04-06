@@ -65,13 +65,14 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
-    const client = {
-      getEvent: vi.fn().mockResolvedValue({
-        event_id: "$approval-msg",
-        sender: "@bot:example.org",
-        content: { body: "approval prompt" },
-      }),
-    } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
+    const getEvent = vi.fn().mockResolvedValue({
+      event_id: "$approval-msg",
+      sender: "@bot:example.org",
+      content: { body: "approval prompt" },
+    });
+    const client = { getEvent } as unknown as Parameters<
+      typeof handleInboundMatrixReaction
+    >[0]["client"];
 
     await handleInboundMatrixReaction({
       client,
@@ -214,9 +215,10 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       allowedDecisions: ["allow-once"],
     });
-    const client = {
-      getEvent: vi.fn().mockRejectedValue(new Error("boom")),
-    } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
+    const getEvent = vi.fn().mockRejectedValue(new Error("boom"));
+    const client = { getEvent } as unknown as Parameters<
+      typeof handleInboundMatrixReaction
+    >[0]["client"];
 
     await handleInboundMatrixReaction({
       client,
@@ -242,7 +244,7 @@ describe("matrix approval reactions", () => {
       logVerboseMessage: vi.fn(),
     });
 
-    expect(client.getEvent).not.toHaveBeenCalled();
+    expect(getEvent).not.toHaveBeenCalled();
     expect(resolveMatrixExecApproval).toHaveBeenCalledWith({
       cfg: buildConfig(),
       approvalId: "req-123",
@@ -263,9 +265,10 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       allowedDecisions: ["deny"],
     });
-    const client = {
-      getEvent: vi.fn(),
-    } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
+    const getEvent = vi.fn();
+    const client = { getEvent } as unknown as Parameters<
+      typeof handleInboundMatrixReaction
+    >[0]["client"];
 
     await handleInboundMatrixReaction({
       client,
@@ -291,7 +294,7 @@ describe("matrix approval reactions", () => {
       logVerboseMessage: vi.fn(),
     });
 
-    expect(client.getEvent).not.toHaveBeenCalled();
+    expect(getEvent).not.toHaveBeenCalled();
     expect(
       resolveMatrixApprovalReactionTarget({
         roomId: "!ops:example.org",
@@ -309,9 +312,10 @@ describe("matrix approval reactions", () => {
       throw new Error("matrix config missing");
     }
     matrixCfg.reactionNotifications = "off";
-    const client = {
-      getEvent: vi.fn(),
-    } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
+    const getEvent = vi.fn();
+    const client = { getEvent } as unknown as Parameters<
+      typeof handleInboundMatrixReaction
+    >[0]["client"];
 
     await handleInboundMatrixReaction({
       client,
@@ -337,7 +341,7 @@ describe("matrix approval reactions", () => {
       logVerboseMessage: vi.fn(),
     });
 
-    expect(client.getEvent).not.toHaveBeenCalled();
+    expect(getEvent).not.toHaveBeenCalled();
     expect(resolveMatrixExecApproval).not.toHaveBeenCalled();
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
   });

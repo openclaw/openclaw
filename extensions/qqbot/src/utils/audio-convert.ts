@@ -9,7 +9,9 @@ type SilkWasm = typeof import("silk-wasm");
 let _silkWasmPromise: Promise<SilkWasm | null> | null = null;
 
 function loadSilkWasm(): Promise<SilkWasm | null> {
-  if (_silkWasmPromise) return _silkWasmPromise;
+  if (_silkWasmPromise) {
+    return _silkWasmPromise;
+  }
   _silkWasmPromise = import("silk-wasm").catch((err) => {
     debugWarn(
       `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${err instanceof Error ? err.message : String(err)})`,
@@ -130,7 +132,9 @@ export function formatDuration(durationMs: number): string {
 export function isAudioFile(filePath: string, mimeType?: string): boolean {
   // Prefer MIME when extension data is missing or misleading.
   if (mimeType) {
-    if (mimeType === "voice" || mimeType.startsWith("audio/")) return true;
+    if (mimeType === "voice" || mimeType.startsWith("audio/")) {
+      return true;
+    }
   }
   const ext = path.extname(filePath).toLowerCase();
   return [
@@ -190,23 +194,40 @@ export interface TTSConfig {
   speed?: number;
 }
 
+interface ProviderTTSConfig {
+  baseUrl?: string;
+  apiKey?: string;
+  authStyle?: string;
+  queryParams?: Record<string, string>;
+  speed?: number;
+}
+
+interface TTSBlock extends ProviderTTSConfig {
+  enabled?: boolean;
+  provider?: string;
+  model?: string;
+  voice?: string;
+}
+
 function resolveTTSFromBlock(
-  block: Record<string, any>,
-  providerCfg: Record<string, any> | undefined,
+  block: TTSBlock,
+  providerCfg: ProviderTTSConfig | undefined,
 ): TTSConfig | null {
   const baseUrl: string | undefined = block?.baseUrl || providerCfg?.baseUrl;
   const apiKey: string | undefined = block?.apiKey || providerCfg?.apiKey;
   const model: string = block?.model || "tts-1";
   const voice: string = block?.voice || "alloy";
-  if (!baseUrl || !apiKey) return null;
+  if (!baseUrl || !apiKey) {
+    return null;
+  }
 
   const authStyle =
     (block?.authStyle || providerCfg?.authStyle) === "api-key"
       ? ("api-key" as const)
       : ("bearer" as const);
   const queryParams: Record<string, string> = {
-    ...(providerCfg?.queryParams ?? {}),
-    ...(block?.queryParams ?? {}),
+    ...providerCfg?.queryParams,
+    ...block?.queryParams,
   };
   const speed: number | undefined = block?.speed;
 
@@ -222,25 +243,31 @@ function resolveTTSFromBlock(
 }
 
 export function resolveTTSConfig(cfg: Record<string, unknown>): TTSConfig | null {
-  const c = cfg as any;
+  const channels = cfg.channels as { qqbot?: { tts?: TTSBlock } } | undefined;
+  const messages = cfg.messages as { tts?: Record<string, unknown> } | undefined;
+  const models = cfg.models as { providers?: Record<string, ProviderTTSConfig> } | undefined;
 
   // Prefer plugin-specific TTS config first.
-  const channelTts = c?.channels?.qqbot?.tts;
+  const channelTts = channels?.qqbot?.tts;
   if (channelTts && channelTts.enabled !== false) {
-    const providerId: string = channelTts?.provider || "openai";
-    const providerCfg = c?.models?.providers?.[providerId];
+    const providerId = channelTts.provider || "openai";
+    const providerCfg = models?.providers?.[providerId];
     const result = resolveTTSFromBlock(channelTts, providerCfg);
-    if (result) return result;
+    if (result) {
+      return result;
+    }
   }
 
   // Fall back to framework-level TTS config.
-  const msgTts = c?.messages?.tts;
+  const msgTts = messages?.tts;
   if (msgTts && msgTts.auto !== "off" && msgTts.auto !== "disabled") {
-    const providerId: string = msgTts?.provider || "openai";
-    const providerBlock = msgTts?.[providerId];
-    const providerCfg = c?.models?.providers?.[providerId];
-    const result = resolveTTSFromBlock(providerBlock ?? {}, providerCfg);
-    if (result) return result;
+    const providerId = typeof msgTts.provider === "string" ? msgTts.provider : "openai";
+    const providerBlock = (msgTts[providerId] as TTSBlock | undefined) ?? {};
+    const providerCfg = models?.providers?.[providerId];
+    const result = resolveTTSFromBlock(providerBlock, providerCfg);
+    if (result) {
+      return result;
+    }
   }
 
   return null;
@@ -258,9 +285,13 @@ export function resolveTTSConfig(cfg: Record<string, unknown>): TTSConfig | null
  */
 export function isGlobalTTSAvailable(cfg: OpenClawConfig): boolean {
   const msgTts = cfg.messages?.tts;
-  if (!msgTts) return false;
+  if (!msgTts) {
+    return false;
+  }
   // Framework canonical field takes precedence.
-  if (msgTts.auto) return msgTts.auto !== "off";
+  if (msgTts.auto) {
+    return msgTts.auto !== "off";
+  }
   // Legacy compat: `enabled: true` → "always", absent/false → "off".
   return msgTts.enabled === true;
 }
@@ -427,7 +458,9 @@ export async function textToSilk(
   const { pcmBuffer, sampleRate } = await textToSpeechPCM(text, ttsCfg);
   const { silkBuffer, duration } = await pcmToSilk(pcmBuffer, sampleRate);
 
-  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
   const silkPath = path.join(outputDir, `tts-${Date.now()}.silk`);
   fs.writeFileSync(silkPath, silkBuffer);
 
@@ -446,7 +479,9 @@ export async function audioFileToSilkBase64(
   filePath: string,
   directUploadFormats?: string[],
 ): Promise<string | null> {
-  if (!fs.existsSync(filePath)) return null;
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
 
   const buf = fs.readFileSync(filePath);
   if (buf.length === 0) {
@@ -764,18 +799,30 @@ function normalizeFormats(formats: string[]): string[] {
 
 /** Parse standard PCM WAV as a no-ffmpeg fallback. */
 function parseWavFallback(buf: Buffer): Buffer | null {
-  if (buf.length < 44) return null;
-  if (buf.toString("ascii", 0, 4) !== "RIFF") return null;
-  if (buf.toString("ascii", 8, 12) !== "WAVE") return null;
-  if (buf.toString("ascii", 12, 16) !== "fmt ") return null;
+  if (buf.length < 44) {
+    return null;
+  }
+  if (buf.toString("ascii", 0, 4) !== "RIFF") {
+    return null;
+  }
+  if (buf.toString("ascii", 8, 12) !== "WAVE") {
+    return null;
+  }
+  if (buf.toString("ascii", 12, 16) !== "fmt ") {
+    return null;
+  }
 
   const audioFormat = buf.readUInt16LE(20);
-  if (audioFormat !== 1) return null;
+  if (audioFormat !== 1) {
+    return null;
+  }
 
   const channels = buf.readUInt16LE(22);
   const sampleRate = buf.readUInt32LE(24);
   const bitsPerSample = buf.readUInt16LE(34);
-  if (bitsPerSample !== 16) return null;
+  if (bitsPerSample !== 16) {
+    return null;
+  }
 
   // Find the PCM data chunk.
   let offset = 36;
@@ -795,7 +842,9 @@ function parseWavFallback(buf: Buffer): Buffer | null {
         const outV = new DataView(mono.buffer, mono.byteOffset, mono.byteLength);
         for (let i = 0; i < samplesPerCh; i++) {
           let sum = 0;
-          for (let ch = 0; ch < channels; ch++) sum += inV.getInt16((i * channels + ch) * 2, true);
+          for (let ch = 0; ch < channels; ch++) {
+            sum += inV.getInt16((i * channels + ch) * 2, true);
+          }
           outV.setInt16(i * 2, Math.max(-32768, Math.min(32767, Math.round(sum / channels))), true);
         }
         pcm = mono;

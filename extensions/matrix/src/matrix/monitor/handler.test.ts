@@ -180,9 +180,12 @@ describe("matrix monitor handler pairing account scope", () => {
       await handler("!room:example.org", makeEvent("$event1"));
       await handler("!room:example.org", makeEvent("$event2"));
       expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
-      expect(String(sendMessageMatrixMock.mock.calls[0]?.[1] ?? "")).toContain(
-        "Pairing request is still pending approval.",
-      );
+      const firstCall = sendMessageMatrixMock.mock.calls[0];
+      const firstBody =
+        firstCall && typeof firstCall[1] === "string"
+          ? firstCall[1]
+          : JSON.stringify(firstCall?.[1]);
+      expect(firstBody).toContain("Pairing request is still pending approval.");
 
       await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
       await handler("!room:example.org", makeEvent("$event3"));
@@ -489,7 +492,7 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("drops forged metadata-only mentions before agent routing", async () => {
-    const { handler, recordInboundSession, resolveAgentRoute } = createMatrixHandlerTestHarness({
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       mentionRegexes: [/@bot/i],
       getMemberDisplayName: async () => "sender",
@@ -1383,7 +1386,7 @@ describe("matrix monitor handler pairing account scope", () => {
         sender: "@user:example.org",
         body: "hello there",
         mentions: { room: true },
-      }) as MatrixRawEvent,
+      }),
     );
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();

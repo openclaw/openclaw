@@ -453,7 +453,7 @@ describe("matrix client storage paths", () => {
       accessToken: "secret-token-old",
     });
 
-    const newerCanonicalPaths = seedCanonicalStorageRoot({
+    seedCanonicalStorageRoot({
       stateDir,
       accessToken: "secret-token-new",
       storageMeta: {

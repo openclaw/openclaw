@@ -1,6 +1,7 @@
 /** Periodically refresh C2C typing state while a response is still in progress. */
 
 import { sendC2CInputNotify } from "./api.js";
+import { formatUnknownError } from "./utils/debug-log.js";
 
 // Refresh every 50s for the QQ API's 60s input-notify window.
 export const TYPING_INTERVAL_MS = 50_000;
@@ -25,7 +26,9 @@ export class TypingKeepAlive {
 
   /** Start periodic keep-alive sends. */
   start(): void {
-    if (this.stopped) return;
+    if (this.stopped) {
+      return;
+    }
     this.timer = setInterval(() => {
       if (this.stopped) {
         this.stop();
@@ -55,7 +58,9 @@ export class TypingKeepAlive {
         const token = await this.getToken();
         await sendC2CInputNotify(token, this.openid, this.msgId, TYPING_INPUT_SECOND);
       } catch {
-        this.log?.debug?.(`${this.logPrefix} Typing keep-alive failed for ${this.openid}: ${err}`);
+        this.log?.debug?.(
+          `${this.logPrefix} Typing keep-alive failed for ${this.openid}: ${formatUnknownError(err)}`,
+        );
       }
     }
   }

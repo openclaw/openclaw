@@ -2,7 +2,9 @@ import type { RefAttachmentSummary } from "../ref-index-store.js";
 
 /** Replace QQ face tags with readable text labels. */
 export function parseFaceTags(text: string): string {
-  if (!text) return text;
+  if (!text) {
+    return text;
+  }
 
   return text.replace(/<faceType=\d+,faceId="[^"]*",ext="([^"]*)">/g, (_match, ext: string) => {
     try {
@@ -18,7 +20,9 @@ export function parseFaceTags(text: string): string {
 
 /** Remove internal framework markers before sending text outward. */
 export function filterInternalMarkers(text: string): string {
-  if (!text) return text;
+  if (!text) {
+    return text;
+  }
 
   let result = text.replace(/\[\[[a-z_]+:\s*[^\]]*\]\]/gi, "");
   result = result.replace(/@(?:image|voice|video|file):[a-zA-Z0-9_.-]+/g, "");
@@ -29,7 +33,9 @@ export function filterInternalMarkers(text: string): string {
 
 /** Parse quote-related ref indices from `message_scene.ext`. */
 export function parseRefIndices(ext?: string[]): { refMsgIdx?: string; msgIdx?: string } {
-  if (!ext || ext.length === 0) return {};
+  if (!ext || ext.length === 0) {
+    return {};
+  }
   let refMsgIdx: string | undefined;
   let msgIdx: string | undefined;
   for (const item of ext) {
@@ -52,15 +58,26 @@ export function buildAttachmentSummaries(
   }>,
   localPaths?: Array<string | null>,
 ): RefAttachmentSummary[] | undefined {
-  if (!attachments || attachments.length === 0) return undefined;
+  if (!attachments || attachments.length === 0) {
+    return undefined;
+  }
   return attachments.map((att, idx) => {
     const ct = att.content_type?.toLowerCase() ?? "";
     let type: RefAttachmentSummary["type"] = "unknown";
-    if (ct.startsWith("image/")) type = "image";
-    else if (ct === "voice" || ct.startsWith("audio/") || ct.includes("silk") || ct.includes("amr"))
+    if (ct.startsWith("image/")) {
+      type = "image";
+    } else if (
+      ct === "voice" ||
+      ct.startsWith("audio/") ||
+      ct.includes("silk") ||
+      ct.includes("amr")
+    ) {
       type = "voice";
-    else if (ct.startsWith("video/")) type = "video";
-    else if (ct.startsWith("application/") || ct.startsWith("text/")) type = "file";
+    } else if (ct.startsWith("video/")) {
+      type = "video";
+    } else if (ct.startsWith("application/") || ct.startsWith("text/")) {
+      type = "file";
+    }
     return {
       type,
       filename: att.filename,

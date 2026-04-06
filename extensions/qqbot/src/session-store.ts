@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { debugLog, debugError } from "./utils/debug-log.js";
+import { debugLog, debugError, formatUnknownError } from "./utils/debug-log.js";
 
 /** Persisted gateway session state. */
 export interface SessionState {
@@ -84,7 +84,9 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
     );
     return state;
   } catch (err) {
-    debugError(`[session-store] Failed to load session for ${accountId}: ${err}`);
+    debugError(
+      `[session-store] Failed to load session for ${accountId}: ${formatUnknownError(err)}`,
+    );
     return null;
   }
 }
@@ -152,7 +154,9 @@ function doSaveSession(state: SessionState): void {
       `[session-store] Saved session for ${state.accountId}: sessionId=${state.sessionId}, lastSeq=${state.lastSeq}`,
     );
   } catch (err) {
-    debugError(`[session-store] Failed to save session for ${state.accountId}: ${err}`);
+    debugError(
+      `[session-store] Failed to save session for ${state.accountId}: ${formatUnknownError(err)}`,
+    );
   }
 }
 
@@ -174,7 +178,9 @@ export function clearSession(accountId: string): void {
       debugLog(`[session-store] Cleared session for ${accountId}`);
     }
   } catch (err) {
-    debugError(`[session-store] Failed to clear session for ${accountId}: ${err}`);
+    debugError(
+      `[session-store] Failed to clear session for ${accountId}: ${formatUnknownError(err)}`,
+    );
   }
 }
 

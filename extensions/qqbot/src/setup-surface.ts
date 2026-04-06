@@ -28,7 +28,8 @@ function clearQQBotCredentialField(
   field: QQBotEnvCredentialField,
 ): OpenClawConfig {
   const next = { ...cfg };
-  const qqbot = { ...((next.channels?.qqbot as Record<string, unknown>) || {}) };
+  const currentQQBot = next.channels?.qqbot as Record<string, unknown> | undefined;
+  const qqbot = { ...currentQQBot };
 
   const clearField = (entry: Record<string, unknown>) => {
     if (field === "appId") {
@@ -42,7 +43,8 @@ function clearQQBotCredentialField(
   if (accountId === DEFAULT_ACCOUNT_ID) {
     clearField(qqbot);
   } else {
-    const accounts = { ...((qqbot.accounts as Record<string, Record<string, unknown>>) || {}) };
+    const currentAccounts = qqbot.accounts as Record<string, Record<string, unknown>> | undefined;
+    const accounts = { ...currentAccounts };
     if (accounts[accountId]) {
       const entry = { ...accounts[accountId] };
       clearField(entry);

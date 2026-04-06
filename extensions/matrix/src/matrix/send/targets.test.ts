@@ -53,6 +53,7 @@ describe("resolveMatrixRoomId", () => {
 
   it("prefers joined rooms marked direct in local member state over plain strict rooms", async () => {
     const userId = "@fallback:example.org";
+    const setAccountData = vi.fn().mockResolvedValue(undefined);
     const client = {
       getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
       getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
@@ -65,13 +66,13 @@ describe("resolveMatrixRoomId", () => {
             ? { is_direct: true }
             : {},
         ),
-      setAccountData: vi.fn().mockResolvedValue(undefined),
+      setAccountData,
     } as unknown as MatrixClient;
 
     const resolved = await resolveMatrixRoomId(client, userId);
 
     expect(resolved).toBe("!explicit:example.org");
-    expect(client.setAccountData).toHaveBeenCalledWith(
+    expect(setAccountData).toHaveBeenCalledWith(
       EventType.Direct,
       expect.objectContaining({ [userId]: ["!explicit:example.org"] }),
     );
@@ -79,6 +80,7 @@ describe("resolveMatrixRoomId", () => {
 
   it("ignores remote member-state direct flags when resolving a direct room", async () => {
     const userId = "@fallback:example.org";
+    const setAccountData = vi.fn().mockResolvedValue(undefined);
     const client = {
       getAccountData: vi.fn().mockRejectedValue(new Error("nope")),
       getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
@@ -91,13 +93,13 @@ describe("resolveMatrixRoomId", () => {
         .mockImplementation(async (roomId: string, _eventType: string, stateKey: string) =>
           roomId === "!remote-marked:example.org" && stateKey === userId ? { is_direct: true } : {},
         ),
-      setAccountData: vi.fn().mockResolvedValue(undefined),
+      setAccountData,
     } as unknown as MatrixClient;
 
     const resolved = await resolveMatrixRoomId(client, userId);
 
     expect(resolved).toBe("!fallback:example.org");
-    expect(client.setAccountData).toHaveBeenCalledWith(
+    expect(setAccountData).toHaveBeenCalledWith(
       EventType.Direct,
       expect.objectContaining({ [userId]: ["!fallback:example.org"] }),
     );

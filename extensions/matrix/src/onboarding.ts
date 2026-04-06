@@ -17,11 +17,7 @@ import {
   validateMatrixHomeserverUrl,
 } from "./matrix/client.js";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
-import {
-  resolveMatrixConfigFieldPath,
-  resolveMatrixConfigPath,
-  updateMatrixAccountConfig,
-} from "./matrix/config-update.js";
+import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
 import type { DmPolicy } from "./runtime-api.js";

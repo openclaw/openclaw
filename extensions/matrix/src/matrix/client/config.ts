@@ -47,12 +47,10 @@ let matrixSecretInputDepsPromise: Promise<MatrixSecretInputDeps> | undefined;
 let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
 
 export function setMatrixAuthClientDepsForTest(
-  deps?:
-    | {
-        MatrixClient: typeof import("../sdk.js").MatrixClient;
-        ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
-      }
-    | undefined,
+  deps?: {
+    MatrixClient: typeof import("../sdk.js").MatrixClient;
+    ensureMatrixSdkLoggingConfigured: typeof import("./logging.js").ensureMatrixSdkLoggingConfigured;
+  },
 ): void {
   matrixAuthClientDepsForTest = deps;
 }

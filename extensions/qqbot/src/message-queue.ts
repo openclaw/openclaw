@@ -1,4 +1,5 @@
 import type { QueueSnapshot } from "./slash-commands.js";
+import { formatUnknownError } from "./utils/debug-log.js";
 
 // Message queue limits.
 const MESSAGE_QUEUE_SIZE = 1000;
@@ -67,13 +68,19 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   let totalEnqueued = 0;
 
   const getMessagePeerId = (msg: QueuedMessage): string => {
-    if (msg.type === "guild") return `guild:${msg.channelId ?? "unknown"}`;
-    if (msg.type === "group") return `group:${msg.groupOpenid ?? "unknown"}`;
+    if (msg.type === "guild") {
+      return `guild:${msg.channelId ?? "unknown"}`;
+    }
+    if (msg.type === "group") {
+      return `group:${msg.groupOpenid ?? "unknown"}`;
+    }
     return `dm:${msg.senderId}`;
   };
 
   const drainUserQueue = async (peerId: string): Promise<void> => {
-    if (activeUsers.has(peerId)) return;
+    if (activeUsers.has(peerId)) {
+      return;
+    }
     if (activeUsers.size >= MAX_CONCURRENT_USERS) {
       log?.info(
         `[qqbot:${accountId}] Max concurrent users (${MAX_CONCURRENT_USERS}) reached, ${peerId} will wait`,
@@ -99,16 +106,20 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
             messagesProcessed++;
           }
         } catch (err) {
-          log?.error(`[qqbot:${accountId}] Message processor error for ${peerId}: ${err}`);
+          log?.error(
+            `[qqbot:${accountId}] Message processor error for ${peerId}: ${formatUnknownError(err)}`,
+          );
         }
       }
     } finally {
       activeUsers.delete(peerId);
       userQueues.delete(peerId);
       for (const [waitingPeerId, waitingQueue] of userQueues) {
-        if (activeUsers.size >= MAX_CONCURRENT_USERS) break;
+        if (activeUsers.size >= MAX_CONCURRENT_USERS) {
+          break;
+        }
         if (waitingQueue.length > 0 && !activeUsers.has(waitingPeerId)) {
-          drainUserQueue(waitingPeerId);
+          void drainUserQueue(waitingPeerId);
         }
       }
     }
@@ -141,7 +152,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
       `[qqbot:${accountId}] Message enqueued for ${peerId}, user queue: ${queue.length}, active users: ${activeUsers.size}`,
     );
 
-    drainUserQueue(peerId);
+    void drainUserQueue(peerId);
   };
 
   const startProcessor = (handleMessageFn: (msg: QueuedMessage) => Promise<void>): void => {
@@ -167,7 +178,9 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
 
   const clearUserQueue = (peerId: string): number => {
     const queue = userQueues.get(peerId);
-    if (!queue || queue.length === 0) return 0;
+    if (!queue || queue.length === 0) {
+      return 0;
+    }
     const droppedCount = queue.length;
     queue.length = 0;
     totalEnqueued = Math.max(0, totalEnqueued - droppedCount);
@@ -177,7 +190,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const executeImmediate = (msg: QueuedMessage): void => {
     if (handleMessageFnRef) {
       handleMessageFnRef(msg).catch((err) => {
-        log?.error(`[qqbot:${accountId}] Immediate execution error: ${err}`);
+        log?.error(`[qqbot:${accountId}] Immediate execution error: ${formatUnknownError(err)}`);
       });
     }
   };

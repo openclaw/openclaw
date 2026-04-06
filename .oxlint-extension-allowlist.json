@@ -1,0 +1,3 @@
+{
+  "extensions": ["extensions/matrix", "extensions/qqbot", "extensions/xai"]
+}

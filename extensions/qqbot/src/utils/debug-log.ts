@@ -7,6 +7,10 @@
 
 const isDebug = () => !!process.env.QQBOT_DEBUG;
 
+export function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function debugLog(...args: unknown[]): void {
   if (isDebug()) {
     console.log(...args);

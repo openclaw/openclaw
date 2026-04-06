@@ -7,10 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import {
-  createPairingPrefixStripper,
-  createTextPairingAdapter,
-} from "openclaw/plugin-sdk/channel-pairing";
+import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderOpenWarningCollector,
   projectAccountConfigWarningCollector,
@@ -58,7 +55,6 @@ import {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./matrix/thread-bindings-shared.js";
-import { getMatrixRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import {
@@ -155,7 +151,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
   listAccountIds: listMatrixAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
   resolveAccessorAccount: ({ cfg, accountId }) =>
-    resolveMatrixAccountConfig({ cfg: cfg as CoreConfig, accountId }),
+    resolveMatrixAccountConfig({ cfg: cfg, accountId }),
   defaultAccountId: resolveDefaultMatrixAccountId,
   clearBaseFields: [
     "name",
@@ -589,9 +585,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         normalizeAllowEntry: createPairingPrefixStripper(/^matrix:/i),
         notify: async ({ id, message, accountId }) => {
           const { sendMessageMatrix } = await loadMatrixChannelRuntime();
-          await sendMessageMatrix(`user:${id}`, message, {
-            ...(accountId ? { accountId } : {}),
-          });
+          await sendMessageMatrix(`user:${id}`, message, accountId ? { accountId } : {});
         },
       },
     },

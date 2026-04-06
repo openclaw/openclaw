@@ -95,7 +95,7 @@ vi.mock("../../runtime-api.js", () => {
       extra?: Record<string, unknown>,
     ) => ({
       ...snapshot,
-      ...(extra ?? {}),
+      ...extra,
     }),
     buildSecretInputSchema: () => z.string(),
     chunkTextForOutbound: vi.fn((text: string) => [text]),
@@ -580,10 +580,8 @@ describe("monitorMatrixProvider", () => {
 });
 
 describe("matrix plugin registration", () => {
-  let matrixPlugin: typeof import("../../../index.js").default;
-
   beforeAll(async () => {
-    ({ default: matrixPlugin } = await import("../../../index.js"));
+    await import("../../../index.js");
   });
 
   beforeEach(() => {

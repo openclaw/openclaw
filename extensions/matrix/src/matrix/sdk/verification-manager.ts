@@ -82,7 +82,7 @@ export type MatrixVerificationRequestLike = {
 };
 
 export type MatrixVerificationCryptoApi = {
-  requestOwnUserVerification: () => Promise<unknown | null>;
+  requestOwnUserVerification: () => Promise<unknown>;
   findVerificationRequestDMInProgress?: (
     roomId: string,
     userId: string,
@@ -114,6 +114,26 @@ type MatrixVerificationSession = {
   reciprocateQrCallbacks?: MatrixShowQrCodeCallbacks;
 };
 
+type MatrixVerificationPhase = VerificationPhase | -1;
+
+function isVerificationPhase(value: unknown): value is VerificationPhase {
+  return (
+    value === VerificationPhase.Unsent ||
+    value === VerificationPhase.Requested ||
+    value === VerificationPhase.Ready ||
+    value === VerificationPhase.Started ||
+    value === VerificationPhase.Cancelled ||
+    value === VerificationPhase.Done
+  );
+}
+
+function normalizeVerificationPhase(
+  value: unknown,
+  fallback: MatrixVerificationPhase,
+): MatrixVerificationPhase {
+  return isVerificationPhase(value) ? value : fallback;
+}
+
 const MAX_TRACKED_VERIFICATION_SESSIONS = 256;
 const TERMINAL_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
 const SAS_AUTO_CONFIRM_DELAY_MS = 30_000;
@@ -137,9 +157,17 @@ export class MatrixVerificationManager {
     }
   }
 
+  private readVerificationPhase(
+    request: MatrixVerificationRequestLike,
+    fallback: MatrixVerificationPhase,
+  ): MatrixVerificationPhase {
+    const phase = this.readRequestValue<unknown>(request, () => request.phase, fallback);
+    return normalizeVerificationPhase(phase, fallback);
+  }
+
   private pruneVerificationSessions(nowMs: number): void {
     for (const [id, session] of this.verificationSessions) {
-      const phase = this.readRequestValue(session.request, () => session.request.phase, -1);
+      const phase = this.readVerificationPhase(session.request, -1);
       const isTerminal = phase === VerificationPhase.Done || phase === VerificationPhase.Cancelled;
       if (isTerminal && nowMs - session.updatedAtMs > TERMINAL_SESSION_RETENTION_MS) {
         this.verificationSessions.delete(id);
@@ -150,7 +178,7 @@ export class MatrixVerificationManager {
       return;
     }
 
-    const sortedByAge = Array.from(this.verificationSessions.entries()).sort(
+    const sortedByAge = Array.from(this.verificationSessions.entries()).toSorted(
       (a, b) => a[1].updatedAtMs - b[1].updatedAtMs,
     );
     const overflow = this.verificationSessions.size - MAX_TRACKED_VERIFICATION_SESSIONS;
@@ -163,22 +191,15 @@ export class MatrixVerificationManager {
   }
 
   private getVerificationPhaseName(phase: number): string {
-    switch (phase) {
-      case VerificationPhase.Unsent:
-        return "unsent";
-      case VerificationPhase.Requested:
-        return "requested";
-      case VerificationPhase.Ready:
-        return "ready";
-      case VerificationPhase.Started:
-        return "started";
-      case VerificationPhase.Cancelled:
-        return "cancelled";
-      case VerificationPhase.Done:
-        return "done";
-      default:
-        return `unknown(${phase})`;
-    }
+    const phaseNames: Record<number, string> = {
+      [VerificationPhase.Unsent]: "unsent",
+      [VerificationPhase.Requested]: "requested",
+      [VerificationPhase.Ready]: "ready",
+      [VerificationPhase.Started]: "started",
+      [VerificationPhase.Cancelled]: "cancelled",
+      [VerificationPhase.Done]: "done",
+    };
+    return phaseNames[phase] ?? `unknown(${phase})`;
   }
 
   private emitVerificationSummary(session: MatrixVerificationSession): void {
@@ -203,7 +224,7 @@ export class MatrixVerificationManager {
 
   private buildVerificationSummary(session: MatrixVerificationSession): MatrixVerificationSummary {
     const request = session.request;
-    const phase = this.readRequestValue(request, () => request.phase, VerificationPhase.Requested);
+    const phase = this.readVerificationPhase(request, VerificationPhase.Requested);
     const accepting = this.readRequestValue(request, () => request.accepting, false);
     const declining = this.readRequestValue(request, () => request.declining, false);
     const pending = this.readRequestValue(request, () => request.pending, false);
@@ -287,7 +308,7 @@ export class MatrixVerificationManager {
       false,
     );
     const initiatedByMe = this.readRequestValue(request, () => request.initiatedByMe, false);
-    const phase = this.readRequestValue(request, () => request.phase, VerificationPhase.Requested);
+    const phase = this.readVerificationPhase(request, VerificationPhase.Requested);
     const accepting = this.readRequestValue(request, () => request.accepting, false);
     const declining = this.readRequestValue(request, () => request.declining, false);
     if (isSelfVerification || initiatedByMe) {
@@ -320,11 +341,7 @@ export class MatrixVerificationManager {
     if (!this.readRequestValue(session.request, () => session.request.isSelfVerification, false)) {
       return;
     }
-    const phase = this.readRequestValue(
-      session.request,
-      () => session.request.phase,
-      VerificationPhase.Requested,
-    );
+    const phase = this.readVerificationPhase(session.request, VerificationPhase.Requested);
     if (phase < VerificationPhase.Ready || phase >= VerificationPhase.Cancelled) {
       return;
     }
@@ -416,11 +433,7 @@ export class MatrixVerificationManager {
     // we send our MAC and finish our side of the SAS flow.
     session.sasAutoConfirmTimer = setTimeout(() => {
       session.sasAutoConfirmTimer = undefined;
-      const phase = this.readRequestValue(
-        session.request,
-        () => session.request.phase,
-        VerificationPhase.Requested,
-      );
+      const phase = this.readVerificationPhase(session.request, VerificationPhase.Requested);
       if (phase >= VerificationPhase.Cancelled) {
         return;
       }
@@ -527,7 +540,7 @@ export class MatrixVerificationManager {
     const summaries = Array.from(this.verificationSessions.values()).map((session) =>
       this.buildVerificationSummary(session),
     );
-    return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return summaries.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async requestVerification(

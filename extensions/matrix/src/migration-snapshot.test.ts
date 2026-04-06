@@ -46,9 +46,12 @@ describe("matrix migration snapshots", () => {
 
       expect(result.created).toBe(true);
       expect(result.markerPath).toBe(resolveMatrixMigrationSnapshotMarkerPath(process.env));
-      expect(
-        result.archivePath.startsWith(resolveMatrixMigrationSnapshotOutputDir(process.env)),
-      ).toBe(true);
+      expect(createBackupArchiveMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          output: resolveMatrixMigrationSnapshotOutputDir(process.env),
+          includeWorkspace: false,
+        }),
+      );
       expect(fs.existsSync(result.archivePath)).toBe(true);
       expect(createBackupArchiveMock).toHaveBeenCalledWith({
         output: resolveMatrixMigrationSnapshotOutputDir(process.env),

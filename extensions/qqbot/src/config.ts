@@ -33,8 +33,13 @@ function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): Q
 }
 
 function normalizeAppId(raw: unknown): string {
-  if (raw === null || raw === undefined) return "";
-  return String(raw).trim();
+  if (typeof raw === "string") {
+    return raw.trim();
+  }
+  if (typeof raw === "number" || typeof raw === "bigint") {
+    return String(raw).trim();
+  }
+  return "";
 }
 
 /** List all configured QQBot account IDs. */
@@ -165,12 +170,13 @@ export function applyQQBotAccountConfig(
   if (accountId === DEFAULT_ACCOUNT_ID) {
     // Default allowFrom to ["*"] when not yet configured.
     const existingConfig = (next.channels?.qqbot as QQBotChannelConfig) || {};
+    const currentQQBot = next.channels?.qqbot as Record<string, unknown> | undefined;
     const allowFrom = existingConfig.allowFrom ?? ["*"];
 
     next.channels = {
       ...next.channels,
       qqbot: {
-        ...((next.channels?.qqbot as Record<string, unknown>) || {}),
+        ...currentQQBot,
         enabled: true,
         allowFrom,
         ...(input.appId ? { appId: input.appId } : {}),
@@ -186,17 +192,18 @@ export function applyQQBotAccountConfig(
     // Default allowFrom to ["*"] when not yet configured.
     const existingAccountConfig =
       (next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId] || {};
+    const currentQQBot = next.channels?.qqbot as Record<string, unknown> | undefined;
     const allowFrom = existingAccountConfig.allowFrom ?? ["*"];
 
     next.channels = {
       ...next.channels,
       qqbot: {
-        ...((next.channels?.qqbot as Record<string, unknown>) || {}),
+        ...currentQQBot,
         enabled: true,
         accounts: {
-          ...((next.channels?.qqbot as QQBotChannelConfig)?.accounts || {}),
+          ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts,
           [accountId]: {
-            ...((next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId] || {}),
+            ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId],
             enabled: true,
             allowFrom,
             ...(input.appId ? { appId: input.appId } : {}),

@@ -112,6 +112,10 @@ export interface GuildMessageEvent {
   guild_id: string;
   content: string;
   timestamp: string;
+  message_scene?: {
+    source: string;
+    ext?: string[];
+  };
   author: {
     id: string;
     username?: string;

@@ -248,14 +248,22 @@ describe("MatrixClient request hardening", () => {
     await expect(client.downloadContent("mxc://example.org/media")).resolves.toEqual(payload);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const firstUrl = String((fetchMock.mock.calls as unknown[][])[0]?.[0] ?? "");
+    const firstCall = fetchMock.mock.calls[0];
+    const firstInput = firstCall?.[0];
+    const firstUrl =
+      typeof firstInput === "string"
+        ? firstInput
+        : firstInput instanceof URL
+          ? firstInput.toString()
+          : "";
     expect(firstUrl).toContain("/_matrix/client/v1/media/download/example.org/media");
   });
 
   it("falls back to legacy media downloads for older homeservers", async () => {
     const payload = Buffer.from([5, 6, 7, 8]);
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url =
+        typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
       if (url.includes("/_matrix/client/v1/media/download/")) {
         return new Response(
           JSON.stringify({
@@ -278,8 +286,22 @@ describe("MatrixClient request hardening", () => {
     await expect(client.downloadContent("mxc://example.org/media")).resolves.toEqual(payload);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const firstUrl = String((fetchMock.mock.calls as unknown[][])[0]?.[0] ?? "");
-    const secondUrl = String((fetchMock.mock.calls as unknown[][])[1]?.[0] ?? "");
+    const firstCall = fetchMock.mock.calls[0];
+    const secondCall = fetchMock.mock.calls[1];
+    const firstInput = firstCall?.[0];
+    const secondInput = secondCall?.[0];
+    const firstUrl =
+      typeof firstInput === "string"
+        ? firstInput
+        : firstInput instanceof URL
+          ? firstInput.toString()
+          : "";
+    const secondUrl =
+      typeof secondInput === "string"
+        ? secondInput
+        : secondInput instanceof URL
+          ? secondInput.toString()
+          : "";
     expect(firstUrl).toContain("/_matrix/client/v1/media/download/example.org/media");
     expect(secondUrl).toContain("/_matrix/media/v3/download/example.org/media");
   });

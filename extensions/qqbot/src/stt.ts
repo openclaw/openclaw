@@ -14,30 +14,48 @@ export interface STTConfig {
   model: string;
 }
 
+interface ProviderConfig {
+  baseUrl?: string;
+  apiKey?: string;
+}
+
+interface ChannelSttConfig extends ProviderConfig {
+  enabled?: boolean;
+  provider?: string;
+  model?: string;
+}
+
+interface AudioModelConfig extends ProviderConfig {
+  provider?: string;
+  model?: string;
+}
+
 export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null {
-  const c = cfg as any;
+  const channels = cfg.channels as { qqbot?: { stt?: ChannelSttConfig } } | undefined;
+  const models = cfg.models as { providers?: Record<string, ProviderConfig> } | undefined;
+  const tools = cfg.tools as { media?: { audio?: { models?: AudioModelConfig[] } } } | undefined;
 
   // Prefer plugin-specific STT config.
-  const channelStt = c?.channels?.qqbot?.stt;
+  const channelStt = channels?.qqbot?.stt;
   if (channelStt && channelStt.enabled !== false) {
-    const providerId: string = channelStt?.provider || "openai";
-    const providerCfg = c?.models?.providers?.[providerId];
-    const baseUrl: string | undefined = channelStt?.baseUrl || providerCfg?.baseUrl;
-    const apiKey: string | undefined = channelStt?.apiKey || providerCfg?.apiKey;
-    const model: string = channelStt?.model || "whisper-1";
+    const providerId = channelStt.provider || "openai";
+    const providerCfg = models?.providers?.[providerId];
+    const baseUrl = channelStt.baseUrl || providerCfg?.baseUrl;
+    const apiKey = channelStt.apiKey || providerCfg?.apiKey;
+    const model = channelStt.model || "whisper-1";
     if (baseUrl && apiKey) {
       return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
     }
   }
 
   // Fall back to framework-level audio model config.
-  const audioModelEntry = c?.tools?.media?.audio?.models?.[0];
+  const audioModelEntry = tools?.media?.audio?.models?.[0];
   if (audioModelEntry) {
-    const providerId: string = audioModelEntry?.provider || "openai";
-    const providerCfg = c?.models?.providers?.[providerId];
-    const baseUrl: string | undefined = audioModelEntry?.baseUrl || providerCfg?.baseUrl;
-    const apiKey: string | undefined = audioModelEntry?.apiKey || providerCfg?.apiKey;
-    const model: string = audioModelEntry?.model || "whisper-1";
+    const providerId = audioModelEntry.provider || "openai";
+    const providerCfg = models?.providers?.[providerId];
+    const baseUrl = audioModelEntry.baseUrl || providerCfg?.baseUrl;
+    const apiKey = audioModelEntry.apiKey || providerCfg?.apiKey;
+    const model = audioModelEntry.model || "whisper-1";
     if (baseUrl && apiKey) {
       return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model };
     }
@@ -51,7 +69,9 @@ export async function transcribeAudio(
   cfg: Record<string, unknown>,
 ): Promise<string | null> {
   const sttCfg = resolveSTTConfig(cfg);
-  if (!sttCfg) return null;
+  if (!sttCfg) {
+    return null;
+  }
 
   const fileBuffer = fs.readFileSync(audioPath);
   const fileName = sanitizeFileName(path.basename(audioPath));

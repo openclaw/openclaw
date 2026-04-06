@@ -27,10 +27,10 @@ describe("searxng web search provider", () => {
     runSearxngSearch.mockImplementation(async (params: Record<string, unknown>) => params);
   });
 
-  it("registers a setup-visible web search provider", () => {
+  it("registers a setup-visible web search provider", async () => {
     const webSearchProviders: unknown[] = [];
 
-    plugin.register({
+    await plugin.register({
       registerWebSearchProvider(provider: unknown) {
         webSearchProviders.push(provider);
       },

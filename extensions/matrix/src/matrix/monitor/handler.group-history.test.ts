@@ -23,7 +23,7 @@ import {
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
-import { EventType, type MatrixRawEvent } from "./types.js";
+import type { MatrixRawEvent } from "./types.js";
 
 const DEFAULT_ROOM = "!room:example.org";
 
@@ -313,7 +313,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
           body: "",
           url: "mxc://example.org/media-a",
         },
-      }) as MatrixRawEvent,
+      }),
     );
     expect(finalizeInboundContext).not.toHaveBeenCalled();
 
@@ -573,12 +573,17 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     );
 
     expect(finalizeInboundContext).toHaveBeenCalledTimes(2);
-    const firstHistory = (finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>)[
-      "InboundHistory"
-    ] as Array<{ body: string }>;
-    const retryHistory = (finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>)[
-      "InboundHistory"
-    ] as Array<{ body: string }>;
+    const firstCall = finalizeInboundContext.mock.calls[0];
+    const retryCall = finalizeInboundContext.mock.calls[1];
+    if (!firstCall || !retryCall) {
+      throw new Error("expected finalizeInboundContext calls");
+    }
+    const firstHistory = (firstCall[0] as Record<string, unknown>)["InboundHistory"] as Array<{
+      body: string;
+    }>;
+    const retryHistory = (retryCall[0] as Record<string, unknown>)["InboundHistory"] as Array<{
+      body: string;
+    }>;
 
     expect(firstHistory.map((entry) => entry.body)).toEqual(["pending msg"]);
     expect(retryHistory.map((entry) => entry.body)).toEqual(["pending msg"]);

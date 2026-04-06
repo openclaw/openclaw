@@ -21,7 +21,7 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const implicit = await resolveImplicitAnthropicVertexProvider({
+          const implicit = resolveImplicitAnthropicVertexProvider({
             env: ctx.env,
           });
           if (!implicit) {

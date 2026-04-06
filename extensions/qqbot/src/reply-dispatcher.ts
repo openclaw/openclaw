@@ -27,6 +27,7 @@ import {
   audioFileToSilkBase64,
   formatDuration,
 } from "./utils/audio-convert.js";
+import { formatUnknownError } from "./utils/debug-log.js";
 import { MAX_UPLOAD_SIZE, formatFileSize } from "./utils/file-utils.js";
 import {
   parseQQBotPayload,
@@ -117,7 +118,9 @@ export async function sendErrorToTarget(ctx: ReplyContext, errorText: string): P
   try {
     await sendTextToTarget(ctx, errorText);
   } catch (sendErr) {
-    ctx.log?.error(`[qqbot:${ctx.account.accountId}] Failed to send error message: ${sendErr}`);
+    ctx.log?.error(
+      `[qqbot:${ctx.account.accountId}] Failed to send error message: ${formatUnknownError(sendErr)}`,
+    );
   }
 }
 
@@ -130,17 +133,21 @@ export async function handleStructuredPayload(
   replyText: string,
   recordActivity: () => void,
 ): Promise<boolean> {
-  const { target, account, cfg, log } = ctx;
+  const { account, log } = ctx;
   const payloadResult = parseQQBotPayload(replyText);
 
-  if (!payloadResult.isPayload) return false;
+  if (!payloadResult.isPayload) {
+    return false;
+  }
 
   if (payloadResult.error) {
     log?.error(`[qqbot:${account.accountId}] Payload parse error: ${payloadResult.error}`);
     return true;
   }
 
-  if (!payloadResult.payload) return true;
+  if (!payloadResult.payload) {
+    return true;
+  }
 
   const parsedPayload = payloadResult.payload;
   log?.info(
@@ -157,7 +164,9 @@ export async function handleStructuredPayload(
         `[qqbot:${account.accountId}] Cron reminder confirmation sent, cronMessage: ${cronMessage}`,
       );
     } catch (err) {
-      log?.error(`[qqbot:${account.accountId}] Failed to send cron confirmation: ${err}`);
+      log?.error(
+        `[qqbot:${account.accountId}] Failed to send cron confirmation: ${formatUnknownError(err)}`,
+      );
     }
     recordActivity();
     return true;
@@ -177,15 +186,13 @@ export async function handleStructuredPayload(
     } else if (parsedPayload.mediaType === "file") {
       await handleFilePayload(ctx, parsedPayload);
     } else {
-      log?.error(
-        `[qqbot:${account.accountId}] Unknown media type: ${(parsedPayload as MediaPayload).mediaType}`,
-      );
+      log?.error(`[qqbot:${account.accountId}] Unknown media type in structured payload`);
     }
     recordActivity();
     return true;
   }
 
-  log?.error(`[qqbot:${account.accountId}] Unknown payload type: ${(parsedPayload as any).type}`);
+  log?.error(`[qqbot:${account.accountId}] Unknown structured payload kind`);
   return true;
 }
 
@@ -216,7 +223,12 @@ function isInlineImageDataUrl(p: string): boolean {
 }
 
 function sanitizeForLog(value: string, maxLen = 200): string {
-  return value.replace(/[\r\n\t\0]/g, " ").slice(0, maxLen);
+  return value
+    .replaceAll("\r", " ")
+    .replaceAll("\n", " ")
+    .replaceAll("\t", " ")
+    .replaceAll("\u0000", " ")
+    .slice(0, maxLen);
 }
 
 function describeMediaTargetForLog(pathValue: string, isHttpUrl: boolean): string {
@@ -297,7 +309,9 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
         `[qqbot:${account.accountId}] Converted local image to Base64 (size: ${formatFileSize(fileBuffer.length)})`,
       );
     } catch (readErr) {
-      log?.error(`[qqbot:${account.accountId}] Failed to read local image: ${readErr}`);
+      log?.error(
+        `[qqbot:${account.accountId}] Failed to read local image: ${formatUnknownError(readErr)}`,
+      );
       return;
     }
   }
@@ -348,7 +362,7 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
       await sendTextToTarget(ctx, payload.caption);
     }
   } catch (err) {
-    log?.error(`[qqbot:${account.accountId}] Failed to send image: ${err}`);
+    log?.error(`[qqbot:${account.accountId}] Failed to send image: ${formatUnknownError(err)}`);
   }
 }
 
@@ -432,7 +446,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
             account.appId,
             token,
             target.senderId,
-            silkBase64!,
+            silkBase64,
             undefined,
             target.messageId,
             ttsText,
@@ -443,7 +457,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
             account.appId,
             token,
             target.groupOpenid,
-            silkBase64!,
+            silkBase64,
             undefined,
             target.messageId,
           );
@@ -464,7 +478,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
     );
     log?.info(`[qqbot:${account.accountId}] Voice message sent`);
   } catch (err) {
-    log?.error(`[qqbot:${account.accountId}] TTS/voice send failed: ${err}`);
+    log?.error(`[qqbot:${account.accountId}] TTS/voice send failed: ${formatUnknownError(err)}`);
   }
 }
 
@@ -560,7 +574,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       await sendTextToTarget(ctx, payload.caption);
     }
   } catch (err) {
-    log?.error(`[qqbot:${account.accountId}] Video send failed: ${err}`);
+    log?.error(`[qqbot:${account.accountId}] Video send failed: ${formatUnknownError(err)}`);
   }
 }
 
@@ -652,6 +666,6 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
     );
     log?.info(`[qqbot:${account.accountId}] File message sent`);
   } catch (err) {
-    log?.error(`[qqbot:${account.accountId}] File send failed: ${err}`);
+    log?.error(`[qqbot:${account.accountId}] File send failed: ${formatUnknownError(err)}`);
   }
 }

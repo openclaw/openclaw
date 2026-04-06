@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { debugLog, debugError } from "./utils/debug-log.js";
+import { debugLog, debugError, formatUnknownError } from "./utils/debug-log.js";
 import { getQQBotDataDir } from "./utils/platform.js";
 
 /** Summary stored for one quoted message. */
@@ -41,7 +41,9 @@ let totalLinesOnDisk = 0;
 
 /** Lazily load the JSONL store into memory. */
 function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
-  if (cache !== null) return cache;
+  if (cache !== null) {
+    return cache;
+  }
 
   cache = new Map();
   totalLinesOnDisk = 0;
@@ -58,12 +60,16 @@ function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
 
     for (const line of lines) {
       const trimmed = line.trim();
-      if (!trimmed) continue;
+      if (!trimmed) {
+        continue;
+      }
       totalLinesOnDisk++;
 
       try {
         const entry = JSON.parse(trimmed) as RefIndexLine;
-        if (!entry.k || !entry.v || !entry.t) continue;
+        if (!entry.k || !entry.v || !entry.t) {
+          continue;
+        }
 
         if (now - entry.t > TTL_MS) {
           expired++;
@@ -85,7 +91,7 @@ function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
       compactFile();
     }
   } catch (err) {
-    debugError(`[ref-index-store] Failed to load: ${err}`);
+    debugError(`[ref-index-store] Failed to load: ${formatUnknownError(err)}`);
     cache = new Map();
   }
 
@@ -99,7 +105,7 @@ function appendLine(line: RefIndexLine): void {
     fs.appendFileSync(REF_INDEX_FILE, JSON.stringify(line) + "\n", "utf-8");
     totalLinesOnDisk++;
   } catch (err) {
-    debugError(`[ref-index-store] Failed to append: ${err}`);
+    debugError(`[ref-index-store] Failed to append: ${formatUnknownError(err)}`);
   }
 }
 
@@ -110,12 +116,16 @@ function ensureDir(): void {
 }
 
 function shouldCompact(): boolean {
-  if (!cache) return false;
+  if (!cache) {
+    return false;
+  }
   return totalLinesOnDisk > cache.size * COMPACT_THRESHOLD_RATIO && totalLinesOnDisk > 1000;
 }
 
 function compactFile(): void {
-  if (!cache) return;
+  if (!cache) {
+    return;
+  }
 
   const before = totalLinesOnDisk;
   try {
@@ -144,12 +154,14 @@ function compactFile(): void {
     totalLinesOnDisk = cache.size;
     debugLog(`[ref-index-store] Compacted: ${before} lines → ${totalLinesOnDisk} lines`);
   } catch (err) {
-    debugError(`[ref-index-store] Compact failed: ${err}`);
+    debugError(`[ref-index-store] Compact failed: ${formatUnknownError(err)}`);
   }
 }
 
 function evictIfNeeded(): void {
-  if (!cache || cache.size < MAX_ENTRIES) return;
+  if (!cache || cache.size < MAX_ENTRIES) {
+    return;
+  }
 
   const now = Date.now();
   for (const [key, entry] of cache) {
@@ -159,7 +171,7 @@ function evictIfNeeded(): void {
   }
 
   if (cache.size >= MAX_ENTRIES) {
-    const sorted = [...cache.entries()].sort((a, b) => a[1]._createdAt - b[1]._createdAt);
+    const sorted = [...cache.entries()].toSorted((a, b) => a[1]._createdAt - b[1]._createdAt);
     const toRemove = sorted.slice(0, cache.size - MAX_ENTRIES + 1000);
     for (const [key] of toRemove) {
       cache.delete(key);
@@ -206,7 +218,9 @@ export function setRefIndex(refIdx: string, entry: RefIndexEntry): void {
 export function getRefIndex(refIdx: string): RefIndexEntry | null {
   const store = loadFromFile();
   const entry = store.get(refIdx);
-  if (!entry) return null;
+  if (!entry) {
+    return null;
+  }
 
   if (Date.now() - entry._createdAt > TTL_MS) {
     store.delete(refIdx);

@@ -6,7 +6,7 @@ function createPinsClient(seedPinned: string[], knownBodies: Record<string, stri
   let pinned = [...seedPinned];
   const getRoomStateEvent = vi.fn(async () => ({ pinned: [...pinned] }));
   const sendStateEvent = vi.fn(
-    async (_roomId: string, _type: string, _key: string, payload: any) => {
+    async (_roomId: string, _type: string, _key: string, payload: { pinned: string[] }) => {
       pinned = [...payload.pinned];
     },
   );

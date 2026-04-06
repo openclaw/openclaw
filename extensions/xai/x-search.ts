@@ -11,10 +11,7 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
-import {
-  resolveEffectiveXSearchConfig,
-  resolveLegacyXSearchConfig,
-} from "./src/x-search-config.js";
+import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
@@ -198,10 +195,9 @@ export function createXSearchTool(options?: {
         enableImageUnderstanding: args.enable_image_understanding === true,
         enableVideoUnderstanding: args.enable_video_understanding === true,
       };
-      const xSearchConfigRecord = xSearchConfig as Record<string, unknown> | undefined;
-      const model = resolveXaiXSearchModel(xSearchConfigRecord);
-      const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
-      const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);
+      const model = resolveXaiXSearchModel(xSearchConfig);
+      const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfig);
+      const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfig);
       const cacheKey = buildXSearchCacheKey({
         query,
         model,
