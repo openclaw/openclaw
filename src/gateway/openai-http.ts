@@ -506,12 +506,29 @@ export async function handleOpenAiHttpRequest(
     senderIsOwner,
   });
 
+  // Abort the embedded agent run when the HTTP client disconnects.
+  // Without this, cancelled requests leave Ollama NUM_PARALLEL slots occupied
+  // for up to agents.defaults.timeoutSeconds (48h by default).
+  const httpAbortController = new AbortController();
+
   if (!stream) {
+    let responseSent = false;
+    res.on("close", () => {
+      if (!responseSent) {
+        logWarn(`openai-compat: client disconnected, aborting agent run runId=${runId}`);
+        httpAbortController.abort(new Error("client_disconnect"));
+      }
+    });
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromIngress(
+        { ...commandInput, abortSignal: httpAbortController.signal },
+        defaultRuntime,
+        deps,
+      );
 
       const content = resolveAgentResponseText(result);
 
+      responseSent = true;
       sendJson(res, 200, {
         id: runId,
         object: "chat.completion",
@@ -528,6 +545,7 @@ export async function handleOpenAiHttpRequest(
       });
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
+      responseSent = true;
       sendJson(res, 500, {
         error: { message: "internal error", type: "api_error" },
       });
@@ -581,14 +599,22 @@ export async function handleOpenAiHttpRequest(
     }
   });
 
-  req.on("close", () => {
+  res.on("close", () => {
+    if (!closed) {
+      logWarn(`openai-compat: client disconnected, aborting streaming run runId=${runId}`);
+    }
     closed = true;
     unsubscribe();
+    httpAbortController.abort(new Error("client_disconnect"));
   });
 
   void (async () => {
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromIngress(
+        { ...commandInput, abortSignal: httpAbortController.signal },
+        defaultRuntime,
+        deps,
+      );
 
       if (closed) {
         return;

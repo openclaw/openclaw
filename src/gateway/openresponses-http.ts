@@ -407,6 +407,7 @@ async function runResponsesAgentCommand(params: {
   messageChannel: string;
   senderIsOwner: boolean;
   deps: ReturnType<typeof createDefaultDeps>;
+  abortSignal?: AbortSignal;
 }) {
   return agentCommandFromIngress(
     {
@@ -423,6 +424,7 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
+      abortSignal: params.abortSignal,
     },
     defaultRuntime,
     params.deps,
@@ -680,7 +682,19 @@ export async function handleOpenResponsesHttpRequest(
       ? { maxTokens: payload.max_output_tokens }
       : undefined;
 
+  // Abort the embedded agent run when the HTTP client disconnects.
+  // Without this, cancelled requests leave Ollama NUM_PARALLEL slots occupied
+  // for up to agents.defaults.timeoutSeconds (48h by default).
+  const httpAbortController = new AbortController();
+
   if (!stream) {
+    let responseSent = false;
+    res.on("close", () => {
+      if (!responseSent) {
+        logWarn(`openresponses: client disconnected, aborting non-streaming run runId=${responseId}`);
+        httpAbortController.abort(new Error("client_disconnect"));
+      }
+    });
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -694,6 +708,7 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        abortSignal: httpAbortController.signal,
       });
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
@@ -742,6 +757,7 @@ export async function handleOpenResponsesHttpRequest(
           usage,
         });
         rememberResponseSession();
+        responseSent = true;
         sendJson(res, 200, response);
         return true;
       }
@@ -770,6 +786,7 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       rememberResponseSession();
+      responseSent = true;
       sendJson(res, 200, response);
     } catch (err) {
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
@@ -781,6 +798,7 @@ export async function handleOpenResponsesHttpRequest(
         error: { code: "api_error", message: "internal error" },
       });
       rememberResponseSession();
+      responseSent = true;
       sendJson(res, 500, response);
     }
     return true;
@@ -940,9 +958,13 @@ export async function handleOpenResponsesHttpRequest(
     }
   });
 
-  req.on("close", () => {
+  res.on("close", () => {
+    if (!closed) {
+      logWarn(`openresponses: client disconnected, aborting streaming run runId=${responseId}`);
+    }
     closed = true;
     unsubscribe();
+    httpAbortController.abort(new Error("client_disconnect"));
   });
 
   void (async () => {
@@ -959,6 +981,7 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        abortSignal: httpAbortController.signal,
       });
 
       finalUsage = extractUsageFromResult(result);
