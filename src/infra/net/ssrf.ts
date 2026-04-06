@@ -200,14 +200,22 @@ function assertAllowedResolvedAddressesOrThrow(
   }
 }
 
-function coerceLookupResults(result: Awaited<ReturnType<LookupFn>>): readonly LookupAddress[] {
+function isLookupAddress(value: unknown): value is LookupAddress {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as { address?: unknown; family?: unknown };
+  return typeof candidate.address === "string" && typeof candidate.family === "number";
+}
+
+function coerceLookupResults(result: unknown): readonly LookupAddress[] {
   if (Array.isArray(result)) {
-    return result;
+    return result.filter(isLookupAddress);
   }
   if (typeof result === "string") {
     return [{ address: result, family: result.includes(":") ? 6 : 4 }];
   }
-  if (result && typeof result === "object" && "address" in result && "family" in result) {
+  if (isLookupAddress(result)) {
     return [result];
   }
   return [];
@@ -232,7 +240,7 @@ export function createPinnedLookup(params: {
     options: unknown,
     callback: LookupCallback,
   ) => void;
-  const records = params.addresses.map((address) => ({
+  const records: LookupAddress[] = params.addresses.map((address) => ({
     address,
     family: address.includes(":") ? 6 : 4,
   }));
@@ -396,7 +404,7 @@ function resolvePinnedDispatcherLookup(
       `Pinned dispatcher override hostname mismatch: expected ${pinned.hostname}, got ${override.hostname}`,
     );
   }
-  const records = override.addresses.map((address) => ({
+  const records: LookupAddress[] = override.addresses.map((address) => ({
     address,
     family: address.includes(":") ? 6 : 4,
   }));

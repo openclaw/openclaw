@@ -147,16 +147,17 @@ describe("claw view", () => {
   it("shows unattended-continuation approval wording and packet sections", () => {
     const container = document.createElement("div");
     render(renderClaw(createProps()), container);
+    const normalizedText = container.textContent?.replace(/\s+/g, " ").trim() ?? "";
 
-    expect(container.textContent).toContain("unattended-continuation approval");
-    expect(container.textContent).toContain(
+    expect(normalizedText).toContain("unattended-continuation approval");
+    expect(normalizedText).toContain(
       "Approval lets Claw continue autonomously without routine check-ins.",
     );
-    expect(container.textContent).toContain("Scope & Plan");
-    expect(container.textContent).toContain("Tasks & Verification");
-    expect(container.textContent).toContain("Logs & Files");
-    expect(container.textContent).toContain("Ship the Claw mission flow end to end.");
-    expect(container.textContent).toContain("Verifier confirms the packet and runtime behavior");
+    expect(normalizedText).toContain("Scope & Plan");
+    expect(normalizedText).toContain("Tasks & Verification");
+    expect(normalizedText).toContain("Logs & Files");
+    expect(normalizedText).toContain("Ship the Claw mission flow end to end.");
+    expect(normalizedText).toContain("Verifier confirms the packet and runtime behavior");
 
     const approveButton = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Approve Continuation",

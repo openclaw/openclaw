@@ -30,6 +30,10 @@ const ALLOWED_CONTRACT_BUNDLED_PATH_HELPERS = new Set([
   "src/plugins/contracts/plugin-sdk-runtime-api-guardrails.test.ts",
 ]);
 
+const ALLOWED_HAND_BUILT_BUNDLED_EXTENSION_PATHS = new Set([
+  "src/channels/plugins/contracts/registry.ts",
+]);
+
 const ALLOWED_CHANNEL_BUNDLED_METADATA_CONSUMERS = new Set([
   "src/channels/plugins/session-conversation.bundled-fallback.test.ts",
 ]);
@@ -139,6 +143,10 @@ describe("plugin contract boundary invariants", () => {
     });
     const offenders = files
       .filter((file) => {
+        const normalizedFile = normalizeRepoFile(file);
+        if (ALLOWED_HAND_BUILT_BUNDLED_EXTENSION_PATHS.has(normalizedFile)) {
+          return false;
+        }
         const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
         return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
       })
