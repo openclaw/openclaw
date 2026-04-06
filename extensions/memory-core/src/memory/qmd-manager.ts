@@ -41,6 +41,7 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
@@ -165,7 +166,6 @@ type ManagedCollection = {
 };
 
 type QmdManagerMode = "full" | "status";
-type QmdCollectionPatternFlag = "--glob" | "--mask";
 type BuiltinQmdMcpTool = "query" | "search" | "vector_search" | "deep_search";
 type QmdMcporterSearchParams =
   | {
@@ -652,8 +652,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async addCollection(pathArg: string, name: string, pattern: string): Promise<void> {
-    const candidateFlags: QmdCollectionPatternFlag[] =
-      this.collectionPatternFlag === "--glob" ? ["--glob", "--mask"] : ["--mask", "--glob"];
+    const candidateFlags = resolveQmdCollectionPatternFlags(this.collectionPatternFlag);
     let lastError: unknown;
     for (const flag of candidateFlags) {
       try {
