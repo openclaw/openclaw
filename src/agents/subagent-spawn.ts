@@ -710,6 +710,15 @@ export async function spawnSubagentDirect(
       },
     });
     if (fsPolicyPatchError) {
+      try {
+        await callSubagentGateway({
+          method: "sessions.delete",
+          params: { key: childSessionKey, emitLifecycleHooks: false },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // Best-effort cleanup only.
+      }
       return {
         status: "error",
         error: fsPolicyPatchError,

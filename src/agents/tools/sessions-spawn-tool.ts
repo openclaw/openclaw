@@ -7,7 +7,10 @@ import { spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
-import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
+import {
+  SUBAGENT_SPAWN_MODES,
+  spawnSubagentDirect,
+} from "../subagent-spawn.js";
 import {
   describeSessionsSpawnTool,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
@@ -229,6 +232,13 @@ export function createSessionsSpawnTool(
       }
 
       if (runtime === "acp") {
+        if (fsPolicy) {
+          return jsonResult({
+            status: "error",
+            error:
+              "fsPolicy is currently unsupported for runtime=acp; use runtime=subagent or remove fsPolicy",
+          });
+        }
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
             status: "error",
