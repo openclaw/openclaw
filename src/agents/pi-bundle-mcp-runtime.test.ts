@@ -298,6 +298,52 @@ describe("session MCP runtime", () => {
     expect(result.content[0]).toMatchObject({ type: "text", text: "hi human" });
   });
 
+  it("keeps native plugin MCP servers available when using a copied sandbox workspace", async () => {
+    const resolvedWorkspace = await makeTempDir("openclaw-native-plugin-mcp-source-");
+    const effectiveWorkspace = await makeTempDir("openclaw-native-plugin-mcp-sandbox-");
+    const pluginRoot = path.join(resolvedWorkspace, "native-plugins", "hello-world");
+    const serverScriptPath = path.join(pluginRoot, "hello-world.mjs");
+    await writeBundleProbeMcpServer(serverScriptPath, {
+      responseText: "FROM-PLUGIN-SANDBOX",
+    });
+
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "native-hello-world",
+        source: path.join(pluginRoot, "index.mjs"),
+        rootDir: pluginRoot,
+      }),
+    );
+    registry.mcpServers.push({
+      pluginId: "native-hello-world",
+      name: "helloWorld",
+      server: {
+        command: "node",
+        args: [serverScriptPath],
+      },
+      source: path.join(pluginRoot, "index.mjs"),
+      rootDir: pluginRoot,
+    });
+    setActivePluginRegistry(registry, "native-plugin-mcp-sandbox", "default", resolvedWorkspace);
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-native-plugin-mcp-sandbox",
+      workspaceDir: effectiveWorkspace,
+      sourceWorkspaceDir: resolvedWorkspace,
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const result = await materialized.tools[0].execute(
+      "call-native-plugin-mcp-sandbox",
+      {},
+      undefined,
+      undefined,
+    );
+
+    expect(materialized.tools.map((tool) => tool.name)).toEqual(["helloWorld__bundle_probe"]);
+    expect(result.content[0]).toMatchObject({ type: "text", text: "FROM-PLUGIN-SANDBOX" });
+  });
+
   it("lets configured MCP override native plugin MCP servers by name", async () => {
     const workspaceDir = await makeTempDir("openclaw-native-plugin-mcp-override-");
     const pluginRoot = path.join(workspaceDir, "native-plugins", "hello-world");

@@ -11,6 +11,7 @@ export type EmbeddedPiMcpConfig = {
 
 export function loadEmbeddedPiMcpConfig(params: {
   workspaceDir: string;
+  pluginWorkspaceDir?: string;
   cfg?: OpenClawConfig;
 }): EmbeddedPiMcpConfig {
   const bundleMcp = loadEnabledBundleMcpConfig({
@@ -18,7 +19,7 @@ export function loadEmbeddedPiMcpConfig(params: {
     cfg: params.cfg,
   });
   const pluginMcp = loadEnabledPluginMcpServerConfig({
-    workspaceDir: params.workspaceDir,
+    workspaceDir: params.pluginWorkspaceDir ?? params.workspaceDir,
     cfg: params.cfg,
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);

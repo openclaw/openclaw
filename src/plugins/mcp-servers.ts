@@ -34,6 +34,16 @@ function isWorkspaceMatch(params: { workspaceDir?: string; activeWorkspaceDir?: 
   return path.resolve(params.workspaceDir) === path.resolve(params.activeWorkspaceDir);
 }
 
+function withDefaultCwd(
+  server: Record<string, unknown>,
+  rootDir?: string,
+): Record<string, unknown> {
+  if (rootDir && typeof server.cwd !== "string" && typeof server.workingDirectory !== "string") {
+    return { ...server, cwd: rootDir };
+  }
+  return { ...server };
+}
+
 export function normalizePluginRegisteredMcpServerConfig(params: {
   name: string;
   server: unknown;
@@ -71,17 +81,13 @@ export function normalizePluginRegisteredMcpServerConfig(params: {
     };
   }
 
-  const normalized = {
-    ...params.server,
-    command: params.server.command.trim(),
-  };
-  if (
-    params.rootDir &&
-    typeof normalized.cwd !== "string" &&
-    typeof normalized.workingDirectory !== "string"
-  ) {
-    normalized.cwd = params.rootDir;
-  }
+  const normalized = withDefaultCwd(
+    {
+      ...params.server,
+      command: params.server.command.trim(),
+    },
+    params.rootDir,
+  );
 
   return {
     ok: true,
@@ -118,25 +124,21 @@ export function loadEnabledPluginMcpServerConfig(params?: {
       )
       .map((plugin) => plugin.id),
   );
-  const mcpServers = Object.fromEntries(
-    registry.mcpServers
-      .filter((entry) => loadedPluginIds.has(entry.pluginId))
-      .toSorted((left, right) => {
-        const nameOrder = left.name.localeCompare(right.name);
-        if (nameOrder !== 0) {
-          return nameOrder;
-        }
-        return left.pluginId.localeCompare(right.pluginId);
-      })
-      .map((entry) => {
-        const server =
-          entry.rootDir &&
-          typeof entry.server.cwd !== "string" &&
-          typeof entry.server.workingDirectory !== "string"
-            ? { ...entry.server, cwd: entry.rootDir }
-            : { ...entry.server };
-        return [entry.name, server];
-      }),
-  );
+  const sortedEntries = [...registry.mcpServers]
+    .filter((entry) => loadedPluginIds.has(entry.pluginId))
+    .toSorted((left, right) => {
+      const nameOrder = left.name.localeCompare(right.name);
+      if (nameOrder !== 0) {
+        return nameOrder;
+      }
+      return left.pluginId.localeCompare(right.pluginId);
+    });
+  const mcpServers: Record<string, Record<string, unknown>> = {};
+  for (const entry of sortedEntries) {
+    if (entry.name in mcpServers) {
+      continue;
+    }
+    mcpServers[entry.name] = withDefaultCwd(entry.server, entry.rootDir);
+  }
   return { config: { mcpServers } };
 }

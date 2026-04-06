@@ -86,6 +86,7 @@ function createCatalogFingerprint(servers: Record<string, unknown>): string {
 
 function loadSessionMcpConfig(params: {
   workspaceDir: string;
+  sourceWorkspaceDir?: string;
   cfg?: OpenClawConfig;
   logDiagnostics?: boolean;
 }): {
@@ -94,6 +95,7 @@ function loadSessionMcpConfig(params: {
 } {
   const loaded = loadEmbeddedPiMcpConfig({
     workspaceDir: params.workspaceDir,
+    pluginWorkspaceDir: params.sourceWorkspaceDir,
     cfg: params.cfg,
   });
   if (params.logDiagnostics !== false) {
@@ -115,10 +117,12 @@ export function createSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
+  sourceWorkspaceDir?: string;
   cfg?: OpenClawConfig;
 }): SessionMcpRuntime {
   const { loaded, fingerprint: configFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
+    sourceWorkspaceDir: params.sourceWorkspaceDir,
     cfg: params.cfg,
     logDiagnostics: true,
   });
@@ -308,6 +312,7 @@ function createSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
       }
       const { fingerprint: nextFingerprint } = loadSessionMcpConfig({
         workspaceDir: params.workspaceDir,
+        sourceWorkspaceDir: params.sourceWorkspaceDir,
         cfg: params.cfg,
         logDiagnostics: false,
       });
@@ -342,6 +347,7 @@ function createSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           workspaceDir: params.workspaceDir,
+          sourceWorkspaceDir: params.sourceWorkspaceDir,
           cfg: params.cfg,
         }),
       ).then((runtime) => {
@@ -420,6 +426,7 @@ export async function getOrCreateSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
+  sourceWorkspaceDir?: string;
   cfg?: OpenClawConfig;
 }): Promise<SessionMcpRuntime> {
   return await getSessionMcpRuntimeManager().getOrCreate(params);

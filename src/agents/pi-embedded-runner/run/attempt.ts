@@ -599,6 +599,7 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
+          sourceWorkspaceDir: resolvedWorkspace,
           cfg: params.config,
         })
       : undefined;

@@ -113,6 +113,39 @@ describe("loadEnabledPluginMcpServerConfig", () => {
     });
   });
 
+  it("uses an explicit registry even when the active workspace does not match", () => {
+    const explicitRegistry = createEmptyPluginRegistry();
+    explicitRegistry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));
+    explicitRegistry.mcpServers.push({
+      pluginId: "plugin-a",
+      name: "helloWorld",
+      server: { command: "node", args: ["hello.mjs"] },
+      source: "/tmp/plugin-a/index.cjs",
+      rootDir: "/tmp/plugin-a",
+    });
+
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.plugins.push(createPluginRecord({ id: "plugin-b", rootDir: "/tmp/plugin-b" }));
+    setActivePluginRegistry(activeRegistry, "mcp-server-test", "default", "/tmp/workspace-a");
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        registry: explicitRegistry,
+        workspaceDir: "/tmp/workspace-b",
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {
+          helloWorld: {
+            command: "node",
+            args: ["hello.mjs"],
+            cwd: "/tmp/plugin-a",
+          },
+        },
+      },
+    });
+  });
+
   it("honors plugins.entries.<id>.enabled=false from runtime config", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));
