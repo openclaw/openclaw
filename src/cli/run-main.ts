@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { CommanderError } from "commander";
+import { Command, CommanderError } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { normalizeEnv } from "../infra/env.js";
@@ -86,6 +86,113 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return isRootHelpInvocation(argv);
+}
+
+export function shouldUseSubcommandHelpFastPath(argv: string[]): boolean {
+  return hasHelpOrVersion(argv) && !isRootHelpInvocation(argv) && Boolean(getPrimaryCommand(argv));
+}
+
+async function createMinimalHelpProgram() {
+  const program = new Command();
+  program.enablePositionalOptions();
+  program.exitOverride((err) => {
+    process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;
+    throw err;
+  });
+
+  const [{ createProgramContext }, { configureProgramHelp }, { setProgramContext }] =
+    await Promise.all([
+      import("./program/context.js"),
+      import("./program/help.js"),
+      import("./program/program-context.js"),
+    ]);
+  const ctx = createProgramContext();
+  setProgramContext(program, ctx);
+  configureProgramHelp(program, ctx);
+
+  return { program, ctx };
+}
+
+const HELP_FAST_PATH_PLUGIN_IDS_BY_PRIMARY: Record<string, readonly string[]> = {
+  memory: ["memory-core"],
+};
+
+export async function outputSubcommandHelpFastPath(argv: string[]): Promise<boolean> {
+  const parseArgv = rewriteUpdateFlagArgv(argv);
+  const primary = getPrimaryCommand(parseArgv);
+  if (!primary) {
+    return false;
+  }
+
+  const [{ getCoreCliCommandDescriptors }, { getSubCliEntries }] = await Promise.all([
+    import("./program/core-command-descriptors.js"),
+    import("./program/subcli-descriptors.js"),
+  ]);
+  const builtinCommands = new Set([
+    ...getCoreCliCommandDescriptors().map((entry) => entry.name),
+    ...getSubCliEntries().map((entry) => entry.name),
+  ]);
+  if (!builtinCommands.has(primary)) {
+    return false;
+  }
+
+  const { program, ctx } = await createMinimalHelpProgram();
+  const { registerCoreCliByName } = await import("./program/command-registry.js");
+  await registerCoreCliByName(program, ctx, primary, parseArgv);
+  const { registerSubCliByName } = await import("./program/register.subclis.js");
+  await registerSubCliByName(program, primary);
+
+  try {
+    await program.parseAsync(parseArgv);
+  } catch (error) {
+    if (!(error instanceof CommanderError)) {
+      throw error;
+    }
+    process.exitCode = error.exitCode;
+  }
+  return true;
+}
+
+export async function outputPluginSubcommandHelpFastPath(argv: string[]): Promise<boolean> {
+  const parseArgv = rewriteUpdateFlagArgv(argv);
+  const primary = getPrimaryCommand(parseArgv);
+  if (!primary) {
+    return false;
+  }
+
+  const { program } = await createMinimalHelpProgram();
+  const { loadValidatedConfigForPluginRegistration } = await import("./program/register.subclis.js");
+  const config = await loadValidatedConfigForPluginRegistration();
+  if (!config) {
+    return false;
+  }
+
+  const { registerPluginCliCommands } = await import("../plugins/cli.js");
+  const onlyPluginIds = HELP_FAST_PATH_PLUGIN_IDS_BY_PRIMARY[primary];
+  await registerPluginCliCommands(
+    program,
+    config,
+    undefined,
+    onlyPluginIds ? { onlyPluginIds: [...onlyPluginIds] } : undefined,
+    {
+      helpOnly: true,
+      primary,
+      mode: "eager",
+    },
+  );
+  if (!program.commands.some((command) => command.name() === primary)) {
+    return false;
+  }
+
+  try {
+    await program.parseAsync(parseArgv);
+  } catch (error) {
+    if (!(error instanceof CommanderError)) {
+      throw error;
+    }
+    process.exitCode = error.exitCode;
+  }
+  return true;
 }
 
 export function resolveMissingPluginCommandMessage(
@@ -176,6 +283,15 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
+    if (shouldUseSubcommandHelpFastPath(normalizedArgv)) {
+      if (await outputSubcommandHelpFastPath(normalizedArgv)) {
+        return;
+      }
+      if (await outputPluginSubcommandHelpFastPath(normalizedArgv)) {
+        return;
+      }
+    }
+
     if (await tryRouteCli(normalizedArgv)) {
       return;
     }
@@ -226,6 +342,7 @@ export async function runCli(argv: string[] = process.argv) {
       const config = await loadValidatedConfigForPluginRegistration();
       if (config) {
         await registerPluginCliCommands(program, config, undefined, undefined, {
+          helpOnly: hasHelpOrVersion(parseArgv),
           mode: "lazy",
           primary,
         });

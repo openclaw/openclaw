@@ -19,7 +19,10 @@ const log = createSubsystemLogger("plugins");
 
 type PluginCliRegistrationMode = "eager" | "lazy";
 
+type PluginCliLoaderOptions = Pick<PluginLoadOptions, "onlyPluginIds" | "pluginSdkResolution">;
+
 type RegisterPluginCliOptions = {
+  helpOnly?: boolean;
   mode?: PluginCliRegistrationMode;
   primary?: string | null;
 };
@@ -83,7 +86,7 @@ function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessE
 async function loadPluginCliMetadataRegistry(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+  loaderOptions?: PluginCliLoaderOptions,
 ) {
   const context = resolvePluginCliLoadContext(cfg, env);
   return {
@@ -103,7 +106,7 @@ async function loadPluginCliMetadataRegistry(
 async function loadPluginCliCommandRegistry(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+  loaderOptions?: PluginCliLoaderOptions,
 ) {
   const context = resolvePluginCliLoadContext(cfg, env);
   const runtimeRegistry = loadOpenClawPlugins({
@@ -155,7 +158,7 @@ async function loadPluginCliCommandRegistry(
 export async function getPluginCliCommandDescriptors(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+  loaderOptions?: PluginCliLoaderOptions,
 ): Promise<OpenClawPluginCliCommandDescriptor[]> {
   try {
     const { registry } = await loadPluginCliMetadataRegistry(cfg, env, loaderOptions);
@@ -180,14 +183,12 @@ export async function registerPluginCliCommands(
   program: Command,
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+  loaderOptions?: PluginCliLoaderOptions,
   options?: RegisterPluginCliOptions,
 ) {
-  const { config, workspaceDir, logger, registry } = await loadPluginCliCommandRegistry(
-    cfg,
-    env,
-    loaderOptions,
-  );
+  const loadRegistry =
+    options?.helpOnly === true ? loadPluginCliMetadataRegistry : loadPluginCliCommandRegistry;
+  const { config, workspaceDir, logger, registry } = await loadRegistry(cfg, env, loaderOptions);
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? null;
 

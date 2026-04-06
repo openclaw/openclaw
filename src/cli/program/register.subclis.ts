@@ -231,6 +231,11 @@ const entries: SubCliEntry[] = [
     description: "Secure DM pairing (approve inbound requests)",
     hasSubcommands: true,
     register: async (program) => {
+      const mod = await import("../pairing-cli.js");
+      if (hasHelpOrVersion(process.argv)) {
+        mod.registerPairingCli(program);
+        return;
+      }
       // Initialize plugins before registering pairing CLI.
       // The pairing CLI calls listPairingChannels() at registration time,
       // which requires the plugin registry to be populated with channel plugins.
@@ -239,7 +244,6 @@ const entries: SubCliEntry[] = [
       if (config) {
         await registerPluginCliCommands(program, config);
       }
-      const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
     },
   },
@@ -250,6 +254,9 @@ const entries: SubCliEntry[] = [
     register: async (program) => {
       const mod = await import("../plugins-cli.js");
       mod.registerPluginsCli(program);
+      if (hasHelpOrVersion(process.argv)) {
+        return;
+      }
       const { registerPluginCliCommands } = await import("../../plugins/cli.js");
       const config = await loadValidatedConfigForPluginRegistration();
       if (config) {

@@ -276,6 +276,30 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
   });
 
+  it("uses the metadata-only loader for help-only registration", async () => {
+    const program = createProgram();
+
+    await registerPluginCliCommands(
+      program,
+      {} as OpenClawConfig,
+      undefined,
+      { onlyPluginIds: ["memory-core"] },
+      {
+        helpOnly: true,
+        mode: "eager",
+        primary: "memory",
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["memory-core"],
+      }),
+    );
+    expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to awaited CLI metadata collection when runtime loading ignored async registration", async () => {
     const asyncRegistrar = vi.fn(async ({ program }: { program: Command }) => {
       const asyncCommand = program.command("async-cli").description("Async CLI");

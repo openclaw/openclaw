@@ -30,6 +30,22 @@ const { registerQaCli } = vi.hoisted(() => ({
   }),
 }));
 
+const { registerPairingCli } = vi.hoisted(() => ({
+  registerPairingCli: vi.fn((program: Command) => {
+    program.command("pairing");
+  }),
+}));
+
+const { registerPluginsCli } = vi.hoisted(() => ({
+  registerPluginsCli: vi.fn((program: Command) => {
+    program.command("plugins");
+  }),
+}));
+
+const pluginCliModule = vi.hoisted(() => ({
+  registerPluginCliCommands: vi.fn(),
+}));
+
 const configModule = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
@@ -38,7 +54,10 @@ const configModule = vi.hoisted(() => ({
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../qa-cli.js", () => ({ registerQaCli }));
+vi.mock("../pairing-cli.js", () => ({ registerPairingCli }));
+vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
 vi.mock("../../config/config.js", () => configModule);
+vi.mock("../../plugins/cli.js", () => pluginCliModule);
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
@@ -64,6 +83,9 @@ describe("registerSubCliCommands", () => {
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
+    registerPairingCli.mockClear();
+    registerPluginsCli.mockClear();
+    pluginCliModule.registerPluginCliCommands.mockReset();
     configModule.loadConfig.mockReset();
     configModule.readConfigFileSnapshot.mockReset();
   });
@@ -143,5 +165,44 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["acp"], { from: "user" });
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips plugin CLI bootstrap for pairing help", async () => {
+    process.argv = ["node", "openclaw", "pairing", "--help"];
+    const program = new Command();
+
+    await registerSubCliByName(program, "pairing");
+
+    expect(registerPairingCli).toHaveBeenCalledTimes(1);
+    expect(pluginCliModule.registerPluginCliCommands).not.toHaveBeenCalled();
+    expect(configModule.readConfigFileSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("skips plugin CLI bootstrap for plugins help", async () => {
+    process.argv = ["node", "openclaw", "plugins", "--help"];
+    const program = new Command();
+
+    await registerSubCliByName(program, "plugins");
+
+    expect(registerPluginsCli).toHaveBeenCalledTimes(1);
+    expect(pluginCliModule.registerPluginCliCommands).not.toHaveBeenCalled();
+    expect(configModule.readConfigFileSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps plugin CLI bootstrap for pairing command runs", async () => {
+    const loadedConfig = { plugins: { enabled: true } };
+    process.argv = ["node", "openclaw", "pairing", "list"];
+    configModule.readConfigFileSnapshot.mockResolvedValueOnce({
+      valid: true,
+      config: loadedConfig,
+    });
+    configModule.loadConfig.mockReturnValueOnce(loadedConfig);
+    const program = new Command();
+
+    await registerSubCliByName(program, "pairing");
+
+    expect(configModule.readConfigFileSnapshot).toHaveBeenCalledTimes(1);
+    expect(pluginCliModule.registerPluginCliCommands).toHaveBeenCalledTimes(1);
+    expect(registerPairingCli).toHaveBeenCalledTimes(1);
   });
 });
