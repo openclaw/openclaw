@@ -635,6 +635,15 @@ async function resolveCompatiblePackageVersion(params: {
       version,
     });
   }
+  if (params.detail.package?.family === "skill") {
+    return {
+      ok: true,
+      version,
+      compatibility:
+        versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
+      verification: null,
+    };
+  }
   const verificationState = resolveClawHubArchiveVerification(
     versionDetail,
     params.detail.package?.name ?? "unknown",

@@ -1363,6 +1363,35 @@ describe("installPluginFromClawHub", () => {
       },
     },
     {
+      name: "redirects skill families before missing archive metadata checks",
+      setup: () => {
+        fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+          package: {
+            name: "calendar",
+            displayName: "Calendar",
+            family: "skill",
+            channel: "official",
+            isOfficial: true,
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        });
+        fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+          version: {
+            version: "2026.3.22",
+            createdAt: 0,
+            changelog: "",
+          },
+        });
+      },
+      spec: "clawhub:calendar",
+      expected: {
+        ok: false,
+        code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
+        error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+      },
+    },
+    {
       name: "returns typed package-not-found failures",
       setup: () => {
         fetchClawHubPackageDetailMock.mockRejectedValueOnce(
