@@ -462,6 +462,38 @@ PY
   host_timeout_exec "$timeout_s" prlctl exec "$VM_NAME" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
 }
 
+dump_latest_guest_npm_log_tail() {
+  local label="${1:-guest npm debug log tail}"
+  local npm_log rc
+  set +e
+  npm_log="$(
+    guest_powershell_poll 20 "$(cat <<'EOF'
+$logDir = Join-Path $env:LOCALAPPDATA 'npm-cache\_logs'
+if (-not (Test-Path $logDir)) {
+  exit 0
+}
+$latest = Get-ChildItem $logDir -Filter '*-debug-0.log' |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+if ($null -eq $latest) {
+  exit 0
+}
+"==> npm-debug-log"
+$latest.FullName
+Get-Content $latest.FullName -Tail 80
+EOF
+)"
+  )"
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 || -z "$npm_log" ]]; then
+    warn "$label unavailable"
+    return 1
+  fi
+  printf '==> %s\n' "$label"
+  printf '%s\n' "$npm_log"
+}
+
 guest_run_openclaw() {
   local env_name="${1:-}"
   local env_value="${2:-}"
@@ -1125,6 +1157,9 @@ PY
       if ! stream_windows_baseline_install_log; then
         warn "windows baseline install helper log drain failed after completion"
       fi
+      if [[ "$done_status" != "0" ]]; then
+        dump_latest_guest_npm_log_tail "windows baseline install npm debug tail" || true
+      fi
       rm -f "$log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
@@ -1148,6 +1183,7 @@ PY
       if ! stream_windows_baseline_install_log; then
         warn "windows baseline install helper log drain failed after timeout"
       fi
+      dump_latest_guest_npm_log_tail "windows baseline install npm debug tail" || true
       warn "windows baseline install helper timed out waiting for done file"
       rm -f "$log_state_path"
       return 1
@@ -1376,6 +1412,9 @@ PY
       if ! stream_windows_install_log; then
         warn "windows install helper log drain failed after completion"
       fi
+      if [[ "$done_status" != "0" ]]; then
+        dump_latest_guest_npm_log_tail "windows packaged install npm debug tail" || true
+      fi
       rm -f "$log_state_path"
       [[ "$done_status" == "0" ]]
       return $?
@@ -1399,6 +1438,7 @@ PY
       if ! stream_windows_install_log; then
         warn "windows install helper log drain failed after timeout"
       fi
+      dump_latest_guest_npm_log_tail "windows packaged install npm debug tail" || true
       warn "windows install helper timed out waiting for done file"
       rm -f "$log_state_path"
       return 1
