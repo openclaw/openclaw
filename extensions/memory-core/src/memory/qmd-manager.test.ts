@@ -895,7 +895,7 @@ describe("QmdMemoryManager", () => {
     );
   });
 
-  it("prefers --mask for collection add and falls back to --glob when --mask is rejected", async () => {
+  it("prefers --glob for collection add and falls back to --mask when --glob is rejected", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -917,10 +917,10 @@ describe("QmdMemoryManager", () => {
       }
       if (args[0] === "collection" && args[1] === "add") {
         const child = createMockChild({ autoClose: false });
-        const flag = args.includes("--mask") ? "--mask" : args.includes("--glob") ? "--glob" : "";
+        const flag = args.includes("--glob") ? "--glob" : args.includes("--mask") ? "--mask" : "";
         addFlagCalls.push(flag);
-        if (flag === "--mask") {
-          emitAndClose(child, "stderr", "unknown flag: --mask", 1);
+        if (flag === "--glob") {
+          emitAndClose(child, "stderr", "unknown flag: --glob", 1);
           return child;
         }
         queueMicrotask(() => child.closeWith(0));
@@ -932,7 +932,7 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager({ mode: "full" });
     await manager.close();
 
-    expect(addFlagCalls).toEqual(["--mask", "--glob", "--glob", "--glob"]);
+    expect(addFlagCalls).toEqual(["--glob", "--mask", "--mask", "--mask"]);
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("retrying with legacy compatibility flag"),
     );
