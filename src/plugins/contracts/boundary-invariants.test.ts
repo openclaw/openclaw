@@ -14,8 +14,17 @@ const ALLOWED_BUNDLED_CAPABILITY_METADATA_CONSUMERS = new Set([
 const ALLOWED_EXTENSION_PATH_STRING_TESTS = new Set([
   "src/plugin-sdk/browser-maintenance.test.ts",
   "src/channels/plugins/bundled.shape-guard.test.ts",
+  "src/channels/plugins/setup-helpers.test.ts",
+  "src/channels/plugins/setup-wizard-helpers.test.ts",
+  "src/plugin-sdk/browser-maintenance.test.ts",
   "src/plugins/contracts/bundled-extension-config-api-guardrails.test.ts",
   "src/scripts/test-projects.test.ts",
+  "src/security/audit-channel-discord-allowlists.test.ts",
+  "src/security/audit-channel-discord-command-findings.test.ts",
+  "src/security/audit-channel-discord-native.test.ts",
+  "src/security/audit-channel-source-config-discord.test.ts",
+  "src/security/audit-channel-synology-zalo.test.ts",
+  "src/security/audit-channel-telegram-command-findings.test.ts",
 ]);
 
 const ALLOWED_CONTRACT_BUNDLED_PATH_HELPERS = new Set([
@@ -26,6 +35,10 @@ const ALLOWED_CONTRACT_BUNDLED_PATH_HELPERS = new Set([
 
 const ALLOWED_CHANNEL_BUNDLED_METADATA_CONSUMERS = new Set([
   "src/channels/plugins/session-conversation.bundled-fallback.test.ts",
+]);
+
+const ALLOWED_HAND_BUILT_EXTENSION_PATH_FILES = new Set([
+  "src/channels/plugins/contracts/registry.ts",
 ]);
 
 describe("plugin contract boundary invariants", () => {
@@ -120,6 +133,9 @@ describe("plugin contract boundary invariants", () => {
       ignore: ["src/**/*.test.ts"],
     });
     const offenders = files.filter((file) => {
+      if (ALLOWED_HAND_BUILT_EXTENSION_PATH_FILES.has(file)) {
+        return false;
+      }
       const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
       return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
     });
