@@ -75,7 +75,7 @@ OpenClaw currently ships this bundled Arcee catalog:
 | `arcee/trinity-large-preview`  | Trinity Large Preview  | text  | 128K    | $0.25 / $1.00        | General-purpose; 400B params, 13B active  |
 | `arcee/trinity-mini`           | Trinity Mini 26B       | text  | 128K    | $0.045 / $0.15       | Fast and cost-efficient; function calling |
 
-When using OpenRouter, model refs are prefixed with `arcee/` (for example `arcee/arcee/trinity-large-thinking`).
+The same model refs work for both direct and OpenRouter setups (for example `arcee/trinity-large-thinking`).
 
 The onboarding preset sets `arcee/trinity-large-thinking` as the default model.
 
