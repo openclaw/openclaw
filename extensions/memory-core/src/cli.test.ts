@@ -2,13 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  defaultRuntime,
+  isVerbose,
+  setVerbose,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
 } from "../../../src/cli/test-runtime-capture.js";
+import { registerMemoryCli } from "./cli.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
@@ -31,17 +37,6 @@ vi.mock("./cli.host.runtime.js", async () => {
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
   };
-});
-
-let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
-let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").defaultRuntime;
-let isVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").isVerbose;
-let setVerbose: typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli").setVerbose;
-
-beforeAll(async () => {
-  ({ registerMemoryCli } = await import("./cli.js"));
-  ({ defaultRuntime, isVerbose, setVerbose } =
-    await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
 });
 
 beforeEach(() => {

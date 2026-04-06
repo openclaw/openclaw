@@ -3,13 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
+import "./embedding.test-mocks.js";
+import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
+import type { MemoryIndexManager } from "./manager.js";
+import { closeAllMemorySearchManagers } from "./search-manager.js";
+import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
 
 let shouldFail = false;
-
-type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
-type TestManagerHelpersModule = typeof import("./test-manager-helpers.js");
-type MemoryIndexModule = typeof import("./index.js");
 
 describe("memory manager atomic reindex", () => {
   let fixtureRoot = "";
@@ -17,22 +17,14 @@ describe("memory manager atomic reindex", () => {
   let workspaceDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
-  let embedBatch: ReturnType<EmbeddingTestMocksModule["getEmbedBatchMock"]>;
-  let resetEmbeddingMocks: EmbeddingTestMocksModule["resetEmbeddingMocks"];
-  let getRequiredMemoryIndexManager: TestManagerHelpersModule["getRequiredMemoryIndexManager"];
-  let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
+  let embedBatch: ReturnType<typeof getEmbedBatchMock>;
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
   });
 
   beforeEach(async () => {
-    vi.resetModules();
-    const embeddingMocks = await import("./embedding.test-mocks.js");
-    embedBatch = embeddingMocks.getEmbedBatchMock();
-    resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
-    ({ getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js"));
-    ({ closeAllMemorySearchManagers } = await import("./index.js"));
+    embedBatch = getEmbedBatchMock();
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     resetEmbeddingMocks();
     shouldFail = false;

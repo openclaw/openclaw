@@ -9,8 +9,8 @@ import type {
   EmbeddingProviderRuntime,
   EmbeddingProviderResult,
 } from "./embeddings.js";
-import type { MemoryIndexManager } from "./index.js";
-type MemoryIndexModule = typeof import("./index.js");
+import type { MemoryIndexManager } from "./manager.js";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./search-manager.js";
 
 const { createEmbeddingProviderMock } = vi.hoisted(() => ({
   createEmbeddingProviderMock: vi.fn(),
@@ -27,9 +27,6 @@ vi.mock("./embeddings.js", async () => {
 vi.mock("./sqlite-vec.js", () => ({
   loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
 }));
-
-let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
-let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
 async function ensureProviderInitialized(manager: MemoryIndexManager): Promise<void> {
   await (
@@ -78,8 +75,6 @@ describe("memory manager mistral provider wiring", () => {
   let manager: MemoryIndexManager | null = null;
 
   beforeEach(async () => {
-    vi.resetModules();
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     vi.clearAllMocks();
     createEmbeddingProviderMock.mockReset();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));

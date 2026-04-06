@@ -6,27 +6,16 @@ const mocks = vi.hoisted(() => ({
   listRegisteredMemoryEmbeddingProviderAdapters: vi.fn<() => MemoryEmbeddingProviderAdapter[]>(
     () => [],
   ),
-  listMemoryEmbeddingProviders: vi.fn(() => {
-    throw new Error("fallback capability loading should stay cold during memory-core register");
-  }),
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
-  >("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
-  return {
-    ...actual,
-    listRegisteredMemoryEmbeddingProviderAdapters:
-      mocks.listRegisteredMemoryEmbeddingProviderAdapters,
-    listMemoryEmbeddingProviders: mocks.listMemoryEmbeddingProviders,
-  };
-});
+vi.mock("./provider-adapters.registry.runtime.js", () => ({
+  listRegisteredMemoryEmbeddingProviderAdapters:
+    mocks.listRegisteredMemoryEmbeddingProviderAdapters,
+}));
 
 beforeEach(() => {
   mocks.listRegisteredMemoryEmbeddingProviderAdapters.mockReset();
   mocks.listRegisteredMemoryEmbeddingProviderAdapters.mockReturnValue([]);
-  mocks.listMemoryEmbeddingProviders.mockClear();
 });
 
 describe("registerBuiltInMemoryEmbeddingProviders", () => {
@@ -41,7 +30,6 @@ describe("registerBuiltInMemoryEmbeddingProviders", () => {
 
     expect(ids).toEqual(["local", "openai", "gemini", "voyage", "mistral"]);
     expect(mocks.listRegisteredMemoryEmbeddingProviderAdapters).toHaveBeenCalledTimes(1);
-    expect(mocks.listMemoryEmbeddingProviders).not.toHaveBeenCalled();
   });
 
   it("skips builtin adapters that are already registered in the current load", () => {
@@ -58,6 +46,5 @@ describe("registerBuiltInMemoryEmbeddingProviders", () => {
     });
 
     expect(ids).toEqual(["openai", "voyage", "mistral"]);
-    expect(mocks.listMemoryEmbeddingProviders).not.toHaveBeenCalled();
   });
 });

@@ -13,7 +13,6 @@ import {
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
-  listRegisteredMemoryEmbeddingProviderAdapters,
   runGeminiEmbeddingBatches,
   runOpenAiEmbeddingBatches,
   runVoyageEmbeddingBatches,
@@ -21,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
+import { listRegisteredMemoryEmbeddingProviderAdapters } from "./provider-adapters.registry.runtime.js";
 
 export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   providerId: string;

@@ -78,7 +78,7 @@ function buildResetParams(
       to: ctx.To ?? "bot",
       resetHookTriggered: false,
     },
-    directives: parseInlineDirectives(""),
+    directives: parseInlineDirectives(commandBody),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
     workspaceDir: "/tmp/openclaw-commands",
