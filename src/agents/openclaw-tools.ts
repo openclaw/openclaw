@@ -72,6 +72,8 @@ export function createOpenClawTools(
     agentDir?: string;
     sandboxRoot?: string;
     sandboxFsBridge?: SandboxFsBridge;
+    /** Sandbox container workdir used to remap container-style file paths to the host workspace. */
+    containerWorkdir?: string;
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
     config?: OpenClawConfig;
@@ -231,6 +233,7 @@ export function createOpenClawTools(
     createCanvasTool({ config: options?.config }),
     options?.fsPolicy?.workspaceOnly
       ? wrapToolWorkspaceRootGuardWithOptions(nodesTool, workspaceDir, {
+          containerWorkdir: options?.containerWorkdir,
           pathParamNames: ["outPath"],
         })
       : nodesTool,

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-core-tools.js";
 
 const mocks = vi.hoisted(() => {
@@ -36,17 +36,19 @@ vi.mock("./pi-tools.read.js", async () => {
 let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 describe("createOpenClawTools nodes workspaceOnly guard", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+  });
+
+  beforeEach(() => {
     mocks.createNodesTool.mockClear();
     mocks.wrapToolWorkspaceRootGuardWithOptions.mockClear();
-    await import("./test-helpers/fast-core-tools.js");
-    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
   });
 
   it("wraps nodes with workspace guards for outPath when workspaceOnly is enabled", () => {
     const tools = createOpenClawTools({
       workspaceDir: "/tmp/workspace",
+      containerWorkdir: "/workspace",
       fsPolicy: { workspaceOnly: true },
       disablePluginTools: true,
     });
@@ -54,7 +56,10 @@ describe("createOpenClawTools nodes workspaceOnly guard", () => {
     expect(mocks.wrapToolWorkspaceRootGuardWithOptions).toHaveBeenCalledWith(
       mocks.nodesTool,
       "/tmp/workspace",
-      { pathParamNames: ["outPath"] },
+      {
+        containerWorkdir: "/workspace",
+        pathParamNames: ["outPath"],
+      },
     );
     expect(tools.find((tool) => tool.name === "nodes")).toBe(mocks.wrappedNodesTool);
   });
