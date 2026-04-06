@@ -46,6 +46,18 @@ const DEFAULT_SUFFIX = (truncatedChars: number) =>
 export const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
 const RECOVERY_MIN_TRUNCATED_TEXT_CHARS = RECOVERY_MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
 
+function resolveSuffixFactory(
+  suffix: ToolResultTruncationOptions["suffix"],
+): (truncatedChars: number) => string {
+  if (typeof suffix === "function") {
+    return suffix;
+  }
+  if (typeof suffix === "string") {
+    return () => suffix;
+  }
+  return DEFAULT_SUFFIX;
+}
+
 /**
  * Marker inserted between head and tail when using head+tail truncation.
  */
@@ -81,10 +93,7 @@ export function truncateToolResultText(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): string {
-  const suffixFactory: (truncatedChars: number) => string =
-    typeof options.suffix === "function"
-      ? options.suffix
-      : () => options.suffix ?? DEFAULT_SUFFIX(1);
+  const suffixFactory = resolveSuffixFactory(options.suffix);
   const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   if (text.length <= maxChars) {
     return text;
@@ -174,10 +183,7 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffixFactory: (truncatedChars: number) => string =
-    typeof options.suffix === "function"
-      ? options.suffix
-      : () => options.suffix ?? DEFAULT_SUFFIX(1);
+  const suffixFactory = resolveSuffixFactory(options.suffix);
   const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
@@ -267,11 +273,22 @@ export type ToolResultReductionPotential = {
   maxReducibleChars: number;
 };
 
+type ToolResultBranchEntry = {
+  id: string;
+  type: string;
+  message?: AgentMessage;
+};
+
+type ToolResultReplacement = {
+  entryId: string;
+  message: AgentMessage;
+};
+
 function buildAggregateToolResultReplacements(params: {
-  branch: Array<{ id: string; type: string; message?: AgentMessage }>;
+  branch: ToolResultBranchEntry[];
   aggregateBudgetChars: number;
   minKeepChars?: number;
-}): Array<{ entryId: string; message: AgentMessage }> {
+}): ToolResultReplacement[] {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const minTruncatedTextChars = minKeepChars + DEFAULT_SUFFIX(1).length;
   const candidates = params.branch
@@ -339,30 +356,126 @@ function buildAggregateToolResultReplacements(params: {
   return replacements;
 }
 
-function applyToolResultReplacementsToBranch(params: {
-  branch: Array<{ id: string; type: string; message?: AgentMessage }>;
-  replacements: Array<{ entryId: string; message: AgentMessage }>;
-}): Array<{ id: string; type: string; message?: AgentMessage }> {
-  if (params.replacements.length === 0) {
-    return params.branch;
+function buildOversizedToolResultReplacements(params: {
+  branch: ToolResultBranchEntry[];
+  maxChars: number;
+  minKeepChars?: number;
+}): ToolResultReplacement[] {
+  const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
+  const replacements: ToolResultReplacement[] = [];
+
+  for (const entry of params.branch) {
+    if (entry.type !== "message" || !entry.message) {
+      continue;
+    }
+    const msg = entry.message;
+    if ((msg as { role?: string }).role !== "toolResult") {
+      continue;
+    }
+    if (getToolResultTextLength(msg) <= params.maxChars) {
+      continue;
+    }
+    replacements.push({
+      entryId: entry.id,
+      message: truncateToolResultMessage(msg, params.maxChars, {
+        minKeepChars,
+      }),
+    });
   }
 
-  const replacementsById = new Map(
-    params.replacements.map((replacement) => [replacement.entryId, replacement.message]),
-  );
+  return replacements;
+}
 
-  return params.branch.map((entry) => {
-    if (entry.type !== "message") {
-      return entry;
+function calculateReplacementReduction(
+  branch: ToolResultBranchEntry[],
+  replacements: ToolResultReplacement[],
+): number {
+  if (replacements.length === 0) {
+    return 0;
+  }
+  const branchById = new Map(branch.map((entry) => [entry.id, entry]));
+  let reduction = 0;
+
+  for (const replacement of replacements) {
+    const entry = branchById.get(replacement.entryId);
+    if (!entry?.message) {
+      continue;
     }
+    reduction += Math.max(
+      0,
+      getToolResultTextLength(entry.message) - getToolResultTextLength(replacement.message),
+    );
+  }
+
+  return reduction;
+}
+
+function applyToolResultReplacementsToBranch(
+  branch: ToolResultBranchEntry[],
+  replacements: ToolResultReplacement[],
+): ToolResultBranchEntry[] {
+  if (replacements.length === 0) {
+    return branch;
+  }
+  const replacementsById = new Map(
+    replacements.map((replacement) => [replacement.entryId, replacement]),
+  );
+  return branch.map((entry) => {
     const replacement = replacementsById.get(entry.id);
-    if (!replacement) {
+    if (!replacement || entry.type !== "message") {
       return entry;
     }
-    return { ...entry, message: replacement };
+    return {
+      ...entry,
+      message: replacement.message,
+    };
   });
 }
 
+function buildToolResultReplacementPlan(params: {
+  branch: ToolResultBranchEntry[];
+  maxChars: number;
+  aggregateBudgetChars: number;
+  minKeepChars?: number;
+}): {
+  replacements: ToolResultReplacement[];
+  oversizedReplacementCount: number;
+  aggregateReplacementCount: number;
+  oversizedReducibleChars: number;
+  aggregateReducibleChars: number;
+} {
+  const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
+  const oversizedReplacements = buildOversizedToolResultReplacements({
+    branch: params.branch,
+    maxChars: params.maxChars,
+    minKeepChars,
+  });
+  const oversizedReducibleChars = calculateReplacementReduction(
+    params.branch,
+    oversizedReplacements,
+  );
+  const oversizedTrimmedBranch = applyToolResultReplacementsToBranch(
+    params.branch,
+    oversizedReplacements,
+  );
+  const aggregateReplacements = buildAggregateToolResultReplacements({
+    branch: oversizedTrimmedBranch,
+    aggregateBudgetChars: params.aggregateBudgetChars,
+    minKeepChars,
+  });
+  const aggregateReducibleChars = calculateReplacementReduction(
+    oversizedTrimmedBranch,
+    aggregateReplacements,
+  );
+
+  return {
+    replacements: [...oversizedReplacements, ...aggregateReplacements],
+    oversizedReplacementCount: oversizedReplacements.length,
+    aggregateReplacementCount: aggregateReplacements.length,
+    oversizedReducibleChars,
+    aggregateReducibleChars,
+  };
+}
 export function estimateToolResultReductionPotential(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
@@ -370,15 +483,15 @@ export function estimateToolResultReductionPotential(params: {
   const { messages, contextWindowTokens } = params;
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
   const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(contextWindowTokens);
+  const branch = messages.map((message, index) => ({
+    id: `message-${index}`,
+    type: "message",
+    message,
+  }));
 
   let toolResultCount = 0;
   let totalToolResultChars = 0;
-  let oversizedCount = 0;
-  let oversizedReducibleChars = 0;
-  const individuallyTrimmedMessages = messages.slice();
-
-  for (let index = 0; index < messages.length; index += 1) {
-    const msg = messages[index];
+  for (const msg of messages) {
     if ((msg as { role?: string }).role !== "toolResult") {
       continue;
     }
@@ -388,50 +501,23 @@ export function estimateToolResultReductionPotential(params: {
     }
     toolResultCount += 1;
     totalToolResultChars += textLength;
-    if (textLength <= maxChars) {
-      continue;
-    }
-    oversizedCount += 1;
-    const truncatedMessage = truncateToolResultMessage(msg, maxChars, {
-      minKeepChars: RECOVERY_MIN_KEEP_CHARS,
-    });
-    individuallyTrimmedMessages[index] = truncatedMessage;
-    oversizedReducibleChars += Math.max(0, textLength - getToolResultTextLength(truncatedMessage));
   }
-
-  const aggregateReplacements = buildAggregateToolResultReplacements({
-    branch: individuallyTrimmedMessages.map((message, index) => ({
-      id: `message-${index}`,
-      type: "message",
-      message,
-    })),
+  const plan = buildToolResultReplacementPlan({
+    branch,
+    maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
   });
-  const individuallyTrimmedBranch = individuallyTrimmedMessages.map((message, index) => ({
-    id: `message-${index}`,
-    type: "message",
-    message,
-  }));
-  const aggregateReducibleChars = aggregateReplacements.reduce((sum, replacement) => {
-    const match = individuallyTrimmedBranch.find((entry) => entry.id === replacement.entryId);
-    const originalLength =
-      match && match.message
-        ? getToolResultTextLength(match.message)
-        : getToolResultTextLength(replacement.message);
-    const newLength = getToolResultTextLength(replacement.message);
-    return sum + Math.max(0, originalLength - newLength);
-  }, 0);
-  const maxReducibleChars = oversizedReducibleChars + aggregateReducibleChars;
+  const maxReducibleChars = plan.oversizedReducibleChars + plan.aggregateReducibleChars;
 
   return {
     maxChars,
     aggregateBudgetChars,
     toolResultCount,
     totalToolResultChars,
-    oversizedCount,
-    oversizedReducibleChars,
-    aggregateReducibleChars,
+    oversizedCount: plan.oversizedReplacementCount,
+    oversizedReducibleChars: plan.oversizedReducibleChars,
+    aggregateReducibleChars: plan.aggregateReducibleChars,
     maxReducibleChars,
   };
 }
@@ -446,84 +532,37 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   const { sessionManager, contextWindowTokens } = params;
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
   const aggregateBudgetChars = calculateRecoveryAggregateToolResultChars(contextWindowTokens);
-  const branch = sessionManager.getBranch();
+  const branch = sessionManager.getBranch() as ToolResultBranchEntry[];
 
   if (branch.length === 0) {
     return { truncated: false, truncatedCount: 0, reason: "empty session" };
   }
 
-  const oversizedIndices: number[] = [];
-  for (let i = 0; i < branch.length; i += 1) {
-    const entry = branch[i];
-    if (entry.type !== "message") {
-      continue;
-    }
-    const msg = entry.message;
-    if ((msg as { role?: string }).role !== "toolResult") {
-      continue;
-    }
-    if (getToolResultTextLength(msg) > maxChars) {
-      oversizedIndices.push(i);
-    }
-  }
-
-  const oversizedReplacements = oversizedIndices.flatMap((index) => {
-    const entry = branch[index];
-    if (!entry || entry.type !== "message") {
-      return [];
-    }
-    return [
-      {
-        entryId: entry.id,
-        message: truncateToolResultMessage(entry.message, maxChars, {
-          minKeepChars: RECOVERY_MIN_KEEP_CHARS,
-        }),
-      },
-    ];
-  });
-
-  const oversizedTrimmedBranch = applyToolResultReplacementsToBranch({
-    branch: branch as Array<{ id: string; type: string; message?: AgentMessage }>,
-    replacements: oversizedReplacements,
-  });
-  const aggregateReplacements = buildAggregateToolResultReplacements({
-    branch: oversizedTrimmedBranch,
+  const plan = buildToolResultReplacementPlan({
+    branch,
+    maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
   });
-  const replacements = [...oversizedReplacements];
-  const replacementIndexById = new Map(replacements.map((replacement) => [replacement.entryId, replacement]));
-  for (const replacement of aggregateReplacements) {
-    replacementIndexById.set(replacement.entryId, replacement);
-  }
-  const mergedReplacements = Array.from(replacementIndexById.values());
-
-  if (mergedReplacements.length === 0) {
+  if (plan.replacements.length === 0) {
     return {
       truncated: false,
       truncatedCount: 0,
       reason: "no oversized or aggregate tool results",
     };
   }
-
   const rewriteResult = rewriteTranscriptEntriesInSessionManager({
     sessionManager,
-    replacements: mergedReplacements,
+    replacements: plan.replacements,
   });
   if (rewriteResult.changed && params.sessionFile) {
     emitSessionTranscriptUpdate(params.sessionFile);
   }
 
-  const truncatedKinds = [
-    oversizedReplacements.length > 0 ? "oversized" : "",
-    aggregateReplacements.length > 0 ? "aggregate" : "",
-  ]
-    .filter(Boolean)
-    .join("+");
-
   log.info(
-    `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} ${truncatedKinds || "tool"} tool result(s) in session ` +
-      `(contextWindow=${contextWindowTokens} maxChars=${maxChars} aggregateBudgetChars=${aggregateBudgetChars}) ` +
+    `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
+      `(contextWindow=${contextWindowTokens} maxChars=${maxChars} aggregateBudgetChars=${aggregateBudgetChars} ` +
+      `oversized=${plan.oversizedReplacementCount} aggregate=${plan.aggregateReplacementCount}) ` +
       `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
   );
 

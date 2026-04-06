@@ -18,6 +18,7 @@ import {
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams as baseParams,
 } from "./run.overflow-compaction.harness.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
@@ -278,7 +279,9 @@ describe("overflow compaction in run loop", () => {
     expect(mockedTruncateOversizedToolResultsInSession).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedLog.warn).toHaveBeenCalledWith(
-      expect.stringContaining("context overflow detected (attempt 1/3); attempting auto-compaction"),
+      expect.stringContaining(
+        "context overflow detected (attempt 1/3); attempting auto-compaction",
+      ),
     );
     expect(result.meta.error).toBeUndefined();
   });
