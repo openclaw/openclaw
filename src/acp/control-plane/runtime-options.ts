@@ -1,5 +1,10 @@
 import { isAbsolute } from "node:path";
-import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import {
+  type AcpSessionRuntimeOptions,
+  SESSION_RUNTIME_MODES,
+  type SessionAcpMeta,
+  type SessionRuntimeMode,
+} from "../../config/sessions/types.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 
 const MAX_RUNTIME_MODE_LENGTH = 64;
@@ -61,12 +66,16 @@ function validateBackendOptionValue(rawValue: unknown): string {
   });
 }
 
-export function validateRuntimeModeInput(rawMode: unknown): string {
-  return validateBoundedText({
+export function validateRuntimeModeInput(rawMode: unknown): SessionRuntimeMode {
+  const mode = validateBoundedText({
     value: rawMode,
     field: "Runtime mode",
     maxLength: MAX_RUNTIME_MODE_LENGTH,
   });
+  if (!SESSION_RUNTIME_MODES.includes(mode as (typeof SESSION_RUNTIME_MODES)[number])) {
+    failInvalidOption(`Runtime mode must be one of ${SESSION_RUNTIME_MODES.join(", ")}.`);
+  }
+  return mode as SessionRuntimeMode;
 }
 
 export function validateRuntimeModelInput(rawModel: unknown): string {
@@ -238,14 +247,26 @@ export function normalizeRuntimeOptions(
     .filter(([key, value]) => Boolean(key && value)) as Array<[string, string]>;
   const backendExtras =
     backendExtrasEntries.length > 0 ? Object.fromEntries(backendExtrasEntries) : undefined;
-  return {
-    ...(runtimeMode ? { runtimeMode } : {}),
-    ...(model ? { model } : {}),
-    ...(cwd ? { cwd } : {}),
-    ...(permissionProfile ? { permissionProfile } : {}),
-    ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
-    ...(backendExtras ? { backendExtras } : {}),
-  };
+  const result: AcpSessionRuntimeOptions = {};
+  if (runtimeMode) {
+    result.runtimeMode = runtimeMode as SessionRuntimeMode;
+  }
+  if (model) {
+    result.model = model;
+  }
+  if (cwd) {
+    result.cwd = cwd;
+  }
+  if (permissionProfile) {
+    result.permissionProfile = permissionProfile;
+  }
+  if (typeof timeoutSeconds === "number") {
+    result.timeoutSeconds = timeoutSeconds;
+  }
+  if (backendExtras) {
+    result.backendExtras = backendExtras;
+  }
+  return result;
 }
 
 export function mergeRuntimeOptions(params: {

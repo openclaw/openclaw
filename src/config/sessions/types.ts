@@ -50,11 +50,35 @@ export type SessionAcpMeta = {
   lastError?: string;
 };
 
+export const SESSION_RUNTIME_MODES = ["plan", "normal", "auto"] as const;
+export type SessionRuntimeMode = (typeof SESSION_RUNTIME_MODES)[number];
+
+export function isSessionRuntimeMode(value: unknown): value is SessionRuntimeMode {
+  return SESSION_RUNTIME_MODES.includes(value as SessionRuntimeMode);
+}
+
+export const SESSION_PLAN_TODO_STATUSES = ["pending", "in_progress", "done", "skipped"] as const;
+export type SessionPlanTodoStatus = (typeof SESSION_PLAN_TODO_STATUSES)[number];
+
+export type SessionPlanTodo = {
+  id: string;
+  text: string;
+  status: SessionPlanTodoStatus;
+};
+
+export type SessionPlanState = {
+  content?: string;
+  todos?: SessionPlanTodo[];
+  enteredAt?: number;
+  confirmedAt?: number;
+  updatedAt?: number;
+};
+
 export type AcpSessionRuntimeOptions = {
   /**
    * ACP runtime mode set via session/set_mode (for example: "plan", "normal", "auto").
    */
-  runtimeMode?: string;
+  runtimeMode?: SessionRuntimeMode;
   /** ACP runtime config option: model id. */
   model?: string;
   /** Working directory override for ACP session turns. */
@@ -114,6 +138,8 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
+  runtimeMode?: SessionRuntimeMode;
+  planState?: SessionPlanState;
   fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;

@@ -9,6 +9,15 @@ export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Send a message to another vis
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn sub-agent or ACP sessions.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status, usage, and model state.";
 export const UPDATE_PLAN_TOOL_DISPLAY_SUMMARY = "Track a short structured work plan.";
+export const ENTER_PLAN_MODE_TOOL_DISPLAY_SUMMARY =
+  "Enter plan mode and pause mutation tools for this session.";
+export const EXIT_PLAN_MODE_TOOL_DISPLAY_SUMMARY =
+  "Exit plan mode after the user confirms the plan.";
+export const TODO_WRITE_TOOL_DISPLAY_SUMMARY =
+  "Persist the current plan content and todo list for this session.";
+export const TASK_CREATE_TOOL_DISPLAY_SUMMARY =
+  "Create a session-scoped task from the current plan.";
+export const TASK_UPDATE_TOOL_DISPLAY_SUMMARY = "Update a session-scoped task status or progress.";
 
 export function describeSessionsListTool(): string {
   return [
@@ -53,5 +62,40 @@ export function describeUpdatePlanTool(): string {
     "Update the current structured work plan for this run.",
     "Use this for non-trivial multi-step work so the plan stays current while execution continues.",
     "Keep steps short, mark at most one step as `in_progress`, and skip this tool for simple one-step tasks.",
+  ].join(" ");
+}
+
+export function describeEnterPlanModeTool(): string {
+  return [
+    "Enter plan mode for the current session.",
+    "This switches the session runtime mode to `plan`, clears any stale persisted plan state, and blocks mutation tools until the plan is confirmed.",
+  ].join(" ");
+}
+
+export function describeExitPlanModeTool(): string {
+  return [
+    "Exit plan mode for the current session after the user confirms the plan.",
+    "This switches the session runtime mode back to `normal` while keeping the last persisted plan for resume and audit.",
+  ].join(" ");
+}
+
+export function describeTodoWriteTool(): string {
+  return [
+    "Persist the current plan content and structured todo list to session metadata.",
+    "Use this to keep plan state durable across resume, compaction, or follow-up turns while plan mode is active.",
+  ].join(" ");
+}
+
+export function describeTaskCreateTool(): string {
+  return [
+    "Create a session-scoped task record for plan execution.",
+    "Use `todoId` to bind the task to an existing persisted todo item, or pass `task` directly for ad hoc execution work.",
+  ].join(" ");
+}
+
+export function describeTaskUpdateTool(): string {
+  return [
+    "Update a task record created from the current session plan.",
+    "Use this to move tasks between queued, running, and terminal states or to persist progress summaries while work continues.",
   ].join(" ");
 }

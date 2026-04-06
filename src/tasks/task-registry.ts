@@ -1231,6 +1231,54 @@ export function setTaskCleanupAfterById(params: {
   });
 }
 
+export function updateTaskStateById(params: {
+  taskId: string;
+  status?: TaskStatus;
+  startedAt?: number;
+  endedAt?: number;
+  lastEventAt?: number;
+  error?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const current = tasks.get(params.taskId);
+  if (!current) {
+    return null;
+  }
+  const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
+  const patch: Partial<TaskRecord> = {};
+  if (params.status) {
+    patch.status = nextStatus;
+  }
+  if (params.startedAt != null) {
+    patch.startedAt = params.startedAt;
+  }
+  if (params.endedAt != null) {
+    patch.endedAt = params.endedAt;
+  }
+  if (params.lastEventAt != null) {
+    patch.lastEventAt = params.lastEventAt;
+  }
+  if (params.error !== undefined) {
+    patch.error = params.error;
+  }
+  if (params.progressSummary !== undefined) {
+    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
+  }
+  if (params.terminalSummary !== undefined) {
+    patch.terminalSummary = normalizeTaskSummary(params.terminalSummary);
+  }
+  if (params.terminalOutcome !== undefined) {
+    patch.terminalOutcome = resolveTaskTerminalOutcome({
+      status: nextStatus,
+      terminalOutcome: params.terminalOutcome,
+    });
+  }
+  return updateTask(params.taskId, patch);
+}
+
 export function markTaskTerminalById(params: {
   taskId: string;
   status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;

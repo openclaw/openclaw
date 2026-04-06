@@ -5,6 +5,7 @@
  * and can be called from anywhere in the codebase.
  */
 
+import { registerPlanModeBeforeToolCallHook } from "../agents/plan-mode-hook.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
@@ -32,6 +33,7 @@ const getLog = () => createSubsystemLogger("plugins");
 export function initializeGlobalHookRunner(registry: PluginRegistry): void {
   const state = getState();
   const log = getLog();
+  registerPlanModeBeforeToolCallHook(registry);
   state.registry = registry;
   state.hookRunner = createHookRunner(registry, {
     logger: {

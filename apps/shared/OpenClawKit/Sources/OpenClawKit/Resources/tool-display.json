@@ -369,6 +369,48 @@
         "plan.0.step"
       ]
     },
+    "enter_plan_mode": {
+      "emoji": "🧭",
+      "title": "Enter Plan Mode",
+      "detailKeys": [
+        "sessionKey",
+        "runtimeMode"
+      ]
+    },
+    "exit_plan_mode": {
+      "emoji": "✅",
+      "title": "Exit Plan Mode",
+      "detailKeys": [
+        "sessionKey",
+        "runtimeMode"
+      ]
+    },
+    "todo_write": {
+      "emoji": "📝",
+      "title": "Todo Write",
+      "detailKeys": [
+        "planState.todos.0.text",
+        "planState.content"
+      ]
+    },
+    "task_create": {
+      "emoji": "📌",
+      "title": "Task Create",
+      "detailKeys": [
+        "task.taskId",
+        "task.label",
+        "task.task"
+      ]
+    },
+    "task_update": {
+      "emoji": "📍",
+      "title": "Task Update",
+      "detailKeys": [
+        "task.taskId",
+        "task.status",
+        "task.progressSummary"
+      ]
+    },
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",
