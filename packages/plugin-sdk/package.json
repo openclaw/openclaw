@@ -8,10 +8,6 @@
       "types": "./dist/packages/plugin-sdk/src/config-runtime.d.ts",
       "default": "./src/config-runtime.ts"
     },
-    "./core": {
-      "types": "./dist/packages/plugin-sdk/src/core.d.ts",
-      "default": "./src/core.ts"
-    },
     "./plugin-entry": {
       "types": "./dist/packages/plugin-sdk/src/plugin-entry.d.ts",
       "default": "./src/plugin-entry.ts"

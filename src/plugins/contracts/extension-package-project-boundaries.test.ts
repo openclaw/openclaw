@@ -62,6 +62,7 @@ describe("opt-in extension package boundaries", () => {
 
     const packageJson = readJsonFile<PackageJson>("packages/plugin-sdk/package.json");
     expect(packageJson.name).toBe("@openclaw/plugin-sdk");
+    expect(packageJson.exports?.["./core"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-entry"]?.types).toBe(
       "./dist/packages/plugin-sdk/src/plugin-entry.d.ts",
     );
