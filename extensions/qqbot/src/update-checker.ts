@@ -44,8 +44,19 @@ let _log:
   | { info: (msg: string) => void; error: (msg: string) => void; debug?: (msg: string) => void }
   | undefined;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function fetchJson(url: string, timeoutMs: number): Promise<unknown> {
@@ -84,18 +95,16 @@ async function fetchDistTags(): Promise<Record<string, string>> {
   for (const url of REGISTRIES) {
     try {
       const json = await fetchJson(url, 10_000);
-      const tags = isRecord(json) ? json["dist-tags"] : undefined;
-      if (isRecord(tags)) {
+      const tags = asRecord(asRecord(json)?.["dist-tags"]);
+      if (tags) {
         return Object.fromEntries(
-          Object.entries(tags).filter((entry): entry is [string, string] => {
-            return typeof entry[1] === "string";
-          }),
+          Object.entries(tags).flatMap(([key, value]) =>
+            typeof value === "string" ? [[key, value]] : [],
+          ),
         );
       }
     } catch (e: unknown) {
-      _log?.debug?.(
-        `[qqbot:update-checker] ${url} failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      _log?.debug?.(`[qqbot:update-checker] ${url} failed: ${getErrorMessage(e)}`);
     }
   }
   throw new Error("all registries failed");
@@ -151,8 +160,8 @@ export async function getUpdateInfo(): Promise<UpdateInfo> {
     const tags = await fetchDistTags();
     return buildUpdateInfo(tags);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    _log?.debug?.(`[qqbot:update-checker] check failed: ${message}`);
+    const errorMessage = getErrorMessage(err);
+    _log?.debug?.(`[qqbot:update-checker] check failed: ${errorMessage}`);
     return {
       current: CURRENT_VERSION,
       latest: null,
@@ -160,7 +169,7 @@ export async function getUpdateInfo(): Promise<UpdateInfo> {
       alpha: null,
       hasUpdate: false,
       checkedAt: Date.now(),
-      error: message,
+      error: errorMessage,
     };
   }
 }
@@ -173,7 +182,7 @@ export async function checkVersionExists(version: string): Promise<boolean> {
     try {
       const url = `${baseUrl}/${version}`;
       const json = await fetchJson(url, 10_000);
-      if (isRecord(json) && json.version === version) {
+      if (readString(asRecord(json), "version") === version) {
         return true;
       }
     } catch {

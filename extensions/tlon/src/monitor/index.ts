@@ -752,10 +752,13 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
+      const contentBody = content.content;
+      const sentAt = readNumber(content, "sent") ?? Date.now();
+
       cacheMessage(nest, {
         author: senderShip,
         content: rawText,
-        timestamp: readNumber(content, "sent") ?? Date.now(),
+        timestamp: sentAt,
         id: messageId,
       });
 
@@ -797,8 +800,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                 originalMessage: {
                   messageId: messageId ?? "",
                   messageText: rawText,
-                  messageContent: content.content,
-                  timestamp: readNumber(content, "sent") ?? Date.now(),
+                  messageContent: contentBody,
+                  timestamp: sentAt,
                   parentId: parentId ?? undefined,
                   isThreadReply,
                 },
@@ -816,7 +819,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
       const messageText = await resolveAuthorizedMessageText({
         rawText,
-        content: content.content,
+        content: contentBody,
         authorizedForCites: true,
         resolveAllCites,
       });
@@ -826,12 +829,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         messageId: messageId ?? "",
         senderShip,
         messageText,
-        messageContent: content.content, // Pass raw content for media extraction
+        messageContent: contentBody, // Pass raw content for media extraction
         isGroup: true,
         channelNest: nest,
         hostShip: parsed?.hostShip,
         channelName: parsed?.channelName,
-        timestamp: readNumber(content, "sent") ?? Date.now(),
+        timestamp: sentAt,
         parentId,
         isThreadReply,
       });

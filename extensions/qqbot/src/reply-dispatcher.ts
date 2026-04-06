@@ -149,6 +149,7 @@ export async function handleStructuredPayload(
   }
 
   const parsedPayload = payloadResult.payload;
+  const unknownPayload = payloadResult.payload as unknown;
   log?.info(
     `[qqbot:${account.accountId}] Detected structured payload, type: ${parsedPayload.type}`,
   );
@@ -195,7 +196,14 @@ export async function handleStructuredPayload(
     return true;
   }
 
-  log?.error(`[qqbot:${account.accountId}] Unknown payload type in structured payload`);
+  const payloadType =
+    typeof unknownPayload === "object" &&
+    unknownPayload !== null &&
+    "type" in unknownPayload &&
+    typeof unknownPayload.type === "string"
+      ? unknownPayload.type
+      : "unknown";
+  log?.error(`[qqbot:${account.accountId}] Unknown payload type: ${payloadType}`);
   return true;
 }
 
