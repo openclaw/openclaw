@@ -475,10 +475,16 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!(await ensureResolvableSecretRefsOrRespond({ config: validated.config, respond }))) {
       return;
     }
-    // snapshot.config is materializeRuntimeConfig(..., "snapshot") from read; compare the same
-    // shape so identity patches (e.g. config.get → JSON → config.patch) hit the noop path.
+    // Noop detection uses two layers:
+    // 1. Source-level: diff the pre-materialization configs so that removing a
+    //    persisted key that would be re-injected from env is NOT a noop.
+    // 2. Materialized: compare snapshot-shaped configs so identity patches
+    //    (e.g. config.get → JSON → config.patch) still hit the noop path.
+    const sourceChangedPaths = diffConfigPaths(snapshot.sourceConfig, validated.config);
     const materializedCandidate = materializeRuntimeConfig(validated.config, "snapshot");
-    const changedPaths = diffConfigPaths(snapshot.config, materializedCandidate);
+    const materializedChangedPaths = diffConfigPaths(snapshot.config, materializedCandidate);
+    const changedPaths =
+      sourceChangedPaths.length > 0 ? sourceChangedPaths : materializedChangedPaths;
     const actor = resolveControlPlaneActor(client);
 
     // No-op: if the validated config is identical to the current config,

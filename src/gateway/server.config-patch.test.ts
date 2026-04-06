@@ -296,6 +296,39 @@ describe("gateway config methods", () => {
     expect(after.payload?.hash).toBe(normalized.payload?.hash);
   });
 
+  it("does not noop config.patch when source config changed", async () => {
+    const current = await rpcReq<{
+      config?: Record<string, unknown>;
+      hash?: string;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+
+    // Write a config with an extra source key via config.set.
+    const withExtra = structuredClone(current.payload?.config ?? {});
+    withExtra.__testSourceDiffMarker = "present";
+    const setRes = await rpcReq<{ ok?: boolean; hash?: string }>(requireWs(), "config.set", {
+      raw: JSON.stringify(withExtra),
+      baseHash: current.payload?.hash,
+    });
+    expect(setRes.ok).toBe(true);
+
+    const afterSet = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+    expect(afterSet.ok).toBe(true);
+
+    // Patch to remove the key (merge-patch null = delete). The source config
+    // changes, so config.patch must NOT return noop.
+    const patchRes = await rpcReq<{
+      ok?: boolean;
+      noop?: boolean;
+    }>(requireWs(), "config.patch", {
+      raw: JSON.stringify({ __testSourceDiffMarker: null }),
+      baseHash: afterSet.payload?.hash,
+    });
+
+    expect(patchRes.ok).toBe(true);
+    expect(patchRes.payload?.noop).not.toBe(true);
+  });
+
   it("rejects config.patch when raw is null", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
       raw: "null",
