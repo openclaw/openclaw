@@ -586,7 +586,7 @@ function buildMessageToolDescription(options?: {
     });
     if (channelActions.length > 0) {
       // Always include "send" as a base action
-      const allActions = new Set(["send", ...channelActions]);
+      const allActions = new Set<ChannelMessageActionName | "send">(["send", ...channelActions]);
       const actionList = Array.from(allActions).toSorted().join(", ");
       let desc = `${baseDescription} Current channel (${currentChannel}) supports: ${actionList}.`;
 
@@ -609,7 +609,7 @@ function buildMessageToolDescription(options?: {
           requesterSenderId: resolvedOptions.requesterSenderId,
         });
         if (actions.length > 0) {
-          const all = new Set(["send", ...actions]);
+          const all = new Set<ChannelMessageActionName | "send">(["send", ...actions]);
           otherChannels.push(`${plugin.id} (${Array.from(all).toSorted().join(", ")})`);
         }
       }
