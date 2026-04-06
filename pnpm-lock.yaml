@@ -739,6 +739,12 @@ importers:
 
   extensions/vydra: {}
 
+  extensions/webhooks:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+
   extensions/whatsapp:
     dependencies:
       '@whiskeysockets/baileys':

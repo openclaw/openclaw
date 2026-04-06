@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Plugins/webhooks: add a bundled webhook ingress plugin so external automation can create and drive bound TaskFlows through per-route shared-secret endpoints. (#61892) Thanks @mbelinky.
+
 ### Fixes
 
 - Providers/Google: recognize Gemma model ids in native Google forward-compat resolution, keep the requested provider when cloning fallback templates, and force Gemma reasoning off so Gemma 4 routes stop failing through the Google catalog fallback. (#61507) Thanks @eyjohn.
