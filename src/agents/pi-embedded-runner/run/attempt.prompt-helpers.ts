@@ -8,6 +8,7 @@ import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
+import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { log } from "../logger.js";
@@ -117,6 +118,18 @@ export function prependSystemPromptAddition(params: {
   systemPromptAddition?: string;
 }): string {
   return prependSystemPromptAdditionAfterCacheBoundary(params);
+}
+
+export function resolveAttemptPrependSystemContext(params: {
+  sessionKey?: string;
+  trigger?: EmbeddedRunAttemptParams["trigger"];
+  hookPrependSystemContext?: string;
+}): string | undefined {
+  const activeVideoTaskPromptContext =
+    params.trigger === "user" || params.trigger === "manual"
+      ? buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey)
+      : undefined;
+  return joinPresentTextSegments([activeVideoTaskPromptContext, params.hookPrependSystemContext]);
 }
 
 /** Build runtime context passed into context-engine afterTurn hooks. */
