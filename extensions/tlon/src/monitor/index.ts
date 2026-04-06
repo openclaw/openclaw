@@ -728,7 +728,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      const content = memo || essay;
+      const content = memo ?? essay;
+      if (!content) {
+        return;
+      }
       const isThreadReply = Boolean(memo);
       const messageId = isThreadReply ? readString(reply, "id") : readString(post, "id");
       if (!messageId) {

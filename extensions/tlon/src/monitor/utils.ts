@@ -227,7 +227,7 @@ function renderInlineItem(
   }
   const link = asRecord(record.link);
   const linkHref = link ? readString(link, "href") : undefined;
-  if (linkHref) {
+  if (link && linkHref) {
     const linkContent = readString(link, "content");
     return options?.linkMode === "href" ? linkHref : linkContent || linkHref;
   }
