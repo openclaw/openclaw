@@ -81,11 +81,11 @@ export default defineBundledChannelEntry({
     });
     api.on("subagent_delivery_target", async (event) => {
       const { handleFeishuSubagentDeliveryTarget } = await loadFeishuSubagentHooksModule();
-      return await handleFeishuSubagentDeliveryTarget(event);
+      return handleFeishuSubagentDeliveryTarget(event);
     });
     api.on("subagent_ended", async (event) => {
       const { handleFeishuSubagentEnded } = await loadFeishuSubagentHooksModule();
-      await handleFeishuSubagentEnded(event);
+      handleFeishuSubagentEnded(event);
     });
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);
