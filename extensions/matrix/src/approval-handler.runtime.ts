@@ -1,14 +1,16 @@
 import type {
   ChannelApprovalCapabilityHandlerContext,
-  ExecApprovalPendingView,
-  ExecApprovalResolvedView,
+  PendingApprovalView,
+  ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
   type ExecApprovalReplyDecision,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { ExecApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import { buildPluginApprovalResolvedReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
+import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildMatrixApprovalReactionHint,
   listMatrixApprovalReactionBindings,
@@ -16,8 +18,8 @@ import {
   unregisterMatrixApprovalReactionTarget,
 } from "./approval-reactions.js";
 import {
-  isMatrixExecApprovalClientEnabled,
-  shouldHandleMatrixExecApprovalRequest,
+  isMatrixAnyApprovalClientEnabled,
+  shouldHandleMatrixApprovalRequest,
 } from "./exec-approvals.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { deleteMatrixMessage, editMatrixMessage } from "./matrix/actions/messages.js";
@@ -136,25 +138,44 @@ async function prepareTarget(
 }
 
 function buildPendingApprovalContent(params: {
-  view: ExecApprovalPendingView;
+  view: PendingApprovalView;
   nowMs: number;
 }): PendingApprovalContent {
   const allowedDecisions = params.view.actions.map((action) => action.decision);
-  const payload = buildExecApprovalPendingReplyPayload({
-    approvalId: params.view.approvalId,
-    approvalSlug: params.view.approvalId.slice(0, 8),
-    approvalCommandId: params.view.approvalId,
-    ask: params.view.ask ?? undefined,
-    agentId: params.view.agentId ?? undefined,
-    allowedDecisions,
-    command: params.view.commandText,
-    cwd: params.view.cwd ?? undefined,
-    host: params.view.host === "node" ? "node" : "gateway",
-    nodeId: params.view.nodeId ?? undefined,
-    sessionKey: params.view.sessionKey ?? undefined,
-    expiresAtMs: params.view.expiresAtMs,
-    nowMs: params.nowMs,
-  });
+  const payload =
+    params.view.approvalKind === "plugin"
+      ? buildPluginApprovalPendingReplyPayload({
+          request: {
+            id: params.view.approvalId,
+            request: {
+              title: params.view.title,
+              description: params.view.description ?? "",
+              severity: params.view.severity,
+              toolName: params.view.toolName ?? undefined,
+              pluginId: params.view.pluginId ?? undefined,
+              agentId: params.view.agentId ?? undefined,
+            },
+            createdAtMs: 0,
+            expiresAtMs: params.view.expiresAtMs,
+          } satisfies PluginApprovalRequest,
+          nowMs: params.nowMs,
+          allowedDecisions,
+        })
+      : buildExecApprovalPendingReplyPayload({
+          approvalId: params.view.approvalId,
+          approvalSlug: params.view.approvalId.slice(0, 8),
+          approvalCommandId: params.view.approvalId,
+          ask: params.view.ask ?? undefined,
+          agentId: params.view.agentId ?? undefined,
+          allowedDecisions,
+          command: params.view.commandText,
+          cwd: params.view.cwd ?? undefined,
+          host: params.view.host === "node" ? "node" : "gateway",
+          nodeId: params.view.nodeId ?? undefined,
+          sessionKey: params.view.sessionKey ?? undefined,
+          expiresAtMs: params.view.expiresAtMs,
+          nowMs: params.nowMs,
+        });
   const hint = buildMatrixApprovalReactionHint(allowedDecisions);
   const text = payload.text ?? "";
   return {
@@ -164,7 +185,19 @@ function buildPendingApprovalContent(params: {
   };
 }
 
-function buildResolvedApprovalText(view: ExecApprovalResolvedView): string {
+function buildResolvedApprovalText(view: ResolvedApprovalView): string {
+  if (view.approvalKind === "plugin") {
+    return (
+      buildPluginApprovalResolvedReplyPayload({
+        resolved: {
+          id: view.approvalId,
+          decision: view.decision,
+          resolvedBy: view.resolvedBy ?? undefined,
+          ts: 0,
+        },
+      }).text ?? ""
+    );
+  }
   const decisionLabel =
     view.decision === "allow-once"
       ? "Allowed once"
@@ -182,37 +215,39 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
   PendingMessage,
   ReactionTargetRef
 >({
-  eventKinds: ["exec"],
+  eventKinds: ["exec", "plugin"],
   availability: {
-    isConfigured: (params) => {
-      const resolved = resolveHandlerContext(params);
-      return resolved
-        ? isMatrixExecApprovalClientEnabled({
-            cfg: params.cfg,
-            accountId: resolved.accountId,
-          })
-        : false;
+    isConfigured: ({ cfg, accountId, context }) => {
+      const resolved = resolveHandlerContext({ cfg, accountId, context });
+      if (!resolved) {
+        return false;
+      }
+      return isMatrixAnyApprovalClientEnabled({
+        cfg,
+        accountId: resolved.accountId,
+      });
     },
-    shouldHandle: (params) => {
-      const resolved = resolveHandlerContext(params);
-      return resolved
-        ? shouldHandleMatrixExecApprovalRequest({
-            cfg: params.cfg,
-            accountId: resolved.accountId,
-            request: params.request as ExecApprovalRequest,
-          })
-        : false;
+    shouldHandle: ({ cfg, accountId, request, context }) => {
+      const resolved = resolveHandlerContext({ cfg, accountId, context });
+      if (!resolved) {
+        return false;
+      }
+      return shouldHandleMatrixApprovalRequest({
+        cfg,
+        accountId: resolved.accountId,
+        request: request as ExecApprovalRequest | PluginApprovalRequest,
+      });
     },
   },
   presentation: {
     buildPendingPayload: ({ view, nowMs }) =>
       buildPendingApprovalContent({
-        view: view as ExecApprovalPendingView,
+        view,
         nowMs,
       }),
     buildResolvedResult: ({ view }) => ({
       kind: "update",
-      payload: buildResolvedApprovalText(view as ExecApprovalResolvedView),
+      payload: buildResolvedApprovalText(view),
     }),
     buildExpiredResult: () => ({ kind: "delete" }),
   },

@@ -20,59 +20,29 @@ function createNativeRuntimeStub() {
 }
 
 describe("resolveChannelApprovalCapability", () => {
-  it("falls back to legacy approval fields when approvalCapability is absent", () => {
-    const authorizeActorAction = vi.fn();
-    const getActionAvailabilityState = vi.fn();
-    const delivery = { hasConfiguredDmRoute: vi.fn() };
-    const nativeRuntime = createNativeRuntimeStub();
-    const describeExecApprovalSetup = vi.fn();
-
-    expect(
-      resolveChannelApprovalCapability({
-        auth: {
-          authorizeActorAction,
-          getActionAvailabilityState,
-        },
-        approvals: {
-          describeExecApprovalSetup,
-          delivery,
-          nativeRuntime,
-        },
-      }),
-    ).toEqual({
-      authorizeActorAction,
-      getActionAvailabilityState,
-      describeExecApprovalSetup,
-      delivery,
-      nativeRuntime,
-      render: undefined,
-      native: undefined,
-    });
+  it("returns undefined when approvalCapability is absent", () => {
+    expect(resolveChannelApprovalCapability({})).toBeUndefined();
   });
 
-  it("merges partial approvalCapability fields with legacy approval wiring", () => {
+  it("returns approvalCapability as the canonical approval contract", () => {
     const capabilityAuth = vi.fn();
-    const legacyAvailability = vi.fn();
-    const legacyDelivery = { hasConfiguredDmRoute: vi.fn() };
+    const capabilityAvailability = vi.fn();
     const capabilityNativeRuntime = createNativeRuntimeStub();
+    const delivery = { hasConfiguredDmRoute: vi.fn() };
 
     expect(
       resolveChannelApprovalCapability({
         approvalCapability: {
           authorizeActorAction: capabilityAuth,
+          getActionAvailabilityState: capabilityAvailability,
+          delivery,
           nativeRuntime: capabilityNativeRuntime,
-        },
-        auth: {
-          getActionAvailabilityState: legacyAvailability,
-        },
-        approvals: {
-          delivery: legacyDelivery,
         },
       }),
     ).toEqual({
       authorizeActorAction: capabilityAuth,
-      getActionAvailabilityState: legacyAvailability,
-      delivery: legacyDelivery,
+      getActionAvailabilityState: capabilityAvailability,
+      delivery,
       nativeRuntime: capabilityNativeRuntime,
       render: undefined,
       native: undefined,
@@ -81,7 +51,7 @@ describe("resolveChannelApprovalCapability", () => {
 });
 
 describe("resolveChannelApprovalAdapter", () => {
-  it("preserves legacy delivery surfaces when approvalCapability only defines auth", () => {
+  it("returns only delivery/runtime surfaces from approvalCapability", () => {
     const delivery = { hasConfiguredDmRoute: vi.fn() };
     const nativeRuntime = createNativeRuntimeStub();
     const describeExecApprovalSetup = vi.fn();
@@ -89,12 +59,10 @@ describe("resolveChannelApprovalAdapter", () => {
     expect(
       resolveChannelApprovalAdapter({
         approvalCapability: {
-          authorizeActorAction: vi.fn(),
-        },
-        approvals: {
           describeExecApprovalSetup,
           delivery,
           nativeRuntime,
+          authorizeActorAction: vi.fn(),
         },
       }),
     ).toEqual({

@@ -225,7 +225,7 @@ describe("server-channels auto restart", () => {
       ...createRuntimeChannel(),
       marker: "channel-runtime",
     } as PluginRuntime["channel"] & { marker: string };
-    const startAccount = vi.fn(async () => {});
+    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ channelRuntime });
@@ -289,7 +289,7 @@ describe("server-channels auto restart", () => {
       marker: "lazy-channel-runtime",
     } as PluginRuntime["channel"] & { marker: string };
     const resolveChannelRuntime = vi.fn(() => channelRuntime);
-    const startAccount = vi.fn(async () => {});
+    const startAccount = vi.fn(async (_ctx: { channelRuntime?: PluginRuntime["channel"] }) => {});
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ resolveChannelRuntime });

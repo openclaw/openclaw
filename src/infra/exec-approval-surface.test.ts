@@ -93,14 +93,14 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       channel === "telegram"
         ? {
             meta: { label: "Telegram" },
-            auth: {
+            approvalCapability: {
               getActionAvailabilityState: () => ({ kind: "enabled" }),
             },
           }
         : channel === "discord"
           ? {
               meta: { label: "Discord" },
-              auth: {
+              approvalCapability: {
                 getActionAvailabilityState: () => ({ kind: "disabled" }),
               },
             }
@@ -164,7 +164,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       channel === "telegram"
         ? {
             meta: { label: "Telegram" },
-            auth: {
+            approvalCapability: {
               getActionAvailabilityState: () => ({ kind: "disabled" }),
             },
           }
@@ -221,14 +221,14 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     {
       plugins: [
         {
-          approvals: {
+          approvalCapability: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          approvals: {
+          approvalCapability: {
             delivery: {
               hasConfiguredDmRoute: () => true,
             },
@@ -240,14 +240,14 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     {
       plugins: [
         {
-          approvals: {
+          approvalCapability: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          approvals: {
+          approvalCapability: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
@@ -278,20 +278,15 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
   });
 
-  it("preserves legacy DM routes when approvalCapability only defines auth", () => {
+  it("returns false when approvalCapability omits delivery surfaces", () => {
     listChannelPluginsMock.mockReturnValueOnce([
       {
         approvalCapability: {
           authorizeActorAction: () => ({ authorized: true }),
         },
-        approvals: {
-          delivery: {
-            hasConfiguredDmRoute: () => true,
-          },
-        },
       },
     ]);
 
-    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
+    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(false);
   });
 });

@@ -252,6 +252,58 @@ describe("matrix approval reactions", () => {
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("resolves plugin approval reactions through the same Matrix reaction path", async () => {
+    const core = buildCore();
+    const cfg = buildConfig();
+    const matrixCfg = cfg.channels?.matrix;
+    if (!matrixCfg) {
+      throw new Error("matrix config missing");
+    }
+    matrixCfg.dm = { allowFrom: ["@owner:example.org"] };
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$plugin-approval-msg",
+      approvalId: "plugin:req-123",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    const client = {
+      getEvent: vi.fn(),
+    } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
+
+    await handleInboundMatrixReaction({
+      client,
+      core,
+      cfg,
+      accountId: "default",
+      roomId: "!ops:example.org",
+      event: {
+        event_id: "$reaction-1",
+        origin_server_ts: 123,
+        content: {
+          "m.relates_to": {
+            rel_type: "m.annotation",
+            event_id: "$plugin-approval-msg",
+            key: "✅",
+          },
+        },
+      } as never,
+      senderId: "@owner:example.org",
+      senderLabel: "Owner",
+      selfUserId: "@bot:example.org",
+      isDirectMessage: false,
+      logVerboseMessage: vi.fn(),
+    });
+
+    expect(client.getEvent).not.toHaveBeenCalled();
+    expect(resolveMatrixExecApproval).toHaveBeenCalledWith({
+      cfg,
+      approvalId: "plugin:req-123",
+      decision: "allow-once",
+      senderId: "@owner:example.org",
+    });
+    expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
   it("unregisters stale approval anchors after not-found resolution", async () => {
     const core = buildCore();
     resolveMatrixExecApproval.mockRejectedValueOnce(

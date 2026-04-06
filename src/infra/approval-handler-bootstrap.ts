@@ -16,7 +16,7 @@ import {
 type ApprovalBootstrapHandler = ChannelApprovalHandler;
 
 export async function startChannelApprovalHandlerBootstrap(params: {
-  plugin: Pick<ChannelPlugin, "id" | "meta" | "approvalCapability" | "auth" | "approvals">;
+  plugin: Pick<ChannelPlugin, "id" | "meta" | "approvalCapability">;
   cfg: OpenClawConfig;
   accountId: string;
   channelRuntime?: PluginRuntime["channel"];

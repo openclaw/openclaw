@@ -32,7 +32,7 @@ describe("resolveApprovalCommandAuthorization", () => {
 
   it("delegates to the channel approval override when present", () => {
     getChannelPluginMock.mockReturnValue({
-      auth: {
+      approvalCapability: {
         authorizeActorAction: ({
           approvalKind,
         }: {
@@ -68,9 +68,6 @@ describe("resolveApprovalCommandAuthorization", () => {
 
   it("prefers approvalCapability over legacy auth wiring when present", () => {
     getChannelPluginMock.mockReturnValue({
-      auth: {
-        authorizeActorAction: () => ({ authorized: false, reason: "legacy denied" }),
-      },
       approvalCapability: {
         authorizeActorAction: () => ({ authorized: true }),
         getActionAvailabilityState: () => ({ kind: "enabled" }),
@@ -89,7 +86,7 @@ describe("resolveApprovalCommandAuthorization", () => {
 
   it("keeps disabled approval availability implicit even when same-chat auth returns allow", () => {
     getChannelPluginMock.mockReturnValue({
-      auth: {
+      approvalCapability: {
         authorizeActorAction: () => ({ authorized: true }),
         getActionAvailabilityState: () => ({ kind: "disabled" }),
       },

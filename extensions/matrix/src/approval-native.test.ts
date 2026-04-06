@@ -125,7 +125,9 @@ describe("matrix native approval adapter", () => {
 
     expect(
       shouldSuppress({
-        cfg: buildConfig(),
+        cfg: buildConfig({
+          dm: { allowFrom: ["@owner:example.org"] },
+        }),
         approvalKind: "plugin",
         target: {
           channel: "matrix",
@@ -144,7 +146,7 @@ describe("matrix native approval adapter", () => {
           expiresAtMs: 1000,
         },
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("preserves room-id case when matching Matrix origin targets", async () => {
@@ -241,7 +243,35 @@ describe("matrix native approval adapter", () => {
     });
   });
 
-  it("disables matrix-native plugin approval delivery", () => {
+  it("enables matrix-native plugin approval delivery when DM approvers are configured", () => {
+    const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+      cfg: buildConfig({
+        dm: { allowFrom: ["@owner:example.org"] },
+      }),
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        id: "plugin:req-1",
+        request: {
+          title: "Plugin Approval Required",
+          description: "Allow plugin access",
+          pluginId: "git-tools",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(capabilities).toEqual({
+      enabled: true,
+      preferredSurface: "both",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: false,
+    });
+  });
+
+  it("keeps matrix-native plugin approval delivery disabled without DM approvers", () => {
     const capabilities = matrixNativeApprovalAdapter.native?.describeDeliveryCapabilities({
       cfg: buildConfig(),
       accountId: "default",
@@ -260,9 +290,9 @@ describe("matrix native approval adapter", () => {
 
     expect(capabilities).toEqual({
       enabled: false,
-      preferredSurface: "approver-dm",
-      supportsOriginSurface: false,
-      supportsApproverDmSurface: false,
+      preferredSurface: "both",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: false,
     });
   });
