@@ -103,34 +103,42 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
   return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
+function resolvePluginIdFromDangerousFlag(
+  flag: string,
+  config: Record<string, unknown>,
+): string | undefined {
+  // Use actual plugin entry keys so dotted IDs are handled correctly.
+  // Take the longest matching prefix to avoid shorter IDs shadowing longer ones
+  // when IDs share a prefix shape (e.g. "foo" and "foo.bar").
+  const pluginEntries = (config as { plugins?: { entries?: Record<string, unknown> } }).plugins
+    ?.entries;
+  if (!pluginEntries) {
+    return undefined;
+  }
+  let best: string | undefined;
+  for (const id of Object.keys(pluginEntries)) {
+    if (
+      flag.startsWith(`plugins.entries.${id}.config.`) &&
+      (best === undefined || id.length > best.length)
+    ) {
+      best = id;
+    }
+  }
+  return best;
+}
+
 function isPluginEntryDangerousFlag(
   flag: string,
   config: Record<string, unknown>,
 ): flag is `plugins.entries.${string}.config.${string}` {
-  // Resolve against actual plugin entry keys so plugin IDs containing dots are handled correctly.
-  const pluginEntries = (config as { plugins?: { entries?: Record<string, unknown> } }).plugins
-    ?.entries;
-  if (!pluginEntries) {
-    return false;
-  }
-  return Object.keys(pluginEntries).some((id) => flag.startsWith(`plugins.entries.${id}.config.`));
+  return resolvePluginIdFromDangerousFlag(flag, config) !== undefined;
 }
 
 function getPluginIdFromDangerousFlag(
   flag: `plugins.entries.${string}.config.${string}`,
   config: Record<string, unknown>,
 ): string {
-  // Use actual plugin entry keys to handle IDs that contain dots.
-  const pluginEntries = (config as { plugins?: { entries?: Record<string, unknown> } }).plugins
-    ?.entries;
-  if (pluginEntries) {
-    for (const id of Object.keys(pluginEntries)) {
-      if (flag.startsWith(`plugins.entries.${id}.config.`)) {
-        return id;
-      }
-    }
-  }
-  return flag.split(".")[2] ?? "";
+  return resolvePluginIdFromDangerousFlag(flag, config) ?? flag.split(".")[2] ?? "";
 }
 
 function isPluginDangerousFlagActive(
