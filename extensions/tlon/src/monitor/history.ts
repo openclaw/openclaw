@@ -1,6 +1,14 @@
 import type { RuntimeEnv } from "../../api.js";
 import { extractMessageText } from "./utils.js";
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * Format a number as @ud (with dots every 3 digits from the right)
  * e.g., 170141184507799509469114119040828178432 -> 170.141.184.507.799.509.469.114.119.040.828.178.432
@@ -62,22 +70,29 @@ export async function fetchChannelHistory(
     let posts: unknown[] = [];
     if (Array.isArray(data)) {
       posts = data;
-    } else if (data.posts && typeof data.posts === "object") {
-      posts = Object.values(data.posts);
-    } else if (typeof data === "object") {
-      posts = Object.values(data);
+    } else {
+      const dataRecord = asRecord(data);
+      const postMap = asRecord(dataRecord?.posts);
+      if (postMap) {
+        posts = Object.values(postMap);
+      } else if (dataRecord) {
+        posts = Object.values(dataRecord);
+      }
     }
 
     const messages = posts
       .map((item) => {
-        const essay = item.essay || item["r-post"]?.set?.essay;
-        const seal = item.seal || item["r-post"]?.set?.seal;
+        const itemRecord = asRecord(item);
+        const replyPost = asRecord(itemRecord?.["r-post"]);
+        const replyPostSet = asRecord(replyPost?.set);
+        const essay = asRecord(itemRecord?.essay) ?? asRecord(replyPostSet?.essay);
+        const seal = asRecord(itemRecord?.seal) ?? asRecord(replyPostSet?.seal);
 
         return {
-          author: essay?.author || "unknown",
+          author: typeof essay?.author === "string" ? essay.author : "unknown",
           content: extractMessageText(essay?.content || []),
-          timestamp: essay?.sent || Date.now(),
-          id: seal?.id,
+          timestamp: typeof essay?.sent === "number" ? essay.sent : Date.now(),
+          id: typeof seal?.id === "string" ? seal.id : undefined,
         } as TlonHistoryEntry;
       })
       .filter((msg) => msg.content);
@@ -85,7 +100,7 @@ export async function fetchChannelHistory(
     runtime?.log?.(`[tlon] Extracted ${messages.length} messages from history`);
     return messages;
   } catch (error: unknown) {
-    runtime?.log?.(`[tlon] Error fetching channel history: ${error?.message ?? String(error)}`);
+    runtime?.log?.(`[tlon] Error fetching channel history: ${formatErrorMessage(error)}`);
     return [];
   }
 }
@@ -138,23 +153,37 @@ export async function fetchThreadHistory(
     let replies: unknown[] = [];
     if (Array.isArray(data)) {
       replies = data;
-    } else if (data.replies && Array.isArray(data.replies)) {
-      replies = data.replies;
-    } else if (typeof data === "object") {
-      replies = Object.values(data);
+    } else {
+      const dataRecord = asRecord(data);
+      const replyValue = dataRecord?.replies;
+      if (Array.isArray(replyValue)) {
+        replies = replyValue;
+      } else if (typeof replyValue === "object" && replyValue) {
+        replies = Object.values(replyValue as Record<string, unknown>);
+      } else if (dataRecord) {
+        replies = Object.values(dataRecord);
+      }
     }
 
     const messages = replies
       .map((item) => {
         // Thread replies use 'memo' structure
-        const memo = item.memo || item["r-reply"]?.set?.memo || item;
-        const seal = item.seal || item["r-reply"]?.set?.seal;
+        const itemRecord = asRecord(item);
+        const replyRecord = asRecord(itemRecord?.["r-reply"]);
+        const replySet = asRecord(replyRecord?.set);
+        const memo = asRecord(itemRecord?.memo) ?? asRecord(replySet?.memo) ?? itemRecord;
+        const seal = asRecord(itemRecord?.seal) ?? asRecord(replySet?.seal);
 
         return {
-          author: memo?.author || "unknown",
+          author: typeof memo?.author === "string" ? memo.author : "unknown",
           content: extractMessageText(memo?.content || []),
-          timestamp: memo?.sent || Date.now(),
-          id: seal?.id || item.id,
+          timestamp: typeof memo?.sent === "number" ? memo.sent : Date.now(),
+          id:
+            typeof seal?.id === "string"
+              ? seal.id
+              : typeof itemRecord?.id === "string"
+                ? itemRecord.id
+                : undefined,
         } as TlonHistoryEntry;
       })
       .filter((msg) => msg.content);
@@ -162,29 +191,39 @@ export async function fetchThreadHistory(
     runtime?.log?.(`[tlon] Extracted ${messages.length} thread replies from history`);
     return messages;
   } catch (error: unknown) {
-    runtime?.log?.(`[tlon] Error fetching thread history: ${error?.message ?? String(error)}`);
+    runtime?.log?.(`[tlon] Error fetching thread history: ${formatErrorMessage(error)}`);
     // Fall back to trying alternate path structure
     try {
       const altPath = `/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`;
       runtime?.log?.(`[tlon] Trying alternate path: ${altPath}`);
-      const data: unknown = await api.scry(altPath);
+      const data = asRecord(await api.scry(altPath));
+      const dataSeal = asRecord(data?.seal);
+      const dataMeta = asRecord(dataSeal?.meta);
+      const repliesValue = data?.replies;
 
-      if (data?.seal?.meta?.replyCount > 0 && data?.replies) {
-        const replies = Array.isArray(data.replies) ? data.replies : Object.values(data.replies);
+      if (typeof dataMeta?.replyCount === "number" && dataMeta.replyCount > 0 && repliesValue) {
+        const replies = Array.isArray(repliesValue)
+          ? repliesValue
+          : Object.values(repliesValue as Record<string, unknown>);
         const messages = replies
-          .map((reply: unknown) => ({
-            author: reply.memo?.author || "unknown",
-            content: extractMessageText(reply.memo?.content || []),
-            timestamp: reply.memo?.sent || Date.now(),
-            id: reply.seal?.id,
-          }))
+          .map((reply: unknown) => {
+            const replyRecord = asRecord(reply);
+            const memo = asRecord(replyRecord?.memo);
+            const seal = asRecord(replyRecord?.seal);
+            return {
+              author: typeof memo?.author === "string" ? memo.author : "unknown",
+              content: extractMessageText(memo?.content || []),
+              timestamp: typeof memo?.sent === "number" ? memo.sent : Date.now(),
+              id: typeof seal?.id === "string" ? seal.id : undefined,
+            };
+          })
           .filter((msg: TlonHistoryEntry) => msg.content);
 
         runtime?.log?.(`[tlon] Extracted ${messages.length} replies from post data`);
         return messages;
       }
     } catch (altError: unknown) {
-      runtime?.log?.(`[tlon] Alternate path also failed: ${altError?.message ?? String(altError)}`);
+      runtime?.log?.(`[tlon] Alternate path also failed: ${formatErrorMessage(altError)}`);
     }
     return [];
   }

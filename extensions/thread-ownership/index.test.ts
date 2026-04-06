@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "./api.js";
 import register from "./index.js";
 
 describe("thread-ownership plugin", () => {
@@ -40,7 +41,7 @@ describe("thread-ownership plugin", () => {
 
   describe("message_sending", () => {
     beforeEach(() => {
-      register.register(api as unknown);
+      register.register(api as unknown as OpenClawPluginApi);
     });
 
     async function sendSlackThreadMessage() {
@@ -112,7 +113,7 @@ describe("thread-ownership plugin", () => {
 
   describe("message_received @-mention tracking", () => {
     beforeEach(() => {
-      register.register(api as unknown);
+      register.register(api as unknown as OpenClawPluginApi);
     });
 
     it("tracks @-mentions and skips ownership check for mentioned threads", async () => {

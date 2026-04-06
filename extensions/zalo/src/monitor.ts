@@ -432,7 +432,6 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     config,
     runtime,
     core,
-    _text,
     mediaPath,
     mediaType,
     statusSink,

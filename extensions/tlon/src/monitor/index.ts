@@ -45,6 +45,10 @@ export type MonitorTlonOpts = {
   accountId?: string | null;
 };
 
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<void> {
   const core = getTlonRuntime();
   const cfg = core.config.loadConfig();
@@ -89,7 +93,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return await authenticate(accountUrl, accountCode, { ssrfPolicy });
       } catch (error: unknown) {
         runtime.error?.(
-          `[tlon] Failed to authenticate (attempt ${attempt}): ${error?.message ?? String(error)}`,
+          `[tlon] Failed to authenticate (attempt ${attempt}): ${formatErrorMessage(error)}`,
         );
         if (attempt >= maxAttempts) {
           throw error;
@@ -169,7 +173,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
     }
   } catch (error: unknown) {
-    runtime.log?.(`[tlon] Could not fetch nickname: ${error?.message ?? String(error)}`);
+    runtime.log?.(`[tlon] Could not fetch nickname: ${formatErrorMessage(error)}`);
   }
 
   // Store init foreigns for processing after settings are loaded
@@ -236,7 +240,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
       initForeigns = initData.foreigns;
     } catch (error: unknown) {
-      runtime.error?.(`[tlon] Auto-discovery failed: ${error?.message ?? String(error)}`);
+      runtime.error?.(`[tlon] Auto-discovery failed: ${formatErrorMessage(error)}`);
     }
   }
 
@@ -302,8 +306,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       senderShip,
       isGroup,
       channelNest,
-      _hostShip,
-      _channelName,
+      hostShip: _hostShip,
+      channelName: _channelName,
       timestamp,
       parentId,
       isThreadReply,
@@ -321,7 +325,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
         }
       } catch (error: unknown) {
-        runtime.log?.(`[tlon] Failed to download images: ${error?.message ?? String(error)}`);
+        runtime.log?.(`[tlon] Failed to download images: ${formatErrorMessage(error)}`);
       }
     }
 
@@ -344,7 +348,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           );
         }
       } catch (error: unknown) {
-        runtime?.log?.(`[tlon] Could not fetch thread context: ${error?.message ?? String(error)}`);
+        runtime?.log?.(`[tlon] Could not fetch thread context: ${formatErrorMessage(error)}`);
         // Continue without thread context - not critical
       }
     }
@@ -391,7 +395,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           "3. Action items if any\n" +
           "4. Notable participants";
       } catch (error: unknown) {
-        const errorMsg = `Sorry, I encountered an error while fetching the channel history: ${error?.message ?? String(error)}`;
+        const errorMsg = `Sorry, I encountered an error while fetching the channel history: ${formatErrorMessage(error)}`;
         if (isGroup && groupChannel) {
           const parsed = parseChannelNest(groupChannel);
           if (parsed) {
@@ -807,9 +811,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         isThreadReply,
       });
     } catch (error: any) {
-      runtime.error?.(
-        `[tlon] Error handling channel firehose event: ${error?.message ?? String(error)}`,
-      );
+      runtime.error?.(`[tlon] Error handling channel firehose event: ${formatErrorMessage(error)}`);
     }
   };
 
@@ -989,9 +991,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         timestamp: essay.sent || Date.now(),
       });
     } catch (error: any) {
-      runtime.error?.(
-        `[tlon] Error handling chat firehose event: ${error?.message ?? String(error)}`,
-      );
+      runtime.error?.(`[tlon] Error handling chat firehose event: ${formatErrorMessage(error)}`);
     }
   };
 
@@ -1044,9 +1044,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             }
           }
         } catch (error: any) {
-          runtime.error?.(
-            `[tlon] Error handling contacts event: ${error?.message ?? String(error)}`,
-          );
+          runtime.error?.(`[tlon] Error handling contacts event: ${formatErrorMessage(error)}`);
         }
       },
       err: (error) => {
@@ -1201,9 +1199,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               }
             }
           } catch (error: any) {
-            runtime.error?.(
-              `[tlon] Error handling groups-ui event: ${error?.message ?? String(error)}`,
-            );
+            runtime.error?.(`[tlon] Error handling groups-ui event: ${formatErrorMessage(error)}`);
           }
         },
         err: (error) => {
@@ -1335,7 +1331,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                 await processPendingInvites(data as Foreigns);
               } catch (error: any) {
                 runtime.error?.(
-                  `[tlon] Error handling foreigns event: ${error?.message ?? String(error)}`,
+                  `[tlon] Error handling foreigns event: ${formatErrorMessage(error)}`,
                 );
               }
             })();
@@ -1388,7 +1384,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               }
             }
           } catch (error: any) {
-            runtime.error?.(`[tlon] Channel refresh error: ${error?.message ?? String(error)}`);
+            runtime.error?.(`[tlon] Channel refresh error: ${formatErrorMessage(error)}`);
           }
         }
       },
@@ -1414,7 +1410,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     try {
       await api?.close();
     } catch (error: any) {
-      runtime.error?.(`[tlon] Cleanup error: ${error?.message ?? String(error)}`);
+      runtime.error?.(`[tlon] Cleanup error: ${formatErrorMessage(error)}`);
     }
   }
 }
