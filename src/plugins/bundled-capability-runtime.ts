@@ -150,6 +150,7 @@ function createCapabilityPluginRecord(params: {
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    mcpServerNames: [],
     memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],

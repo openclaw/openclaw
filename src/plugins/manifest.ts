@@ -137,6 +137,7 @@ export type PluginManifestContracts = {
   musicGenerationProviders?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
+  mcpServers?: string[];
   tools?: string[];
 };
 

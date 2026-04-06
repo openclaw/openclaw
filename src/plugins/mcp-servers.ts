@@ -3,13 +3,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { BundleMcpConfig } from "./bundle-mcp.js";
 import type { PluginRegistry } from "./registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import type { OpenClawPluginMcpServerConfig } from "./types.js";
 
 export type PluginMcpServerConfigResult = {
   config: BundleMcpConfig;
 };
 
 type PluginMcpServerConfigNormalizationResult =
-  | { ok: true; server: Record<string, unknown> }
+  | { ok: true; server: OpenClawPluginMcpServerConfig }
   | { ok: false; error: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -35,9 +36,9 @@ function isWorkspaceMatch(params: { workspaceDir?: string; activeWorkspaceDir?: 
 }
 
 function withDefaultCwd(
-  server: Record<string, unknown>,
+  server: OpenClawPluginMcpServerConfig,
   rootDir?: string,
-): Record<string, unknown> {
+): OpenClawPluginMcpServerConfig {
   if (rootDir && typeof server.cwd !== "string" && typeof server.workingDirectory !== "string") {
     return { ...server, cwd: rootDir };
   }
@@ -83,7 +84,7 @@ export function normalizePluginRegisteredMcpServerConfig(params: {
 
   const normalized = withDefaultCwd(
     {
-      ...params.server,
+      ...(params.server as OpenClawPluginMcpServerConfig),
       command: params.server.command.trim(),
     },
     params.rootDir,

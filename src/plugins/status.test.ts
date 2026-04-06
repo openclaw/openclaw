@@ -791,6 +791,25 @@ describe("plugin status reports", () => {
     });
   });
 
+  it("treats manifest-declared native MCP servers as a capability in metadata-only inspect", () => {
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "native-mcp",
+        name: "Native MCP",
+        mcpServerNames: ["helloWorld"],
+      }),
+    );
+
+    const inspect = expectInspectReport("native-mcp");
+
+    expectInspectShape(inspect, {
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["mcp-server"],
+    });
+    expect(inspect.mcpServers).toEqual([{ name: "helloWorld", hasStdioTransport: true }]);
+  });
+
   it("formats and summarizes compatibility notices", () => {
     const notice = createCompatibilityNotice({
       pluginId: "legacy-plugin",

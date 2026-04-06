@@ -183,6 +183,21 @@ describe("plugin contract registry", () => {
     ).toEqual(bundledWebSearchPluginIds);
   });
 
+  it("covers every bundled MCP plugin from the shared resolver", () => {
+    const bundledMcpPluginIds = resolveManifestContractPluginIds({
+      contract: "mcpServers",
+      origin: "bundled",
+    });
+
+    expect(
+      uniqueSortedStrings(
+        pluginRegistrationContractRegistry
+          .filter((entry) => entry.mcpServerNames.length > 0)
+          .map((entry) => entry.pluginId),
+      ),
+    ).toEqual(bundledMcpPluginIds);
+  });
+
   it(
     "loads bundled web search providers for each shared-resolver plugin",
     { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },

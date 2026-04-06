@@ -59,6 +59,7 @@ export function createPluginRecord(
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
+    mcpServerNames: [],
     memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],

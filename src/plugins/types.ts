@@ -175,7 +175,15 @@ export type OpenClawPluginToolOptions = {
   optional?: boolean;
 };
 
-export type OpenClawPluginMcpServerConfig = Record<string, unknown>;
+export type OpenClawPluginMcpServerConfig = {
+  command: string;
+  args?: string[];
+  env?: Record<string, string | number | boolean>;
+  cwd?: string;
+  workingDirectory?: string;
+  transport?: "stdio";
+  connectionTimeoutMs?: number;
+};
 
 export type OpenClawPluginMcpServerRegistration = {
   pluginId: string;

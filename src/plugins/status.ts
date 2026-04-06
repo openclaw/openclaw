@@ -254,6 +254,34 @@ function buildCapabilityEntries(
   ].filter((entry) => entry.ids.length > 0);
 }
 
+function buildNativeMcpInspectEntries(
+  plugin: PluginRegistry["plugins"][number],
+  report: PluginStatusReport,
+): PluginInspectReport["mcpServers"] {
+  const entries = new Map<string, PluginInspectReport["mcpServers"][number]>();
+
+  for (const name of plugin.mcpServerNames ?? []) {
+    const normalized = name.trim();
+    if (!normalized) {
+      continue;
+    }
+    entries.set(normalized, {
+      name: normalized,
+      hasStdioTransport: true,
+    });
+  }
+
+  for (const entry of report.mcpServers.filter((entry) => entry.pluginId === plugin.id)) {
+    entries.set(entry.name, {
+      name: entry.name,
+      hasStdioTransport:
+        typeof entry.server.command === "string" && entry.server.command.trim().length > 0,
+    });
+  }
+
+  return [...entries.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
 function deriveInspectShape(params: {
   capabilityCount: number;
   typedHookCount: number;
@@ -310,18 +338,7 @@ export function buildPluginInspectReport(params: {
     return null;
   }
 
-  const nativeMcpServers = report.mcpServers
-    .filter((entry) => entry.pluginId === plugin.id)
-    .map((entry) => ({
-      name: entry.name,
-      hasStdioTransport:
-        typeof entry.server.command === "string" && entry.server.command.trim().length > 0,
-    }))
-    .toSorted((a, b) => a.name.localeCompare(b.name));
-  const capabilities = buildCapabilityEntries(
-    plugin,
-    nativeMcpServers.map((entry) => entry.name),
-  );
+  const nativeMcpServers = buildNativeMcpInspectEntries(plugin, report);
   const typedHooks = report.typedHooks
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
@@ -342,20 +359,6 @@ export function buildPluginInspectReport(params: {
       names: [...entry.names],
       optional: entry.optional,
     }));
-  const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
-  const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
-  const capabilityCount = capabilities.length;
-  const shape = deriveInspectShape({
-    capabilityCount,
-    typedHookCount: typedHooks.length,
-    customHookCount: customHooks.length,
-    toolCount: tools.length,
-    commandCount: plugin.commands.length,
-    cliCount: plugin.cliCommands.length,
-    serviceCount: plugin.services.length,
-    gatewayMethodCount: plugin.gatewayMethods.length,
-    httpRouteCount: plugin.httpRoutes,
-  });
 
   // Populate MCP server info for bundle-format plugins with a known rootDir.
   let mcpServers: PluginInspectReport["mcpServers"] = nativeMcpServers;
@@ -376,6 +379,24 @@ export function buildPluginInspectReport(params: {
       })),
     ];
   }
+  const capabilities = buildCapabilityEntries(
+    plugin,
+    mcpServers.map((entry) => entry.name),
+  );
+  const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === plugin.id);
+  const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
+  const capabilityCount = capabilities.length;
+  const shape = deriveInspectShape({
+    capabilityCount,
+    typedHookCount: typedHooks.length,
+    customHookCount: customHooks.length,
+    toolCount: tools.length,
+    commandCount: plugin.commands.length,
+    cliCount: plugin.cliCommands.length,
+    serviceCount: plugin.services.length,
+    gatewayMethodCount: plugin.gatewayMethods.length,
+    httpRouteCount: plugin.httpRoutes,
+  });
 
   // Populate LSP server info for bundle-format plugins with a known rootDir.
   let lspServers: PluginInspectReport["lspServers"] = [];

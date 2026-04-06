@@ -182,7 +182,7 @@ describe("loadEnabledPluginMcpServerConfig", () => {
     expect(
       normalizePluginRegisteredMcpServerConfig({
         name: "helloWorld",
-        server: { command: " node ", args: ["hello.mjs"] },
+        server: { command: " node ", args: ["hello.mjs"], transport: "stdio" },
         rootDir: "/tmp/plugin-a",
       }),
     ).toEqual({
@@ -190,6 +190,7 @@ describe("loadEnabledPluginMcpServerConfig", () => {
       server: {
         command: "node",
         args: ["hello.mjs"],
+        transport: "stdio",
         cwd: "/tmp/plugin-a",
       },
     });

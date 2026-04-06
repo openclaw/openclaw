@@ -17,6 +17,7 @@ export type BundledPluginContractSnapshot = {
   musicGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
+  mcpServerNames: string[];
   toolNames: string[];
 };
 
@@ -60,6 +61,7 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
     webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders, (value) =>
       value.trim(),
     ),
+    mcpServerNames: uniqueStrings(manifest.contracts?.mcpServers, (value) => value.trim()),
     toolNames: uniqueStrings(manifest.contracts?.tools, (value) => value.trim()),
   }))
     .filter(
@@ -75,6 +77,7 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
         entry.musicGenerationProviderIds.length > 0 ||
         entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0 ||
+        entry.mcpServerNames.length > 0 ||
         entry.toolNames.length > 0,
     )
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));

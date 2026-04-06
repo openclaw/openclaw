@@ -45,7 +45,8 @@ type PluginManifestContractListKey =
   | "musicGenerationProviders"
   | "memoryEmbeddingProviders"
   | "webFetchProviders"
-  | "webSearchProviders";
+  | "webSearchProviders"
+  | "mcpServers";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;

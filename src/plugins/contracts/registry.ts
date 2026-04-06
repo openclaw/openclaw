@@ -63,6 +63,7 @@ type PluginRegistrationContractEntry = {
   musicGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
+  mcpServerNames: string[];
   toolNames: string[];
 };
 
@@ -76,9 +77,10 @@ type ManifestContractKey =
   | "musicGenerationProviders"
   | "webFetchProviders"
   | "webSearchProviders"
+  | "mcpServers"
   | "tools";
 
-type ManifestRegistryContractKey = "webFetchProviders" | "webSearchProviders";
+type ManifestRegistryContractKey = "webFetchProviders" | "webSearchProviders" | "mcpServers";
 
 function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
   if (process.env.VITEST) {
@@ -95,6 +97,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       musicGenerationProviderIds: [...entry.musicGenerationProviderIds],
       webFetchProviderIds: [...entry.webFetchProviderIds],
       webSearchProviderIds: [...entry.webSearchProviderIds],
+      mcpServerNames: [...entry.mcpServerNames],
       toolNames: [...entry.toolNames],
     }));
   }
@@ -113,6 +116,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
           (plugin.contracts?.musicGenerationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.webFetchProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 ||
+          (plugin.contracts?.mcpServers?.length ?? 0) > 0 ||
           (plugin.contracts?.tools?.length ?? 0) > 0),
     )
     .map((plugin) => ({
@@ -132,6 +136,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       musicGenerationProviderIds: uniqueStrings(plugin.contracts?.musicGenerationProviders ?? []),
       webFetchProviderIds: uniqueStrings(plugin.contracts?.webFetchProviders ?? []),
       webSearchProviderIds: uniqueStrings(plugin.contracts?.webSearchProviders ?? []),
+      mcpServerNames: uniqueStrings(plugin.contracts?.mcpServers ?? []),
       toolNames: uniqueStrings(plugin.contracts?.tools ?? []),
     }));
 }
@@ -188,6 +193,8 @@ function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKe
             return entry.webFetchProviderIds.length > 0;
           case "webSearchProviders":
             return entry.webSearchProviderIds.length > 0;
+          case "mcpServers":
+            return entry.mcpServerNames.length > 0;
           case "tools":
             return entry.toolNames.length > 0;
         }
