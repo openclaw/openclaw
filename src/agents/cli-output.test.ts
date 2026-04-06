@@ -121,7 +121,7 @@ describe("parseCliJson", () => {
 });
 
 describe("parseCliJsonl", () => {
-  it("parses generic jsonl result events", () => {
+  it("parses Claude stream-json result events", () => {
     const result = parseCliJsonl(
       [
         JSON.stringify({ type: "init", session_id: "session-123" }),
@@ -137,11 +137,11 @@ describe("parseCliJsonl", () => {
         }),
       ].join("\n"),
       {
-        command: "codex",
+        command: "claude",
         output: "jsonl",
         sessionIdFields: ["session_id"],
       },
-      "codex-cli",
+      "claude-cli",
     );
 
     expect(result).toEqual({
@@ -157,7 +157,7 @@ describe("parseCliJsonl", () => {
     });
   });
 
-  it("preserves cache creation tokens instead of flattening them to zero", () => {
+  it("preserves Claude cache creation tokens instead of flattening them to zero", () => {
     const result = parseCliJsonl(
       [
         JSON.stringify({ type: "init", session_id: "session-cache-123" }),
@@ -174,11 +174,11 @@ describe("parseCliJsonl", () => {
         }),
       ].join("\n"),
       {
-        command: "codex",
+        command: "claude",
         output: "jsonl",
         sessionIdFields: ["session_id"],
       },
-      "codex-cli",
+      "claude-cli",
     );
 
     expect(result).toEqual({
@@ -194,15 +194,50 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("preserves Claude session metadata even when the final result text is empty", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-456" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-456",
+          result: "   ",
+          usage: {
+            input_tokens: 18,
+            output_tokens: 0,
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-456",
+      usage: {
+        input: 18,
+        output: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+
   it("parses multiple JSON objects embedded on the same line", () => {
     const result = parseCliJsonl(
       '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
       {
-        command: "codex",
+        command: "claude",
         output: "jsonl",
         sessionIdFields: ["session_id"],
       },
-      "codex-cli",
+      "claude-cli",
     );
 
     expect(result).toEqual({

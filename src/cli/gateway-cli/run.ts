@@ -604,6 +604,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
       "Only show CLI backend logs in the console (includes stdout/stderr)",
       false,
     )
+    .option("--claude-cli-logs", "Deprecated alias for --cli-backend-logs", false)
     .option("--ws-log <style>", 'WebSocket log style ("auto"|"full"|"compact")', "auto")
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)

@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
 import {
-  buildSystemPrompt,
   buildCliArgs,
   loadPromptRefImages,
   resolveCliRunQueueKey,
@@ -143,21 +142,6 @@ describe("buildCliArgs", () => {
   });
 });
 
-describe("buildSystemPrompt", () => {
-  it("keeps prompts unchanged across CLI backends", () => {
-    const prompt = buildSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      modelDisplay: "gpt-5.4",
-      tools: [],
-      backendId: "codex-cli",
-    });
-
-    expect(prompt).toContain("You are a personal assistant running inside OpenClaw.");
-    expect(prompt).toContain("## OpenClaw CLI Quick Reference");
-    expect(prompt).toContain("OpenClaw docs:");
-  });
-});
-
 describe("writeCliImages", () => {
   it("uses stable hashed file paths so repeated image hydration reuses the same path", async () => {
     const image: ImageContent = {
@@ -198,12 +182,35 @@ describe("writeCliImages", () => {
 });
 
 describe("resolveCliRunQueueKey", () => {
-  it("keeps serialized runs on the provider lane", () => {
+  it("scopes Claude CLI serialization to the workspace for fresh runs", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-1",
+        workspaceDir: "/tmp/project-a",
+      }),
+    ).toBe("claude-cli:workspace:/tmp/project-a");
+  });
+
+  it("scopes Claude CLI serialization to the resumed CLI session id", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-2",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "claude-session-123",
+      }),
+    ).toBe("claude-cli:session:claude-session-123");
+  });
+
+  it("keeps non-Claude backends on the provider lane when serialized", () => {
     expect(
       resolveCliRunQueueKey({
         backendId: "codex-cli",
         serialize: true,
-        runId: "run-1",
+        runId: "run-3",
         workspaceDir: "/tmp/project-a",
         cliSessionId: "thread-123",
       }),
@@ -213,11 +220,11 @@ describe("resolveCliRunQueueKey", () => {
   it("disables serialization when serialize=false", () => {
     expect(
       resolveCliRunQueueKey({
-        backendId: "codex-cli",
+        backendId: "claude-cli",
         serialize: false,
-        runId: "run-2",
+        runId: "run-4",
         workspaceDir: "/tmp/project-a",
       }),
-    ).toBe("codex-cli:run-2");
+    ).toBe("claude-cli:run-4");
   });
 });

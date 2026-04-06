@@ -569,17 +569,20 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store, {
-        model: { primary: "codex-cli/gpt-5.4" },
-        models: { "codex-cli/gpt-5.4": {} },
+        model: { primary: "claude-cli/claude-sonnet-4-6" },
+        models: { "claude-cli/claude-sonnet-4-6": {} },
       });
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "ok" }],
         meta: {
           durationMs: 5,
           agentMeta: {
-            sessionId: "codex-cli-session-1",
-            provider: "codex-cli",
-            model: "gpt-5.4",
+            sessionId: "claude-cli-session-1",
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            cliSessionBinding: {
+              sessionId: "claude-cli-session-1",
+            },
           },
         },
       });

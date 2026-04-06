@@ -9,8 +9,12 @@ import type { OAuthCredentials, OAuthProvider } from "./auth-profiles/types.js";
 
 const log = createSubsystemLogger("agents/auth-profiles");
 
+const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
+
+const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
+const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
 
 type CachedValue<T> = {
   value: T | null;
@@ -19,13 +23,30 @@ type CachedValue<T> = {
   sourceFingerprint?: number | string | null;
 };
 
+let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
 let codexCliCache: CachedValue<CodexCliCredential> | null = null;
 let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 
 export function resetCliCredentialCachesForTest(): void {
+  claudeCliCache = null;
   codexCliCache = null;
   minimaxCliCache = null;
 }
+
+export type ClaudeCliCredential =
+  | {
+      type: "oauth";
+      provider: "anthropic";
+      access: string;
+      refresh: string;
+      expires: number;
+    }
+  | {
+      type: "token";
+      provider: "anthropic";
+      token: string;
+      expires: number;
+    };
 
 export type CodexCliCredential = {
   type: "oauth";
@@ -42,6 +63,16 @@ export type MiniMaxCliCredential = {
   access: string;
   refresh: string;
   expires: number;
+};
+
+type ClaudeCliFileOptions = {
+  homeDir?: string;
+};
+
+type ClaudeCliWriteOptions = ClaudeCliFileOptions & {
+  platform?: NodeJS.Platform;
+  writeKeychain?: (credentials: OAuthCredentials) => boolean;
+  writeFile?: (credentials: OAuthCredentials, options?: ClaudeCliFileOptions) => boolean;
 };
 
 type CodexCliFileOptions = {
@@ -66,6 +97,42 @@ type CodexCliWriteOptions = CodexCliFileOptions & {
 
 type ExecSyncFn = typeof execSync;
 type ExecFileSyncFn = typeof execFileSync;
+
+function resolveClaudeCliCredentialsPath(homeDir?: string) {
+  const baseDir = homeDir ?? resolveUserPath("~");
+  return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
+}
+
+function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredential | null {
+  if (!claudeOauth || typeof claudeOauth !== "object") {
+    return null;
+  }
+  const accessToken = (claudeOauth as Record<string, unknown>).accessToken;
+  const refreshToken = (claudeOauth as Record<string, unknown>).refreshToken;
+  const expiresAt = (claudeOauth as Record<string, unknown>).expiresAt;
+
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+    return null;
+  }
+  if (typeof refreshToken === "string" && refreshToken) {
+    return {
+      type: "oauth",
+      provider: "anthropic",
+      access: accessToken,
+      refresh: refreshToken,
+      expires: expiresAt,
+    };
+  }
+  return {
+    type: "token",
+    provider: "anthropic",
+    token: accessToken,
+    expires: expiresAt,
+  };
+}
 
 function resolveCodexHomePath(codexHome?: string) {
   const configured = codexHome ?? process.env.CODEX_HOME;
@@ -275,6 +342,191 @@ function readPortalCliOauthCredentials<TProvider extends string>(
 function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
   const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
   return readPortalCliOauthCredentials(credPath, "minimax-portal");
+}
+
+function readClaudeCliKeychainCredentials(
+  execSyncImpl: ExecSyncFn = execSync,
+): ClaudeCliCredential | null {
+  try {
+    const result = execSyncImpl(
+      `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w`,
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    const data = JSON.parse(result.trim());
+    return parseClaudeCliOauthCredential(data?.claudeAiOauth);
+  } catch {
+    return null;
+  }
+}
+
+export function readClaudeCliCredentials(options?: {
+  allowKeychainPrompt?: boolean;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+  execSync?: ExecSyncFn;
+}): ClaudeCliCredential | null {
+  const platform = options?.platform ?? process.platform;
+  if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
+    const keychainCreds = readClaudeCliKeychainCredentials(options?.execSync);
+    if (keychainCreds) {
+      log.info("read anthropic credentials from claude cli keychain", {
+        type: keychainCreds.type,
+      });
+      return keychainCreds;
+    }
+  }
+
+  const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const data = raw as Record<string, unknown>;
+  return parseClaudeCliOauthCredential(data.claudeAiOauth);
+}
+
+export function readClaudeCliCredentialsCached(options?: {
+  allowKeychainPrompt?: boolean;
+  ttlMs?: number;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
+  execSync?: ExecSyncFn;
+}): ClaudeCliCredential | null {
+  return readCachedCliCredential({
+    ttlMs: options?.ttlMs ?? 0,
+    cache: claudeCliCache,
+    cacheKey: resolveClaudeCliCredentialsPath(options?.homeDir),
+    read: () =>
+      readClaudeCliCredentials({
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+        platform: options?.platform,
+        homeDir: options?.homeDir,
+        execSync: options?.execSync,
+      }),
+    setCache: (next) => {
+      claudeCliCache = next;
+    },
+  });
+}
+
+export function writeClaudeCliKeychainCredentials(
+  newCredentials: OAuthCredentials,
+  options?: { execFileSync?: ExecFileSyncFn },
+): boolean {
+  const execFileSyncImpl = options?.execFileSync ?? execFileSync;
+  try {
+    const existingResult = execFileSyncImpl(
+      "security",
+      ["find-generic-password", "-s", CLAUDE_CLI_KEYCHAIN_SERVICE, "-w"],
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    const existingData = JSON.parse(existingResult.trim());
+    const existingOauth = existingData?.claudeAiOauth;
+    if (!existingOauth || typeof existingOauth !== "object") {
+      return false;
+    }
+
+    existingData.claudeAiOauth = {
+      ...existingOauth,
+      accessToken: newCredentials.access,
+      refreshToken: newCredentials.refresh,
+      expiresAt: newCredentials.expires,
+    };
+
+    const newValue = JSON.stringify(existingData);
+
+    // Use execFileSync to avoid shell interpretation of user-controlled token values.
+    // This prevents command injection via $() or backtick expansion in OAuth tokens.
+    execFileSyncImpl(
+      "security",
+      [
+        "add-generic-password",
+        "-U",
+        "-s",
+        CLAUDE_CLI_KEYCHAIN_SERVICE,
+        "-a",
+        CLAUDE_CLI_KEYCHAIN_ACCOUNT,
+        "-w",
+        newValue,
+      ],
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    log.info("wrote refreshed credentials to claude cli keychain", {
+      expires: new Date(newCredentials.expires).toISOString(),
+    });
+    return true;
+  } catch (error) {
+    log.warn("failed to write credentials to claude cli keychain", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+export function writeClaudeCliFileCredentials(
+  newCredentials: OAuthCredentials,
+  options?: ClaudeCliFileOptions,
+): boolean {
+  const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
+
+  if (!fs.existsSync(credPath)) {
+    return false;
+  }
+
+  try {
+    const raw = loadJsonFile(credPath);
+    if (!raw || typeof raw !== "object") {
+      return false;
+    }
+
+    const data = raw as Record<string, unknown>;
+    const existingOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
+    if (!existingOauth || typeof existingOauth !== "object") {
+      return false;
+    }
+
+    data.claudeAiOauth = {
+      ...existingOauth,
+      accessToken: newCredentials.access,
+      refreshToken: newCredentials.refresh,
+      expiresAt: newCredentials.expires,
+    };
+
+    saveJsonFile(credPath, data);
+    log.info("wrote refreshed credentials to claude cli file", {
+      expires: new Date(newCredentials.expires).toISOString(),
+    });
+    return true;
+  } catch (error) {
+    log.warn("failed to write credentials to claude cli file", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+export function writeClaudeCliCredentials(
+  newCredentials: OAuthCredentials,
+  options?: ClaudeCliWriteOptions,
+): boolean {
+  const platform = options?.platform ?? process.platform;
+  const writeKeychain = options?.writeKeychain ?? writeClaudeCliKeychainCredentials;
+  const writeFile =
+    options?.writeFile ??
+    ((credentials, fileOptions) => writeClaudeCliFileCredentials(credentials, fileOptions));
+
+  if (platform === "darwin") {
+    const didWriteKeychain = writeKeychain(newCredentials);
+    if (didWriteKeychain) {
+      return true;
+    }
+  }
+
+  return writeFile(newCredentials, { homeDir: options?.homeDir });
 }
 
 function buildUpdatedCodexAuthRecord(

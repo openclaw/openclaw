@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.minimax)
+OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.claude .codex .minimax)
 OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL=(
   .codex/auth.json
   .codex/config.toml

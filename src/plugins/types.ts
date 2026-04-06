@@ -2004,7 +2004,7 @@ export type OpenClawPluginService = {
 
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = {
-  /** Provider id used in model refs, for example `codex-cli/gpt-5`. */
+  /** Provider id used in model refs, for example `claude-cli/opus`. */
   id: string;
   /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
   config: CliBackendConfig;

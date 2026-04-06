@@ -3528,7 +3528,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   additionalProperties: false,
                 },
                 title: "CLI Backends",
-                description: "Optional CLI backends for text-only fallback.",
+                description: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
               },
               memorySearch: {
                 type: "object",
@@ -25037,7 +25037,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.cliBackends": {
       label: "CLI Backends",
-      help: "Optional CLI backends for text-only fallback.",
+      help: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
       tags: ["advanced"],
     },
     "agents.defaults.compaction": {

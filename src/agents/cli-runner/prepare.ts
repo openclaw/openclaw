@@ -1,4 +1,8 @@
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import {
+  createMcpLoopbackServerConfig,
+  getActiveMcpLoopbackRuntime,
+} from "../../gateway/mcp-http.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   buildBootstrapInjectionStats,
@@ -29,6 +33,8 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
+  getActiveMcpLoopbackRuntime,
+  createMcpLoopbackServerConfig,
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
@@ -103,11 +109,25 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
+  const mcpLoopbackRuntime =
+    backendResolved.id === "claude-cli" ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: backendResolved.bundleMcp,
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,
+    additionalConfig: mcpLoopbackRuntime
+      ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      : undefined,
+    env: mcpLoopbackRuntime
+      ? {
+          OPENCLAW_MCP_TOKEN: mcpLoopbackRuntime.token,
+          OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
+          OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
+          OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+        }
+      : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
   const reusableCliSession = resolveCliSessionReuse({
@@ -146,7 +166,6 @@ export async function prepareCliRunContext(
     contextFiles,
     modelDisplay,
     agentId: sessionAgentId,
-    backendId: backendResolved.id,
   });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",

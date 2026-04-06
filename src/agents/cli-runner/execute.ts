@@ -23,7 +23,11 @@ import {
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./helpers.js";
-import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
+import {
+  cliBackendLog,
+  CLI_BACKEND_LOG_OUTPUT_ENV,
+  LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
+} from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const executeDeps = {
@@ -158,7 +162,9 @@ export async function executePreparedCliRun(
       cliBackendLog.info(
         `cli exec: provider=${params.provider} model=${context.normalizedModel} promptChars=${params.prompt.length}`,
       );
-      const logOutputText = isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]);
+      const logOutputText =
+        isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
+        isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
       if (logOutputText) {
         const logArgs = buildCliLogArgs({
           args,

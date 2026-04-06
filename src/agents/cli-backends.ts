@@ -11,6 +11,11 @@ export type ResolvedCliBackend = {
   pluginId?: string;
 };
 
+export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  const normalizeConfig = resolveFallbackCliBackendPolicy("claude-cli")?.normalizeConfig;
+  return normalizeConfig ? normalizeConfig(config) : config;
+}
+
 type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
   baseConfig?: CliBackendConfig;

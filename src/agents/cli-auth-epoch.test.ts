@@ -13,6 +13,7 @@ describe("resolveCliAuthEpoch", () => {
 
   it("returns undefined when no local or auth-profile credentials exist", async () => {
     setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => null,
       readCodexCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => ({
         version: 1,
@@ -20,7 +21,7 @@ describe("resolveCliAuthEpoch", () => {
       }),
     });
 
-    await expect(resolveCliAuthEpoch({ provider: "codex-cli" })).resolves.toBeUndefined();
+    await expect(resolveCliAuthEpoch({ provider: "claude-cli" })).resolves.toBeUndefined();
     await expect(
       resolveCliAuthEpoch({
         provider: "google-gemini-cli",
@@ -29,22 +30,21 @@ describe("resolveCliAuthEpoch", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("changes when codex cli credentials change", async () => {
+  it("changes when claude cli credentials change", async () => {
     let access = "access-a";
     setCliAuthEpochTestDeps({
-      readCodexCliCredentialsCached: () => ({
+      readClaudeCliCredentialsCached: () => ({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "anthropic",
         access,
         refresh: "refresh",
         expires: 1,
-        accountId: "acct-1",
       }),
     });
 
-    const first = await resolveCliAuthEpoch({ provider: "codex-cli" });
+    const first = await resolveCliAuthEpoch({ provider: "claude-cli" });
     access = "access-b";
-    const second = await resolveCliAuthEpoch({ provider: "codex-cli" });
+    const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
     expect(first).toBeDefined();
     expect(second).toBeDefined();

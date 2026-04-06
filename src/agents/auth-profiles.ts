@@ -1,4 +1,4 @@
-export { CODEX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
+export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 export type {
   AuthCredentialReasonCode,
   TokenExpiryState,

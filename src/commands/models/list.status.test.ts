@@ -394,9 +394,9 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          model: { primary: "codex-cli/gpt-5.4", fallbacks: [] },
-          models: { "codex-cli/gpt-5.4": {} },
-          cliBackends: { "codex-cli": {} },
+          model: { primary: "claude-cli/claude-sonnet-4-6", fallbacks: [] },
+          models: { "claude-cli/claude-sonnet-4-6": {} },
+          cliBackends: { "claude-cli": {} },
         },
       },
       models: { providers: {} },
@@ -407,7 +407,7 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       await modelsStatusCommand({ json: true }, localRuntime as never);
       const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
-      expect(payload.defaultModel).toBe("codex-cli/gpt-5.4");
+      expect(payload.defaultModel).toBe("claude-cli/claude-sonnet-4-6");
       expect(payload.auth.missingProvidersInUse).toEqual([]);
     } finally {
       if (originalLoadConfig) {

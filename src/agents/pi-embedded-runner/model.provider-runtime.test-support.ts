@@ -324,7 +324,8 @@ function buildDynamicModel(
         maxTokens: patch.maxTokens ?? DEFAULT_CONTEXT_WINDOW,
       });
     }
-    case "anthropic": {
+    case "anthropic":
+    case "claude-cli": {
       if (lower !== "claude-opus-4-6" && lower !== "claude-sonnet-4-6") {
         return undefined;
       }

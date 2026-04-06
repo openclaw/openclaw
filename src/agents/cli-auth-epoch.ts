@@ -1,14 +1,21 @@
 import crypto from "node:crypto";
 import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
-import { readCodexCliCredentialsCached, type CodexCliCredential } from "./cli-credentials.js";
+import {
+  readClaudeCliCredentialsCached,
+  readCodexCliCredentialsCached,
+  type ClaudeCliCredential,
+  type CodexCliCredential,
+} from "./cli-credentials.js";
 
 type CliAuthEpochDeps = {
+  readClaudeCliCredentialsCached: typeof readClaudeCliCredentialsCached;
   readCodexCliCredentialsCached: typeof readCodexCliCredentialsCached;
   loadAuthProfileStoreForRuntime: typeof loadAuthProfileStoreForRuntime;
 };
 
 const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
+  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   loadAuthProfileStoreForRuntime,
 };
@@ -29,6 +36,19 @@ function hashCliAuthEpochPart(value: string): string {
 
 function encodeUnknown(value: unknown): string {
   return JSON.stringify(value ?? null);
+}
+
+function encodeClaudeCredential(credential: ClaudeCliCredential): string {
+  if (credential.type === "oauth") {
+    return JSON.stringify([
+      "oauth",
+      credential.provider,
+      credential.access,
+      credential.refresh,
+      credential.expires,
+    ]);
+  }
+  return JSON.stringify(["token", credential.provider, credential.token, credential.expires]);
 }
 
 function encodeCodexCredential(credential: CodexCliCredential): string {
@@ -84,6 +104,13 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
 
 function getLocalCliCredentialFingerprint(provider: string): string | undefined {
   switch (provider) {
+    case "claude-cli": {
+      const credential = cliAuthEpochDeps.readClaudeCliCredentialsCached({
+        ttlMs: 5000,
+        allowKeychainPrompt: false,
+      });
+      return credential ? hashCliAuthEpochPart(encodeClaudeCredential(credential)) : undefined;
+    }
     case "codex-cli": {
       const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
         ttlMs: 5000,

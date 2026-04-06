@@ -9,12 +9,16 @@ CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
-DEFAULT_MODEL="codex-cli/gpt-5.4"
+DEFAULT_MODEL="claude-cli/claude-sonnet-4-6"
 CLI_MODEL="${OPENCLAW_LIVE_CLI_BACKEND_MODEL:-$DEFAULT_MODEL}"
 CLI_PROVIDER="${CLI_MODEL%%/*}"
+CLI_DISABLE_MCP_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG:-}"
 
 if [[ -z "$CLI_PROVIDER" || "$CLI_PROVIDER" == "$CLI_MODEL" ]]; then
-  CLI_PROVIDER="codex-cli"
+  CLI_PROVIDER="claude-cli"
+fi
+if [[ "$CLI_PROVIDER" == "claude-cli" && -z "$CLI_DISABLE_MCP_CONFIG" ]]; then
+  CLI_DISABLE_MCP_CONFIG="0"
 fi
 
 mkdir -p "$CLI_TOOLS_DIR"
@@ -92,20 +96,41 @@ if ((${#auth_files[@]} > 0)); then
   for auth_file in "${auth_files[@]}"; do
     [ -n "$auth_file" ] || continue
     if [ -f "/host-auth-files/$auth_file" ]; then
-      mkdir -p "$(dirname "$HOME/$auth_file")"
       cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
       chmod u+rw "$HOME/$auth_file" || true
     fi
   done
 fi
-provider="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-codex-cli}"
-if [ "$provider" = "codex-cli" ]; then
+provider="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
+if [ "$provider" = "claude-cli" ]; then
   if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ]; then
-    export OPENCLAW_LIVE_CLI_BACKEND_COMMAND="$HOME/.npm-global/bin/codex"
+    export OPENCLAW_LIVE_CLI_BACKEND_COMMAND="$HOME/.npm-global/bin/claude"
   fi
   if [ ! -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ]; then
-    npm_config_prefix="$HOME/.npm-global" npm install -g @openai/codex
+    npm_config_prefix="$HOME/.npm-global" npm install -g @anthropic-ai/claude-code
   fi
+  real_claude="$HOME/.npm-global/bin/claude-real"
+  if [ ! -x "$real_claude" ] && [ -x "$HOME/.npm-global/bin/claude" ]; then
+    mv "$HOME/.npm-global/bin/claude" "$real_claude"
+  fi
+  if [ -x "$real_claude" ]; then
+    cat > "$HOME/.npm-global/bin/claude" <<WRAP
+#!/usr/bin/env bash
+script_dir="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
+if [ -n "\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY:-}" ]; then
+  export ANTHROPIC_API_KEY="\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY}"
+fi
+if [ -n "\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD:-}" ]; then
+  export ANTHROPIC_API_KEY_OLD="\${OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD}"
+fi
+exec "\$script_dir/claude-real" "\$@"
+WRAP
+    chmod +x "$HOME/.npm-global/bin/claude"
+  fi
+  if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" ]; then
+    export OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'
+  fi
+  claude auth status || true
 fi
 tmp_dir="$(mktemp -d)"
 cleanup() {
@@ -141,7 +166,10 @@ echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
 docker run --rm -t \
   -u node \
   --entrypoint bash \
-  -e OPENAI_API_KEY \
+  -e ANTHROPIC_API_KEY \
+  -e ANTHROPIC_API_KEY_OLD \
+  -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
   -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
@@ -157,6 +185,7 @@ docker run --rm -t \
   -e OPENCLAW_LIVE_CLI_BACKEND_ARGS="${OPENCLAW_LIVE_CLI_BACKEND_ARGS:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV="${OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV="${OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV:-}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG="$CLI_DISABLE_MCP_CONFIG" \
   -e OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG:-}" \

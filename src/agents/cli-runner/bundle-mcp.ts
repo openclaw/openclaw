@@ -104,8 +104,9 @@ export async function prepareCliBundleMcpConfig(params: {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
 
-  // Always pass an explicit strict MCP config for background CLI runs so they
-  // do not inherit ambient user/global MCP servers (for example Playwright).
+  // Always pass an explicit strict MCP config for background claude-cli runs.
+  // Otherwise Claude may inherit ambient user/global MCP servers (for example
+  // Playwright) and spawn unexpected background processes.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
   const mcpConfigPath = path.join(tempDir, "mcp.json");
   const serializedConfig = `${JSON.stringify(mergedConfig, null, 2)}\n`;
