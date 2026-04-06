@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { GENERATED_BASE_CONFIG_SCHEMA } from "./schema.base.generated.js";
@@ -108,7 +109,7 @@ function hoistNestedRootDefs(rootSchema: JsonSchemaObject, schemaNode: JsonSchem
   const rootDefs = { ...asJsonSchemaDefs(rootSchema.$defs) };
   for (const [key, value] of Object.entries(nestedDefs)) {
     const current = rootDefs[key];
-    if (current !== undefined && JSON.stringify(current) !== JSON.stringify(value)) {
+    if (current !== undefined && !isDeepStrictEqual(current, value)) {
       throw new Error(`Conflicting config schema $defs entry: ${key}`);
     }
     if (current === undefined) {

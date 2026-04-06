@@ -219,6 +219,49 @@ describe("config schema", () => {
     expect(qqbotConfig?.properties?.account).toEqual({ $ref: "#/$defs/account" });
   });
 
+  it("accepts semantically identical hoisted $defs even when key order differs", () => {
+    expect(() =>
+      buildConfigSchema({
+        plugins: [
+          {
+            id: "alpha",
+            configSchema: {
+              type: "object",
+              $defs: {
+                shared: {
+                  type: "object",
+                  properties: {
+                    id: { type: "string" },
+                    enabled: { type: "boolean" },
+                  },
+                  required: ["id"],
+                },
+              },
+            },
+          },
+        ],
+        channels: [
+          {
+            id: "matrix",
+            configSchema: {
+              type: "object",
+              $defs: {
+                shared: {
+                  required: ["id"],
+                  properties: {
+                    enabled: { type: "boolean" },
+                    id: { type: "string" },
+                  },
+                  type: "object",
+                },
+              },
+            },
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
     const res = buildConfigSchema({
       plugins: [
