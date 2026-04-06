@@ -452,14 +452,14 @@ export async function promptAndConfigureLmstudioInteractive(params: {
         key: apiKey,
       };
   const existingProvider = params.config.models?.providers?.[PROVIDER_ID];
-  const resolvedHeaders = await resolveLmstudioProviderHeaders({
-    config: params.config,
-    env: process.env,
-    headers: existingProvider?.headers,
-  });
   // A fresh interactive setup run is explicit API-key intent, so drop any stale
   // Authorization header from saved config while preserving other custom headers.
   const persistedHeaders = omitAuthorizationHeader(existingProvider?.headers);
+  const resolvedHeaders = await resolveLmstudioProviderHeaders({
+    config: params.config,
+    env: process.env,
+    headers: persistedHeaders,
+  });
   const discovery = await fetchLmstudioModels({
     baseUrl,
     apiKey,
@@ -646,14 +646,14 @@ export async function configureLmstudioNonInteractive(
   };
 
   const existingProvider = normalizedCtx.config.models?.providers?.[PROVIDER_ID];
-  const resolvedHeaders = await resolveLmstudioProviderHeaders({
-    config: normalizedCtx.config,
-    env: process.env,
-    headers: existingProvider?.headers,
-  });
   const persistedHeaders = resolved
     ? omitAuthorizationHeader(existingProvider?.headers)
     : existingProvider?.headers;
+  const resolvedHeaders = await resolveLmstudioProviderHeaders({
+    config: normalizedCtx.config,
+    env: process.env,
+    headers: persistedHeaders,
+  });
   const discovery = await fetchLmstudioModels({
     baseUrl,
     apiKey: resolvedOrSynthetic.key,
