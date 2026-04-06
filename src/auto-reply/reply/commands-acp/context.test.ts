@@ -1,6 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { setActivePluginRegistry } from "../../../plugins/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../../../test-utils/channel-plugins.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
@@ -8,6 +6,11 @@ import {
   registerSessionBindingAdapter,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
 import {
   resolveAcpCommandBindingContext,
@@ -28,7 +31,9 @@ function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
   return (topicMatch?.[1] ?? trimmed).trim() || undefined;
 }
 
-function parseDiscordConversationIdForTest(targets: Array<string | undefined | null>): string | undefined {
+function parseDiscordConversationIdForTest(
+  targets: Array<string | undefined | null>,
+): string | undefined {
   for (const rawTarget of targets) {
     const target = rawTarget?.trim();
     if (!target) {
@@ -263,8 +268,7 @@ function setMinimalAcpContextRegistryForTests(): void {
                 });
                 return {
                   conversationId:
-                    senderScopedConversationId ??
-                    `${parentConversationId}:topic:${threadId}`,
+                    senderScopedConversationId ?? `${parentConversationId}:topic:${threadId}`,
                   parentConversationId,
                 };
               }
@@ -421,6 +425,10 @@ describe("commands-acp context", () => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
+  afterEach(() => {
+    setMinimalAcpContextRegistryForTests();
+  });
+
   it("resolves channel/account/thread context from originating fields", () => {
     const params = buildCommandTestParams("/acp sessions", baseCfg, {
       Provider: "discord",
@@ -495,6 +503,58 @@ describe("commands-acp context", () => {
       conversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
+  });
+
+  it("uses the plugin default account when ACP context omits AccountId", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "line",
+              label: "LINE",
+              config: {
+                listAccountIds: () => ["default", "work"],
+                defaultAccountId: () => "work",
+              },
+            }),
+            bindings: {
+              resolveCommandConversation: ({
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              }: {
+                originatingTo?: string;
+                commandTo?: string;
+                fallbackTo?: string;
+              }) => {
+                const conversationId =
+                  parseLineConversationIdFromTargetForTest(originatingTo) ??
+                  parseLineConversationIdFromTargetForTest(commandTo) ??
+                  parseLineConversationIdFromTargetForTest(fallbackTo);
+                return conversationId ? { conversationId } : null;
+              },
+            },
+          },
+        },
+      ]),
+    );
+
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "line:user:U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
   });
 
   it("builds canonical telegram topic conversation ids from originating chat + thread", () => {

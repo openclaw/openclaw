@@ -12,7 +12,9 @@ export function resolveSlackReplyBlocks(payload: ReplyPayload): SlackBlock[] | u
   }
   const blocks = [...channelBlocks, ...interactiveBlocks];
   if (blocks.length > SLACK_MAX_BLOCKS) {
-    throw new Error(`Slack blocks cannot exceed ${SLACK_MAX_BLOCKS} items after interactive render`);
+    throw new Error(
+      `Slack blocks cannot exceed ${SLACK_MAX_BLOCKS} items after interactive render`,
+    );
   }
   return blocks.length > 0 ? blocks : undefined;
 }

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
-import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import {
   createChannelOnboardingPostWriteHookCollector,
   runCollectedChannelOnboardingPostWriteHooks,
@@ -62,9 +62,7 @@ type PatchedSetupAdapterFields = {
   getStatus?: ChannelSetupWizardAdapter["getStatus"];
 };
 
-function patchChannelOnboardingAdapterForTest(
-  patch: ChannelSetupWizardAdapterPatch,
-): () => void {
+function patchChannelOnboardingAdapterForTest(patch: ChannelSetupWizardAdapterPatch): () => void {
   const adapter = getChannelSetupWizardAdapter("telegram");
   if (!adapter) {
     throw new Error("missing setup adapter for telegram");

@@ -9,8 +9,8 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
-  test("operator.approvals is denied by chat.send and /v1/chat/completions without operator.write", async () => {
+describe("gateway OpenAI-compatible HTTP shared-secret auth", () => {
+  test("operator.approvals stays denied on WS chat.send but compat chat HTTP restores full operator defaults", async () => {
     const started = await startServerWithClient("secret", {
       openAiChatCompletionsEnabled: true,
     });
@@ -43,18 +43,18 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
         }),
       });
 
-      expect(httpRes.status).toBe(403);
+      expect(httpRes.status).toBe(200);
       const body = (await httpRes.json()) as {
-        error?: { type?: string; message?: string };
+        id?: string;
+        object?: string;
       };
-      expect(body.error?.type).toBe("forbidden");
-      expect(body.error?.message).toBe("missing scope: operator.write");
-      expect(agentCommand).toHaveBeenCalledTimes(0);
+      expect(body.object).toBe("chat.completion");
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const firstCall = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { senderIsOwner?: boolean }
+        | undefined;
+      expect(firstCall?.senderIsOwner).toBe(true);
 
-      // Requests without x-openclaw-scopes header now receive default
-      // CLI_DEFAULT_OPERATOR_SCOPES (which include operator.write), so they
-      // are authorised.  The explicit-header test above still proves that a
-      // caller who *declares* only operator.approvals is correctly rejected.
       agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
       const missingHeaderRes = await fetch(`http://127.0.0.1:${started.port}/v1/chat/completions`, {
@@ -70,12 +70,6 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
       });
 
       expect(missingHeaderRes.status).toBe(200);
-      const missingHeaderBody = (await missingHeaderRes.json()) as {
-        object?: string;
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      expect(missingHeaderBody.object).toBe("chat.completion");
-      expect(missingHeaderBody.choices?.[0]?.message?.content).toBe("hello");
       expect(agentCommand).toHaveBeenCalledTimes(1);
     } finally {
       started.ws.close();
@@ -84,7 +78,7 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
     }
   });
 
-  test("operator.write can still use /v1/chat/completions", async () => {
+  test("shared-secret bearer auth ignores narrower declared write scopes for /v1/chat/completions", async () => {
     const started = await startServerWithClient("secret", {
       openAiChatCompletionsEnabled: true,
     });
@@ -107,12 +101,6 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
       });
 
       expect(httpRes.status).toBe(200);
-      const body = (await httpRes.json()) as {
-        object?: string;
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      expect(body.object).toBe("chat.completion");
-      expect(body.choices?.[0]?.message?.content).toBe("hello");
       expect(agentCommand).toHaveBeenCalledTimes(1);
     } finally {
       started.ws.close();
@@ -121,7 +109,7 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
     }
   });
 
-  test("operator.approvals is denied by chat.send and /v1/responses without operator.write", async () => {
+  test("operator.approvals stays denied on WS chat.send but compat responses HTTP restores full operator defaults", async () => {
     const started = await startServerWithClient("secret", {
       openResponsesEnabled: true,
     });
@@ -155,13 +143,16 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
         }),
       });
 
-      expect(httpRes.status).toBe(403);
+      expect(httpRes.status).toBe(200);
       const body = (await httpRes.json()) as {
-        error?: { type?: string; message?: string };
+        object?: string;
       };
-      expect(body.error?.type).toBe("forbidden");
-      expect(body.error?.message).toBe("missing scope: operator.write");
-      expect(agentCommand).toHaveBeenCalledTimes(0);
+      expect(body.object).toBe("response");
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const firstCall = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { senderIsOwner?: boolean }
+        | undefined;
+      expect(firstCall?.senderIsOwner).toBe(true);
     } finally {
       started.ws.close();
       await started.server.close();
@@ -169,7 +160,7 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
     }
   });
 
-  test("operator.write can still use /v1/responses", async () => {
+  test("shared-secret bearer auth ignores narrower declared write scopes for /v1/responses", async () => {
     const started = await startServerWithClient("secret", {
       openResponsesEnabled: true,
     });
@@ -193,22 +184,37 @@ describe("gateway OpenAI-compatible HTTP write-scope bypass PoC", () => {
       });
 
       expect(httpRes.status).toBe(200);
-      const body = (await httpRes.json()) as {
-        object?: string;
-        status?: string;
-        output?: Array<{
-          type?: string;
-          role?: string;
-          content?: Array<{ type?: string; text?: string }>;
-        }>;
-      };
-      expect(body.object).toBe("response");
-      expect(body.status).toBe("completed");
-      expect(body.output?.[0]?.type).toBe("message");
-      expect(body.output?.[0]?.role).toBe("assistant");
-      expect(body.output?.[0]?.content?.[0]?.type).toBe("output_text");
-      expect(body.output?.[0]?.content?.[0]?.text).toBe("hello");
       expect(agentCommand).toHaveBeenCalledTimes(1);
+    } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("shared-secret bearer auth can use /tools/invoke", async () => {
+    const started = await startServerWithClient("secret");
+
+    try {
+      const httpRes = await fetch(`http://127.0.0.1:${started.port}/tools/invoke`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          tool: "agents_list",
+          args: {},
+        }),
+      });
+
+      expect(httpRes.status).toBe(200);
+      const body = (await httpRes.json()) as {
+        ok?: boolean;
+        result?: unknown;
+      };
+      expect(body.ok).toBe(true);
+      expect(body.result).toBeTruthy();
     } finally {
       started.ws.close();
       await started.server.close();

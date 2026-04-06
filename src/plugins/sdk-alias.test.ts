@@ -13,12 +13,17 @@ import {
   buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
+  normalizeJitiAliasTargetPath,
   resolveExtensionApiAlias,
   resolvePluginRuntimeModulePath,
   resolvePluginSdkAliasFile,
   shouldPreferNativeJiti,
 } from "./sdk-alias.js";
-import { makeTrackedTempDir, mkdirSafeDir } from "./test-helpers/fs-fixtures.js";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir,
+} from "./test-helpers/fs-fixtures.js";
 
 type CreateJiti = typeof import("jiti").createJiti;
 
@@ -304,7 +309,7 @@ function expectCwdFallbackPluginSdkAliasResolution(params: {
 }
 
 afterAll(() => {
-  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  cleanupTrackedTempDirs(fixtureTempDirs);
 });
 
 describe("plugin sdk alias helpers", () => {
@@ -657,6 +662,45 @@ describe("plugin sdk alias helpers", () => {
       Object.defineProperty(process, "versions", {
         configurable: true,
         value: originalVersions,
+      });
+    }
+  });
+
+  it("disables native Jiti loads on Windows even for built JavaScript entries", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+
+    try {
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
+        false,
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
+    }
+  });
+
+  it("normalizes Windows alias targets before handing them to Jiti", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+
+    try {
+      expect(normalizeJitiAliasTargetPath(String.raw`C:\repo\dist\plugin-sdk\root-alias.cjs`)).toBe(
+        "C:/repo/dist/plugin-sdk/root-alias.cjs",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
       });
     }
   });

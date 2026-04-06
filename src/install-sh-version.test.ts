@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../test/helpers/temp-dir.js";
+
+const tempRoots: string[] = [];
 
 function withFakeCli(versionOutput: string): { root: string; cliPath: string } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-sh-"));
+  const root = makeTempDir(tempRoots, "openclaw-install-sh-");
   const cliPath = path.join(root, "openclaw");
   const escapedOutput = versionOutput.replace(/'/g, "'\\''");
   fs.writeFileSync(
@@ -62,19 +64,14 @@ resolve_openclaw_version
 }
 
 describe("install.sh version resolution", () => {
-  const tempRoots: string[] = [];
-
   afterEach(() => {
-    for (const root of tempRoots.splice(0)) {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    cleanupTempDirs(tempRoots);
   });
 
   it.runIf(process.platform !== "win32")(
     "extracts the semantic version from decorated CLI output",
     () => {
       const fixture = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
-      tempRoots.push(fixture.root);
 
       expect(resolveVersionFromInstaller(fixture.cliPath)).toBe("2026.3.10");
     },
@@ -84,7 +81,6 @@ describe("install.sh version resolution", () => {
     "falls back to raw output when no semantic version is present",
     () => {
       const fixture = withFakeCli("OpenClaw dev's build");
-      tempRoots.push(fixture.root);
 
       expect(resolveVersionFromInstaller(fixture.cliPath)).toBe("OpenClaw dev's build");
     },
@@ -94,10 +90,8 @@ describe("install.sh version resolution", () => {
     "does not source version helpers from cwd when installer runs via stdin",
     () => {
       const fixture = withFakeCli("OpenClaw 2026.3.10 (abcdef0)");
-      tempRoots.push(fixture.root);
 
-      const hostileCwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-install-stdin-"));
-      tempRoots.push(hostileCwd);
+      const hostileCwd = makeTempDir(tempRoots, "openclaw-install-stdin-");
       const hostileHelper = path.join(
         hostileCwd,
         "docker",

@@ -91,6 +91,20 @@ describe("evaluateSystemRunPolicy", () => {
     expect(denied.requiresAsk).toBe(true);
   });
 
+  it("still requires approval when ask=always even with durable trust", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "always",
+          durableApprovalSatisfied: true,
+        }),
+      ),
+    );
+    expect(denied.eventReason).toBe("approval-required");
+    expect(denied.requiresAsk).toBe(true);
+  });
+
   it("allows allowlist miss when explicit approval is provided", () => {
     const allowed = expectAllowedDecision(
       evaluateSystemRunPolicy(

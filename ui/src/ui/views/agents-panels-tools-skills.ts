@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
+import { t } from "../../i18n/index.ts";
 import type {
   SkillStatusEntry,
   SkillStatusReport,
@@ -52,12 +53,16 @@ function renderEffectiveToolBadge(tool: {
   channelId?: string;
 }) {
   if (tool.source === "plugin") {
-    return tool.pluginId ? `Connected: ${tool.pluginId}` : "Connected";
+    return tool.pluginId
+      ? t("agentTools.connectedSource", { id: tool.pluginId })
+      : t("agentTools.connected");
   }
   if (tool.source === "channel") {
-    return tool.channelId ? `Channel: ${tool.channelId}` : "Channel";
+    return tool.channelId
+      ? t("agentTools.channelSource", { id: tool.channelId })
+      : t("agentTools.channel");
   }
-  return "Built-in";
+  return t("agentTools.builtIn");
 }
 
 export function renderAgentTools(params: {
@@ -188,7 +193,7 @@ export function renderAgentTools(params: {
             ?disabled=${params.configLoading}
             @click=${params.onConfigReload}
           >
-            Reload Config
+            ${t("common.reloadConfig")}
           </button>
           <button
             class="btn btn--sm primary"
@@ -200,41 +205,49 @@ export function renderAgentTools(params: {
         </div>
       </div>
 
-      ${!params.configForm
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Load the gateway config to adjust tool profiles.
-            </div>
-          `
-        : nothing}
-      ${hasAgentAllow
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              This agent is using an explicit allowlist in config. Tool overrides are managed in the
-              Config tab.
-            </div>
-          `
-        : nothing}
-      ${hasGlobalAllow
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Global tools.allow is set. Agent overrides cannot enable tools that are globally
-              blocked.
-            </div>
-          `
-        : nothing}
-      ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
-        ? html`
-            <div class="callout info" style="margin-top: 12px">Loading runtime tool catalog…</div>
-          `
-        : nothing}
-      ${params.toolsCatalogError
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Could not load runtime tool catalog. Showing built-in fallback list instead.
-            </div>
-          `
-        : nothing}
+      ${
+        !params.configForm
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Load the gateway config to adjust tool profiles.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        hasAgentAllow
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                This agent is using an explicit allowlist in config. Tool overrides are managed in the Config tab.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        hasGlobalAllow
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Global tools.allow is set. Agent overrides cannot enable tools that are globally blocked.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
+          ? html`
+              <div class="callout info" style="margin-top: 12px">Loading runtime tool catalog…</div>
+            `
+          : nothing
+      }
+      ${
+        params.toolsCatalogError
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Could not load runtime tool catalog. Showing built-in fallback list instead.
+              </div>
+            `
+          : nothing
+      }
 
       <div class="agent-tools-meta" style="margin-top: 16px;">
         <div class="agent-kv">
@@ -245,14 +258,16 @@ export function renderAgentTools(params: {
           <div class="label">Source</div>
           <div>${profileSource}</div>
         </div>
-        ${params.configDirty
-          ? html`
-              <div class="agent-kv">
-                <div class="label">Status</div>
-                <div class="mono">unsaved</div>
-              </div>
-            `
-          : nothing}
+        ${
+          params.configDirty
+            ? html`
+                <div class="agent-kv">
+                  <div class="label">Status</div>
+                  <div class="mono">unsaved</div>
+                </div>
+              `
+            : nothing
+        }
       </div>
 
       <div style="margin-top: 18px;">
@@ -261,31 +276,32 @@ export function renderAgentTools(params: {
           What this agent can use in the current chat session.
           <span class="mono">${params.runtimeSessionKey || "no session"}</span>
         </div>
-        ${!params.runtimeSessionMatchesSelectedAgent
-          ? html`
-              <div class="callout info" style="margin-top: 12px">
-                Switch chat to this agent to view its live runtime tools.
-              </div>
-            `
-          : params.toolsEffectiveLoading &&
-              !params.toolsEffectiveResult &&
-              !params.toolsEffectiveError
+        ${
+          !params.runtimeSessionMatchesSelectedAgent
             ? html`
-                <div class="callout info" style="margin-top: 12px">Loading available tools…</div>
+                <div class="callout info" style="margin-top: 12px">
+                  Switch chat to this agent to view its live runtime tools.
+                </div>
               `
-            : params.toolsEffectiveError
+            : params.toolsEffectiveLoading &&
+                !params.toolsEffectiveResult &&
+                !params.toolsEffectiveError
               ? html`
-                  <div class="callout info" style="margin-top: 12px">
-                    Could not load available tools for this session.
-                  </div>
+                  <div class="callout info" style="margin-top: 12px">Loading available tools…</div>
                 `
-              : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
+              : params.toolsEffectiveError
                 ? html`
                     <div class="callout info" style="margin-top: 12px">
-                      No tools are available for this session right now.
+                      Could not load available tools for this session.
                     </div>
                   `
-                : html`
+                : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
+                  ? html`
+                      <div class="callout info" style="margin-top: 12px">
+                        No tools are available for this session right now.
+                      </div>
+                    `
+                  : html`
                     <div class="agent-tools-grid" style="margin-top: 16px;">
                       ${params.toolsEffectiveResult?.groups.map(
                         (group) => html`
@@ -314,7 +330,8 @@ export function renderAgentTools(params: {
                         `,
                       )}
                     </div>
-                  `}
+                  `
+        }
       </div>
 
       <div class="agent-tools-presets" style="margin-top: 16px;">
@@ -347,11 +364,13 @@ export function renderAgentTools(params: {
             <div class="agent-tools-section">
               <div class="agent-tools-header">
                 ${section.label}
-                ${section.source === "plugin" && section.pluginId
-                  ? html`<span class="agent-pill" style="margin-left: 8px;"
+                ${
+                  section.source === "plugin" && section.pluginId
+                    ? html`<span class="agent-pill" style="margin-left: 8px;"
                       >plugin:${section.pluginId}</span
                     >`
-                  : nothing}
+                    : nothing
+                }
               </div>
               <div class="agent-tools-list">
                 ${section.tools.map((tool) => {
@@ -430,9 +449,11 @@ export function renderAgentSkills(params: {
           <div class="card-title">Skills</div>
           <div class="card-sub">
             Per-agent skill allowlist and workspace skills.
-            ${totalCount > 0
-              ? html`<span class="mono">${enabledCount}/${totalCount}</span>`
-              : nothing}
+            ${
+              totalCount > 0
+                ? html`<span class="mono">${enabledCount}/${totalCount}</span>`
+                : nothing
+            }
           </div>
         </div>
         <div class="row" style="gap: 8px; flex-wrap: wrap;">
@@ -468,10 +489,10 @@ export function renderAgentSkills(params: {
             ?disabled=${params.configLoading}
             @click=${params.onConfigReload}
           >
-            Reload Config
+            ${t("common.reloadConfig")}
           </button>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? "Loading…" : "Refresh"}
+            ${params.loading ? t("common.loading") : t("common.refresh")}
           </button>
           <button
             class="btn btn--sm primary"
@@ -483,34 +504,40 @@ export function renderAgentSkills(params: {
         </div>
       </div>
 
-      ${!params.configForm
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Load the gateway config to set per-agent skills.
-            </div>
-          `
-        : nothing}
-      ${usingAllowlist
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              This agent uses a custom skill allowlist.
-            </div>
-          `
-        : html`
-            <div class="callout info" style="margin-top: 12px">
-              All skills are enabled. Disabling any skill will create a per-agent allowlist.
-            </div>
-          `}
-      ${!reportReady && !params.loading
-        ? html`
-            <div class="callout info" style="margin-top: 12px">
-              Load skills for this agent to view workspace-specific entries.
-            </div>
-          `
-        : nothing}
-      ${params.error
-        ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
-        : nothing}
+      ${
+        !params.configForm
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Load the gateway config to set per-agent skills.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        usingAllowlist
+          ? html`
+              <div class="callout info" style="margin-top: 12px">This agent uses a custom skill allowlist.</div>
+            `
+          : html`
+              <div class="callout info" style="margin-top: 12px">
+                All skills are enabled. Disabling any skill will create a per-agent allowlist.
+              </div>
+            `
+      }
+      ${
+        !reportReady && !params.loading
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Load skills for this agent to view workspace-specific entries.
+              </div>
+            `
+          : nothing
+      }
+      ${
+        params.error
+          ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
+          : nothing
+      }
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="flex: 1;">
@@ -526,9 +553,12 @@ export function renderAgentSkills(params: {
         <div class="muted">${filtered.length} shown</div>
       </div>
 
-      ${filtered.length === 0
-        ? html` <div class="muted" style="margin-top: 16px">No skills found.</div> `
-        : html`
+      ${
+        filtered.length === 0
+          ? html`
+              <div class="muted" style="margin-top: 16px">No skills found.</div>
+            `
+          : html`
             <div class="agent-skills-groups" style="margin-top: 16px;">
               ${groups.map((group) =>
                 renderAgentSkillGroup(group, {
@@ -540,7 +570,8 @@ export function renderAgentSkills(params: {
                 }),
               )}
             </div>
-          `}
+          `
+      }
     </section>
   `;
 }
@@ -596,12 +627,16 @@ function renderAgentSkillRow(
         <div class="list-title">${skill.emoji ? `${skill.emoji} ` : ""}${skill.name}</div>
         <div class="list-sub">${skill.description}</div>
         ${renderSkillStatusChips({ skill })}
-        ${missing.length > 0
-          ? html`<div class="muted" style="margin-top: 6px;">Missing: ${missing.join(", ")}</div>`
-          : nothing}
-        ${reasons.length > 0
-          ? html`<div class="muted" style="margin-top: 6px;">Reason: ${reasons.join(", ")}</div>`
-          : nothing}
+        ${
+          missing.length > 0
+            ? html`<div class="muted" style="margin-top: 6px;">Missing: ${missing.join(", ")}</div>`
+            : nothing
+        }
+        ${
+          reasons.length > 0
+            ? html`<div class="muted" style="margin-top: 6px;">Reason: ${reasons.join(", ")}</div>`
+            : nothing
+        }
       </div>
       <div class="list-meta">
         <label class="cfg-toggle">

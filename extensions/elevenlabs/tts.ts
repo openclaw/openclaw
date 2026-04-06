@@ -1,8 +1,12 @@
 import {
+  asObject,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
+  readResponseTextLimited,
   requireInRange,
+  trimToUndefined,
+  truncateErrorDetail,
 } from "openclaw/plugin-sdk/speech";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
@@ -17,6 +21,45 @@ function normalizeElevenLabsBaseUrl(baseUrl?: string): string {
     return DEFAULT_ELEVENLABS_BASE_URL;
   }
   return trimmed.replace(/\/+$/, "");
+}
+
+function formatElevenLabsErrorPayload(payload: unknown): string | undefined {
+  const root = asObject(payload);
+  if (!root) {
+    return undefined;
+  }
+  const detailObject = asObject(root.detail);
+  const message =
+    trimToUndefined(root.message) ??
+    trimToUndefined(detailObject?.message) ??
+    trimToUndefined(detailObject?.detail) ??
+    trimToUndefined(root.error);
+  const code =
+    trimToUndefined(root.code) ??
+    trimToUndefined(detailObject?.code) ??
+    trimToUndefined(detailObject?.status);
+  if (message && code) {
+    return `${truncateErrorDetail(message)} [code=${code}]`;
+  }
+  if (message) {
+    return truncateErrorDetail(message);
+  }
+  if (code) {
+    return `[code=${code}]`;
+  }
+  return undefined;
+}
+
+async function extractElevenLabsErrorDetail(response: Response): Promise<string | undefined> {
+  const rawBody = trimToUndefined(await readResponseTextLimited(response));
+  if (!rawBody) {
+    return undefined;
+  }
+  try {
+    return formatElevenLabsErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
+  } catch {
+    return truncateErrorDetail(rawBody);
+  }
 }
 
 function assertElevenLabsVoiceSettings(settings: {
@@ -42,6 +85,7 @@ export async function elevenLabsTTS(params: {
   seed?: number;
   applyTextNormalization?: "auto" | "on" | "off";
   languageCode?: string;
+  latencyTier?: number;
   voiceSettings: {
     stability: number;
     similarityBoost: number;
@@ -61,6 +105,7 @@ export async function elevenLabsTTS(params: {
     seed,
     applyTextNormalization,
     languageCode,
+    latencyTier,
     voiceSettings,
     timeoutMs,
   } = params;
@@ -94,6 +139,7 @@ export async function elevenLabsTTS(params: {
         seed: normalizedSeed,
         apply_text_normalization: normalizedNormalization,
         language_code: normalizedLanguage,
+        latency_optimization_level: latencyTier,
         voice_settings: {
           stability: voiceSettings.stability,
           similarity_boost: voiceSettings.similarityBoost,
@@ -106,7 +152,15 @@ export async function elevenLabsTTS(params: {
     });
 
     if (!response.ok) {
-      throw new Error(`ElevenLabs API error (${response.status})`);
+      const detail = await extractElevenLabsErrorDetail(response);
+      const requestId =
+        trimToUndefined(response.headers.get("x-request-id")) ??
+        trimToUndefined(response.headers.get("request-id"));
+      throw new Error(
+        `ElevenLabs API error (${response.status})` +
+          (detail ? `: ${detail}` : "") +
+          (requestId ? ` [request_id=${requestId}]` : ""),
+      );
     }
 
     return Buffer.from(await response.arrayBuffer());

@@ -216,16 +216,17 @@ export function renderOverview(props: OverviewProps) {
               placeholder="ws://100.x.y.z:18789"
             />
           </label>
-          ${isTrustedProxy
-            ? ""
-            : html`
+          ${
+            isTrustedProxy
+              ? ""
+              : html`
                 <label class="field">
                   <span>${t("overview.access.token")}</span>
-                  <div style="display: flex; align-items: center; gap: 8px;">
+                  <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
                     <input
                       type=${props.showGatewayToken ? "text" : "password"}
                       autocomplete="off"
-                      style="flex: 1;"
+                      style="flex: 1 1 0%; min-width: 0; box-sizing: border-box;"
                       .value=${props.settings.token}
                       @input=${(e: Event) => {
                         const v = (e.target as HTMLInputElement).value;
@@ -236,7 +237,7 @@ export function renderOverview(props: OverviewProps) {
                     <button
                       type="button"
                       class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
-                      style="width: 36px; height: 36px;"
+                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
                       title=${props.showGatewayToken ? "Hide token" : "Show token"}
                       aria-label="Toggle token visibility"
                       aria-pressed=${props.showGatewayToken}
@@ -248,11 +249,11 @@ export function renderOverview(props: OverviewProps) {
                 </label>
                 <label class="field">
                   <span>${t("overview.access.password")}</span>
-                  <div style="display: flex; align-items: center; gap: 8px;">
+                  <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
                     <input
                       type=${props.showGatewayPassword ? "text" : "password"}
                       autocomplete="off"
-                      style="flex: 1;"
+                      style="flex: 1 1 0%; min-width: 0; width: 100%; box-sizing: border-box;"
                       .value=${props.password}
                       @input=${(e: Event) => {
                         const v = (e.target as HTMLInputElement).value;
@@ -263,7 +264,7 @@ export function renderOverview(props: OverviewProps) {
                     <button
                       type="button"
                       class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
-                      style="width: 36px; height: 36px;"
+                      style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
                       title=${props.showGatewayPassword ? "Hide password" : "Show password"}
                       aria-label="Toggle password visibility"
                       aria-pressed=${props.showGatewayPassword}
@@ -273,7 +274,8 @@ export function renderOverview(props: OverviewProps) {
                     </button>
                   </div>
                 </label>
-              `}
+              `
+          }
           <label class="field">
             <span>${t("overview.access.sessionKey")}</span>
             <input
@@ -307,13 +309,14 @@ export function renderOverview(props: OverviewProps) {
           <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
           <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
           <span class="muted"
-            >${isTrustedProxy
-              ? t("overview.access.trustedProxy")
-              : t("overview.access.connectHint")}</span
+            >${
+              isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
+            }</span
           >
         </div>
-        ${!props.connected
-          ? html`
+        ${
+          !props.connected
+            ? html`
               <div class="login-gate__help" style="margin-top: 16px;">
                 <div class="login-gate__help-title">${t("overview.connection.title")}</div>
                 <ol class="login-gate__steps">
@@ -343,7 +346,8 @@ export function renderOverview(props: OverviewProps) {
                 </div>
               </div>
             `
-          : nothing}
+            : nothing
+        }
       </div>
 
       <div class="card">
@@ -367,22 +371,26 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
             <div class="stat-value">
-              ${props.lastChannelsRefresh
-                ? formatRelativeTimestamp(props.lastChannelsRefresh)
-                : t("common.na")}
+              ${
+                props.lastChannelsRefresh
+                  ? formatRelativeTimestamp(props.lastChannelsRefresh)
+                  : t("common.na")
+              }
             </div>
           </div>
         </div>
-        ${props.lastError
-          ? html`<div class="callout danger" style="margin-top: 14px;">
+        ${
+          props.lastError
+            ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
               ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
             </div>`
-          : html`
+            : html`
               <div class="callout" style="margin-top: 14px">
                 ${t("overview.snapshot.channelsHint")}
               </div>
-            `}
+            `
+        }
       </div>
     </section>
 

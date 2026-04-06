@@ -1,4 +1,6 @@
-import { getChatChannelMeta } from "../channels/chat-meta.js";
+import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../channels/ids.js";
+import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
+import { resolveChannelExposure } from "../channels/plugins/exposure.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import {
   createScopedAccountReplyToModeResolver,
@@ -15,14 +17,16 @@ import type {
   ChannelPollResult,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelMeta } from "../channels/plugins/types.js";
+import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
-import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import type { PluginPackageChannel } from "../plugins/manifest.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { OpenClawPluginApi, OpenClawPluginConfigSchema } from "../plugins/types.js";
+import type { OpenClawPluginApi } from "../plugins/types.js";
 
 export type {
   AnyAgentTool,
@@ -34,7 +38,6 @@ export type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginCommandContext,
-  PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
@@ -54,20 +57,57 @@ export type {
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeResolvedModelContext,
+  ProviderNormalizeToolSchemasContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderPreparedRuntimeAuth,
+  ProviderReasoningOutputMode,
+  ProviderReasoningOutputModeContext,
+  ProviderReplayPolicy,
+  ProviderReplayPolicyContext,
+  ProviderReplaySessionEntry,
+  ProviderReplaySessionState,
   ProviderResolveDynamicModelContext,
+  ProviderResolveTransportTurnStateContext,
+  ProviderResolveWebSocketSessionPolicyContext,
   ProviderResolvedUsageAuth,
+  RealtimeTranscriptionProviderPlugin,
+  ProviderSanitizeReplayHistoryContext,
+  ProviderTransportTurnState,
+  ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
+  ProviderValidateReplayTurnsContext,
+  ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
   SpeechProviderPlugin,
 } from "./plugin-entry.js";
 export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
+export type {
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchResult,
+} from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
+export type { OutboundIdentity } from "../infra/outbound/identity.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export type { ReplyPayload } from "../auto-reply/types.js";
+export type { AllowlistMatch } from "../channels/allowlist-match.js";
+export type {
+  BaseProbeResult,
+  ChannelAccountSnapshot,
+  ChannelGroupContext,
+  ChannelMessageActionName,
+  ChannelMeta,
+  ChannelSetupInput,
+} from "../channels/plugins/types.js";
+export type { ChatType } from "../channels/chat-type.js";
+export type { NormalizedLocation } from "../channels/location.js";
+export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
+export type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
+export type { PollInput } from "../polls.js";
 export { isSecretRef } from "../config/types.secrets.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 export type {
@@ -100,7 +140,8 @@ export type {
 } from "../infra/provider-usage.types.js";
 export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export type { PluginRuntime } from "../plugins/runtime/types.js";
+export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+export type { WizardPrompter } from "../wizard/prompts.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
@@ -109,7 +150,10 @@ export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js"
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
-export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export {
+  buildChannelConfigSchema,
+  emptyChannelConfigSchema,
+} from "../channels/plugins/config-schema.js";
 export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
@@ -123,7 +167,6 @@ export {
   formatPairingApproveHint,
   parseOptionalDelimitedEntries,
 } from "../channels/plugins/helpers.js";
-export { getChatChannelMeta } from "../channels/chat-meta.js";
 export {
   channelTargetSchema,
   channelTargetsSchema,
@@ -143,6 +186,19 @@ export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
 export { resolveGatewayPort } from "../config/paths.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { normalizeAtHashSlug, normalizeHyphenSlug } from "../shared/string-normalization.js";
+export { createActionGate } from "../agents/tools/common.js";
+export {
+  jsonResult,
+  readNumberParam,
+  readReactionParams,
+  readStringArrayParam,
+  readStringParam,
+} from "../agents/tools/common.js";
+export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
+export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
+export { ensureConfiguredAcpBindingReady } from "../acp/persistent-bindings.lifecycle.js";
+export { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 
 export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 export type {
@@ -159,6 +215,104 @@ export { resolveThreadSessionKeys } from "../routing/session-key.js";
 export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
+
+var cachedSdkChatChannelMeta: ReturnType<typeof buildChatChannelMetaById> | undefined;
+var cachedSdkChatChannelIdSet: Set<string> | undefined;
+
+function getSdkChatChannelIdSet(): Set<string> {
+  cachedSdkChatChannelIdSet ??= new Set(CHAT_CHANNEL_ORDER);
+  return cachedSdkChatChannelIdSet;
+}
+
+function toSdkChatChannelMeta(params: {
+  id: ChatChannelId;
+  channel: PluginPackageChannel;
+}): ChannelMeta {
+  const label = params.channel.label?.trim();
+  if (!label) {
+    throw new Error(`Missing label for bundled chat channel "${params.id}"`);
+  }
+  const exposure = resolveChannelExposure(params.channel);
+  return {
+    id: params.id,
+    label,
+    selectionLabel: params.channel.selectionLabel?.trim() || label,
+    docsPath: params.channel.docsPath?.trim() || `/channels/${params.id}`,
+    docsLabel: params.channel.docsLabel?.trim() || undefined,
+    blurb: params.channel.blurb?.trim() || "",
+    ...(params.channel.aliases?.length ? { aliases: params.channel.aliases } : {}),
+    ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
+    ...(params.channel.selectionDocsPrefix !== undefined
+      ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
+      : {}),
+    ...(params.channel.selectionDocsOmitLabel !== undefined
+      ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
+      : {}),
+    ...(params.channel.selectionExtras?.length
+      ? { selectionExtras: params.channel.selectionExtras }
+      : {}),
+    ...(params.channel.detailLabel?.trim()
+      ? { detailLabel: params.channel.detailLabel.trim() }
+      : {}),
+    ...(params.channel.systemImage?.trim()
+      ? { systemImage: params.channel.systemImage.trim() }
+      : {}),
+    ...(params.channel.markdownCapable !== undefined
+      ? { markdownCapable: params.channel.markdownCapable }
+      : {}),
+    exposure,
+    ...(params.channel.quickstartAllowFrom !== undefined
+      ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }
+      : {}),
+    ...(params.channel.forceAccountBinding !== undefined
+      ? { forceAccountBinding: params.channel.forceAccountBinding }
+      : {}),
+    ...(params.channel.preferSessionLookupForAnnounceTarget !== undefined
+      ? {
+          preferSessionLookupForAnnounceTarget: params.channel.preferSessionLookupForAnnounceTarget,
+        }
+      : {}),
+    ...(params.channel.preferOver?.length ? { preferOver: params.channel.preferOver } : {}),
+  };
+}
+
+function buildChatChannelMetaById(): Record<ChatChannelId, ChannelMeta> {
+  const entries = new Map<ChatChannelId, ChannelMeta>();
+  for (const entry of listBundledPluginMetadata({
+    includeChannelConfigs: true,
+    includeSyntheticChannelConfigs: false,
+  })) {
+    const channel =
+      entry.packageManifest && "channel" in entry.packageManifest
+        ? entry.packageManifest.channel
+        : undefined;
+    if (!channel) {
+      continue;
+    }
+    const rawId = channel.id?.trim();
+    if (!rawId || !getSdkChatChannelIdSet().has(rawId)) {
+      continue;
+    }
+    const id = rawId;
+    entries.set(
+      id,
+      toSdkChatChannelMeta({
+        id,
+        channel,
+      }),
+    );
+  }
+  return Object.freeze(Object.fromEntries(entries)) as Record<ChatChannelId, ChannelMeta>;
+}
+
+function resolveSdkChatChannelMeta(id: string) {
+  cachedSdkChatChannelMeta ??= buildChatChannelMetaById();
+  return cachedSdkChatChannelMeta[id];
+}
+
+export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
+  return resolveSdkChatChannelMeta(id);
+}
 
 /** Remove one of the known provider prefixes from a free-form target string. */
 export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
@@ -211,12 +365,17 @@ export function buildChannelOutboundSessionRoute(params: {
 }
 
 /** Options for a channel plugin entry that should register a channel capability. */
+type ChannelEntryConfigSchema<TPlugin> =
+  TPlugin extends ChannelPlugin<unknown>
+    ? NonNullable<TPlugin["configSchema"]>
+    : ChannelConfigSchema;
+
 type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   id: string;
   name: string;
   description: string;
   plugin: TPlugin;
-  configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
+  configSchema?: ChannelEntryConfigSchema<TPlugin> | (() => ChannelEntryConfigSchema<TPlugin>);
   setRuntime?: (runtime: PluginRuntime) => void;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
@@ -226,7 +385,7 @@ type DefinedChannelPluginEntry<TPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: OpenClawPluginConfigSchema;
+  configSchema: ChannelEntryConfigSchema<TPlugin>;
   register: (api: OpenClawPluginApi) => void;
   channelPlugin: TPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
@@ -237,6 +396,8 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   meta?: Partial<NonNullable<ChannelPlugin<TResolvedAccount>["meta"]>>;
   setupWizard?: NonNullable<ChannelPlugin<TResolvedAccount>["setupWizard"]>;
   capabilities?: ChannelPlugin<TResolvedAccount>["capabilities"];
+  commands?: ChannelPlugin<TResolvedAccount>["commands"];
+  doctor?: ChannelPlugin<TResolvedAccount>["doctor"];
   agentPrompt?: ChannelPlugin<TResolvedAccount>["agentPrompt"];
   streaming?: ChannelPlugin<TResolvedAccount>["streaming"];
   reload?: ChannelPlugin<TResolvedAccount>["reload"];
@@ -257,6 +418,8 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
       ChannelPlugin<TResolvedAccount>,
       | "setupWizard"
       | "capabilities"
+      | "commands"
+      | "doctor"
       | "agentPrompt"
       | "streaming"
       | "reload"
@@ -280,12 +443,15 @@ export function defineChannelPluginEntry<TPlugin>({
   name,
   description,
   plugin,
-  configSchema = emptyPluginConfigSchema,
+  configSchema,
   setRuntime,
   registerCliMetadata,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  const resolvedConfigSchema = typeof configSchema === "function" ? configSchema() : configSchema;
+  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
+    typeof configSchema === "function"
+      ? configSchema()
+      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
   const entry = {
     id,
     name,
@@ -347,6 +513,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     normalizeEntry?: (raw: string) => string;
   };
   collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];
+  collectAuditFindings?: ChannelSecurityAdapter<TResolvedAccount>["collectAuditFindings"];
 };
 
 type ChatChannelPairingOptions = {
@@ -454,6 +621,9 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         normalizeEntry: security.dm.normalizeEntry,
       }),
     ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
+    ...(security.collectAuditFindings
+      ? { collectAuditFindings: security.collectAuditFindings }
+      : {}),
   };
 }
 
@@ -544,11 +714,13 @@ export function createChannelPluginBase<TResolvedAccount>(
   return {
     id: params.id,
     meta: {
-      ...getChatChannelMeta(params.id as Parameters<typeof getChatChannelMeta>[0]),
+      ...resolveSdkChatChannelMeta(params.id),
       ...params.meta,
     },
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+    ...(params.commands ? { commands: params.commands } : {}),
+    ...(params.doctor ? { doctor: params.doctor } : {}),
     ...(params.agentPrompt ? { agentPrompt: params.agentPrompt } : {}),
     ...(params.streaming ? { streaming: params.streaming } : {}),
     ...(params.reload ? { reload: params.reload } : {}),

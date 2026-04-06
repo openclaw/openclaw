@@ -1,12 +1,17 @@
+import {
+  getChannelPlugin,
+  resolveChannelApprovalCapability,
+} from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
-import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
+import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const COMMAND_REGEX = /^\/approve(?:\s|$)/i;
+const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
 
 const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
@@ -26,6 +31,9 @@ type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
   | { ok: false; error: string };
 
+const APPROVE_USAGE_TEXT =
+  "Usage: /approve <id> <decision> (see the pending approval message for available decisions)";
+
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
   if (FOREIGN_COMMAND_MENTION_REGEX.test(trimmed)) {
@@ -37,11 +45,11 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   }
   const rest = trimmed.slice(commandMatch[0].length).trim();
   if (!rest) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return { ok: false, error: APPROVE_USAGE_TEXT };
   }
   const tokens = rest.split(/\s+/).filter(Boolean);
   if (tokens.length < 2) {
-    return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+    return { ok: false, error: APPROVE_USAGE_TEXT };
   }
 
   const first = tokens[0].toLowerCase();
@@ -61,7 +69,7 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
       id: tokens[0],
     };
   }
-  return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
+  return { ok: false, error: APPROVE_USAGE_TEXT };
 }
 
 function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
@@ -70,37 +78,47 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
-function readErrorCode(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
+function formatApprovalSubmitError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function readApprovalNotFoundDetailsReason(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
+type ApprovalMethod = "exec.approval.resolve" | "plugin.approval.resolve";
+
+function resolveApprovalMethods(params: {
+  approvalId: string;
+  execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+  pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+}): ApprovalMethod[] {
+  if (params.approvalId.startsWith("plugin:")) {
+    return params.pluginAuthorization.authorized ? ["plugin.approval.resolve"] : [];
   }
-  const reason = (value as { reason?: unknown }).reason;
-  return typeof reason === "string" && reason.trim() ? reason : null;
+  if (params.execAuthorization.authorized && params.pluginAuthorization.authorized) {
+    return ["exec.approval.resolve", "plugin.approval.resolve"];
+  }
+  if (params.execAuthorization.authorized) {
+    return ["exec.approval.resolve"];
+  }
+  if (params.pluginAuthorization.authorized) {
+    return ["plugin.approval.resolve"];
+  }
+  return [];
 }
 
-function isApprovalNotFoundError(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
+function resolveApprovalAuthorizationError(params: {
+  approvalId: string;
+  execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+  pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
+}): string {
+  if (params.approvalId.startsWith("plugin:")) {
+    return (
+      params.pluginAuthorization.reason ?? "❌ You are not authorized to approve this request."
+    );
   }
-  const gatewayCode = readErrorCode((err as { gatewayCode?: unknown }).gatewayCode);
-  if (gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND) {
-    return true;
-  }
-
-  const detailsReason = readApprovalNotFoundDetailsReason((err as { details?: unknown }).details);
-  if (
-    gatewayCode === ErrorCodes.INVALID_REQUEST &&
-    detailsReason === ErrorCodes.APPROVAL_NOT_FOUND
-  ) {
-    return true;
-  }
-
-  // Legacy server/client combinations may only include the message text.
-  return /unknown or expired approval id/i.test(err.message);
+  return (
+    params.execAuthorization.reason ??
+    params.pluginAuthorization.reason ??
+    "❌ You are not authorized to approve this request."
+  );
 }
 
 export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -112,31 +130,53 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   if (!parsed) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
+  if (!parsed.ok) {
+    return { shouldContinue: false, reply: { text: parsed.error } };
+  }
+
+  const isPluginId = parsed.id.startsWith("plugin:");
+  const effectiveAccountId = resolveChannelAccountId({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    command: params.command,
+  });
+  const approvalCapability = resolveChannelApprovalCapability(
+    getChannelPlugin(params.command.channel),
+  );
+  const approveCommandBehavior = approvalCapability?.resolveApproveCommandBehavior?.({
+    cfg: params.cfg,
+    accountId: effectiveAccountId,
+    senderId: params.command.senderId,
+    approvalKind: isPluginId ? "plugin" : "exec",
+  });
+  if (approveCommandBehavior?.kind === "ignore") {
+    return { shouldContinue: false };
+  }
+  if (approveCommandBehavior?.kind === "reply") {
+    return { shouldContinue: false, reply: { text: approveCommandBehavior.text } };
+  }
+  const execApprovalAuthorization = resolveApprovalCommandAuthorization({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    accountId: effectiveAccountId,
+    senderId: params.command.senderId,
+    kind: "exec",
+  });
+  const pluginApprovalAuthorization = resolveApprovalCommandAuthorization({
+    cfg: params.cfg,
+    channel: params.command.channel,
+    accountId: effectiveAccountId,
+    senderId: params.command.senderId,
+    kind: "plugin",
+  });
+  const hasExplicitApprovalAuthorization =
+    (execApprovalAuthorization.explicit && execApprovalAuthorization.authorized) ||
+    (pluginApprovalAuthorization.explicit && pluginApprovalAuthorization.authorized);
+  if (!params.command.isAuthorizedSender && !hasExplicitApprovalAuthorization) {
     logVerbose(
       `Ignoring /approve from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
-  }
-
-  if (!parsed.ok) {
-    return { shouldContinue: false, reply: { text: parsed.error } };
-  }
-  const isPluginId = parsed.id.startsWith("plugin:");
-  const approvalAuthorization = resolveApprovalCommandAuthorization({
-    cfg: params.cfg,
-    channel: params.command.channel,
-    accountId: params.ctx.AccountId,
-    senderId: params.command.senderId,
-    kind: isPluginId ? "plugin" : "exec",
-  });
-  if (!approvalAuthorization.authorized) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: approvalAuthorization.reason ?? "❌ You are not authorized to approve this request.",
-      },
-    };
   }
 
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {
@@ -159,50 +199,47 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     });
   };
 
-  // Plugin approval IDs are kind-prefixed (`plugin:<uuid>`); route directly when detected.
-  // Unprefixed IDs try exec first, then fall back to plugin for backward compat.
-  if (isPluginId) {
+  const methods = resolveApprovalMethods({
+    approvalId: parsed.id,
+    execAuthorization: execApprovalAuthorization,
+    pluginAuthorization: pluginApprovalAuthorization,
+  });
+  if (methods.length === 0) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: resolveApprovalAuthorizationError({
+          approvalId: parsed.id,
+          execAuthorization: execApprovalAuthorization,
+          pluginAuthorization: pluginApprovalAuthorization,
+        }),
+      },
+    };
+  }
+
+  let lastError: unknown = null;
+  for (const [index, method] of methods.entries()) {
     try {
-      await callApprovalMethod("plugin.approval.resolve");
-    } catch (err) {
-      return {
-        shouldContinue: false,
-        reply: { text: `❌ Failed to submit approval: ${String(err)}` },
-      };
-    }
-  } else {
-    try {
-      await callApprovalMethod("exec.approval.resolve");
-    } catch (err) {
-      if (isApprovalNotFoundError(err)) {
-        const pluginFallbackAuthorization = resolveApprovalCommandAuthorization({
-          cfg: params.cfg,
-          channel: params.command.channel,
-          accountId: params.ctx.AccountId,
-          senderId: params.command.senderId,
-          kind: "plugin",
-        });
-        if (!pluginFallbackAuthorization.authorized) {
-          return {
-            shouldContinue: false,
-            reply: { text: `❌ Failed to submit approval: ${String(err)}` },
-          };
-        }
-        try {
-          await callApprovalMethod("plugin.approval.resolve");
-        } catch (pluginErr) {
-          return {
-            shouldContinue: false,
-            reply: { text: `❌ Failed to submit approval: ${String(pluginErr)}` },
-          };
-        }
-      } else {
+      await callApprovalMethod(method);
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      const isLastMethod = index === methods.length - 1;
+      if (!isApprovalNotFoundError(error) || isLastMethod) {
         return {
           shouldContinue: false,
-          reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+          reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}` },
         };
       }
     }
+  }
+
+  if (lastError) {
+    return {
+      shouldContinue: false,
+      reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(lastError)}` },
+    };
   }
 
   return {

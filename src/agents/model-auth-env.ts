@@ -1,8 +1,8 @@
 import { getEnvApiKey } from "@mariozechner/pi-ai";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import { hasAnthropicVertexAvailableAuth } from "../plugin-sdk/anthropic-vertex.js";
+import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
 import { normalizeProviderIdForAuth } from "./provider-id.js";
 
@@ -16,6 +16,7 @@ export function resolveEnvApiKey(
   env: NodeJS.ProcessEnv = process.env,
 ): EnvApiKeyResult | null {
   const normalized = normalizeProviderIdForAuth(provider);
+  const candidateMap = resolveProviderEnvApiKeyCandidates();
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -26,8 +27,8 @@ export function resolveEnvApiKey(
     return { apiKey: value, source };
   };
 
-  const candidates = PROVIDER_ENV_API_KEY_CANDIDATES[normalized];
-  if (candidates) {
+  const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
+  if (Array.isArray(candidates)) {
     for (const envVar of candidates) {
       const resolved = pick(envVar);
       if (resolved) {
@@ -44,13 +45,21 @@ export function resolveEnvApiKey(
     return { apiKey: envKey, source: "gcloud adc" };
   }
 
-  if (normalized === "anthropic-vertex") {
-    // Vertex AI uses GCP credentials (SA JSON or ADC), not API keys.
-    // Return a sentinel so the model resolver still treats this provider as available.
-    if (hasAnthropicVertexAvailableAuth(env)) {
-      return { apiKey: GCP_VERTEX_CREDENTIALS_MARKER, source: "gcloud adc" };
+  const setupProvider = resolvePluginSetupProvider({
+    provider: normalized,
+    env,
+  });
+  if (setupProvider?.resolveConfigApiKey) {
+    const resolved = setupProvider.resolveConfigApiKey({
+      provider: normalized,
+      env,
+    });
+    if (resolved?.trim()) {
+      return {
+        apiKey: resolved,
+        source: resolved === GCP_VERTEX_CREDENTIALS_MARKER ? "gcloud adc" : "env",
+      };
     }
-    return null;
   }
 
   return null;

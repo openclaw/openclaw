@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const FAKE_STARTTIME = 12345;
 let __testing: typeof import("./session-write-lock.js").__testing;
@@ -10,25 +10,15 @@ let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLock
 let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
 
-async function loadFreshSessionWriteLockModuleForTest() {
-  vi.resetModules();
-  // Mock getProcessStartTime so PID-recycling detection works on non-Linux
-  // (macOS, CI runners). isPidAlive is left unmocked.
-  vi.doMock("../shared/pid-alive.js", async (importOriginal) => {
-    const original = await importOriginal<typeof import("../shared/pid-alive.js")>();
-    return {
-      ...original,
-      getProcessStartTime: (pid: number) => (pid === process.pid ? FAKE_STARTTIME : null),
-    };
-  });
-  ({
-    __testing,
-    acquireSessionWriteLock,
-    cleanStaleLockFiles,
-    resetSessionWriteLockStateForTest,
-    resolveSessionLockMaxHoldFromTimeout,
-  } = await import("./session-write-lock.js"));
-}
+vi.mock("../shared/pid-alive.js", async () => {
+  const original =
+    await vi.importActual<typeof import("../shared/pid-alive.js")>("../shared/pid-alive.js");
+  return {
+    ...original,
+    // Keep liveness checks real; only pin process start time for PID recycle coverage.
+    getProcessStartTime: (pid: number) => (pid === process.pid ? FAKE_STARTTIME : null),
+  };
+});
 
 async function expectLockRemovedOnlyAfterFinalRelease(params: {
   lockPath: string;
@@ -104,8 +94,14 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 }
 
 describe("acquireSessionWriteLock", () => {
-  beforeEach(async () => {
-    await loadFreshSessionWriteLockModuleForTest();
+  beforeAll(async () => {
+    ({
+      __testing,
+      acquireSessionWriteLock,
+      cleanStaleLockFiles,
+      resetSessionWriteLockStateForTest,
+      resolveSessionLockMaxHoldFromTimeout,
+    } = await import("./session-write-lock.js"));
   });
 
   afterEach(() => {

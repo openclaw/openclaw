@@ -8,9 +8,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
+import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { isValidIPv4 } from "../gateway/net.js";
+import { probeGateway } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
   openUrl,
@@ -18,20 +18,16 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import {
-  inspectBestEffortPrimaryTailnetIPv4,
-  pickBestEffortPrimaryLanIPv4,
-} from "../infra/network-discovery-display.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { CONFIG_DIR, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, openUrlInBackground, resolveBrowserOpenCommand };
+export { resolveControlUiLinks };
 
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
@@ -231,16 +227,16 @@ export async function probeGatewayReachable(params: {
   const url = params.url.trim();
   const timeoutMs = params.timeoutMs ?? 1500;
   try {
-    await callGateway({
+    const probe = await probeGateway({
       url,
-      token: params.token,
-      password: params.password,
-      method: "health",
       timeoutMs,
-      clientName: GATEWAY_CLIENT_NAMES.PROBE,
-      mode: GATEWAY_CLIENT_MODES.PROBE,
+      auth: {
+        token: params.token,
+        password: params.password,
+      },
+      detailLevel: "none",
     });
-    return { ok: true };
+    return probe.ok ? { ok: true } : { ok: false, detail: probe.error ?? undefined };
   } catch (err) {
     return { ok: false, detail: summarizeError(err) };
   }
@@ -298,34 +294,3 @@ function summarizeError(err: unknown): string {
 }
 
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
-
-export function resolveControlUiLinks(params: {
-  port: number;
-  bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";
-  customBindHost?: string;
-  basePath?: string;
-}): { httpUrl: string; wsUrl: string } {
-  const port = params.port;
-  const bind = params.bind ?? "loopback";
-  const customBindHost = params.customBindHost?.trim();
-  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
-  const host = (() => {
-    if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
-      return customBindHost;
-    }
-    if (bind === "tailnet" && tailnetIPv4) {
-      return tailnetIPv4 ?? "127.0.0.1";
-    }
-    if (bind === "lan") {
-      return pickBestEffortPrimaryLanIPv4() ?? "127.0.0.1";
-    }
-    return "127.0.0.1";
-  })();
-  const basePath = normalizeControlUiBasePath(params.basePath);
-  const uiPath = basePath ? `${basePath}/` : "/";
-  const wsPath = basePath ? basePath : "";
-  return {
-    httpUrl: `http://${host}:${port}${uiPath}`,
-    wsUrl: `ws://${host}:${port}${wsPath}`,
-  };
-}

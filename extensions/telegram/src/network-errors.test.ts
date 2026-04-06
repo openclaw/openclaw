@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
+  isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramPollingNetworkError,
@@ -160,6 +161,16 @@ describe("isRecoverableTelegramNetworkError", () => {
 });
 
 describe("isSafeToRetrySendError", () => {
+  class MockHttpError extends Error {
+    constructor(
+      message: string,
+      public readonly error: unknown,
+    ) {
+      super(message);
+      this.name = "HttpError";
+    }
+  }
+
   it.each([
     ["ECONNREFUSED", "connect ECONNREFUSED", true],
     ["ENOTFOUND", "getaddrinfo ENOTFOUND", true],
@@ -184,6 +195,13 @@ describe("isSafeToRetrySendError", () => {
     const wrapped = Object.assign(new Error("fetch failed"), { cause: root });
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
+
+  it("detects pre-connect error wrapped in grammY HttpError", () => {
+    const root = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+    const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
+    expect(isSafeToRetrySendError(wrapped)).toBe(true);
+  });
 });
 
 describe("isTelegramServerError", () => {
@@ -197,6 +215,26 @@ describe("isTelegramServerError", () => {
 
   it("returns false for plain Error", () => {
     expect(isTelegramServerError(new Error("500: Internal Server Error"))).toBe(false);
+  });
+});
+
+describe("isTelegramRateLimitError", () => {
+  it("returns true for Telegram 429 errors", () => {
+    expect(isTelegramRateLimitError(errorWithTelegramCode("Too Many Requests", 429))).toBe(true);
+  });
+
+  it("detects wrapped 429 retry_after errors without error_code", () => {
+    const wrapped = {
+      message: "429 Too Many Requests",
+      response: { parameters: { retry_after: 1 } },
+    };
+    expect(isTelegramRateLimitError(wrapped)).toBe(true);
+  });
+
+  it("detects error_code in nested cause", () => {
+    const inner = Object.assign(new Error("Too Many Requests"), { error_code: 429 });
+    const outer = Object.assign(new Error("wrapped"), { cause: inner });
+    expect(isTelegramRateLimitError(outer)).toBe(true);
   });
 });
 

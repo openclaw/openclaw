@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import { formatPresenceAge } from "../presenter.ts";
 import type { PresenceEntry } from "../types.ts";
@@ -20,8 +21,8 @@ export function renderInstances(props: InstancesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Connected Instances</div>
-          <div class="card-sub">Presence beacons from the gateway and clients.</div>
+          <div class="card-title">${t("instances.title")}</div>
+          <div class="card-sub">${t("instances.subtitle")}</div>
         </div>
         <div class="row" style="gap: 8px;">
           <button
@@ -30,35 +31,44 @@ export function renderInstances(props: InstancesProps) {
               hostsRevealed = !hostsRevealed;
               props.onRefresh();
             }}
-            title=${masked ? "Show hosts and IPs" : "Hide hosts and IPs"}
-            aria-label="Toggle host visibility"
+            title=${masked ? t("instances.showHosts") : t("instances.hideHosts")}
+            aria-label=${t("instances.toggleHostVisibility")}
             aria-pressed=${!masked}
             style="width: 36px; height: 36px;"
           >
             ${masked ? icons.eyeOff : icons.eye}
           </button>
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Loading…" : "Refresh"}
+            ${props.loading ? t("common.loading") : t("common.refresh")}
           </button>
         </div>
       </div>
-      ${props.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
-        : nothing}
-      ${props.statusMessage
-        ? html`<div class="callout" style="margin-top: 12px;">${props.statusMessage}</div>`
-        : nothing}
+      ${
+        props.lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
+          : nothing
+      }
+      ${
+        props.statusMessage
+          ? html`<div class="callout" style="margin-top: 12px;">${props.statusMessage}</div>`
+          : nothing
+      }
       <div class="list" style="margin-top: 16px;">
-        ${props.entries.length === 0
-          ? html` <div class="muted">No instances reported yet.</div> `
-          : props.entries.map((entry) => renderEntry(entry, masked))}
+        ${
+          props.entries.length === 0
+            ? html` <div class="muted">${t("instances.noInstances")}</div> `
+            : props.entries.map((entry) => renderEntry(entry, masked))
+        }
       </div>
     </section>
   `;
 }
 
 function renderEntry(entry: PresenceEntry, masked: boolean) {
-  const lastInput = entry.lastInputSeconds != null ? `${entry.lastInputSeconds}s ago` : "n/a";
+  const lastInput =
+    entry.lastInputSeconds != null
+      ? t("common.secondsAgo", { count: String(entry.lastInputSeconds) })
+      : t("common.na");
   const mode = entry.mode ?? "unknown";
   const host = entry.host ?? "unknown host";
   const ip = entry.ip ?? null;
@@ -86,16 +96,18 @@ function renderEntry(entry: PresenceEntry, masked: boolean) {
           ${scopesLabel ? html`<span class="chip">${scopesLabel}</span>` : nothing}
           ${entry.platform ? html`<span class="chip">${entry.platform}</span>` : nothing}
           ${entry.deviceFamily ? html`<span class="chip">${entry.deviceFamily}</span>` : nothing}
-          ${entry.modelIdentifier
-            ? html`<span class="chip">${entry.modelIdentifier}</span>`
-            : nothing}
+          ${
+            entry.modelIdentifier
+              ? html`<span class="chip">${entry.modelIdentifier}</span>`
+              : nothing
+          }
           ${entry.version ? html`<span class="chip">${entry.version}</span>` : nothing}
         </div>
       </div>
       <div class="list-meta">
         <div>${formatPresenceAge(entry)}</div>
-        <div class="muted">Last input ${lastInput}</div>
-        <div class="muted">Reason ${entry.reason ?? ""}</div>
+        <div class="muted">${t("instances.lastInput", { time: lastInput })}</div>
+        <div class="muted">${t("instances.reason", { reason: entry.reason ?? "" })}</div>
       </div>
     </div>
   `;

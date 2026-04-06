@@ -1,11 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext } from "../server-context.js";
 
 let createBrowserRouteDispatcher: typeof import("./dispatcher.js").createBrowserRouteDispatcher;
 
 describe("browser route dispatcher (abort)", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     vi.doMock("./index.js", () => {
       return {
         registerBrowserRoutes(app: { get: (path: string, handler: unknown) => void }) {

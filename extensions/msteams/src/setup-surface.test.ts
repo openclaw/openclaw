@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsSetupAdapter } from "./setup-core.js";
 
 const resolveMSTeamsUserAllowlist = vi.hoisted(() => vi.fn());
@@ -31,6 +31,12 @@ vi.mock("../../../src/channels/plugins/bundled.js", () => ({
 }));
 
 describe("msteams setup surface", () => {
+  let msteamsSetupWizard: typeof import("./setup-surface.js").msteamsSetupWizard;
+
+  beforeAll(async () => {
+    ({ msteamsSetupWizard } = await import("./setup-surface.js"));
+  });
+
   beforeEach(() => {
     resolveMSTeamsUserAllowlist.mockReset();
     resolveMSTeamsChannelAllowlist.mockReset();
@@ -41,7 +47,6 @@ describe("msteams setup surface", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    vi.resetModules();
   });
 
   it("always resolves to the default account", () => {
@@ -78,7 +83,6 @@ describe("msteams setup surface", () => {
       appId: "app",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const { msteamsSetupWizard } = await import("./setup-surface.js");
 
     expect(
       msteamsSetupWizard.status.resolveConfigured({
@@ -90,7 +94,6 @@ describe("msteams setup surface", () => {
   it("reports configured status from configured credentials and renders status lines", async () => {
     resolveMSTeamsCredentials.mockReturnValue(null);
     hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    const { msteamsSetupWizard } = await import("./setup-surface.js");
 
     expect(
       msteamsSetupWizard.status.resolveConfigured({
@@ -114,7 +117,6 @@ describe("msteams setup surface", () => {
     resolveMSTeamsCredentials.mockReturnValue(null);
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
 
-    const { msteamsSetupWizard } = await import("./setup-surface.js");
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: { existing: true } } },
       prompter: {
@@ -149,7 +151,6 @@ describe("msteams setup surface", () => {
       throw new Error(`Unexpected prompt: ${message}`);
     });
 
-    const { msteamsSetupWizard } = await import("./setup-surface.js");
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: {} } },
       prompter: {

@@ -19,7 +19,6 @@ import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { buildEmbeddedSystemPrompt } from "./pi-embedded-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
-import { buildToolSummaryMap } from "./tool-summaries.js";
 
 export type PromptScenarioTurn = {
   id: string;
@@ -50,9 +49,6 @@ function buildCommonSystemParams(workspaceDir: string) {
     "x_search",
     "web_fetch",
   ];
-  const toolSummaries = buildToolSummaryMap(
-    toolNames.map((name) => ({ name, description: `${name} tool` }) as never),
-  );
   return {
     runtimeInfo: {
       agentId: "main",
@@ -66,10 +62,9 @@ function buildCommonSystemParams(workspaceDir: string) {
       shell: "zsh",
     },
     userTimezone: "America/Los_Angeles",
-    userTime: "Monday, March 16th, 2026 — 9:00 PM",
+    userTime: "Monday, March 16th, 2026 - 9:00 PM",
     userTimeFormat: "12" as const,
     toolNames,
-    toolSummaries,
   };
 }
 
@@ -80,7 +75,7 @@ function buildSystemPrompt(params: {
   reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
 }) {
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames, toolSummaries } =
+  const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames } =
     buildCommonSystemParams(params.workspaceDir);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -90,7 +85,6 @@ function buildSystemPrompt(params: {
     userTime,
     userTimeFormat,
     toolNames,
-    toolSummaries,
     modelAliasLines: [],
     promptMode: "full",
     acpEnabled: true,
@@ -574,7 +568,7 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "Store durable memories only in memory/2026-03-15.md (create memory/ if needed).",
     "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.",
     "If nothing to store, reply with NO_REPLY.",
-    "Current time: Sunday, March 15th, 2026 — 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
   ].join("\n");
   const memoryFlushSystemPrompt = buildSystemPrompt({
     workspaceDir,
@@ -598,7 +592,7 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "## Red Lines",
     "Do not delete production data.",
     "",
-    "Current time: Sunday, March 15th, 2026 — 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
   ].join("\n");
   const postCompactionSystemPrompt = buildSystemPrompt({
     workspaceDir,

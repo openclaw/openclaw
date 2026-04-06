@@ -5,11 +5,10 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
-import {
-  deriveGatewaySessionLifecycleSnapshot,
-  persistGatewaySessionLifecycleEvent,
-} from "./session-lifecycle-state.js";
-import { loadGatewaySessionRow, loadSessionEntry } from "./session-utils.js";
+import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
+import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 function resolveHeartbeatAckMaxChars(): number {
@@ -730,6 +729,7 @@ export function createAgentEventHandler({
     const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
+    const isItemEvent = evt.stream === "item";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
     // Build tool payload: strip result/partialResult unless verbose=full
     const toolPayload =
@@ -793,6 +793,10 @@ export function createAgentEventHandler({
         }
       }
     } else {
+      const itemPhase = isItemEvent && typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (itemPhase === "start" && isControlUiVisible && sessionKey && !isAborted) {
+        flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, evt.runId, evt.seq);
+      }
       broadcast("agent", agentPayload);
     }
 
