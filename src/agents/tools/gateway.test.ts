@@ -91,6 +91,20 @@ describe("gateway tool defaults", () => {
     expect(opts.token).toBe("remote-token");
   });
 
+  it("treats a loopback override that matches gateway.remote.url as remote", () => {
+    configState.value = {
+      gateway: {
+        remote: {
+          url: "ws://127.0.0.1:18789",
+          token: "remote-token",
+        },
+      },
+    };
+    const opts = resolveGatewayOptions({ gatewayUrl: "ws://127.0.0.1:18789" });
+    expect(opts.url).toBe("ws://127.0.0.1:18789");
+    expect(opts.token).toBe("remote-token");
+  });
+
   it("does not leak local env/config tokens to remote overrides", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
     configState.value = {

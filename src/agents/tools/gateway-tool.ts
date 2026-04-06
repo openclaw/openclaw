@@ -4,7 +4,6 @@ import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
-import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -19,6 +18,7 @@ import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
+import { isRemoteGatewayTargetForAgentTools } from "./gateway.js";
 
 const log = createSubsystemLogger("gateway-tool");
 
@@ -206,17 +206,9 @@ function collectNewlyEnabledDangerousConfigFlags(
   return nextFlags;
 }
 
-function isRemoteGatewayTarget(gatewayUrl: string | undefined): boolean {
-  const details = buildGatewayConnectionDetails(
-    gatewayUrl ? { url: gatewayUrl, urlSource: "cli" } : undefined,
-  );
-  // URL.hostname returns "[::1]" (with brackets) for IPv6 literals, so strip them before comparing.
-  const hostname = new URL(details.url).hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  return hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1";
-}
-
 function assertGatewayConfigMutationAllowed(params: {
   action: "config.apply" | "config.patch";
+  config?: OpenClawConfig;
   currentConfig: Record<string, unknown>;
   gatewayUrl?: string;
   raw: string;
@@ -241,7 +233,10 @@ function assertGatewayConfigMutationAllowed(params: {
     );
   }
   if (
-    isRemoteGatewayTarget(params.gatewayUrl) &&
+    isRemoteGatewayTargetForAgentTools({
+      config: params.config,
+      gatewayUrl: params.gatewayUrl,
+    }) &&
     !isDeepStrictEqual(
       getValueAtCanonicalPath(params.currentConfig, "plugins.entries"),
       getValueAtCanonicalPath(nextConfig, "plugins.entries"),
@@ -416,6 +411,7 @@ export function createGatewayTool(opts?: {
           await resolveConfigWriteParams();
         assertGatewayConfigMutationAllowed({
           action: "config.apply",
+          config: opts?.config,
           currentConfig: snapshotConfig,
           gatewayUrl: gatewayOpts.gatewayUrl,
           raw,
@@ -434,6 +430,7 @@ export function createGatewayTool(opts?: {
           await resolveConfigWriteParams();
         assertGatewayConfigMutationAllowed({
           action: "config.patch",
+          config: opts?.config,
           currentConfig: snapshotConfig,
           gatewayUrl: gatewayOpts.gatewayUrl,
           raw,

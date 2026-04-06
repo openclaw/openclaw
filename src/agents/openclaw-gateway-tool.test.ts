@@ -12,15 +12,29 @@ const { callGatewayToolMock, readGatewayCallOptionsMock } = vi.hoisted(() => ({
   readGatewayCallOptionsMock: vi.fn(() => ({})),
 }));
 
-vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: callGatewayToolMock,
-  readGatewayCallOptions: readGatewayCallOptionsMock,
-}));
+vi.mock("./tools/gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tools/gateway.js")>();
+  return {
+    ...actual,
+    callGatewayTool: callGatewayToolMock,
+    readGatewayCallOptions: readGatewayCallOptionsMock,
+  };
+});
 
-function requireGatewayTool(agentSessionKey?: string) {
+function requireGatewayTool(agentSessionKey?: string, config?: Record<string, unknown>) {
   return createGatewayTool({
     ...(agentSessionKey ? { agentSessionKey } : {}),
-    config: { commands: { restart: true } },
+    config: { commands: { restart: true }, ...config },
+  });
+}
+
+function requireGatewayToolWithConfig(config: Record<string, unknown>, agentSessionKey?: string) {
+  return createGatewayTool({
+    ...(agentSessionKey ? { agentSessionKey } : {}),
+    config: {
+      commands: { restart: true },
+      ...config,
+    },
   });
 }
 
@@ -417,6 +431,106 @@ describe("gateway tool", () => {
       tool.execute("call-remote-plugin-config", {
         action: "config.patch",
         gatewayUrl: "wss://gateway.example",
+        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects plugin config writes when remote mode uses a loopback tunnel", async () => {
+    const tool = requireGatewayTool(undefined, {
+      gateway: {
+        mode: "remote",
+        remote: { url: "ws://127.0.0.1:18789" },
+      },
+    });
+
+    await expect(
+      tool.execute("call-remote-tunnel-plugin-config", {
+        action: "config.patch",
+        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects plugin config writes when remote mode uses a loopback gatewayUrl override", async () => {
+    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "ws://127.0.0.1:18789" });
+    const tool = requireGatewayTool(undefined, {
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://gateway.example" },
+      },
+    });
+
+    await expect(
+      tool.execute("call-remote-loopback-override-plugin-config", {
+        action: "config.patch",
+        gatewayUrl: "ws://127.0.0.1:18789",
+        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects tunneled remote config.patch when it changes plugin config", async () => {
+    readGatewayCallOptionsMock.mockReturnValueOnce({ gatewayUrl: "ws://127.0.0.1:18789" });
+    const tool = requireGatewayToolWithConfig({
+      gateway: {
+        mode: "remote",
+        remote: { url: "ws://127.0.0.1:18789" },
+      },
+    });
+
+    await expect(
+      tool.execute("call-tunneled-remote-plugin-config", {
+        action: "config.patch",
+        gatewayUrl: "ws://127.0.0.1:18789",
+        raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change plugin config on remote gateways because dangerous plugin flags are host-specific",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects remote-mode config.patch when it changes plugin config without a gatewayUrl override", async () => {
+    const tool = requireGatewayToolWithConfig({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://gateway.example" },
+      },
+    });
+
+    await expect(
+      tool.execute("call-configured-remote-plugin-config", {
+        action: "config.patch",
         raw: '{ plugins: { entries: { acpx: { config: { permissionMode: "allow" } } } } }',
       }),
     ).rejects.toThrow(
