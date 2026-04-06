@@ -1,5 +1,12 @@
 import type { TableColumn } from "../terminal/table.js";
-import { statusOverviewTableColumns } from "./status-all/report-tables.js";
+import {
+  buildStatusChannelsTableSection,
+  buildStatusHealthSection,
+  buildStatusOverviewSection,
+  buildStatusSessionsSection,
+  buildStatusSystemEventsSection,
+  buildStatusUsageSection,
+} from "./status-all/report-sections.js";
 import { appendStatusReportSections } from "./status-all/text-report.js";
 
 export async function buildStatusCommandReportLines(params: {
@@ -36,12 +43,11 @@ export async function buildStatusCommandReportLines(params: {
     heading: params.heading,
     sections: [
       {
-        kind: "table",
-        title: "Overview",
-        width: params.width,
-        renderTable: params.renderTable,
-        columns: statusOverviewTableColumns,
-        rows: params.overviewRows,
+        ...buildStatusOverviewSection({
+          width: params.width,
+          renderTable: params.renderTable,
+          rows: params.overviewRows,
+        }),
       },
       {
         kind: "raw",
@@ -65,45 +71,39 @@ export async function buildStatusCommandReportLines(params: {
         body: params.securityAuditLines,
       },
       {
-        kind: "table",
-        title: "Channels",
-        width: params.width,
-        renderTable: params.renderTable,
-        columns: params.channelsColumns,
-        rows: params.channelsRows,
+        ...buildStatusChannelsTableSection({
+          width: params.width,
+          renderTable: params.renderTable,
+          columns: params.channelsColumns,
+          rows: params.channelsRows,
+        }),
       },
       {
-        kind: "table",
-        title: "Sessions",
-        width: params.width,
-        renderTable: params.renderTable,
-        columns: params.sessionsColumns,
-        rows: params.sessionsRows,
+        ...buildStatusSessionsSection({
+          width: params.width,
+          renderTable: params.renderTable,
+          columns: params.sessionsColumns,
+          rows: params.sessionsRows,
+        }),
       },
       {
-        kind: "table",
-        title: "System events",
-        width: params.width,
-        renderTable: params.renderTable,
-        columns: [{ key: "Event", header: "Event", flex: true, minWidth: 24 }],
-        rows: params.systemEventsRows ?? [],
-        trailer: params.systemEventsTrailer,
-        skipIfEmpty: true,
+        ...buildStatusSystemEventsSection({
+          width: params.width,
+          renderTable: params.renderTable,
+          rows: params.systemEventsRows,
+          trailer: params.systemEventsTrailer,
+        }),
       },
       {
-        kind: "table",
-        title: "Health",
-        width: params.width,
-        renderTable: params.renderTable,
-        columns: params.healthColumns ?? [],
-        rows: params.healthRows ?? [],
-        skipIfEmpty: true,
+        ...buildStatusHealthSection({
+          width: params.width,
+          renderTable: params.renderTable,
+          columns: params.healthColumns,
+          rows: params.healthRows,
+        }),
       },
       {
-        kind: "lines",
-        title: "Usage",
-        body: params.usageLines ?? [],
-        skipIfEmpty: true,
+        ...buildStatusUsageSection({ usageLines: params.usageLines }),
       },
       {
         kind: "raw",
