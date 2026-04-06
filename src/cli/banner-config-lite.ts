@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import JSON5 from "json5";
+import { resolveConfigEnvVars } from "../config/env-substitution.js";
+import { applyConfigEnvVars } from "../config/env-vars.js";
 import { resolveConfigIncludes } from "../config/includes.js";
 import { resolveConfigPathCandidate } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { TaglineMode } from "./tagline.js";
 
 function parseTaglineMode(value: unknown): TaglineMode | undefined {
@@ -28,7 +31,12 @@ export function readCliBannerTaglineMode(
       JSON5.parse(fs.readFileSync(configPath, "utf-8")),
       configPath,
     ) as BannerConfigShape;
-    return parseTaglineMode(parsed.cli?.banner?.taglineMode);
+    // Keep banner startup cheap, but still honor config.env and ${VAR} substitution.
+    if (parsed && typeof parsed === "object" && "env" in parsed) {
+      applyConfigEnvVars(parsed as OpenClawConfig, env);
+    }
+    const resolved = resolveConfigEnvVars(parsed, env) as BannerConfigShape;
+    return parseTaglineMode(resolved.cli?.banner?.taglineMode);
   } catch {
     return undefined;
   }

@@ -68,4 +68,50 @@ describe("readCliBannerTaglineMode", () => {
     expect(readCliBannerTaglineMode({ OPENCLAW_CONFIG_PATH: missingPath })).toBeUndefined();
     expect(readCliBannerTaglineMode({ OPENCLAW_CONFIG_PATH: invalidPath })).toBeUndefined();
   });
+
+  it("resolves tagline mode from process env substitution", () => {
+    const root = makeTempDir("openclaw-banner-process-env-");
+    const configPath = path.join(root, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      `{
+        cli: {
+          banner: {
+            taglineMode: "\${TAGLINE_MODE}",
+          },
+        },
+      }
+      `,
+      "utf-8",
+    );
+
+    expect(
+      readCliBannerTaglineMode({
+        OPENCLAW_CONFIG_PATH: configPath,
+        TAGLINE_MODE: "off",
+      }),
+    ).toBe("off");
+  });
+
+  it("resolves tagline mode from config env substitution", () => {
+    const root = makeTempDir("openclaw-banner-config-env-");
+    const configPath = path.join(root, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      `{
+        env: {
+          TAGLINE_MODE: "default",
+        },
+        cli: {
+          banner: {
+            taglineMode: "\${TAGLINE_MODE}",
+          },
+        },
+      }
+      `,
+      "utf-8",
+    );
+
+    expect(readCliBannerTaglineMode({ OPENCLAW_CONFIG_PATH: configPath })).toBe("default");
+  });
 });
