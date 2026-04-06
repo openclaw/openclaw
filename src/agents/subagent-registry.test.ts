@@ -42,19 +42,19 @@ vi.mock("../infra/agent-events.js", () => ({
   onAgentEvent: mocks.onAgentEvent,
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: mocks.loadConfig,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: mocks.loadConfig,
+}));
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
   resolveStorePath: mocks.resolveStorePath,
   updateSessionStore: mocks.updateSessionStore,
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: mocks.resolveStorePath,
 }));
 
 vi.mock("../sessions/session-lifecycle-events.js", () => ({
@@ -96,11 +96,10 @@ vi.mock("./timeout.js", () => ({
   resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
 }));
 
-describe("subagent registry seam flow", () => {
-  let mod: typeof import("./subagent-registry.js");
+const mod = await import("./subagent-registry.js");
 
-  beforeEach(async () => {
-    vi.resetModules();
+describe("subagent registry seam flow", () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
@@ -133,7 +132,6 @@ describe("subagent registry seam flow", () => {
       }
       return {};
     });
-    mod = await import("./subagent-registry.js");
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
