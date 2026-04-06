@@ -57,6 +57,25 @@ function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike
   });
 }
 
+function warnOnIgnoredLegacyCompatibilityConfig(params: {
+  pluginConfig: ResolvedAcpxPluginConfig;
+  logger?: PluginLogger;
+}): void {
+  const ignoredFields: string[] = [];
+  if (params.pluginConfig.legacyCompatibilityConfig.queueOwnerTtlSeconds != null) {
+    ignoredFields.push("queueOwnerTtlSeconds");
+  }
+  if (params.pluginConfig.legacyCompatibilityConfig.strictWindowsCmdWrapper === false) {
+    ignoredFields.push("strictWindowsCmdWrapper=false");
+  }
+  if (ignoredFields.length === 0) {
+    return;
+  }
+  params.logger?.warn(
+    `embedded acpx runtime ignores legacy compatibility config: ${ignoredFields.join(", ")}`,
+  );
+}
+
 function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
   const detailText = report.details?.filter(Boolean).join("; ").trim();
   return detailText ? `${report.message} (${detailText})` : report.message;
@@ -76,6 +95,10 @@ export function createAcpxRuntimeService(
         workspaceDir: ctx.workspaceDir,
       });
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+      warnOnIgnoredLegacyCompatibilityConfig({
+        pluginConfig,
+        logger: ctx.logger,
+      });
 
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
       runtime = runtimeFactory({

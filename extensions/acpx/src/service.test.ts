@@ -102,4 +102,35 @@ describe("createAcpxRuntimeService", () => {
 
     await service.stop?.(ctx);
   });
+
+  it("warns when legacy compatibility config is explicitly ignored", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = {
+      ensureSession: vi.fn(),
+      runTurn: vi.fn(),
+      cancel: vi.fn(),
+      close: vi.fn(),
+      probeAvailability: vi.fn(async () => {}),
+      isHealthy: vi.fn(() => true),
+      doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
+    };
+    const service = createAcpxRuntimeService({
+      pluginConfig: {
+        queueOwnerTtlSeconds: 30,
+        strictWindowsCmdWrapper: false,
+      },
+      runtimeFactory: () => runtime as never,
+    });
+
+    await service.start(ctx);
+
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "embedded acpx runtime ignores legacy compatibility config: queueOwnerTtlSeconds, strictWindowsCmdWrapper=false",
+      ),
+    );
+
+    await service.stop?.(ctx);
+  });
 });

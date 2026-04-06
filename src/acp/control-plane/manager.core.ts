@@ -1279,10 +1279,18 @@ export class AcpSessionManager {
         ) {
           if (input.discardPersistentState) {
             const configuredBackend = (meta.backend || input.cfg.acp?.backend || "").trim();
-            const runtimeBackend = this.deps.requireRuntimeBackend(configuredBackend || undefined);
-            await runtimeBackend.runtime.prepareFreshSession?.({
-              sessionKey,
-            });
+            try {
+              const runtimeBackend = this.deps.requireRuntimeBackend(
+                configuredBackend || undefined,
+              );
+              await runtimeBackend.runtime.prepareFreshSession?.({
+                sessionKey,
+              });
+            } catch (recoveryError) {
+              logVerbose(
+                `acp close recovery: unable to prepare fresh session for ${sessionKey}: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
+              );
+            }
           }
           // Treat unavailable backends as terminal for this cached handle so it
           // cannot continue counting against maxConcurrentSessions.

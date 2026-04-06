@@ -2337,6 +2337,34 @@ describe("AcpSessionManager", () => {
     expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
   });
 
+  it("does not fail reset close recovery when backend lookup also throws", async () => {
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_MISSING",
+        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+      );
+    });
+
+    const manager = new AcpSessionManager();
+    const result = await manager.closeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+      allowBackendUnavailable: true,
+      clearMeta: false,
+    });
+
+    expect(result.runtimeClosed).toBe(false);
+    expect(result.runtimeNotice).toContain("not configured");
+    expect(result.metaCleared).toBe(false);
+  });
+
   it("surfaces metadata clear errors during closeSession", async () => {
     hoisted.readAcpSessionEntryMock.mockReturnValue({
       sessionKey: "agent:codex:acp:session-1",
