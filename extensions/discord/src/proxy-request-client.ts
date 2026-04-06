@@ -33,10 +33,7 @@ type Attachment = {
   description?: string;
 };
 
-const defaultOptions: Required<Omit<RequestClientOptions, "baseUrl" | "tokenHeader" | "fetch">> & {
-  baseUrl: string;
-  tokenHeader: "Bot" | "Bearer";
-} = {
+const defaultOptions = {
   tokenHeader: "Bot",
   baseUrl: "https://discord.com/api",
   apiVersion: 10,
@@ -44,7 +41,7 @@ const defaultOptions: Required<Omit<RequestClientOptions, "baseUrl" | "tokenHead
   timeout: 15_000,
   queueRequests: true,
   maxQueueSize: 1000,
-};
+} satisfies Omit<ProxyRequestClientOptions, "fetch">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
