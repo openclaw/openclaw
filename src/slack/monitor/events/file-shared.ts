@@ -1,8 +1,7 @@
-import { appendFileSync } from "node:fs";
+import { danger } from "../../../globals.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
-import { danger } from "../../../globals.js";
 
 /**
  * Shared dedup set: the `message` event handler should call
@@ -11,17 +10,6 @@ import { danger } from "../../../globals.js";
  */
 const handledMessageTimestamps = new Set<string>();
 const DEDUP_TTL_MS = 30_000;
-const DIAG_LOG_PATH = "/tmp/diag.log";
-
-function writeDiag(message: string) {
-  try {
-    appendFileSync(DIAG_LOG_PATH, `${new Date().toISOString()} ${message}\n`);
-  } catch {
-    // Best-effort diagnostics only.
-  }
-}
-
-writeDiag("diag init: file-shared.ts loaded");
 
 export function markMessageHandled(ts: string) {
   handledMessageTimestamps.add(ts);
@@ -60,27 +48,19 @@ export function registerSlackFileSharedEvents(params: {
   ).event("file_shared", async ({ event, body }) => {
     try {
       const fileEvent = event as FileSharedEvent;
-      writeDiag(
-        `diag slack file_shared ingress: ch=${fileEvent.channel_id ?? "?"} file=${fileEvent.file_id ?? "?"} user=${fileEvent.user_id ?? "?"} event_ts=${fileEvent.event_ts ?? "?"}`,
-      );
 
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        writeDiag(
-          `diag slack file_shared drop(mismatch): ch=${fileEvent.channel_id ?? "?"} file=${fileEvent.file_id ?? "?"}`,
-        );
         return;
       }
 
       const channelId = fileEvent.channel_id;
       const fileId = fileEvent.file_id;
       if (!channelId || !fileId) {
-        writeDiag("diag slack file_shared drop(missing channel or file id)");
         return;
       }
 
       // Skip if the bot itself shared the file
       if (fileEvent.user_id === ctx.botUserId) {
-        writeDiag(`diag slack file_shared drop(bot user): ch=${channelId} file=${fileId}`);
         return;
       }
 
@@ -95,7 +75,6 @@ export function registerSlackFileSharedEvents(params: {
       });
 
       if (!result.ok || !result.messages?.length) {
-        writeDiag(`diag slack file_shared history empty: ch=${channelId} file=${fileId}`);
         return;
       }
 
@@ -109,9 +88,6 @@ export function registerSlackFileSharedEvents(params: {
       );
 
       if (!matchingMessage) {
-        writeDiag(
-          `diag slack file_shared no matching message in history: ch=${channelId} file=${fileId}`,
-        );
         return;
       }
 
@@ -119,9 +95,6 @@ export function registerSlackFileSharedEvents(params: {
       // `message` event (small files get both events).
       const msgTs = matchingMessage.ts;
       if (msgTs && handledMessageTimestamps.has(msgTs)) {
-        writeDiag(
-          `diag slack file_shared skipped duplicate message ${msgTs} in ${channelId} (file ${fileId})`,
-        );
         ctx.runtime.log?.(
           `file_shared fallback: skipped duplicate message ${msgTs} in ${channelId} (file ${fileId})`,
         );
@@ -130,9 +103,6 @@ export function registerSlackFileSharedEvents(params: {
 
       // Skip bot messages
       if (matchingMessage.bot_id || matchingMessage.user === ctx.botUserId) {
-        writeDiag(
-          `diag slack file_shared drop(bot message): ch=${channelId} file=${fileId} ts=${matchingMessage.ts ?? "?"}`,
-        );
         return;
       }
 
@@ -163,19 +133,9 @@ export function registerSlackFileSharedEvents(params: {
       ctx.runtime.log?.(
         `file_shared fallback: processing message ${msgTs} in ${channelId} (file ${fileId})`,
       );
-      writeDiag(
-        `diag slack file_shared processing message ${msgTs ?? "?"} in ${channelId} (file ${fileId})`,
-      );
 
-      writeDiag(
-        `diag slack file_shared calling handleSlackMessage: ch=${channelId} ts=${msgTs ?? "?"} file=${fileId} files=${message.files?.length ?? 0} text_len=${(message.text ?? "").length}`,
-      );
       await handleSlackMessage(message, { source: "file_shared" });
-      writeDiag(
-        `diag slack file_shared handleSlackMessage returned: ch=${channelId} ts=${msgTs ?? "?"} file=${fileId}`,
-      );
     } catch (err) {
-      writeDiag(`diag slack file_shared handler exception: ${String(err)}`);
       ctx.runtime.error?.(danger(`slack file_shared handler failed: ${String(err)}`));
     }
   });
