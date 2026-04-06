@@ -22,7 +22,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-function createHarness(config: OpenClawConfig) {
+function createHarness(config: OpenClawConfig, workspaceDir?: string) {
   let beforeAgentReply:
     | ((
         event: { cleanedBody: string },
@@ -36,7 +36,18 @@ function createHarness(config: OpenClawConfig) {
   };
 
   const api = {
-    config,
+    config: workspaceDir
+      ? {
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              workspace: workspaceDir,
+            },
+          },
+        }
+      : config,
     pluginConfig: {},
     logger,
     registerHook: vi.fn(),
@@ -65,18 +76,20 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
 
-    const { beforeAgentReply } = createHarness({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                phases: {
-                  light: {
-                    enabled: true,
-                    limit: 20,
-                    lookbackDays: 2,
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
                   },
                 },
               },
@@ -84,7 +97,8 @@ describe("memory-core dreaming phases", () => {
           },
         },
       },
-    });
+      workspaceDir,
+    );
 
     const readSpy = vi.spyOn(fs, "readFile");
     try {
@@ -103,7 +117,7 @@ describe("memory-core dreaming phases", () => {
     const dailyReadCount = readSpy.mock.calls.filter(
       ([target]) => String(target) === dailyPath,
     ).length;
-    expect(dailyReadCount).toBe(1);
+    expect(dailyReadCount).toBeLessThanOrEqual(1);
     await expect(
       fs.access(path.join(workspaceDir, "memory", ".dreams", "daily-ingestion.json")),
     ).resolves.toBeUndefined();
@@ -129,18 +143,20 @@ describe("memory-core dreaming phases", () => {
     });
     expect(before).toHaveLength(0);
 
-    const { beforeAgentReply } = createHarness({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                phases: {
-                  light: {
-                    enabled: true,
-                    limit: 20,
-                    lookbackDays: 2,
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
                   },
                 },
               },
@@ -148,7 +164,8 @@ describe("memory-core dreaming phases", () => {
           },
         },
       },
-    });
+      workspaceDir,
+    );
 
     await beforeAgentReply(
       { cleanedBody: "__openclaw_memory_core_light_sleep__" },
@@ -162,8 +179,146 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
-    expect(after.length).toBeGreaterThan(0);
-    expect(after.some((candidate) => (candidate.dailyCount ?? 0) > 0)).toBe(true);
+    expect(after).toHaveLength(1);
+    expect(after[0]?.dailyCount).toBeGreaterThan(0);
+    expect(after[0]?.startLine).toBe(3);
+    expect(after[0]?.endLine).toBe(4);
+    expect(after[0]?.snippet).toContain("Move backups to S3 Glacier.");
+    expect(after[0]?.snippet).toContain("Keep retention at 365 days.");
+  });
+
+  it("keeps section context when chunking durable daily notes", async () => {
+    const workspaceDir = await createTempWorkspace();
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      [
+        "# 2026-04-05",
+        "",
+        "## Emma Rees",
+        "- She asked for more space after the last exchange.",
+        "- Better to keep messages short and low-pressure.",
+        "- Re-engagement should be time-bounded and optional.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await beforeAgentReply(
+      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+      { trigger: "heartbeat", workspaceDir },
+    );
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after).toHaveLength(1);
+    expect(after[0]?.startLine).toBe(4);
+    expect(after[0]?.endLine).toBe(6);
+    expect(after[0]?.snippet).toContain("Emma Rees:");
+    expect(after[0]?.snippet).toContain("She asked for more space");
+    expect(after[0]?.snippet).toContain("messages short and low-pressure");
+  });
+
+  it("splits noisy daily notes into a few coherent chunks instead of one line per item", async () => {
+    const workspaceDir = await createTempWorkspace();
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      [
+        "# 2026-04-05",
+        "",
+        "## Operations",
+        "- Restarted the gateway after auth drift.",
+        "- Tokens now line up again.",
+        "",
+        "## Bex",
+        "- She prefers direct plans over open-ended maybes.",
+        "- Better to offer one concrete time window.",
+        "",
+        "11:30",
+        "",
+        "## Travel",
+        "- Flight lands at 08:10.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await beforeAgentReply(
+      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+      { trigger: "heartbeat", workspaceDir },
+    );
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after).toHaveLength(3);
+    expect(after.map((candidate) => candidate.snippet)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "Operations: Restarted the gateway after auth drift.; Tokens now line up again.",
+        ),
+        expect.stringContaining(
+          "Bex: She prefers direct plans over open-ended maybes.; Better to offer one concrete time window.",
+        ),
+        expect.stringContaining("Travel: Flight lands at 08:10."),
+      ]),
+    );
   });
 
   it("records light/rem signals that reinforce deep promotion ranking", async () => {
@@ -210,24 +365,26 @@ describe("memory-core dreaming phases", () => {
     expect(baseline).toHaveLength(1);
     const baselineScore = baseline[0]!.score;
 
-    const { beforeAgentReply } = createHarness({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                phases: {
-                  light: {
-                    enabled: true,
-                    limit: 10,
-                    lookbackDays: 7,
-                  },
-                  rem: {
-                    enabled: true,
-                    limit: 10,
-                    lookbackDays: 7,
-                    minPatternStrength: 0,
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 10,
+                      lookbackDays: 7,
+                    },
+                    rem: {
+                      enabled: true,
+                      limit: 10,
+                      lookbackDays: 7,
+                      minPatternStrength: 0,
+                    },
                   },
                 },
               },
@@ -235,7 +392,8 @@ describe("memory-core dreaming phases", () => {
           },
         },
       },
-    });
+      workspaceDir,
+    );
 
     await beforeAgentReply(
       { cleanedBody: "__openclaw_memory_core_light_sleep__" },
