@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { __testing, createExecTool } from "./bash-tools.exec.js";
+
+const { analyzeInterpreterHeuristicsFromUnquoted } = __testing;
 
 const isWin = process.platform === "win32";
 
@@ -720,6 +722,48 @@ describeNonWin("exec script preflight", () => {
       expect(text).toContain("bad.py");
       expect(text).not.toMatch(/exec preflight:/);
     });
+  });
+});
+
+describe("analyzeInterpreterHeuristicsFromUnquoted regex safety", () => {
+  it("does not catastrophically backtrack on repeated env-var assignments without a trailing interpreter keyword", () => {
+    // Regression test for #61881 — the original `.*` in the env-prefix group
+    // caused exponential backtracking when the input contained many
+    // `VAR=value` pairs followed by a non-interpreter word.
+    const parts: string[] = [];
+    for (let i = 0; i < 30; i++) {
+      parts.push(`VAR${i}=val${i}`);
+    }
+    const payload = parts.join(" ") + " endofline";
+
+    const start = Date.now();
+    const result = analyzeInterpreterHeuristicsFromUnquoted(payload);
+    const elapsed = Date.now() - start;
+
+    expect(result.hasPython).toBe(false);
+    expect(result.hasNode).toBe(false);
+    // With the fix the call completes in <5 ms; the old regex would hang for
+    // minutes.  Use a generous 2 000 ms ceiling so the test is not flaky on
+    // slow CI runners while still catching exponential blowup.
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it("still detects python after env-var prefixes", () => {
+    const result = analyzeInterpreterHeuristicsFromUnquoted("A=1 B=2 python script.py");
+    expect(result.hasPython).toBe(true);
+    expect(result.hasNode).toBe(false);
+  });
+
+  it("still detects node after env-var prefixes", () => {
+    const result = analyzeInterpreterHeuristicsFromUnquoted("NODE_ENV=production node server.js");
+    expect(result.hasPython).toBe(false);
+    expect(result.hasNode).toBe(true);
+  });
+
+  it("returns false for commands without interpreter keywords", () => {
+    const result = analyzeInterpreterHeuristicsFromUnquoted("ls -la /tmp");
+    expect(result.hasPython).toBe(false);
+    expect(result.hasNode).toBe(false);
   });
 });
 

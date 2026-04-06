@@ -418,11 +418,11 @@ function analyzeInterpreterHeuristicsFromUnquoted(raw: string): {
   hasScriptHint: boolean;
 } {
   const hasPython =
-    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*python(?:3(?:\.\d+)?)?(?=$|[\s|&;()<>\n\r`$])/i.test(
+    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*python(?:3(?:\.\d+)?)?(?=$|[\s|&;()<>\n\r`$])/i.test(
       raw,
     );
   const hasNode =
-    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=.*\s+)*node(?=$|[\s|&;()<>\n\r`$])/i.test(
+    /(?:^|\s|(?<!\\)[|&;()])(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*node(?=$|[\s|&;()<>\n\r`$])/i.test(
       raw,
     );
   const hasProcessSubstitution = /(?<!\\)<\(|(?<!\\)>\(/u.test(raw);
@@ -1656,3 +1656,7 @@ export function createExecTool(
 }
 
 export const execTool = createExecTool();
+
+export const __testing = {
+  analyzeInterpreterHeuristicsFromUnquoted,
+};
