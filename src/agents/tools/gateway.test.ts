@@ -4,30 +4,70 @@ const callGatewayMock = vi.fn();
 const configState = vi.hoisted(() => ({
   value: {} as Record<string, unknown>,
 }));
+const buildGatewayConnectionDetailsMock = vi.fn(
+  ({ config }: { config?: Record<string, unknown> } = {}) => {
+    const cfg = config ?? {};
+    const envUrl = process.env.OPENCLAW_GATEWAY_URL?.trim();
+    if (envUrl) {
+      return { url: envUrl, urlSource: "env OPENCLAW_GATEWAY_URL" };
+    }
+    const remoteUrl =
+      cfg.gateway &&
+      typeof cfg.gateway === "object" &&
+      cfg.gateway.mode === "remote" &&
+      cfg.gateway.remote &&
+      typeof cfg.gateway.remote === "object" &&
+      typeof cfg.gateway.remote.url === "string" &&
+      cfg.gateway.remote.url.trim()
+        ? cfg.gateway.remote.url.trim()
+        : undefined;
+    if (remoteUrl) {
+      return { url: remoteUrl, urlSource: "config gateway.remote.url" };
+    }
+    const fallbackLocal =
+      cfg.gateway &&
+      typeof cfg.gateway === "object" &&
+      cfg.gateway.mode === "remote" &&
+      (!cfg.gateway.remote ||
+        typeof cfg.gateway.remote !== "object" ||
+        typeof cfg.gateway.remote.url !== "string" ||
+        !cfg.gateway.remote.url.trim());
+    return {
+      url: "ws://127.0.0.1:18789",
+      urlSource: fallbackLocal ? "missing gateway.remote.url (fallback local)" : "local loopback",
+    };
+  },
+);
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => configState.value,
   resolveGatewayPort: () => 18789,
 }));
 vi.mock("../../gateway/call.js", () => ({
+  buildGatewayConnectionDetails: (...args: unknown[]) => buildGatewayConnectionDetailsMock(...args),
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
 let callGatewayTool: typeof import("./gateway.js").callGatewayTool;
+let isRemoteGatewayTargetForAgentTools: typeof import("./gateway.js").isRemoteGatewayTargetForAgentTools;
 let resolveGatewayOptions: typeof import("./gateway.js").resolveGatewayOptions;
 
 describe("gateway tool defaults", () => {
   const envSnapshot = {
     openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
+    url: process.env.OPENCLAW_GATEWAY_URL,
   };
 
   beforeAll(async () => {
-    ({ callGatewayTool, resolveGatewayOptions } = await import("./gateway.js"));
+    ({ callGatewayTool, isRemoteGatewayTargetForAgentTools, resolveGatewayOptions } =
+      await import("./gateway.js"));
   });
 
   beforeEach(() => {
+    buildGatewayConnectionDetailsMock.mockClear();
     callGatewayMock.mockClear();
     configState.value = {};
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_URL;
   });
 
   afterAll(() => {
@@ -35,6 +75,11 @@ describe("gateway tool defaults", () => {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
       process.env.OPENCLAW_GATEWAY_TOKEN = envSnapshot.openclaw;
+    }
+    if (envSnapshot.url === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_URL;
+    } else {
+      process.env.OPENCLAW_GATEWAY_URL = envSnapshot.url;
     }
   });
 
@@ -155,6 +200,36 @@ describe("gateway tool defaults", () => {
       gatewayToken: "explicit-token",
     });
     expect(opts.token).toBe("explicit-token");
+  });
+
+  it("treats config-selected remote targets as remote when no override is passed", () => {
+    configState.value = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example/ws",
+        },
+      },
+    };
+
+    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+  });
+
+  it("treats OPENCLAW_GATEWAY_URL-selected targets as remote when no override is passed", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-from-env.example/ws";
+
+    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(true);
+  });
+
+  it("keeps remote-mode fallback-local targets classified as local without an override", () => {
+    configState.value = {
+      gateway: {
+        mode: "remote",
+        remote: {},
+      },
+    };
+
+    expect(isRemoteGatewayTargetForAgentTools({ config: configState.value })).toBe(false);
   });
 
   it("uses least-privilege write scope for write methods", async () => {

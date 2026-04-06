@@ -24,6 +24,10 @@ export type GatewayCallOptions = {
 
 type GatewayOverrideTarget = "local" | "remote";
 
+function isRemoteAgentToolGatewayUrlSource(urlSource: string): boolean {
+  return urlSource === "config gateway.remote.url" || urlSource === "env OPENCLAW_GATEWAY_URL";
+}
+
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
     gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
@@ -175,7 +179,9 @@ export function isRemoteGatewayTargetForAgentTools(params: {
     const hostname = new URL(override).hostname.toLowerCase().replace(/^\[|\]$/g, "");
     return hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1";
   }
-  return buildGatewayConnectionDetails({ config: cfg }).urlSource === "config gateway.remote.url";
+  return isRemoteAgentToolGatewayUrlSource(
+    buildGatewayConnectionDetails({ config: cfg }).urlSource,
+  );
 }
 
 export async function callGatewayTool<T = Record<string, unknown>>(
