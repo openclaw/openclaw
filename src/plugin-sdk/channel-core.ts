@@ -25,11 +25,16 @@ import type { ReplyToMode } from "../config/types.base.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { OpenClawPluginApi } from "../plugins/types.js";
+import type { OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
 
 export type { ChannelConfigUiHint, ChannelPlugin };
 export type { OpenClawConfig };
 export type { PluginRuntime };
+export type { OpenClawPluginApi, PluginCommandContext };
+export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export { clearAccountEntryFields } from "../channels/plugins/config-helpers.js";
+export { parseOptionalDelimitedEntries } from "../channels/plugins/helpers.js";
+export { tryReadSecretFileSync } from "../infra/secret-file.js";
 
 export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>

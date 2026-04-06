@@ -78,6 +78,22 @@ export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildBaseAccountStatusSnapshot } from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 
+type FacadeModule = typeof import("@openclaw/zalouser/contract-api.js");
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+
+function loadFacadeModule(): FacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
+    dirName: "zalouser",
+    artifactBasename: "contract-api.js",
+  });
+}
+
+export const collectZalouserSecurityAuditFindings: FacadeModule["collectZalouserSecurityAuditFindings"] =
+  ((...args) =>
+    loadFacadeModule().collectZalouserSecurityAuditFindings(
+      ...args,
+    )) as FacadeModule["collectZalouserSecurityAuditFindings"];
+
 const zalouserSetup = createOptionalChannelSetupSurface({
   channel: "zalouser",
   label: "Zalo Personal",

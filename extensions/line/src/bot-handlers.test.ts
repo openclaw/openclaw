@@ -5,34 +5,146 @@ import type { LineAccountConfig } from "./types.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
-vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
-    "openclaw/plugin-sdk/runtime-env",
-  );
-  return {
-    ...actual,
-    danger: (text: string) => text,
-    logVerbose: () => {},
-    shouldLogVerbose: () => false,
-  };
-});
+vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+  buildMentionRegexes: () => [],
+  matchesMentionPatterns: () => false,
+  resolveMentionGatingWithBypass: ({
+    isGroup,
+    requireMention,
+    canDetectMention,
+    wasMentioned,
+    hasAnyMention,
+    allowTextCommands,
+    hasControlCommand,
+    commandAuthorized,
+  }: {
+    isGroup: boolean;
+    requireMention: boolean;
+    canDetectMention: boolean;
+    wasMentioned: boolean;
+    hasAnyMention: boolean;
+    allowTextCommands: boolean;
+    hasControlCommand: boolean;
+    commandAuthorized: boolean;
+  }) => ({
+    shouldSkip:
+      isGroup &&
+      requireMention &&
+      canDetectMention &&
+      !wasMentioned &&
+      !(allowTextCommands && hasControlCommand && commandAuthorized && !hasAnyMention),
+  }),
+}));
+vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
+  createChannelPairingChallengeIssuer:
+    ({ upsertPairingRequest }: { upsertPairingRequest: (args: unknown) => Promise<unknown> }) =>
+    async ({ senderId, onCreated }: { senderId: string; onCreated?: () => void }) => {
+      await upsertPairingRequest({ id: senderId, meta: {} });
+      onCreated?.();
+    },
+}));
+vi.mock("openclaw/plugin-sdk/command-auth", () => ({
+  hasControlCommand: (text: string) => text.trim().startsWith("!"),
+  resolveControlCommandGate: ({
+    hasControlCommand,
+    authorizers,
+  }: {
+    hasControlCommand: boolean;
+    authorizers: Array<{ configured: boolean; allowed: boolean }>;
+  }) => ({
+    commandAuthorized:
+      hasControlCommand && authorizers.some((entry) => entry.allowed || entry.configured === false),
+  }),
+}));
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+  resolveAllowlistProviderRuntimeGroupPolicy: ({
+    groupPolicy,
+    defaultGroupPolicy,
+  }: {
+    groupPolicy?: string;
+    defaultGroupPolicy: string;
+  }) => ({
+    groupPolicy: groupPolicy ?? defaultGroupPolicy,
+    providerMissingFallbackApplied: false,
+  }),
+  resolveDefaultGroupPolicy: (cfg: { channels?: { line?: { groupPolicy?: string } } }) =>
+    cfg.channels?.line?.groupPolicy ?? "open",
+  warnMissingProviderGroupPolicyFallbackOnce: () => {},
+}));
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  danger: (text: string) => text,
+  logVerbose: () => {},
+}));
+vi.mock("openclaw/plugin-sdk/group-access", () => ({
+  evaluateMatchedGroupAccessForPolicy: ({
+    groupPolicy,
+    hasMatchInput,
+    allowlistConfigured,
+    allowlistMatched,
+  }: {
+    groupPolicy: string;
+    hasMatchInput: boolean;
+    allowlistConfigured: boolean;
+    allowlistMatched: boolean;
+  }) => {
+    if (groupPolicy === "disabled") {
+      return { allowed: false, reason: "disabled" };
+    }
+    if (groupPolicy !== "allowlist") {
+      return { allowed: true, reason: null };
+    }
+    if (!hasMatchInput) {
+      return { allowed: false, reason: "missing_match_input" };
+    }
+    if (!allowlistConfigured) {
+      return { allowed: false, reason: "empty_allowlist" };
+    }
+    if (!allowlistMatched) {
+      return { allowed: false, reason: "not_allowlisted" };
+    }
+    return { allowed: true, reason: null };
+  },
+}));
+vi.mock("openclaw/plugin-sdk/reply-history", () => ({
+  DEFAULT_GROUP_HISTORY_LIMIT: 20,
+  clearHistoryEntriesIfEnabled: ({
+    historyMap,
+    historyKey,
+  }: {
+    historyMap: Map<string, HistoryEntry[]>;
+    historyKey: string;
+  }) => {
+    historyMap.delete(historyKey);
+  },
+  recordPendingHistoryEntryIfEnabled: ({
+    historyMap,
+    historyKey,
+    limit,
+    entry,
+  }: {
+    historyMap: Map<string, HistoryEntry[]>;
+    historyKey: string;
+    limit: number;
+    entry: HistoryEntry;
+  }) => {
+    const existing = historyMap.get(historyKey) ?? [];
+    historyMap.set(historyKey, [...existing, entry].slice(-limit));
+  },
+}));
+vi.mock("openclaw/plugin-sdk/routing", () => ({
+  resolveAgentRoute: () => ({ agentId: "default" }),
+}));
 
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
   upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-    "openclaw/plugin-sdk/conversation-runtime",
-  );
-  return {
-    ...actual,
-    resolvePairingIdLabel: () => "lineUserId",
-    readChannelAllowFromStore: readAllowFromStoreMock,
-    upsertChannelPairingRequest: upsertPairingRequestMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
+  resolvePairingIdLabel: () => "lineUserId",
+  readChannelAllowFromStore: readAllowFromStoreMock,
+  upsertChannelPairingRequest: upsertPairingRequestMock,
+}));
 
 vi.mock("./download.js", () => ({
   downloadLineMedia: async () => {

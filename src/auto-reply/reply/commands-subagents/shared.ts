@@ -1,34 +1,31 @@
 import { resolveModelDisplayName } from "../../../agents/model-selection-display.js";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
 import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
-import {
-  countPendingDescendantRuns,
-  type SubagentRunRecord,
-} from "../../../agents/subagent-registry.js";
+import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
+import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.js";
 import {
   extractAssistantText,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
-  sanitizeTextContent,
   stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
-import type {
-  SessionEntry,
-  loadSessionStore as loadSessionStoreFn,
-  resolveStorePath as resolveStorePathFn,
-} from "../../../config/sessions.js";
+import type { resolveStorePath as resolveStorePathFn } from "../../../config/sessions/paths.js";
+import type { loadSessionStore as loadSessionStoreFn } from "../../../config/sessions/store-load.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
-import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import {
   formatDurationCompact,
   formatTokenUsageDisplay,
   truncateLine,
 } from "../../../shared/subagents-format.js";
 import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
+import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
 import {
   formatRunLabel,
@@ -39,6 +36,7 @@ import {
 
 export { extractAssistantText, stripToolMessages };
 export { resolveCommandSurfaceChannel, resolveChannelAccountId };
+export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const COMMAND = "/subagents";
 export const COMMAND_KILL = "/kill";
@@ -173,7 +171,14 @@ export function resolveSubagentTarget(
     recentWindowMinutes: RECENT_WINDOW_MINUTES,
     label: (entry) => formatRunLabel(entry),
     isActive: (entry) =>
-      !entry.endedAt || Math.max(0, countPendingDescendantRuns(entry.childSessionKey)) > 0,
+      !entry.endedAt ||
+      Math.max(
+        0,
+        countPendingDescendantRunsFromRuns(
+          getSubagentRunsSnapshotForRead(subagentRuns),
+          entry.childSessionKey,
+        ),
+      ) > 0,
     errors: {
       missingTarget: "Missing subagent id.",
       invalidIndex: (value) => `Invalid subagent index: ${value}`,
@@ -365,20 +370,6 @@ export function buildSubagentsHelp() {
     "",
     "Ids: use the list index (#), runId/session prefix, label, or full session key.",
   ].join("\n");
-}
-
-export type ChatMessage = {
-  role?: unknown;
-  content?: unknown;
-};
-
-export function extractMessageText(message: ChatMessage): { role: string; text: string } | null {
-  const role = typeof message.role === "string" ? message.role : "";
-  const shouldSanitize = role === "assistant";
-  const text = extractTextFromChatContent(message.content, {
-    sanitizeText: shouldSanitize ? sanitizeTextContent : undefined,
-  });
-  return text ? { role, text } : null;
 }
 
 export function formatLogLines(messages: ChatMessage[]) {

@@ -5,6 +5,8 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createPairingPrefixStripper,
   createTextPairingAdapter,
@@ -15,11 +17,6 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
-import {
-  buildChannelConfigSchema,
-  createChatChannelPlugin,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createResolvedDirectoryEntriesLister,
@@ -62,7 +59,13 @@ import {
   setMatrixThreadBindingMaxAgeBySessionKey,
 } from "./matrix/thread-bindings-shared.js";
 import { getMatrixRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
+import {
+  namedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget,
+  singleAccountKeysToMove,
+} from "./setup-contract.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import { matrixSetupWizard } from "./setup-surface.js";
 import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
@@ -157,7 +160,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
   clearBaseFields: [
     "name",
     "homeserver",
-    "allowPrivateNetwork",
+    "network",
     "proxy",
     "userId",
     "accessToken",
@@ -452,7 +455,16 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           }),
       },
       actions: matrixMessageActions,
-      setup: matrixSetupAdapter,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
+      setup: {
+        ...matrixSetupAdapter,
+        singleAccountKeysToMove,
+        namedAccountPromotionKeys,
+        resolveSingleAccountPromotionTarget,
+      },
       bindings: {
         compileConfiguredBinding: ({ conversationId }) =>
           normalizeMatrixAcpConversationId(conversationId),
@@ -486,6 +498,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
               homeserver: auth.homeserver,
               accessToken: auth.accessToken,
               userId: auth.userId,
+              deviceId: auth.deviceId,
               timeoutMs,
               accountId: account.accountId,
               allowPrivateNetwork: auth.allowPrivateNetwork,

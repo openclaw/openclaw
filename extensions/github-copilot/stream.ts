@@ -1,11 +1,12 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicEphemeralCacheControlMarkers,
   buildCopilotDynamicHeaders,
   hasCopilotVisionInput,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 
 type StreamContext = Parameters<StreamFn>[1];
 
@@ -33,4 +34,8 @@ export function wrapCopilotAnthropicStream(baseStreamFn: StreamFn | undefined): 
       applyAnthropicEphemeralCacheControlMarkers,
     );
   };
+}
+
+export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
+  return wrapCopilotAnthropicStream(ctx.streamFn);
 }

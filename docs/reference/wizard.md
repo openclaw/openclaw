@@ -31,8 +31,8 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
   </Step>
   <Step title="Model/Auth">
     - **Anthropic API key**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
-    - **Anthropic Claude CLI**: preferred Anthropic assistant choice in onboarding/configure. On macOS onboarding checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present and switches model selection to `claude-cli/...`.
-    - **Anthropic legacy token profiles**: still honored at runtime if already configured, but onboarding/configure no longer offers Anthropic setup-token as a new setup path.
+    - **Anthropic API key**: preferred Anthropic assistant choice in onboarding/configure.
+    - **Anthropic setup-token (legacy/manual)**: available again in onboarding/configure, but Anthropic told OpenClaw users that the OpenClaw Claude-login path counts as third-party harness usage and requires **Extra Usage** on the Claude account.
     - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, onboarding can reuse it. Reused Codex CLI credentials stay managed by Codex CLI; on expiry OpenClaw re-reads that source first and, when the provider can refresh it, writes the refreshed credential back to Codex storage instead of taking ownership itself.
     - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
       - Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
@@ -48,6 +48,8 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - **Cloudflare AI Gateway**: prompts for Account ID, Gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
     - **MiniMax**: config is auto-written; hosted default is `MiniMax-M2.7`.
+      API-key setup uses `minimax/...`, and OAuth setup uses
+      `minimax-portal/...`.
     - More detail: [MiniMax](/providers/minimax)
     - **StepFun**: config is auto-written for StepFun standard or Step Plan on China or global endpoints.
     - Standard currently includes `step-3.5-flash`, and Step Plan also includes `step-3.5-flash-2603`.
@@ -121,7 +123,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
   </Step>
   <Step title="Health check">
     - Starts the Gateway (if needed) and runs `openclaw health`.
-    - Tip: `openclaw status --deep` adds gateway health probes to status output (requires a reachable gateway).
+    - Tip: `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported (requires a reachable gateway).
   </Step>
   <Step title="Skills (recommended)">
     - Reads the available skills and checks requirements.
@@ -218,6 +220,8 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack/Discord/Matrix/Microsoft Teams) when you opt in during the prompts (names resolve to IDs when possible).
 - `skills.install.nodeManager`
+  - `setup --node-manager` accepts `npm`, `pnpm`, or `bun`.
+  - Manual config can still use `yarn` by setting `skills.install.nodeManager` directly.
 - `wizard.lastRunAt`
 - `wizard.lastRunVersion`
 - `wizard.lastRunCommit`

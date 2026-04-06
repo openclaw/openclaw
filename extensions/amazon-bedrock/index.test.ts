@@ -152,11 +152,34 @@ describe("amazon-bedrock provider plugin", () => {
   });
 
   describe("guardrail config schema", () => {
-    it("defines guardrail object with correct property types, required fields, and enums", () => {
+    it("defines discovery and guardrail objects with the expected shape", () => {
       const pluginJson = JSON.parse(
         readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"),
       );
+      const discovery = pluginJson.configSchema?.properties?.discovery;
       const guardrail = pluginJson.configSchema?.properties?.guardrail;
+
+      expect(discovery).toBeDefined();
+      expect(discovery.type).toBe("object");
+      expect(discovery.additionalProperties).toBe(false);
+      expect(discovery.properties.enabled).toEqual({ type: "boolean" });
+      expect(discovery.properties.region).toEqual({ type: "string" });
+      expect(discovery.properties.providerFilter).toEqual({
+        type: "array",
+        items: { type: "string" },
+      });
+      expect(discovery.properties.refreshInterval).toEqual({
+        type: "integer",
+        minimum: 0,
+      });
+      expect(discovery.properties.defaultContextWindow).toEqual({
+        type: "integer",
+        minimum: 1,
+      });
+      expect(discovery.properties.defaultMaxTokens).toEqual({
+        type: "integer",
+        minimum: 1,
+      });
 
       expect(guardrail).toBeDefined();
       expect(guardrail.type).toBe("object");

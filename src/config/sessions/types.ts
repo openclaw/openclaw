@@ -18,6 +18,8 @@ export type SessionOrigin = {
   chatType?: SessionChatType;
   from?: string;
   to?: string;
+  nativeChannelId?: string;
+  nativeDirectUserId?: string;
   accountId?: string;
   threadId?: string | number;
 };
@@ -65,13 +67,6 @@ export type AcpSessionRuntimeOptions = {
   backendExtras?: Record<string, string>;
 };
 
-export type CliSessionBinding = {
-  sessionId: string;
-  authProfileId?: string;
-  extraSystemPromptHash?: string;
-  mcpConfigHash?: string;
-};
-
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -80,6 +75,8 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Heartbeat task state (task name -> last run timestamp ms). */
+  heartbeatTaskState?: Record<string, number>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -180,9 +177,6 @@ export type SessionEntry = {
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
-  cliSessionIds?: Record<string, string>;
-  cliSessionBindings?: Record<string, CliSessionBinding>;
-  claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
   channel?: string;

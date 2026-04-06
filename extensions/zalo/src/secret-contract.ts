@@ -64,9 +64,6 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: zalo, surface } = resolved;
-  const baseTokenFile = typeof zalo.tokenFile === "string" ? zalo.tokenFile.trim() : "";
-  const accountTokenFile = (account: Record<string, unknown>) =>
-    typeof account.tokenFile === "string" ? account.tokenFile.trim() : "";
   collectConditionalChannelFieldAssignments({
     channelKey: "zalo",
     field: "botToken",
@@ -74,13 +71,12 @@ export function collectRuntimeConfigAssignments(params: {
     surface,
     defaults: params.defaults,
     context: params.context,
-    topLevelActiveWithoutAccounts: baseTokenFile.length === 0,
+    topLevelActiveWithoutAccounts: true,
     topLevelInheritedAccountActive: ({ account, enabled }) =>
-      enabled && !hasOwnProperty(account, "botToken") && accountTokenFile(account).length === 0,
-    accountActive: ({ account, enabled }) => enabled && accountTokenFile(account).length === 0,
-    topInactiveReason:
-      "no enabled Zalo surface inherits this top-level botToken (tokenFile is configured).",
-    accountInactiveReason: "Zalo account is disabled or tokenFile is configured.",
+      enabled && !hasOwnProperty(account, "botToken"),
+    accountActive: ({ enabled }) => enabled,
+    topInactiveReason: "no enabled Zalo surface inherits this top-level botToken.",
+    accountInactiveReason: "Zalo account is disabled.",
   });
   const baseWebhookUrl = typeof zalo.webhookUrl === "string" ? zalo.webhookUrl.trim() : "";
   const accountWebhookUrl = (account: Record<string, unknown>) =>

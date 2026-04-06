@@ -27,6 +27,8 @@ import {
 } from "./command-ui.js";
 import { TelegramChannelConfigSchema } from "./config-schema.js";
 import { telegramDoctor } from "./doctor.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { singleAccountKeysToMove } from "./setup-contract.js";
 
 export const TELEGRAM_CHANNEL = "telegram" as const;
 
@@ -125,8 +127,9 @@ export function createTelegramPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "secrets"
 > {
-  return createChannelPluginBase({
+  const base = createChannelPluginBase({
     id: TELEGRAM_CHANNEL,
     meta: {
       ...getChatChannelMeta(TELEGRAM_CHANNEL),
@@ -155,6 +158,8 @@ export function createTelegramPluginBase(params: {
     configSchema: TelegramChannelConfigSchema,
     config: {
       ...telegramConfigAdapter,
+      hasConfiguredState: ({ env }) =>
+        typeof env?.TELEGRAM_BOT_TOKEN === "string" && env.TELEGRAM_BOT_TOKEN.trim().length > 0,
       isConfigured: (account, cfg) => {
         // Use inspectTelegramAccount for a complete token resolution that includes
         // channel-level fallback paths not available in resolveTelegramAccount.
@@ -218,8 +223,18 @@ export function createTelegramPluginBase(params: {
         };
       },
     },
-    setup: params.setup,
-  }) as Pick<
+    setup: {
+      ...params.setup,
+      singleAccountKeysToMove,
+    },
+  });
+  return {
+    ...base,
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
+    },
+  } as Pick<
     ChannelPlugin<ResolvedTelegramAccount>,
     | "id"
     | "meta"
@@ -231,5 +246,6 @@ export function createTelegramPluginBase(params: {
     | "configSchema"
     | "config"
     | "setup"
+    | "secrets"
   >;
 }

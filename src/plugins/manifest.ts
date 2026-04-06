@@ -32,6 +32,43 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
+export type PluginManifestConfigLiteral = string | number | boolean | null;
+
+export type PluginManifestDangerousConfigFlag = {
+  /**
+   * Dot-separated config path relative to `plugins.entries.<id>.config`.
+   * Supports `*` wildcards for map/array segments.
+   */
+  path: string;
+  /** Exact literal that marks this config value as dangerous. */
+  equals: PluginManifestConfigLiteral;
+};
+
+export type PluginManifestSecretInputPath = {
+  /**
+   * Dot-separated config path relative to `plugins.entries.<id>.config`.
+   * Supports `*` wildcards for map/array segments.
+   */
+  path: string;
+  /** Expected resolved type for SecretRef materialization. */
+  expected?: "string";
+};
+
+export type PluginManifestSecretInputContracts = {
+  /**
+   * Override bundled-plugin default enablement when deciding whether this
+   * SecretRef surface is active. Use this when the plugin is bundled but the
+   * surface should stay inactive until explicitly enabled in config.
+   */
+  bundledDefaultEnabled?: boolean;
+  paths: PluginManifestSecretInputPath[];
+};
+
+export type PluginManifestConfigContracts = {
+  dangerousFlags?: PluginManifestDangerousConfigFlag[];
+  secretInputs?: PluginManifestSecretInputContracts;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: Record<string, unknown>;
@@ -48,8 +85,6 @@ export type PluginManifest = {
    * Use this for shorthand model refs that omit an explicit provider prefix.
    */
   modelSupport?: PluginManifestModelSupport;
-  /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
-  cliBackends?: string[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
   providerAuthEnvVars?: Record<string, string[]>;
   /**
@@ -67,15 +102,20 @@ export type PluginManifest = {
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  /** Manifest-owned config behavior consumed by generic core helpers. */
+  configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
 export type PluginManifestContracts = {
+  memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
   imageGenerationProviders?: string[];
+  videoGenerationProviders?: string[];
+  musicGenerationProviders?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   tools?: string[];
@@ -150,26 +190,114 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     return undefined;
   }
 
+  const memoryEmbeddingProviders = normalizeStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeStringList(value.realtimeTranscriptionProviders);
   const realtimeVoiceProviders = normalizeStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
   const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
+  const videoGenerationProviders = normalizeStringList(value.videoGenerationProviders);
+  const musicGenerationProviders = normalizeStringList(value.musicGenerationProviders);
   const webFetchProviders = normalizeStringList(value.webFetchProviders);
   const webSearchProviders = normalizeStringList(value.webSearchProviders);
   const tools = normalizeStringList(value.tools);
   const contracts = {
+    ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
+    ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
+    ...(musicGenerationProviders.length > 0 ? { musicGenerationProviders } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(tools.length > 0 ? { tools } : {}),
   } satisfies PluginManifestContracts;
 
   return Object.keys(contracts).length > 0 ? contracts : undefined;
+}
+
+function isManifestConfigLiteral(value: unknown): value is PluginManifestConfigLiteral {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+function normalizeManifestDangerousConfigFlags(
+  value: unknown,
+): PluginManifestDangerousConfigFlag[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestDangerousConfigFlag[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const path = typeof entry.path === "string" ? entry.path.trim() : "";
+    if (!path || !isManifestConfigLiteral(entry.equals)) {
+      continue;
+    }
+    normalized.push({ path, equals: entry.equals });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestSecretInputPaths(
+  value: unknown,
+): PluginManifestSecretInputPath[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestSecretInputPath[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const path = typeof entry.path === "string" ? entry.path.trim() : "";
+    if (!path) {
+      continue;
+    }
+    const expected = entry.expected === "string" ? entry.expected : undefined;
+    normalized.push({
+      path,
+      ...(expected ? { expected } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestConfigContracts(
+  value: unknown,
+): PluginManifestConfigContracts | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const rawSecretInputs = isRecord(value.secretInputs) ? value.secretInputs : undefined;
+  const dangerousFlags = normalizeManifestDangerousConfigFlags(value.dangerousFlags);
+  const secretInputPaths = rawSecretInputs
+    ? normalizeManifestSecretInputPaths(rawSecretInputs.paths)
+    : undefined;
+  const secretInputs =
+    secretInputPaths && secretInputPaths.length > 0
+      ? ({
+          ...(rawSecretInputs?.bundledDefaultEnabled === true
+            ? { bundledDefaultEnabled: true }
+            : rawSecretInputs?.bundledDefaultEnabled === false
+              ? { bundledDefaultEnabled: false }
+              : {}),
+          paths: secretInputPaths,
+        } satisfies PluginManifestSecretInputContracts)
+      : undefined;
+  const configContracts = {
+    ...(dangerousFlags ? { dangerousFlags } : {}),
+    ...(secretInputs ? { secretInputs } : {}),
+  } satisfies PluginManifestConfigContracts;
+  return Object.keys(configContracts).length > 0 ? configContracts : undefined;
 }
 
 function normalizeManifestModelSupport(value: unknown): PluginManifestModelSupport | undefined {
@@ -368,11 +496,11 @@ export function loadPluginManifest(
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
-  const cliBackends = normalizeStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const skills = normalizeStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
+  const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
@@ -394,7 +522,6 @@ export function loadPluginManifest(
       channels,
       providers,
       modelSupport,
-      cliBackends,
       providerAuthEnvVars,
       providerAuthChoices,
       skills,
@@ -403,6 +530,7 @@ export function loadPluginManifest(
       version,
       uiHints,
       contracts,
+      configContracts,
       channelConfigs,
     },
     manifestPath,
@@ -426,10 +554,24 @@ export type PluginPackageChannel = {
   selectionDocsOmitLabel?: boolean;
   selectionExtras?: readonly string[];
   markdownCapable?: boolean;
+  exposure?: {
+    configured?: boolean;
+    setup?: boolean;
+    docs?: boolean;
+  };
   showConfigured?: boolean;
+  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
+  configuredState?: {
+    specifier?: string;
+    exportName?: string;
+  };
+  persistedAuthState?: {
+    specifier?: string;
+    exportName?: string;
+  };
 };
 
 export type PluginPackageInstall = {

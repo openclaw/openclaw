@@ -1,6 +1,4 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
@@ -10,12 +8,6 @@ import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
 } from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
-import {
-  createKilocodeWrapper,
-  createOpenRouterSystemCacheWrapper,
-  createOpenRouterWrapper,
-  isProxyReasoningUnsupported,
-} from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
@@ -28,7 +20,18 @@ import {
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
 } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
-import { createToolStreamWrapper, createZaiToolStreamWrapper } from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
+import {
+  createKilocodeWrapper,
+  createOpenRouterSystemCacheWrapper,
+  createOpenRouterWrapper,
+  isProxyReasoningUnsupported,
+} from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
+import {
+  createToolStreamWrapper,
+  createZaiToolStreamWrapper,
+} from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
 export type ProviderStreamWrapperFactory =
   | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
@@ -40,7 +43,7 @@ export function composeProviderStreamWrappers(
   baseStreamFn: StreamFn | undefined,
   ...wrappers: ProviderStreamWrapperFactory[]
 ): StreamFn | undefined {
-  return wrappers.reduce<StreamFn | undefined>(
+  return wrappers.reduce(
     (streamFn, wrapper) => (wrapper ? wrapper(streamFn) : streamFn),
     baseStreamFn,
   );
@@ -48,6 +51,7 @@ export function composeProviderStreamWrappers(
 
 export type ProviderStreamFamily =
   | "google-thinking"
+  | "kilocode-thinking"
   | "moonshot-thinking"
   | "minimax-fast-mode"
   | "openai-responses-defaults"
@@ -73,6 +77,16 @@ export function buildProviderStreamFamilyHooks(
             thinkingLevel: ctx.thinkingLevel,
           });
           return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
+        },
+      };
+    case "kilocode-thinking":
+      return {
+        wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
+          const thinkingLevel =
+            ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)
+              ? undefined
+              : ctx.thinkingLevel;
+          return createKilocodeWrapper(ctx.streamFn, thinkingLevel);
         },
       };
     case "minimax-fast-mode":
@@ -149,14 +163,18 @@ export {
 export {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
-  createMinimaxFastModeWrapper,
+} from "../agents/pi-embedded-runner/google-stream-wrappers.js";
+export {
   createKilocodeWrapper,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
+} from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
+export { createMinimaxFastModeWrapper } from "../agents/pi-embedded-runner/minimax-stream-wrappers.js";
+export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-};
+} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
 export {
   createOpenAIAttributionHeadersWrapper,
   createCodexNativeWebSearchWrapper,

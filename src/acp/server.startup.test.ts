@@ -10,16 +10,24 @@ type GatewayClientAuth = {
   token?: string;
   password?: string;
 };
-type ResolveGatewayConnectionAuth = (params: unknown) => Promise<GatewayClientAuth>;
+type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
+  url: string;
+  urlSource: string;
+  auth: GatewayClientAuth;
+}>;
 
 const mockState = vi.hoisted(() => ({
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
-  resolveGatewayConnectionAuth: vi.fn<ResolveGatewayConnectionAuth>(async (_params) => ({
-    token: undefined,
-    password: undefined,
+  resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
+    url: "ws://127.0.0.1:18789",
+    urlSource: "local loopback",
+    auth: {
+      token: undefined,
+      password: undefined,
+    },
   })),
 }));
 
@@ -82,8 +90,9 @@ vi.mock("../gateway/call.js", () => ({
   },
 }));
 
-vi.mock("../gateway/connection-auth.js", () => ({
-  resolveGatewayConnectionAuth: (params: unknown) => mockState.resolveGatewayConnectionAuth(params),
+vi.mock("../gateway/client-bootstrap.js", () => ({
+  resolveGatewayClientBootstrap: (params: unknown) =>
+    mockState.resolveGatewayClientBootstrap(params),
 }));
 
 vi.mock("../gateway/client.js", () => ({
@@ -156,10 +165,14 @@ describe("serveAcpGateway startup", () => {
     mockState.gatewayAuth.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentStart.mockReset();
-    mockState.resolveGatewayConnectionAuth.mockReset();
-    mockState.resolveGatewayConnectionAuth.mockResolvedValue({
-      token: undefined,
-      password: undefined,
+    mockState.resolveGatewayClientBootstrap.mockReset();
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
     });
   });
 
@@ -199,9 +212,13 @@ describe("serveAcpGateway startup", () => {
   });
 
   it("passes resolved SecretInput gateway credentials to the ACP gateway client", async () => {
-    mockState.resolveGatewayConnectionAuth.mockResolvedValue({
-      token: undefined,
-      password: "resolved-secret-password", // pragma: allowlist secret
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      auth: {
+        token: undefined,
+        password: "resolved-secret-password", // pragma: allowlist secret
+      },
     });
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
@@ -209,7 +226,7 @@ describe("serveAcpGateway startup", () => {
       const servePromise = serveAcpGateway({});
       await Promise.resolve();
 
-      expect(mockState.resolveGatewayConnectionAuth).toHaveBeenCalledWith(
+      expect(mockState.resolveGatewayClientBootstrap).toHaveBeenCalledWith(
         expect.objectContaining({
           env: process.env,
         }),
@@ -235,11 +252,10 @@ describe("serveAcpGateway startup", () => {
       });
       await Promise.resolve();
 
-      expect(mockState.resolveGatewayConnectionAuth).toHaveBeenCalledWith(
+      expect(mockState.resolveGatewayClientBootstrap).toHaveBeenCalledWith(
         expect.objectContaining({
           env: process.env,
-          urlOverride: "wss://override.example/ws",
-          urlOverrideSource: "cli",
+          gatewayUrl: "wss://override.example/ws",
         }),
       );
 

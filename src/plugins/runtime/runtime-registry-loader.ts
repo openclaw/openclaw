@@ -33,9 +33,16 @@ function activeRegistrySatisfiesScope(
   scope: PluginRegistryScope,
   active: ReturnType<typeof getActivePluginRegistry>,
   expectedChannelPluginIds: readonly string[],
+  requestedPluginIds: readonly string[],
 ): boolean {
   if (!active) {
     return false;
+  }
+  if (requestedPluginIds.length > 0) {
+    const activePluginIds = new Set(
+      active.plugins.filter((plugin) => plugin.status === "loaded").map((plugin) => plugin.id),
+    );
+    return requestedPluginIds.every((pluginId) => activePluginIds.has(pluginId));
   }
   const activeChannelPluginIds = new Set(active.channels.map((entry) => entry.plugin.id));
   switch (scope) {
@@ -55,9 +62,13 @@ export function ensurePluginRegistryLoaded(options?: {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
 }): void {
   const scope = options?.scope ?? "all";
-  if (scopeRank(pluginRegistryLoaded) >= scopeRank(scope)) {
+  const requestedPluginIds =
+    options?.onlyPluginIds?.map((pluginId) => pluginId.trim()).filter(Boolean) ?? [];
+  const scopedLoad = requestedPluginIds.length > 0;
+  if (!scopedLoad && scopeRank(pluginRegistryLoaded) >= scopeRank(scope)) {
     return;
   }
   const env = options?.env ?? process.env;
@@ -68,8 +79,9 @@ export function ensurePluginRegistryLoaded(options?: {
     resolvedConfig,
     resolveDefaultAgentId(resolvedConfig),
   );
-  const expectedChannelPluginIds =
-    scope === "configured-channels"
+  const expectedChannelPluginIds = scopedLoad
+    ? requestedPluginIds
+    : scope === "configured-channels"
       ? resolveConfiguredChannelPluginIds({
           config: resolvedConfig,
           workspaceDir,
@@ -84,10 +96,12 @@ export function ensurePluginRegistryLoaded(options?: {
         : [];
   const active = getActivePluginRegistry();
   if (
-    pluginRegistryLoaded === "none" &&
-    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds)
+    (pluginRegistryLoaded === "none" || scopedLoad) &&
+    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds, expectedChannelPluginIds)
   ) {
-    pluginRegistryLoaded = scope;
+    if (!scopedLoad) {
+      pluginRegistryLoaded = scope;
+    }
     return;
   }
   const logger: PluginLogger = {
@@ -103,11 +117,11 @@ export function ensurePluginRegistryLoaded(options?: {
     workspaceDir,
     logger,
     throwOnLoadError: true,
-    ...(scope === "configured-channels" || scope === "channels"
-      ? { onlyPluginIds: expectedChannelPluginIds }
-      : {}),
+    ...(expectedChannelPluginIds.length > 0 ? { onlyPluginIds: expectedChannelPluginIds } : {}),
   });
-  pluginRegistryLoaded = scope;
+  if (!scopedLoad) {
+    pluginRegistryLoaded = scope;
+  }
 }
 
 export const __testing = {

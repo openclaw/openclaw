@@ -14,6 +14,7 @@ MiniMax also provides:
 
 - bundled speech synthesis via T2A v2
 - bundled image understanding via `MiniMax-VL-01`
+- bundled music generation via `music-2.5+`
 - bundled `web_search` through the MiniMax Coding Plan search API
 
 Provider split:
@@ -62,6 +63,63 @@ entries, OpenClaw materializes `MiniMax-M2.7` and
 The built-in bundled MiniMax text catalog itself stays text-only metadata until
 that explicit provider config exists. Image understanding is exposed separately
 through the plugin-owned `MiniMax-VL-01` media provider.
+
+See [Image Generation](/tools/image-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Music generation
+
+The bundled `minimax` plugin also registers music generation through the shared
+`music_generate` tool.
+
+- Default music model: `minimax/music-2.5+`
+- Also supports `minimax/music-2.5` and `minimax/music-2.0`
+- Prompt controls: `lyrics`, `instrumental`, `durationSeconds`
+- Output format: `mp3`
+- Session-backed runs detach through the shared task/status flow, including `action: "status"`
+
+To use MiniMax as the default music provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "minimax/music-2.5+",
+      },
+    },
+  },
+}
+```
+
+See [Music Generation](/tools/music-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Video generation
+
+The bundled `minimax` plugin also registers video generation through the shared
+`video_generate` tool.
+
+- Default video model: `minimax/MiniMax-Hailuo-2.3`
+- Modes: text-to-video and single-image reference flows
+- Supports `aspectRatio` and `resolution`
+
+To use MiniMax as the default video provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "minimax/MiniMax-Hailuo-2.3",
+      },
+    },
+  },
+}
+```
+
+See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
 
 ## Image understanding
 
@@ -221,7 +279,9 @@ Current MiniMax auth choices in the wizard/CLI:
 
 ## Notes
 
-- Model refs are `minimax/<model>`.
+- Model refs follow the auth path:
+  - API-key setup: `minimax/<model>`
+  - OAuth setup: `minimax-portal/<model>`
 - Default chat model: `MiniMax-M2.7`
 - Alternate chat model: `MiniMax-M2.7-highspeed`
 - On `api: "anthropic-messages"`, OpenClaw injects
@@ -241,28 +301,36 @@ Current MiniMax auth choices in the wizard/CLI:
   OpenClaw prefers the chat-model entry, derives the window label from
   `start_time` / `end_time` when needed, and includes the selected model name
   in the plan label so coding-plan windows are easier to distinguish.
+- Usage snapshots treat `minimax`, `minimax-cn`, and `minimax-portal` as the
+  same MiniMax quota surface, and prefer stored MiniMax OAuth before falling
+  back to Coding Plan key env vars.
 - Update pricing values in `models.json` if you need exact cost tracking.
 - Referral link for MiniMax Coding Plan (10% off): [https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link](https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link)
 - See [/concepts/model-providers](/concepts/model-providers) for provider rules.
-- Use `openclaw models list` and `openclaw models set minimax/MiniMax-M2.7` to switch.
+- Use `openclaw models list` to confirm the current provider id, then switch with
+  `openclaw models set minimax/MiniMax-M2.7` or
+  `openclaw models set minimax-portal/MiniMax-M2.7`.
 
 ## Troubleshooting
 
 ### "Unknown model: minimax/MiniMax-M2.7"
 
-This usually means the **MiniMax provider isn’t configured** (no provider entry
-and no MiniMax auth profile/env key found). A fix for this detection is in
-**2026.1.12**. Fix by:
+This usually means the **MiniMax provider isn’t configured** (no matching
+provider entry and no MiniMax auth profile/env key found). A fix for this
+detection is in **2026.1.12**. Fix by:
 
 - Upgrading to **2026.1.12** (or run from source `main`), then restarting the gateway.
 - Running `openclaw configure` and selecting a **MiniMax** auth option, or
-- Adding the `models.providers.minimax` block manually, or
-- Setting `MINIMAX_API_KEY` (or a MiniMax auth profile) so the provider can be injected.
+- Adding the matching `models.providers.minimax` or
+  `models.providers.minimax-portal` block manually, or
+- Setting `MINIMAX_API_KEY`, `MINIMAX_OAUTH_TOKEN`, or a MiniMax auth profile
+  so the matching provider can be injected.
 
 Make sure the model id is **case‑sensitive**:
 
-- `minimax/MiniMax-M2.7`
-- `minimax/MiniMax-M2.7-highspeed`
+- API-key path: `minimax/MiniMax-M2.7` or `minimax/MiniMax-M2.7-highspeed`
+- OAuth path: `minimax-portal/MiniMax-M2.7` or
+  `minimax-portal/MiniMax-M2.7-highspeed`
 
 Then recheck with:
 

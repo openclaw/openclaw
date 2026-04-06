@@ -12,6 +12,7 @@ import {
   normalizeSeed,
   requireInRange,
 } from "openclaw/plugin-sdk/speech";
+import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { elevenLabsTTS } from "./tts.js";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
@@ -350,16 +351,16 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
       const base = normalizeElevenLabsProviderConfig(baseTtsConfig);
       const talkVoiceSettings = asObject(talkProviderConfig.voiceSettings);
+      const resolvedTalkApiKey =
+        talkProviderConfig.apiKey === undefined
+          ? (resolveElevenLabsApiKeyWithProfileFallback() ?? undefined)
+          : normalizeResolvedSecretInputString({
+              value: talkProviderConfig.apiKey,
+              path: "talk.providers.elevenlabs.apiKey",
+            });
       return {
         ...base,
-        ...(talkProviderConfig.apiKey === undefined
-          ? {}
-          : {
-              apiKey: normalizeResolvedSecretInputString({
-                value: talkProviderConfig.apiKey,
-                path: "talk.providers.elevenlabs.apiKey",
-              }),
-            }),
+        ...(resolvedTalkApiKey === undefined ? {} : { apiKey: resolvedTalkApiKey }),
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
           : { baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
@@ -407,6 +408,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     resolveTalkOverrides: ({ params }) => {
       const normalize = trimToUndefined(params.normalize);
       const language = trimToUndefined(params.language)?.toLowerCase();
+      const latencyTier = asNumber(params.latencyTier);
       const voiceSettings = {
         ...(asNumber(params.speed) == null ? {} : { speed: asNumber(params.speed) }),
         ...(asNumber(params.stability) == null ? {} : { stability: asNumber(params.stability) }),
@@ -433,6 +435,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
           ? {}
           : { applyTextNormalization: normalizeApplyTextNormalization(normalize) }),
         ...(language == null ? {} : { languageCode: normalizeLanguageCode(language) }),
+        ...(latencyTier == null ? {} : { latencyTier }),
         ...(Object.keys(voiceSettings).length === 0 ? {} : { voiceSettings }),
       };
     },
@@ -441,7 +444,10 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         ? readElevenLabsProviderConfig(req.providerConfig)
         : undefined;
       const apiKey =
-        req.apiKey || config?.apiKey || process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY;
+        req.apiKey ||
+        config?.apiKey ||
+        resolveElevenLabsApiKeyWithProfileFallback() ||
+        process.env.XI_API_KEY;
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }
@@ -453,13 +459,14 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     isConfigured: ({ providerConfig }) =>
       Boolean(
         readElevenLabsProviderConfig(providerConfig).apiKey ||
-        process.env.ELEVENLABS_API_KEY ||
+        resolveElevenLabsApiKeyWithProfileFallback() ||
         process.env.XI_API_KEY,
       ),
     synthesize: async (req) => {
       const config = readElevenLabsProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
-      const apiKey = config.apiKey || process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY;
+      const apiKey =
+        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }
@@ -467,6 +474,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         trimToUndefined(overrides.outputFormat) ??
         (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
       const overrideVoiceSettings = asObject(overrides.voiceSettings);
+      const latencyTier = asNumber(overrides.latencyTier);
       const audioBuffer = await elevenLabsTTS({
         text: req.text,
         apiKey,
@@ -482,6 +490,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
             | "off"
             | undefined) ?? config.applyTextNormalization,
         languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
+        latencyTier,
         voiceSettings: {
           ...config.voiceSettings,
           ...(asNumber(overrideVoiceSettings?.stability) == null
@@ -511,7 +520,8 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const config = readElevenLabsProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY;
+      const apiKey =
+        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }

@@ -326,7 +326,12 @@ trackSessionManagerAccess(params.sessionFile);
 
 ### Compaction
 
-Auto-compaction triggers on context overflow. `compactEmbeddedPiSessionDirect()` handles manual compaction:
+Auto-compaction triggers on context overflow. Common overflow signatures
+include `request_too_large`, `context length exceeded`, `input exceeds the
+maximum number of tokens`, `input token count exceeds the maximum number of
+input tokens`, `input is too long for the model`, and `ollama error: context
+length exceeded`. `compactEmbeddedPiSessionDirect()` handles manual
+compaction:
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
@@ -498,7 +503,7 @@ if (sandboxRoot) {
 
 - Refusal magic string scrubbing
 - Turn validation for consecutive roles
-- Claude Code parameter compatibility
+- Strict upstream Pi tool parameter validation
 
 ### Google/Gemini
 

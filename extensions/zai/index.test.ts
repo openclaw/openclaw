@@ -1,3 +1,5 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
@@ -161,5 +163,56 @@ describe("zai provider plugin", () => {
       reasoning: true,
       input: ["text"],
     });
+  });
+
+  it("wires tool-stream defaults through the shared stream family hook", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const defaultWrapped = provider.wrapStreamFn?.({
+      provider: "zai",
+      modelId: "glm-5.1",
+      extraParams: {},
+      streamFn: baseStreamFn,
+    } as never);
+
+    void defaultWrapped?.(
+      {
+        api: "openai-completions",
+        provider: "zai",
+        id: "glm-5.1",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedPayload).toMatchObject({
+      tool_stream: true,
+    });
+
+    const disabledWrapped = provider.wrapStreamFn?.({
+      provider: "zai",
+      modelId: "glm-5.1",
+      extraParams: { tool_stream: false },
+      streamFn: baseStreamFn,
+    } as never);
+
+    void disabledWrapped?.(
+      {
+        api: "openai-completions",
+        provider: "zai",
+        id: "glm-5.1",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedPayload).not.toHaveProperty("tool_stream");
   });
 });

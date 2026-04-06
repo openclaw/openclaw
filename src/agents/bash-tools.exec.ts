@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
   type ExecHost,
@@ -52,7 +52,8 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
-import { failedTextResult, textResult } from "./tools/common.js";
+import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type {
@@ -1115,9 +1116,18 @@ function deriveExecShortName(fullPath: string): string {
   return base.replace(/\.exe$/i, "") || base;
 }
 
-function buildExecToolDescription(agentId?: string): string {
-  const base =
-    "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents).";
+export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
+  const base = [
+    "Execute shell commands with background continuation for work that starts now.",
+    "Use yieldMs/background to continue later via process tool.",
+    "For long-running work started now, rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion. Use process whenever you need logs, status, input, or intervention.",
+    params?.hasCronTool
+      ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
+      : undefined,
+    "Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+  ]
+    .filter(Boolean)
+    .join(" ");
   if (process.platform !== "win32") {
     return base;
   }
@@ -1127,7 +1137,10 @@ function buildExecToolDescription(agentId?: string): string {
   );
   try {
     const approvalsFile = loadExecApprovals();
-    const approvals = resolveExecApprovalsFromFile({ file: approvalsFile, agentId });
+    const approvals = resolveExecApprovalsFromFile({
+      file: approvalsFile,
+      agentId: params?.agentId,
+    });
     const allowlist = approvals.allowlist.filter((entry) => {
       const pattern = entry.pattern?.trim() ?? "";
       return (
@@ -1155,7 +1168,7 @@ function buildExecToolDescription(agentId?: string): string {
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any, ExecToolDetails> {
+): AgentToolWithMeta<any, ExecToolDetails> {
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
@@ -1207,8 +1220,9 @@ export function createExecTool(
   return {
     name: "exec",
     label: "exec",
+    displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
     get description() {
-      return buildExecToolDescription(agentId);
+      return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
     },
     parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {

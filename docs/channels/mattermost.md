@@ -6,15 +6,19 @@ read_when:
 title: "Mattermost"
 ---
 
-# Mattermost (plugin)
+# Mattermost
 
-Status: supported via plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
+Status: bundled plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
 Mattermost is a self-hostable team messaging platform; see the official site at
 [mattermost.com](https://mattermost.com) for product details and downloads.
 
-## Plugin required
+## Bundled plugin
 
-Mattermost ships as a plugin and is not bundled with the core install.
+Mattermost ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Mattermost,
+install it manually:
 
 Install via CLI (npm registry):
 
@@ -28,14 +32,13 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./path/to/local/mattermost-plugin
 ```
 
-If you choose Mattermost during setup and a git checkout is detected,
-OpenClaw will offer the local install path automatically.
-
 Details: [Plugins](/tools/plugin)
 
 ## Quick setup
 
-1. Install the Mattermost plugin.
+1. Ensure the Mattermost plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create a Mattermost bot account and copy the **bot token**.
 3. Copy the Mattermost **base URL** (e.g., `https://chat.example.com`).
 4. Configure OpenClaw and start the gateway.
@@ -173,9 +176,27 @@ Notes:
 
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
+- Per-channel mention overrides live under `channels.mattermost.groups.<channelId>.requireMention`
+  or `channels.mattermost.groups["*"].requireMention` for a default.
 - `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
 - Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
+
+Example:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      groupPolicy: "open",
+      groups: {
+        "*": { requireMention: true },
+        "team-channel-id": { requireMention: false },
+      },
+    },
+  },
+}
+```
 
 ## Targets for outbound delivery
 
