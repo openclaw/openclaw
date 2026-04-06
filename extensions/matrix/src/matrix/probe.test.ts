@@ -34,7 +34,7 @@ describe("probeMatrix", () => {
       homeserver: "https://matrix.example.org",
       userId: undefined,
       accessToken: "tok",
-      persistStorageMeta: false,
+      persistStorage: false,
       localTimeoutMs: 1234,
     });
   });
@@ -51,7 +51,7 @@ describe("probeMatrix", () => {
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
       accessToken: "tok",
-      persistStorageMeta: false,
+      persistStorage: false,
       localTimeoutMs: 500,
     });
   });
@@ -69,7 +69,7 @@ describe("probeMatrix", () => {
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
       accessToken: "tok",
-      persistStorageMeta: false,
+      persistStorage: false,
       localTimeoutMs: 500,
       accountId: "ops",
     });
@@ -90,7 +90,7 @@ describe("probeMatrix", () => {
       homeserver: "https://matrix.example.org",
       userId: undefined,
       accessToken: "tok",
-      persistStorageMeta: false,
+      persistStorage: false,
       localTimeoutMs: 500,
       dispatcherPolicy: {
         mode: "explicit-proxy",
@@ -114,7 +114,7 @@ describe("probeMatrix", () => {
       userId: "@bot:example.org",
       accessToken: "tok",
       deviceId: "ABCDEF",
-      persistStorageMeta: false,
+      persistStorage: false,
       localTimeoutMs: 500,
       accountId: "ops",
     });
@@ -132,7 +132,7 @@ describe("probeMatrix", () => {
       userId: undefined,
       accessToken: "tok",
       deviceId: undefined,
-      persistStorageMeta: false,
+      persistStorage: false,
       localTimeoutMs: 500,
     });
   });

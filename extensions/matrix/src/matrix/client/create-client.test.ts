@@ -68,18 +68,48 @@ describe("createMatrixClient", () => {
       accountId: undefined,
       deviceId: undefined,
     });
-    expect(MatrixClientMock).toHaveBeenCalledTimes(1);
+    expect(resolveMatrixStoragePathsMock).toHaveBeenCalledTimes(1);
+    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
+      userId: "@bot:example.org",
+      password: undefined,
+      deviceId: undefined,
+      encryption: undefined,
+      localTimeoutMs: undefined,
+      initialSyncLimit: undefined,
+      storagePath: storagePaths.storagePath,
+      recoveryKeyPath: storagePaths.recoveryKeyPath,
+      idbSnapshotPath: storagePaths.idbSnapshotPath,
+      cryptoDatabasePrefix: "openclaw-matrix-default-token-hash",
+      autoBootstrapCrypto: undefined,
+      ssrfPolicy: undefined,
+      dispatcherPolicy: undefined,
+    });
   });
 
-  it("skips storage metadata writes when persistence is disabled", async () => {
+  it("skips persistent storage wiring when persistence is disabled", async () => {
     await createMatrixClient({
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
       accessToken: "tok",
-      persistStorageMeta: false,
+      persistStorage: false,
     });
 
+    expect(resolveMatrixStoragePathsMock).not.toHaveBeenCalled();
     expect(writeStorageMetaMock).not.toHaveBeenCalled();
-    expect(MatrixClientMock).toHaveBeenCalledTimes(1);
+    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
+      userId: "@bot:example.org",
+      password: undefined,
+      deviceId: undefined,
+      encryption: undefined,
+      localTimeoutMs: undefined,
+      initialSyncLimit: undefined,
+      storagePath: undefined,
+      recoveryKeyPath: undefined,
+      idbSnapshotPath: undefined,
+      cryptoDatabasePrefix: undefined,
+      autoBootstrapCrypto: undefined,
+      ssrfPolicy: undefined,
+      dispatcherPolicy: undefined,
+    });
   });
 });
