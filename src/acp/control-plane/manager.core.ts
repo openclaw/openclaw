@@ -875,11 +875,14 @@ export class AcpSessionManager {
                 ? "ACP turn failed before completion."
                 : "Could not initialize ACP session runtime.",
             });
-            retryFreshHandle = this.shouldRetryTurnWithFreshHandle({
+            retryFreshHandle = await this.prepareFreshHandleRetry({
               attempt,
+              cfg: input.cfg,
               sessionKey,
               error: acpError,
               sawTurnOutput,
+              runtime,
+              meta,
             });
             if (retryFreshHandle) {
               continue;
@@ -1621,27 +1624,118 @@ export class AcpSessionManager {
     this.errorCountsByCode.set(normalized, (this.errorCountsByCode.get(normalized) ?? 0) + 1);
   }
 
-  private shouldRetryTurnWithFreshHandle(params: {
+  private async prepareFreshHandleRetry(params: {
     attempt: number;
+    cfg: OpenClawConfig;
     sessionKey: string;
     error: AcpRuntimeError;
     sawTurnOutput: boolean;
-  }): boolean {
+    runtime?: AcpRuntime;
+    meta?: SessionAcpMeta;
+  }): Promise<boolean> {
     if (params.attempt > 0 || params.sawTurnOutput) {
       return false;
     }
-    if (!this.isRecoverableAcpxExitError(params.error.message)) {
+    if (this.isRecoverableAcpxExitError(params.error.message)) {
+      this.clearCachedRuntimeState(params.sessionKey);
+      logVerbose(
+        `acp-manager: retrying ${params.sessionKey} with a fresh runtime handle after early turn failure: ${params.error.message}`,
+      );
+      return true;
+    }
+    if (
+      !params.runtime ||
+      !params.meta ||
+      params.meta.mode !== "persistent" ||
+      !this.isRecoverableMissingPersistentSessionError(params.error.message)
+    ) {
       return false;
+    }
+    const cleared = await this.clearPersistedRuntimeResumeState({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
+    if (!cleared) {
+      return false;
+    }
+    if (params.runtime.prepareFreshSession) {
+      try {
+        await params.runtime.prepareFreshSession({
+          sessionKey: params.sessionKey,
+        });
+      } catch (error) {
+        logVerbose(
+          `acp-manager: failed preparing a fresh persistent session for ${params.sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return false;
+      }
     }
     this.clearCachedRuntimeState(params.sessionKey);
     logVerbose(
-      `acp-manager: retrying ${params.sessionKey} with a fresh runtime handle after early turn failure: ${params.error.message}`,
+      `acp-manager: retrying ${params.sessionKey} with a fresh persistent session after missing backend resume target: ${params.error.message}`,
     );
     return true;
   }
 
   private isRecoverableAcpxExitError(message: string): boolean {
     return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
+  }
+
+  private isRecoverableMissingPersistentSessionError(message: string): boolean {
+    const normalized = message.trim();
+    return (
+      /persistent acp session .* could not be resumed/i.test(normalized) &&
+      /(resource not found|no matching session)/i.test(normalized)
+    );
+  }
+
+  private async clearPersistedRuntimeResumeState(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+  }): Promise<boolean> {
+    const now = Date.now();
+    const updated = await this.writeSessionMeta({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      mutate: (current, entry) => {
+        if (!entry) {
+          return null;
+        }
+        const base = current ?? entry.acp;
+        if (!base) {
+          return null;
+        }
+        const currentIdentity = resolveSessionIdentityFromMeta(base);
+        if (!currentIdentity?.acpxSessionId && !currentIdentity?.agentSessionId) {
+          return base;
+        }
+        const nextIdentity = {
+          state: "pending" as const,
+          ...(currentIdentity.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
+          source: currentIdentity.source,
+          lastUpdatedAt: now,
+        };
+        return {
+          backend: base.backend,
+          agent: base.agent,
+          runtimeSessionName: base.runtimeSessionName,
+          identity: nextIdentity,
+          mode: base.mode,
+          ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
+          ...(base.cwd ? { cwd: base.cwd } : {}),
+          state: base.state,
+          lastActivityAt: now,
+          ...(base.lastError ? { lastError: base.lastError } : {}),
+        };
+      },
+    });
+    if (!updated) {
+      logVerbose(
+        `acp-manager: unable to clear persisted runtime resume state for ${params.sessionKey}`,
+      );
+      return false;
+    }
+    return true;
   }
 
   private async evictIdleRuntimeHandles(params: { cfg: OpenClawConfig }): Promise<void> {
