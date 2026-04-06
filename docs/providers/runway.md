@@ -11,9 +11,9 @@ read_when:
 
 OpenClaw ships a bundled `runway` provider for hosted video generation.
 
-- Provider: `runway`
-- Auth: `RUNWAYML_API_SECRET` (canonical; `RUNWAY_API_KEY` also works)
-- API: Runway task-based video generation API
+- Provider id: `runway`
+- Auth: `RUNWAYML_API_SECRET` (canonical) or `RUNWAY_API_KEY`
+- API: Runway task-based video generation (`GET /v1/tasks/{id}` polling)
 
 ## Quick start
 
@@ -23,33 +23,27 @@ OpenClaw ships a bundled `runway` provider for hosted video generation.
 openclaw onboard --auth-choice runway-api-key
 ```
 
-2. Set a default video model:
+2. Set Runway as the default video provider:
 
-```json5
-{
-  agents: {
-    defaults: {
-      videoGenerationModel: {
-        primary: "runway/gen4.5",
-      },
-    },
-  },
-}
+```bash
+openclaw config set agents.defaults.videoGenerationModel.primary "runway/gen4.5"
 ```
 
-## Video generation
+3. Ask the agent to generate a video. Runway will be used automatically.
 
-The bundled `runway` video-generation provider defaults to `runway/gen4.5`.
+## Supported modes
 
-- Modes: text-to-video, single-image image-to-video, and single-video video-to-video
-- Runtime: async task submit + poll via `GET /v1/tasks/{id}`
-- Agent sessions: `video_generate` starts a background task, and later calls in the same session now return active-task status instead of spawning a duplicate run
-- Status lookup: `video_generate action=status`
-- Local image/video references: supported via data URIs
-- Current video-to-video caveat: OpenClaw currently requires `runway/gen4_aleph` for video inputs
-- Current text-to-video caveat: OpenClaw currently exposes `16:9` and `9:16` for text-only runs
+| Mode           | Model              | Reference input         |
+| -------------- | ------------------ | ----------------------- |
+| Text-to-video  | `gen4.5` (default) | None                    |
+| Image-to-video | `gen4.5`           | 1 local or remote image |
+| Video-to-video | `gen4_aleph`       | 1 local or remote video |
 
-To use Runway as the default video provider:
+- Local image and video references are supported via data URIs.
+- Video-to-video currently requires `runway/gen4_aleph` specifically.
+- Text-only runs currently expose `16:9` and `9:16` aspect ratios.
+
+## Configuration
 
 ```json5
 {
@@ -65,5 +59,5 @@ To use Runway as the default video provider:
 
 ## Related
 
-- [Video Generation](/tools/video-generation)
+- [Video Generation](/tools/video-generation) -- shared tool parameters, provider selection, and async behavior
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults)
