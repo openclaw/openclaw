@@ -349,6 +349,26 @@ describe("drainWakeRequestedEvents", () => {
     expect(peeked[0].wakeRequested).toBe(true);
     expect(peeked[1].wakeRequested).toBeUndefined();
   });
+
+  it("resets dedupe markers after selective drain so re-enqueue is not suppressed", () => {
+    const key = "agent:main:test-wake-dedupe-reset";
+    enqueueSystemEvent("passive event", { sessionKey: key });
+    enqueueSystemEvent("wake text", { sessionKey: key, wakeRequested: true });
+
+    // Drain the wake event, leaving the passive one
+    const drained = drainWakeRequestedEvents(key);
+    expect(drained.map((e) => e.text)).toEqual(["wake text"]);
+    expect(peekSystemEvents(key)).toEqual(["passive event"]);
+
+    // Re-enqueue the same wake text — should succeed because dedupe markers
+    // were updated to the remaining queue tail, not left stale
+    const accepted = enqueueSystemEvent("wake text", {
+      sessionKey: key,
+      wakeRequested: true,
+    });
+    expect(accepted).toBe(true);
+    expect(peekSystemEvents(key)).toEqual(["passive event", "wake text"]);
+  });
 });
 
 describe("removeExecEventsForSession", () => {

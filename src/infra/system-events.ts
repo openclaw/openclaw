@@ -162,6 +162,13 @@ export function drainWakeRequestedEvents(sessionKey: string): SystemEvent[] {
     entry.lastText = null;
     entry.lastContextKey = null;
     queues.delete(key);
+  } else {
+    // Update dedupe markers to match the remaining queue tail so future
+    // enqueues that reuse a drained event's text are not incorrectly
+    // suppressed as consecutive duplicates.
+    const tail = remaining[remaining.length - 1];
+    entry.lastText = tail.text;
+    entry.lastContextKey = tail.contextKey ?? null;
   }
   return wakeEvents;
 }
