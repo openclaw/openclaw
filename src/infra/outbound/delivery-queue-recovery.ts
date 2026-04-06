@@ -139,7 +139,16 @@ export function isEntryEligibleForRecoveryRetry(
 }
 
 export function isPermanentDeliveryError(error: string): boolean {
-  return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
+  if (PERMANENT_ERROR_PATTERNS.some((re) => re.test(error))) {
+    return true;
+  }
+  // HTTP 4xx client errors are permanent — the request is malformed and will never
+  // succeed on retry. Examples: 400 (bad request), 413 (payload too large), 429 (rate limit).
+  // 5xx errors are transient and should be retried.
+  if (/\(4\d{2}[^)]*\)/.test(error)) {
+    return true;
+  }
+  return false;
 }
 
 /**

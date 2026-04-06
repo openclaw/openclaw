@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   enqueueDelivery,
+  isPermanentDeliveryError,
   loadPendingDeliveries,
   MAX_RETRIES,
   recoverPendingDeliveries,
@@ -136,6 +137,80 @@ describe("delivery-queue recovery", () => {
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+  });
+
+  it("moves entries to failed/ immediately on HTTP 400 permanent errors", async () => {
+    const id = await enqueueDelivery(
+      { channel: "telegram", to: "user:abc", payloads: [{ text: "hi" }] },
+      tmpDir(),
+    );
+    const deliver = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("Call to sendMessage failed! (400: Bad Request: message is too long)"),
+      );
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
+
+    expect(result.failed).toBe(1);
+    expect(result.recovered).toBe(0);
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(
+      true,
+    );
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+  });
+
+  it("moves entries to failed/ immediately on HTTP 413 payload too large", async () => {
+    const id = await enqueueDelivery(
+      { channel: "telegram", to: "user:abc", payloads: [{ text: "hi" }] },
+      tmpDir(),
+    );
+    const deliver = vi
+      .fn()
+      .mockRejectedValue(new Error("Call to sendDocument failed! (413: Payload Too Large)"));
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
+
+    expect(result.failed).toBe(1);
+    expect(result.recovered).toBe(0);
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(
+      true,
+    );
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+  });
+
+  it("keeps HTTP 500 transient errors in queue for retry", async () => {
+    await enqueueDelivery(
+      { channel: "telegram", to: "user:abc", payloads: [{ text: "hi" }] },
+      tmpDir(),
+    );
+    const deliver = vi
+      .fn()
+      .mockRejectedValue(new Error("Call to sendMessage failed! (500: Internal Server Error)"));
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
+
+    expect(result.failed).toBe(1);
+    expect(result.recovered).toBe(0);
+    // Entry should still be in queue (not moved to failed/) for 5xx transient errors
+    const pending = await loadPendingDeliveries(tmpDir());
+    expect(pending).toHaveLength(1);
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed"))).toBe(false);
+  });
+
+  it("isPermanentDeliveryError returns true for HTTP 4xx error strings", () => {
+    expect(isPermanentDeliveryError("Call to sendMessage failed! (400: Bad Request: message is too long)")).toBe(true);
+    expect(isPermanentDeliveryError("Call to sendDocument failed! (413: Payload Too Large)")).toBe(true);
+    expect(isPermanentDeliveryError("Call to sendMessage failed! (429: Too Many Requests)")).toBe(true);
+    expect(isPermanentDeliveryError("Call to sendMessage failed! (401: Unauthorized)")).toBe(true);
+  });
+
+  it("isPermanentDeliveryError returns false for HTTP 5xx error strings", () => {
+    expect(isPermanentDeliveryError("Call to sendMessage failed! (500: Internal Server Error)")).toBe(false);
+    expect(isPermanentDeliveryError("Call to sendMessage failed! (502: Bad Gateway)")).toBe(false);
+    expect(isPermanentDeliveryError("Call to sendMessage failed! (503: Service Unavailable)")).toBe(false);
   });
 
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
