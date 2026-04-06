@@ -12,13 +12,13 @@ title: "Tests"
 - `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
 - `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
 - `pnpm test:coverage:changed`: Runs unit coverage only for files changed since `origin/main`.
-- `pnpm test:changed`: runs the native Vitest projects config with `--changed origin/main`. The base config treats the projects/config files as `forceRerunTriggers` so wiring changes still rerun broadly when needed.
-- `pnpm test`: runs the native Vitest root projects config directly. File filters work natively across the configured projects.
+- `pnpm test:changed`: expands changed git paths into scoped Vitest lanes when the diff only touches routable source/test files. Config/setup changes still fall back to the native root projects run so wiring edits rerun broadly when needed.
+- `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes, but still falls back to the native root projects run when you do a full untargeted sweep.
 - Base Vitest config now defaults to `pool: "threads"` and `isolate: false`, with the shared non-isolated runner enabled across the repo configs.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
 - `pnpm test:extensions` runs `vitest.extensions.config.ts`.
 - `pnpm test:extensions`: runs extension/plugin suites.
-- `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting for the native root projects run.
+- `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets.
 - `pnpm test:perf:imports:changed`: same import profiling, but only for files changed since `origin/main`.
 - `pnpm test:perf:profile:main`: writes a CPU profile for the Vitest main thread (`.artifacts/vitest-main-profile`).
 - `pnpm test:perf:profile:runner`: writes CPU + heap profiles for the unit runner (`.artifacts/vitest-runner-profile`).

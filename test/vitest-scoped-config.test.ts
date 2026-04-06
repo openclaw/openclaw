@@ -101,6 +101,25 @@ describe("createScopedVitestConfig", () => {
     expect(config.test?.passWithNoTests).toBe(true);
   });
 
+  it("loads scoped include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(includeFile, JSON.stringify(["src/utils/utils-misc.test.ts"]), "utf8");
+
+      const config = createScopedVitestConfig(["src/utils/**/*.test.ts"], {
+        dir: "src",
+        env: {
+          OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+        },
+      });
+
+      expect(config.test?.include).toEqual(["utils/utils-misc.test.ts"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("overrides setup files when a scoped config requests them", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], {
       env: {},
@@ -508,6 +527,7 @@ describe("scoped vitest configs", () => {
   it("normalizes shared-core include patterns relative to the scoped dir", () => {
     expect(defaultSharedCoreConfig.test?.dir).toBe("src");
     expect(defaultSharedCoreConfig.test?.include).toEqual(["shared/**/*.test.ts"]);
+    expect(defaultSharedCoreConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
   });
 
   it("normalizes process include patterns relative to the scoped dir", () => {
@@ -585,5 +605,6 @@ describe("scoped vitest configs", () => {
   it("normalizes utils include patterns relative to the scoped dir", () => {
     expect(defaultUtilsConfig.test?.dir).toBe("src");
     expect(defaultUtilsConfig.test?.include).toEqual(["utils/**/*.test.ts"]);
+    expect(defaultUtilsConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
   });
 });
