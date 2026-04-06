@@ -2,6 +2,7 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-tools";
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildVeniceProvider } from "./provider-catalog.js";
+import { buildVeniceVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "venice";
 
@@ -43,5 +44,8 @@ export default defineSingleProviderPluginEntry({
     },
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
+  },
+  register(api) {
+    api.registerVideoGenerationProvider(buildVeniceVideoGenerationProvider());
   },
 });

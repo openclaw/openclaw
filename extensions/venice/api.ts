@@ -6,3 +6,4 @@ export {
   VENICE_MODEL_CATALOG,
 } from "./models.js";
 export { buildVeniceProvider } from "./provider-catalog.js";
+export { buildVeniceVideoGenerationProvider } from "./video-generation-provider.js";
