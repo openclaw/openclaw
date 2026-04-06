@@ -1,6 +1,6 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
-export const KIMI_BASE_URL = "https://api.kimi.com/coding/";
+export const KIMI_BASE_URL = "https://api.kimi.com/coding/v1/";
 const KIMI_CODING_USER_AGENT = "claude-code/0.1.0";
 export const KIMI_DEFAULT_MODEL_ID = "kimi-code";
 export const KIMI_UPSTREAM_MODEL_ID = "kimi-for-coding";
@@ -17,7 +17,7 @@ const KIMI_CODING_DEFAULT_COST = {
 export function buildKimiCodingProvider(): ModelProviderConfig {
   return {
     baseUrl: KIMI_BASE_URL,
-    api: "anthropic-messages",
+    api: "openai-completions",
     headers: {
       "User-Agent": KIMI_CODING_USER_AGENT,
     },
