@@ -89,6 +89,9 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { createWebhookInFlightLimiter, readJsonWebhookBodyOrReject, type WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";',
     'export { setGoogleChatRuntime } from "./src/runtime.js";',
   ],
+  [bundledPluginFile("irc", "runtime-api.ts")]: [
+    'export { setIrcRuntime } from "./src/runtime.js";',
+  ],
   [bundledPluginFile("matrix", "runtime-api.ts")]: [
     'export * from "./src/auth-precedence.js";',
     'export { requiresExplicitMatrixDefaultAccount, resolveMatrixDefaultOrOnlyAccountId } from "./src/account-selection.js";',
