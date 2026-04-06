@@ -65,6 +65,7 @@ OpenClaw picks the first configured provider in registry auto-select order.
 | **MiniMax**       | `MINIMAX_API_KEY` (or Token Plan: `MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`)      | T2A v2 API. Defaults to `speech-2.8-hd`.                                |
 | **OpenAI**        | `OPENAI_API_KEY`                                                                                                 | Also used for auto-summary; supports persona `instructions`.            |
 | **OpenRouter**    | `OPENROUTER_API_KEY` (can reuse `models.providers.openrouter.apiKey`)                                            | Default model `hexgrad/kokoro-82m`.                                     |
+| **Typecast**      | `TYPECAST_API_KEY`                                                                                               | AI voices with emotion control; ssfm-v30 model; 37+ languages.          |
 | **Volcengine**    | `VOLCENGINE_TTS_API_KEY` or `BYTEPLUS_SEED_SPEECH_API_KEY` (legacy AppID/token: `VOLCENGINE_TTS_APPID`/`_TOKEN`) | BytePlus Seed Speech HTTP API.                                          |
 | **Vydra**         | `VYDRA_API_KEY`                                                                                                  | Shared image, video, and speech provider.                               |
 | **xAI**           | `XAI_API_KEY`                                                                                                    | xAI batch TTS. Native Opus voice-note is **not** supported.             |
@@ -296,6 +297,34 @@ preset and adapt the provider block:
           model: "hexgrad/kokoro-82m",
           voice: "af_alloy",
           responseFormat: "mp3",
+        },
+      },
+    },
+  },
+}
+```
+  </Tab>
+  <Tab title="Typecast">
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "typecast",
+      providers: {
+        typecast: {
+          apiKey: "${TYPECAST_API_KEY}",
+          voiceId: "tc_your_voice_id",
+          model: "ssfm-v30",
+          language: "kor",
+          emotionPreset: "happy",
+          emotionIntensity: 1.2,
+          output: {
+            audioFormat: "mp3",
+            audioTempo: 1.0,
+            volume: 100,
+            audioPitch: 0,
+          },
         },
       },
     },
@@ -906,6 +935,21 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="speed" type="number">Provider-native speed override.</ParamField>
   </Accordion>
 
+  <Accordion title="Typecast">
+    <ParamField path="apiKey" type="string">Env: `TYPECAST_API_KEY`.</ParamField>
+    <ParamField path="baseHost" type="string">Override the Typecast API base URL. Default `https://api.typecast.ai`.</ParamField>
+    <ParamField path="voiceId" type="string">Typecast voice ID (required; format `tc_xxx` or `uc_xxx`).</ParamField>
+    <ParamField path="model" type='"ssfm-v21" | "ssfm-v30"'>TTS model. Default `ssfm-v30`.</ParamField>
+    <ParamField path="language" type="string">ISO 639-3 language code (e.g. `kor`, `eng`, `jpn`). Auto-detected if unset.</ParamField>
+    <ParamField path="emotionPreset" type='"normal" | "happy" | "sad" | "angry" | "whisper" | "toneup" | "tonedown"'>Emotion preset.</ParamField>
+    <ParamField path="emotionIntensity" type="number">Emotion intensity `0..2`. Default `1.0`.</ParamField>
+    <ParamField path="seed" type="number">Integer for reproducible output.</ParamField>
+    <ParamField path="output.volume" type="number">Output volume `0..200`. Default `100`.</ParamField>
+    <ParamField path="output.audioPitch" type="number">Pitch adjustment in semitones `-12..12`. Default `0`.</ParamField>
+    <ParamField path="output.audioTempo" type="number">Speed multiplier `0.5..2.0`. Default `1.0`.</ParamField>
+    <ParamField path="output.audioFormat" type='"wav" | "mp3"'>Default `mp3`.</ParamField>
+  </Accordion>
+
   <Accordion title="Volcengine (BytePlus Seed Speech)">
     <ParamField path="apiKey" type="string">Env: `VOLCENGINE_TTS_API_KEY` or `BYTEPLUS_SEED_SPEECH_API_KEY`.</ParamField>
     <ParamField path="resourceId" type="string">Default `seed-tts-1.0`. Env: `VOLCENGINE_TTS_RESOURCE_ID`. Use `seed-tts-2.0` when your project has TTS 2.0 entitlement.</ParamField>
@@ -974,6 +1018,8 @@ per-call provider request timeout in milliseconds.
 - [Gradium](/providers/gradium)
 - [Inworld TTS API](https://docs.inworld.ai/tts/tts)
 - [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
+- [Typecast API](https://docs.typecast.ai)
+- [Typecast Voices](https://typecast.ai)
 - [Volcengine TTS HTTP API](/providers/volcengine#text-to-speech)
 - [Xiaomi MiMo speech synthesis](/providers/xiaomi#text-to-speech)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)

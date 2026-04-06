@@ -1,0 +1,9 @@
+{
+  "id": "typecast",
+  "speechProviders": ["typecast"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

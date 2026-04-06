@@ -112,7 +112,7 @@ See the plugin docs for recommended ranges and production examples:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration for
+Voice Call uses the core `messages.tts` configuration (OpenAI, ElevenLabs, or Typecast) for
 streaming speech on calls. Override examples and provider caveats live here:
 `https://docs.openclaw.ai/plugins/voice-call#tts-for-calls`
 

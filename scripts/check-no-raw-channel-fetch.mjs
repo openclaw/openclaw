@@ -45,6 +45,7 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("msteams", "src/sdk.ts", 441),
   bundledPluginCallsite("ollama", "src/stream.ts", 649),
   bundledPluginCallsite("openai", "tts.ts", 149),
+  bundledPluginCallsite("typecast", "tts.ts", 199),
   bundledPluginCallsite("qa-channel", "src/bus-client.ts", 41),
   bundledPluginCallsite("qa-channel", "src/bus-client.ts", 221),
   bundledPluginCallsite("qa-lab", "src/docker-up.runtime.ts", 274),
