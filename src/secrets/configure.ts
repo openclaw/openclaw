@@ -4,8 +4,7 @@ import { confirm, select, text } from "@clack/prompts";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStatePath, resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
-import { coerceAuthProfileState, mergeAuthProfileState } from "../agents/auth-profiles/state.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
@@ -31,7 +30,6 @@ import {
 import { resolveSecretRefValue } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
-import { readJsonObjectIfExists } from "./storage-scan.js";
 
 export type SecretsConfigureResult = {
   plan: SecretsApplyPlan;
@@ -271,53 +269,17 @@ function resolveConfigureAgentId(config: OpenClawConfig, explicitAgentId?: strin
   );
 }
 
-function normalizeAuthStoreForConfigure(
-  raw: Record<string, unknown> | null,
-  storePath: string,
-): AuthProfileStore {
-  if (!raw) {
-    return {
-      version: AUTH_STORE_VERSION,
-      profiles: {},
-    };
-  }
-  if (!isRecord(raw.profiles)) {
-    throw new Error(
-      `Cannot run interactive secrets configure because ${storePath} is invalid (missing "profiles" object).`,
-    );
-  }
-  const version = typeof raw.version === "number" && Number.isFinite(raw.version) ? raw.version : 1;
-  return {
-    version,
-    profiles: raw.profiles as AuthProfileStore["profiles"],
-    ...coerceAuthProfileState(raw),
-  };
-}
-
 function loadAuthProfileStoreForConfigure(params: {
   config: OpenClawConfig;
   agentId: string;
 }): AuthProfileStore {
   const agentDir = resolveAgentDir(params.config, params.agentId);
-  const storePath = resolveAuthStorePath(agentDir);
-  const parsed = readJsonObjectIfExists(storePath);
-  if (parsed.error) {
-    throw new Error(
-      `Cannot run interactive secrets configure because ${storePath} could not be read: ${parsed.error}`,
-    );
-  }
-  const store = normalizeAuthStoreForConfigure(parsed.value, storePath);
-  const statePath = resolveAuthStatePath(agentDir);
-  const parsedState = readJsonObjectIfExists(statePath);
-  if (parsedState.error) {
-    throw new Error(
-      `Cannot run interactive secrets configure because ${statePath} could not be read: ${parsedState.error}`,
-    );
-  }
-  return {
-    ...store,
-    ...mergeAuthProfileState(store, coerceAuthProfileState(parsedState.value)),
-  };
+  return (
+    loadPersistedAuthProfileStore(agentDir) ?? {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+    }
+  );
 }
 
 async function promptNewAuthProfileCandidate(agentId: string): Promise<ConfigureCandidate> {
