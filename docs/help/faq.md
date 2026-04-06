@@ -2645,7 +2645,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     for one model can still be usable for a sibling model on the same provider,
     while billing/disabled windows still block the whole profile.
 
-    You can also set a **per-agent** order override (stored in that agent's `auth-profiles.json`) via the CLI:
+    You can also set a **per-agent** order override (stored in that agent's `auth-state.json`) via the CLI:
 
     ```bash
     # Defaults to the configured default agent (omit --agent)
