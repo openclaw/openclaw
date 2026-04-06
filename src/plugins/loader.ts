@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
@@ -167,6 +168,22 @@ export function clearPluginLoaderCache(): void {
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
+
+/**
+ * On Windows, the Node.js ESM loader requires absolute paths to be expressed
+ * as file:// URLs (e.g. file:///C:/Users/...). Raw drive-letter paths like
+ * C:\... are rejected with ERR_UNSUPPORTED_ESM_URL_SCHEME because the loader
+ * mistakes the drive letter for an unknown URL scheme.
+ *
+ * This helper converts an absolute path to a file:// URL string on Windows
+ * and leaves it unchanged on POSIX systems where raw paths are accepted.
+ */
+function toSafeImportPath(absolutePath: string): string {
+  if (process.platform === "win32" && /^[a-zA-Z]:[\\/]/.test(absolutePath)) {
+    return pathToFileURL(absolutePath).href;
+  }
+  return absolutePath;
+}
 
 function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
@@ -1040,7 +1057,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (!runtimeModulePath) {
       throw new Error("Unable to resolve plugin runtime module");
     }
-    const runtimeModule = getJiti(runtimeModulePath)(runtimeModulePath) as {
+    const safeRuntimePath = toSafeImportPath(runtimeModulePath);
+    const runtimeModule = getJiti(safeRuntimePath)(safeRuntimePath) as {
       createPluginRuntime?: (options?: CreatePluginRuntimeOptions) => PluginRuntime;
     };
     if (typeof runtimeModule.createPluginRuntime !== "function") {
@@ -1448,12 +1466,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
 
+    // On Windows, Node.js ESM requires file:// URLs for absolute paths.
+    // toSafeImportPath converts C:\... -> file:///C:/... on win32 only.
+    const safeImportSource = toSafeImportPath(safeSource);
+
     let mod: OpenClawPluginModule | null = null;
     try {
       // Track the plugin as imported once module evaluation begins. Top-level
       // code may have already executed even if evaluation later throws.
       recordImportedPluginId(record.id);
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      mod = getJiti(safeImportSource)(safeImportSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
@@ -1899,9 +1921,12 @@ export async function loadOpenClawPluginCliRegistry(
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
 
+    // On Windows, Node.js ESM requires file:// URLs for absolute paths.
+    const safeImportSource = toSafeImportPath(safeSource);
+
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      mod = getJiti(safeImportSource)(safeImportSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
         logger,
