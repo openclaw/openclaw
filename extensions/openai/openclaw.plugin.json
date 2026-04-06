@@ -39,7 +39,8 @@
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
-    "imageGenerationProviders": ["openai"]
+    "imageGenerationProviders": ["openai"],
+    "videoGenerationProviders": ["openai"]
   },
   "configSchema": {
     "type": "object",

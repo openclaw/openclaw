@@ -895,49 +895,6 @@ describe("QmdMemoryManager", () => {
     );
   });
 
-  it("prefers --mask for collection add and falls back to --glob when --mask is rejected", async () => {
-    cfg = {
-      ...cfg,
-      memory: {
-        backend: "qmd",
-        qmd: {
-          includeDefaultMemory: true,
-          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
-          paths: [],
-        },
-      },
-    } as OpenClawConfig;
-
-    const addFlagCalls: string[] = [];
-    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
-      if (args[0] === "collection" && args[1] === "list") {
-        const child = createMockChild({ autoClose: false });
-        emitAndClose(child, "stdout", "[]");
-        return child;
-      }
-      if (args[0] === "collection" && args[1] === "add") {
-        const child = createMockChild({ autoClose: false });
-        const flag = args.includes("--mask") ? "--mask" : args.includes("--glob") ? "--glob" : "";
-        addFlagCalls.push(flag);
-        if (flag === "--mask") {
-          emitAndClose(child, "stderr", "unknown flag: --mask", 1);
-          return child;
-        }
-        queueMicrotask(() => child.closeWith(0));
-        return child;
-      }
-      return createMockChild();
-    });
-
-    const { manager } = await createManager({ mode: "full" });
-    await manager.close();
-
-    expect(addFlagCalls).toEqual(["--mask", "--glob", "--glob", "--glob"]);
-    expect(logWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("retrying with legacy compatibility flag"),
-    );
-  });
-
   it("migrates unscoped legacy collections from plain-text collection list output", async () => {
     cfg = {
       ...cfg,

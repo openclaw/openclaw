@@ -21,5 +21,9 @@ export {
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./src/normalize-target.js";
+export {
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
+} from "./src/group-policy.js";
 export { resolveWhatsAppGroupIntroHint } from "./src/runtime-api.js";
 export { __testing as whatsappAccessControlTesting } from "./src/inbound/access-control.js";

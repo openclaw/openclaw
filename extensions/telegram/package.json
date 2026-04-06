@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.4.4",
+  "version": "2026.4.5",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
@@ -28,7 +28,11 @@
       "selectionExtras": [
         "https://openclaw.ai"
       ],
-      "markdownCapable": true
+      "markdownCapable": true,
+      "configuredState": {
+        "specifier": "./configured-state",
+        "exportName": "hasTelegramConfiguredState"
+      }
     },
     "bundle": {
       "stageRuntimeDependencies": true

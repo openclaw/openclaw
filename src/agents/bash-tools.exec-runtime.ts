@@ -242,15 +242,6 @@ export function resolveExecTarget(params: {
 }) {
   const configuredTarget = params.configuredTarget ?? "auto";
   const requestedTarget = params.requestedTarget ?? null;
-  if (params.elevatedRequested) {
-    const elevatedTarget = configuredTarget === "node" ? ("node" as const) : ("gateway" as const);
-    return {
-      configuredTarget,
-      requestedTarget,
-      selectedTarget: elevatedTarget,
-      effectiveHost: elevatedTarget,
-    };
-  }
   if (
     requestedTarget &&
     !isRequestedExecTargetAllowed({
@@ -259,18 +250,31 @@ export function resolveExecTarget(params: {
       sandboxAvailable: params.sandboxAvailable,
     })
   ) {
+    const allowedConfig = Array.from(
+      new Set(
+        requestedTarget === "gateway" && !params.sandboxAvailable
+          ? ["gateway", "auto"]
+          : [renderExecTargetLabel(requestedTarget), "auto"],
+      ),
+    ).join(" or ");
     throw new Error(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configure tools.exec.host=${renderExecTargetLabel(requestedTarget)} to allow).`,
+        `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
+        `set tools.exec.host=${allowedConfig} to allow this override).`,
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
+  const resolvedTarget = params.elevatedRequested
+    ? selectedTarget === "node"
+      ? "node"
+      : "gateway"
+    : selectedTarget;
   const effectiveHost =
-    selectedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : selectedTarget;
+    resolvedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : resolvedTarget;
   return {
     configuredTarget,
     requestedTarget,
-    selectedTarget,
+    selectedTarget: resolvedTarget,
     effectiveHost,
   };
 }
@@ -578,6 +582,9 @@ export async function runExecProcess(opts: {
 
   const emitUpdate = () => {
     if (!opts.onUpdate) {
+      return;
+    }
+    if (session.backgrounded || session.exited) {
       return;
     }
     const tailText = session.tail || session.aggregated;

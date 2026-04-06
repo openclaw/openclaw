@@ -19,6 +19,7 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -680,35 +681,7 @@ function sanitizeChatHistoryMessage(
  * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
  */
 function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const entry = message as Record<string, unknown>;
-  if (entry.role !== "assistant") {
-    return undefined;
-  }
-  if (typeof entry.text === "string") {
-    return entry.text;
-  }
-  if (typeof entry.content === "string") {
-    return entry.content;
-  }
-  if (!Array.isArray(entry.content) || entry.content.length === 0) {
-    return undefined;
-  }
-
-  const texts: string[] = [];
-  for (const block of entry.content) {
-    if (!block || typeof block !== "object") {
-      return undefined;
-    }
-    const typed = block as { type?: unknown; text?: unknown };
-    if (typed.type !== "text" || typeof typed.text !== "string") {
-      return undefined;
-    }
-    texts.push(typed.text);
-  }
-  return texts.length > 0 ? texts.join("\n") : undefined;
+  return extractAssistantVisibleText(message);
 }
 
 function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {

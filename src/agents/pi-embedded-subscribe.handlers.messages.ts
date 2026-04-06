@@ -5,6 +5,7 @@ import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -25,8 +26,6 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
-
-type AssistantDeliveryPhase = "commentary" | "final_answer";
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -68,47 +67,8 @@ const coerceText = (value: unknown): string => {
   return "";
 };
 
-function normalizeAssistantDeliveryPhase(value: unknown): AssistantDeliveryPhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function resolveAssistantDeliveryPhase(
-  message: AgentMessage | undefined,
-): AssistantDeliveryPhase | undefined {
-  if (!message || message.role !== "assistant") {
-    return undefined;
-  }
-  const directPhase = normalizeAssistantDeliveryPhase((message as { phase?: unknown }).phase);
-  if (directPhase) {
-    return directPhase;
-  }
-  if (!Array.isArray(message.content)) {
-    return undefined;
-  }
-  const explicitStructuredPhases = new Set<AssistantDeliveryPhase>();
-  for (const part of message.content) {
-    if (!part || typeof part !== "object") {
-      continue;
-    }
-    const block = part as { type?: unknown; textSignature?: unknown };
-    if (block.type !== "text" || typeof block.textSignature !== "string") {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(block.textSignature) as { phase?: unknown };
-      const phase = normalizeAssistantDeliveryPhase(parsed.phase);
-      if (phase) {
-        explicitStructuredPhases.add(phase);
-      }
-    } catch {
-      continue;
-    }
-  }
-  return explicitStructuredPhases.size === 1 ? [...explicitStructuredPhases][0] : undefined;
-}
-
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
-  return resolveAssistantDeliveryPhase(message) === "commentary";
+  return resolveAssistantMessagePhase(message) === "commentary";
 }
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
@@ -330,7 +290,7 @@ export function handleMessageUpdate(
       ? (assistantRecord.partial as AssistantMessage)
       : msg;
   const phaseAwareVisibleText = coerceText(extractAssistantVisibleText(partialAssistant)).trim();
-  const deliveryPhase = resolveAssistantDeliveryPhase(partialAssistant);
+  const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
   if (deliveryPhase === "commentary" && !phaseAwareVisibleText) {
     return;
   }
@@ -642,20 +602,33 @@ export function handleMessageEnd(
       ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
       ctx.blockChunker.reset();
     } else if (text !== ctx.state.lastBlockReplyText) {
-      // Check for duplicates before emitting (same logic as emitBlockChunk).
-      const normalizedText = normalizeTextForComparison(text);
-      if (
-        isMessagingToolDuplicateNormalized(
-          normalizedText,
-          ctx.state.messagingToolSentTextsNormalized,
-        )
-      ) {
+      // Guard: for text_end channels, if text_end already delivered content
+      // (lastBlockReplyText is set), skip this safety send. The text comparison
+      // here uses a different stripping pipeline (stripBlockTags with reset state)
+      // than emitBlockChunk (stripBlockTags with running blockState +
+      // stripDowngradedToolCallText), which can false-positive. When text_end
+      // didn't deliver (e.g. commentary suppressed, provider skipped text_end),
+      // lastBlockReplyText is still null and message_end must deliver.
+      if (ctx.state.blockReplyBreak === "text_end" && ctx.state.lastBlockReplyText != null) {
         ctx.log.debug(
-          `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
+          `Skipping message_end safety send for text_end channel - content already delivered via text_end`,
         );
       } else {
-        ctx.state.lastBlockReplyText = text;
-        emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
+        // Check for duplicates before emitting (same logic as emitBlockChunk).
+        const normalizedText = normalizeTextForComparison(text);
+        if (
+          isMessagingToolDuplicateNormalized(
+            normalizedText,
+            ctx.state.messagingToolSentTextsNormalized,
+          )
+        ) {
+          ctx.log.debug(
+            `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
+          );
+        } else {
+          ctx.state.lastBlockReplyText = text;
+          emitSplitResultAsBlockReply(ctx.consumeReplyDirectives(text, { final: true }));
+        }
       }
     }
   }

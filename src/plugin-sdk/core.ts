@@ -1,5 +1,6 @@
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
+import { resolveChannelExposure } from "../channels/plugins/exposure.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import {
   createScopedAccountReplyToModeResolver,
@@ -231,6 +232,7 @@ function toSdkChatChannelMeta(params: {
   if (!label) {
     throw new Error(`Missing label for bundled chat channel "${params.id}"`);
   }
+  const exposure = resolveChannelExposure(params.channel);
   return {
     id: params.id,
     label,
@@ -258,9 +260,7 @@ function toSdkChatChannelMeta(params: {
     ...(params.channel.markdownCapable !== undefined
       ? { markdownCapable: params.channel.markdownCapable }
       : {}),
-    ...(params.channel.showConfigured !== undefined
-      ? { showConfigured: params.channel.showConfigured }
-      : {}),
+    exposure,
     ...(params.channel.quickstartAllowFrom !== undefined
       ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }
       : {}),

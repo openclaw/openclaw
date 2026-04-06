@@ -331,7 +331,7 @@ const runOpenClaw = async (deps) => {
 
 const syncRuntimeArtifacts = (deps) => {
   try {
-    runRuntimePostBuild({ cwd: deps.cwd });
+    deps.runRuntimePostBuild({ cwd: deps.cwd });
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
@@ -355,6 +355,8 @@ const writeBuildStamp = (deps) => {
   }
 };
 
+const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
+
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -366,6 +368,7 @@ export async function runNodeMain(params = {}) {
     cwd: params.cwd ?? process.cwd(),
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
+    runRuntimePostBuild: params.runRuntimePostBuild ?? runRuntimePostBuild,
   };
 
   deps.distRoot = path.join(deps.cwd, "dist");
@@ -379,7 +382,7 @@ export async function runNodeMain(params = {}) {
 
   const buildRequirement = resolveBuildRequirement(deps);
   if (!buildRequirement.shouldBuild) {
-    if (!syncRuntimeArtifacts(deps)) {
+    if (!shouldSkipCleanWatchRuntimeSync(deps) && !syncRuntimeArtifacts(deps)) {
       return 1;
     }
     return await runOpenClaw(deps);

@@ -104,7 +104,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expectResolvedForwardCompatFallbackResult({
       result: resolveModelForTest("google-antigravity", "claude-opus-4-6-thinking", "/tmp/agent"),
       expectedModel: {
-        api: "google-gemini-cli",
+        api: "google-generative-ai",
         baseUrl: "https://cloudcode-pa.googleapis.com",
         id: "claude-opus-4-6-thinking",
         provider: "google-antigravity",

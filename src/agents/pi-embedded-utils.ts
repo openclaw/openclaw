@@ -1,6 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
+import {
+  normalizeAssistantPhase,
+  parseAssistantTextSignature,
+  type AssistantPhase,
+} from "../shared/chat-message-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
@@ -231,37 +236,6 @@ export function stripDowngradedToolCallText(text: string): string {
  */
 export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
-}
-
-type AssistantPhase = "commentary" | "final_answer";
-
-function normalizeAssistantPhase(value: unknown): AssistantPhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function parseAssistantTextSignature(
-  value: unknown,
-): { id?: string; phase?: AssistantPhase } | null {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
-  if (!value.startsWith("{")) {
-    return { id: value };
-  }
-  try {
-    const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
-    if (parsed.v !== 1) {
-      return null;
-    }
-    return {
-      ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-      ...(normalizeAssistantPhase(parsed.phase)
-        ? { phase: normalizeAssistantPhase(parsed.phase) }
-        : {}),
-    };
-  } catch {
-    return null;
-  }
 }
 
 function sanitizeAssistantText(text: string): string {

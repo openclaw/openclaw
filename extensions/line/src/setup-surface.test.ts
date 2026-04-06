@@ -28,7 +28,6 @@ vi.mock("@line/bot-sdk", () => ({
 }));
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
-let probeLineBot: typeof import("./probe.js").probeLineBot;
 const LINE_SRC_PREFIX = `../../${bundledPluginRoot("line")}/src/`;
 
 function normalizeModuleSpecifier(specifier: string): string | null {
@@ -296,10 +295,6 @@ describe("line setup wizard", () => {
 });
 
 describe("probeLineBot", () => {
-  beforeAll(async () => {
-    ({ probeLineBot } = await import("./probe.js"));
-  });
-
   beforeEach(() => {
     getBotInfoMock.mockReset();
     MessagingApiClientMock.mockReset();
@@ -315,6 +310,7 @@ describe("probeLineBot", () => {
   });
 
   it("returns timeout when bot info stalls", async () => {
+    const { probeLineBot } = await import("./probe.js");
     vi.useFakeTimers();
     getBotInfoMock.mockImplementation(() => new Promise(() => {}));
 
@@ -327,6 +323,7 @@ describe("probeLineBot", () => {
   });
 
   it("returns bot info when available", async () => {
+    const { probeLineBot } = await import("./probe.js");
     getBotInfoMock.mockResolvedValue({
       displayName: "OpenClaw",
       userId: "U123",
@@ -343,6 +340,7 @@ describe("probeLineBot", () => {
 
 describe("linePlugin status.probeAccount", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
+    const { probeLineBot } = await import("./probe.js");
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };

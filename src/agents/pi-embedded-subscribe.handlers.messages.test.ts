@@ -513,6 +513,131 @@ describe("handleMessageEnd", () => {
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
   });
 
+  it("does not duplicate block reply for text_end channels when text was already delivered", () => {
+    const onBlockReply = vi.fn();
+    const emitBlockReply = vi.fn();
+    // In real usage, the directive accumulator returns null for empty/consumed
+    // input. The non-empty call shouldn't happen for text_end channels (that's
+    // the safety send we're guarding against).
+    const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onBlockReply,
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        messagingToolSentTexts: [],
+        messagingToolSentTextsNormalized: [],
+        includeReasoning: false,
+        streamReasoning: false,
+        emittedAssistantUpdate: true,
+        lastStreamedAssistantCleaned: "Hello world",
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        blockReplyBreak: "text_end",
+        // Simulate text_end already delivered this text through emitBlockChunk
+        lastBlockReplyText: "Hello world",
+        lastReasoningSent: undefined,
+        reasoningStreamOpen: false,
+        deltaBuffer: "",
+        blockBuffer: "",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+      },
+      log: { debug: vi.fn() },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      finalizeAssistantTexts: vi.fn(),
+      emitBlockReply,
+      consumeReplyDirectives,
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    // The block reply should NOT fire again since text_end already delivered it.
+    // consumeReplyDirectives is called once with "" (the final flush for
+    // text_end channels) but returns null, so emitBlockReply is never called.
+    expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate block reply for text_end channels even when stripping differs", () => {
+    const onBlockReply = vi.fn();
+    const emitBlockReply = vi.fn();
+    // Same pattern: directive accumulator returns null for empty final flush
+    const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onBlockReply,
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        messagingToolSentTexts: [],
+        messagingToolSentTextsNormalized: [],
+        includeReasoning: false,
+        streamReasoning: false,
+        emittedAssistantUpdate: true,
+        lastStreamedAssistantCleaned: "Hello world",
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        blockReplyBreak: "text_end",
+        // text_end delivered via emitBlockChunk which uses different stripping
+        lastBlockReplyText: "Hello world.",
+        lastReasoningSent: undefined,
+        reasoningStreamOpen: false,
+        deltaBuffer: "",
+        blockBuffer: "",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+      },
+      log: { debug: vi.fn() },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      finalizeAssistantTexts: vi.fn(),
+      emitBlockReply,
+      consumeReplyDirectives,
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        // The raw text differs slightly from lastBlockReplyText due to stripping
+        content: [{ type: "text", text: "Hello world" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    // Even though text !== lastBlockReplyText (different stripping), the safety
+    // send should NOT fire for text_end channels. The only consumeReplyDirectives
+    // call is the final empty flush which returns null.
+    expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
   it("emits a replacement final assistant event when final_answer appears only at message_end", () => {
     const onAgentEvent = vi.fn();
     const ctx = {

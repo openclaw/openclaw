@@ -57,7 +57,9 @@ const hoisted = vi.hoisted(() => {
   const releaseSharedClientInstance = vi.fn(async () => true);
   const setActiveMatrixClient = vi.fn();
   const setMatrixRuntime = vi.fn();
+  const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(async () => undefined);
   return {
+    backfillMatrixAuthDeviceIdAfterStartup,
     callOrder,
     accountConfig,
     client,
@@ -222,6 +224,7 @@ vi.mock("../active-client.js", () => ({
 }));
 
 vi.mock("../client.js", () => ({
+  backfillMatrixAuthDeviceIdAfterStartup: hoisted.backfillMatrixAuthDeviceIdAfterStartup,
   isBunRuntime: () => false,
   resolveMatrixAuth: vi.fn(async () => ({
     accountId: "default",
@@ -370,6 +373,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.inboundDeduper.releaseEvent.mockReset();
     hoisted.inboundDeduper.flush.mockReset().mockResolvedValue(undefined);
     hoisted.inboundDeduper.stop.mockReset().mockResolvedValue(undefined);
+    hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.createMatrixRoomMessageHandler.mockReset().mockReturnValue(vi.fn());
     Object.values(hoisted.logger).forEach((mock) => mock.mockReset());
   });
@@ -406,6 +410,28 @@ describe("monitorMatrixProvider", () => {
       "matrix",
       "default",
     );
+  });
+
+  it("starts monitoring without waiting for best-effort deviceId backfill", async () => {
+    hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockImplementation(
+      () => new Promise<undefined>(() => {}),
+    );
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+
+    await vi.waitFor(() => {
+      expect(hoisted.callOrder).toContain("start-client");
+      expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledTimes(1);
+    });
+    expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+      }),
+    );
+
+    abortController.abort();
+    await expect(monitorPromise).resolves.toBeUndefined();
   });
 
   it("cleans up thread bindings and shared clients when startup fails", async () => {

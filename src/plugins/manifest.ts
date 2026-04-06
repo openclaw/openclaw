@@ -76,6 +76,7 @@ export type PluginManifestContracts = {
   mediaUnderstandingProviders?: string[];
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];
+  musicGenerationProviders?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
   tools?: string[];
@@ -157,6 +158,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
   const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
   const videoGenerationProviders = normalizeStringList(value.videoGenerationProviders);
+  const musicGenerationProviders = normalizeStringList(value.musicGenerationProviders);
   const webFetchProviders = normalizeStringList(value.webFetchProviders);
   const webSearchProviders = normalizeStringList(value.webSearchProviders);
   const tools = normalizeStringList(value.tools);
@@ -168,6 +170,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
+    ...(musicGenerationProviders.length > 0 ? { musicGenerationProviders } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
     ...(tools.length > 0 ? { tools } : {}),
@@ -428,10 +431,24 @@ export type PluginPackageChannel = {
   selectionDocsOmitLabel?: boolean;
   selectionExtras?: readonly string[];
   markdownCapable?: boolean;
+  exposure?: {
+    configured?: boolean;
+    setup?: boolean;
+    docs?: boolean;
+  };
   showConfigured?: boolean;
+  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
+  configuredState?: {
+    specifier?: string;
+    exportName?: string;
+  };
+  persistedAuthState?: {
+    specifier?: string;
+    exportName?: string;
+  };
 };
 
 export type PluginPackageInstall = {

@@ -1,6 +1,8 @@
 // language=python
-export const SANDBOX_PINNED_FS_MUTATION_PYTHON = String.raw`import os
+export const SANDBOX_PINNED_FS_MUTATION_PYTHON = String.raw`import errno
+import os
 import secrets
+import stat
 import subprocess
 import sys
 
@@ -156,6 +158,15 @@ def run_rename(args):
     try:
         from_parent_fd = walk_parent(from_root_fd, from_relative_parent, False)
         to_parent_fd = walk_parent(to_root_fd, to_relative_parent, True)
+        src_fd = os.open(from_basename, os.O_RDONLY, dir_fd=from_parent_fd)
+        try:
+            src_stat = os.fstat(src_fd)
+            if not stat.S_ISREG(src_stat.st_mode):
+                raise OSError(errno.EPERM, "only regular files are allowed", from_basename)
+            if src_stat.st_nlink > 1:
+                raise OSError(errno.EPERM, "hardlinked file is not allowed", from_basename)
+        finally:
+            os.close(src_fd)
         run_command(
             [
                 "mv",

@@ -85,7 +85,7 @@ function expectThreadingToolContextShape(context: ChannelThreadingToolContext) {
     expect(["string", "number"]).toContain(typeof context.currentMessageId);
   }
   if (context.replyToMode !== undefined) {
-    expect(["off", "first", "all"]).toContain(context.replyToMode);
+    expect(["off", "first", "all", "batched"]).toContain(context.replyToMode);
   }
   if (context.hasRepliedRef !== undefined) {
     expect(typeof context.hasRepliedRef).toBe("object");
@@ -337,7 +337,7 @@ export function installChannelThreadingContractSuite(params: {
 
     if (threading?.resolveReplyToMode) {
       expect(
-        ["off", "first", "all"].includes(
+        ["off", "first", "all", "batched"].includes(
           threading.resolveReplyToMode({
             cfg: {} as OpenClawConfig,
             accountId: "default",

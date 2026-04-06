@@ -15,6 +15,10 @@ type ToolWithParameters = {
   parameters: unknown;
 };
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
   return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}));
 }
@@ -131,12 +135,12 @@ export function resolvesToNativeOpenAIStrictTools(
   transport: OpenAITransportKind,
 ): boolean {
   const capabilities = resolveProviderRequestCapabilities({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
+    provider: optionalString(model.provider),
+    api: optionalString(model.api),
+    baseUrl: optionalString(model.baseUrl),
     capability: "llm",
     transport,
-    modelId: model.id,
+    modelId: optionalString(model.id),
     compat:
       model.compat && typeof model.compat === "object"
         ? (model.compat as { supportsStore?: boolean })

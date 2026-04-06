@@ -118,6 +118,12 @@ describe("plugin activation boundary", () => {
   it("does not load bundled plugins for config and env detection helpers", async () => {
     const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
+    expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
+    expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
+    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
+    expect(
+      isChannelConfigured({}, "irc", { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" }),
+    ).toBe(true);
     expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
     expect(
       resolveEnvApiKey("anthropic-vertex", {
@@ -144,7 +150,7 @@ describe("plugin activation boundary", () => {
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
-  it("does not load the browser plugin for static browser config helpers", async () => {
+  it("keeps browser helper imports cold and loads only narrow browser helper surfaces on use", async () => {
     const browser = await importBrowserHelpers();
 
     expect(browser.DEFAULT_AI_SNAPSHOT_MAX_CHARS).toBe(80_000);
@@ -152,6 +158,7 @@ describe("plugin activation boundary", () => {
     expect(browser.DEFAULT_OPENCLAW_BROWSER_COLOR).toBe("#FF4500");
     expect(browser.DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME).toBe("openclaw");
     expect(browser.DEFAULT_UPLOAD_DIR).toContain("uploads");
+    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
     expect(browser.parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
     expect(browser.resolveBrowserControlAuth({}, {} as NodeJS.ProcessEnv)).toEqual({
       token: undefined,

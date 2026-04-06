@@ -165,27 +165,33 @@ export async function loadStatusScanModuleForTest(
   } = {},
 ) {
   vi.resetModules();
+  const getStatusCommandSecretTargetIds = mocks.getStatusCommandSecretTargetIds ?? vi.fn(() => []);
+  const resolveMemorySearchConfig =
+    mocks.resolveMemorySearchConfig ?? vi.fn(() => ({ store: { path: "/tmp/main.sqlite" } }));
 
   vi.doMock("../channels/config-presence.js", () => ({
     hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
   }));
 
-  if (options.fastJson) {
-    vi.doMock("../config/io.js", () => ({
-      readBestEffortConfig: mocks.readBestEffortConfig,
-    }));
-    vi.doMock("../cli/command-secret-targets.js", () => ({
-      getStatusCommandSecretTargetIds: mocks.getStatusCommandSecretTargetIds,
-    }));
-    vi.doMock("../agents/memory-search.js", () => ({
-      resolveMemorySearchConfig: mocks.resolveMemorySearchConfig,
-    }));
-  } else {
+  vi.doMock("../config/io.js", () => ({
+    readBestEffortConfig: mocks.readBestEffortConfig,
+  }));
+  vi.doMock("../config/config.js", () => ({
+    readBestEffortConfig: mocks.readBestEffortConfig,
+  }));
+  vi.doMock("../cli/command-secret-targets.js", () => ({
+    getStatusCommandSecretTargetIds,
+  }));
+  vi.doMock("../cli/command-config-resolution.js", () => ({
+    resolveCommandConfigWithSecrets: mocks.resolveCommandSecretRefsViaGateway,
+  }));
+  vi.doMock("../agents/memory-search.js", () => ({
+    resolveMemorySearchConfig,
+  }));
+
+  if (!options.fastJson) {
     vi.doMock("../cli/progress.js", () => ({
       withProgress: vi.fn(async (_opts, run) => await run({ setLabel: vi.fn(), tick: vi.fn() })),
-    }));
-    vi.doMock("../config/config.js", () => ({
-      readBestEffortConfig: mocks.readBestEffortConfig,
     }));
     vi.doMock("./status-all/channels.js", () => ({
       buildChannelsTable: mocks.buildChannelsTable,
