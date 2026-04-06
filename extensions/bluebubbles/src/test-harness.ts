@@ -28,21 +28,74 @@ export function mockBlueBubblesPrivateApiStatusOnce(
   mock.mockReturnValueOnce(value);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizeBlueBubblesPrivateNetworkAliases(
+  config: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const record = asRecord(config);
+  if (!record) {
+    return config;
+  }
+  const network = asRecord(record.network);
+  const canonicalValue =
+    typeof network?.dangerouslyAllowPrivateNetwork === "boolean"
+      ? network.dangerouslyAllowPrivateNetwork
+      : typeof network?.allowPrivateNetwork === "boolean"
+        ? network.allowPrivateNetwork
+        : typeof record.dangerouslyAllowPrivateNetwork === "boolean"
+          ? record.dangerouslyAllowPrivateNetwork
+          : typeof record.allowPrivateNetwork === "boolean"
+            ? record.allowPrivateNetwork
+            : undefined;
+
+  if (canonicalValue === undefined) {
+    return config;
+  }
+
+  return {
+    ...record,
+    network: {
+      ...network,
+      dangerouslyAllowPrivateNetwork: canonicalValue,
+    },
+  };
+}
+
 export function resolveBlueBubblesAccountFromConfig(params: {
   cfg?: { channels?: { bluebubbles?: Record<string, unknown> } };
   accountId?: string;
 }) {
-  const baseConfig = params.cfg?.channels?.bluebubbles ?? {};
+  const baseConfig =
+    normalizeBlueBubblesPrivateNetworkAliases(params.cfg?.channels?.bluebubbles ?? {}) ?? {};
   const accountId = params.accountId ?? "default";
   const accountConfig =
-    accountId === "default"
-      ? {}
-      : ((baseConfig.accounts as Record<string, Record<string, unknown> | undefined> | undefined)?.[
-          accountId
-        ] ?? {});
-  const config = {
+    normalizeBlueBubblesPrivateNetworkAliases(
+      accountId === "default"
+        ? {}
+        : ((
+            baseConfig.accounts as Record<string, Record<string, unknown> | undefined> | undefined
+          )?.[accountId] ?? {}),
+    ) ?? {};
+  const config: Record<string, unknown> = {
     ...baseConfig,
     ...accountConfig,
+    network:
+      typeof baseConfig.network === "object" &&
+      baseConfig.network &&
+      !Array.isArray(baseConfig.network) &&
+      typeof accountConfig.network === "object" &&
+      accountConfig.network &&
+      !Array.isArray(accountConfig.network)
+        ? {
+            ...(baseConfig.network as Record<string, unknown>),
+            ...(accountConfig.network as Record<string, unknown>),
+          }
+        : (accountConfig.network ?? baseConfig.network),
   };
   return {
     accountId,
@@ -50,12 +103,6 @@ export function resolveBlueBubblesAccountFromConfig(params: {
     configured: Boolean(config.serverUrl && config.password),
     config,
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function resolveBlueBubblesPrivateNetworkConfigValueFromConfig(

@@ -31,17 +31,59 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function normalizeBlueBubblesPrivateNetworkAliases(
+  config: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const record = asRecord(config);
+  if (!record) {
+    return config;
+  }
+  const network = asRecord(record.network);
+  const canonicalValue =
+    typeof network?.dangerouslyAllowPrivateNetwork === "boolean"
+      ? network.dangerouslyAllowPrivateNetwork
+      : typeof network?.allowPrivateNetwork === "boolean"
+        ? network.allowPrivateNetwork
+        : typeof record.dangerouslyAllowPrivateNetwork === "boolean"
+          ? record.dangerouslyAllowPrivateNetwork
+          : typeof record.allowPrivateNetwork === "boolean"
+            ? record.allowPrivateNetwork
+            : undefined;
+
+  if (canonicalValue === undefined) {
+    return config;
+  }
+
+  return {
+    ...record,
+    network: {
+      ...network,
+      dangerouslyAllowPrivateNetwork: canonicalValue,
+    },
+  };
+}
+
 function mergeBlueBubblesAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): BlueBubblesAccountConfig {
+  const channelConfig = normalizeBlueBubblesPrivateNetworkAliases(
+    cfg.channels?.bluebubbles as BlueBubblesAccountConfig | undefined,
+  ) as BlueBubblesAccountConfig | undefined;
+  const accounts = cfg.channels?.bluebubbles?.accounts as
+    | Record<string, Partial<BlueBubblesAccountConfig>>
+    | undefined;
+  const accountConfig = normalizeBlueBubblesPrivateNetworkAliases(
+    normalizeAccountId(accountId) === "default"
+      ? undefined
+      : (accounts?.[accountId] as Partial<BlueBubblesAccountConfig> | undefined),
+  ) as Partial<BlueBubblesAccountConfig> | undefined;
   const merged = resolveMergedAccountConfig<BlueBubblesAccountConfig>({
-    channelConfig: cfg.channels?.bluebubbles as BlueBubblesAccountConfig | undefined,
-    accounts: cfg.channels?.bluebubbles?.accounts as
-      | Record<string, Partial<BlueBubblesAccountConfig>>
-      | undefined,
+    channelConfig,
+    accounts: accountConfig ? { [accountId]: accountConfig } : undefined,
     accountId,
     omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["network"],
   });
   return {
     ...merged,

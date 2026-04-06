@@ -23,4 +23,34 @@ describe("resolveBlueBubblesServerAccount", () => {
       allowPrivateNetwork: false,
     });
   });
+
+  it("lets a legacy per-account opt-in override a channel-level canonical default", () => {
+    expect(
+      resolveBlueBubblesServerAccount({
+        accountId: "personal",
+        cfg: {
+          channels: {
+            bluebubbles: {
+              network: {
+                dangerouslyAllowPrivateNetwork: false,
+              },
+              accounts: {
+                personal: {
+                  serverUrl: "http://127.0.0.1:1234",
+                  password: "test-password",
+                  allowPrivateNetwork: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toMatchObject({
+      accountId: "personal",
+      baseUrl: "http://127.0.0.1:1234",
+      password: "test-password",
+      allowPrivateNetwork: true,
+      allowPrivateNetworkConfig: true,
+    });
+  });
 });
