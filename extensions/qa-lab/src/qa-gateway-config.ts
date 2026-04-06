@@ -74,6 +74,21 @@ export function buildQaGatewayConfig(params: {
         contextWindow: 128_000,
         maxTokens: 4096,
       },
+      {
+        id: "gpt-image-1",
+        name: "gpt-image-1",
+        api: "openai-responses",
+        reasoning: false,
+        input: ["text"],
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        contextWindow: 128_000,
+        maxTokens: 4096,
+      },
     ],
   };
   const providerMode = params.providerMode ?? "mock-openai";
@@ -87,6 +102,8 @@ export function buildQaGatewayConfig(params: {
   const alternateModel =
     params.alternateModel ??
     (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4-alt");
+  const imageGenerationModelRef =
+    providerMode === "live-openai" ? "openai/gpt-image-1" : "mock-openai/gpt-image-1";
   const liveModelParams =
     providerMode === "live-openai"
       ? {
@@ -133,6 +150,17 @@ export function buildQaGatewayConfig(params: {
         model: {
           primary: primaryModel,
         },
+        imageGenerationModel: {
+          primary: imageGenerationModelRef,
+        },
+        memorySearch: {
+          sync: {
+            watch: true,
+            watchDebounceMs: 25,
+            onSessionStart: true,
+            onSearch: true,
+          },
+        },
         models: {
           [primaryModel]: {
             params: liveModelParams,
@@ -164,6 +192,9 @@ export function buildQaGatewayConfig(params: {
           },
         },
       ],
+    },
+    memory: {
+      backend: "builtin",
     },
     ...(providerMode === "mock-openai"
       ? {
