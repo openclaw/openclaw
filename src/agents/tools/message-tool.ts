@@ -588,6 +588,11 @@ function buildMessageToolDescription(options?: {
       const actionList = Array.from(allActions).toSorted().join(", ");
       let desc = `${baseDescription} Current channel (${currentChannel}) supports: ${actionList}.`;
 
+      // Add usage hints for non-obvious actions
+      if (allActions.has("read")) {
+        desc += ` Use action="read" with threadId to fetch prior messages in a thread when you need conversation context you don't have.`;
+      }
+
       // Include other configured channels so cron/isolated agents can discover them
       const otherChannels: string[] = [];
       for (const plugin of listChannelPlugins()) {

@@ -852,6 +852,48 @@ describe("message tool description", () => {
     expect(tool.description).toContain("Current channel (signal) supports: react, send.");
   });
 
+  it("includes read action usage hint when read is a supported action", () => {
+    const slackPlugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "Slack test plugin.",
+      actions: ["send", "read", "react", "delete", "edit"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "slack",
+    });
+
+    expect(tool.description).toContain('Use action="read" with threadId to fetch prior messages');
+  });
+
+  it("omits read action hint when read is not a supported action", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send", "react"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+
+    expect(tool.description).not.toContain("read");
+  });
+
   it("does not include 'Other configured channels' when only one channel is configured", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
