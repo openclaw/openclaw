@@ -72,8 +72,9 @@ export function createWebOnMessageHandler(params: {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
+    const freshCfg = loadConfig();
     const route = resolveAgentRoute({
-      cfg: loadConfig(),
+      cfg: freshCfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
@@ -168,7 +169,7 @@ export function createWebOnMessageHandler(params: {
       // (or agent identity name/emoji as fallback). A dedicated dmMentionPatterns
       // resolution path may be added in a follow-up.
       if (params.account.dmRequireMention) {
-        const mentionConfig = buildMentionConfig(loadConfig(), route.agentId);
+        const mentionConfig = buildMentionConfig(freshCfg, route.agentId);
         if (mentionConfig.mentionRegexes.length === 0) {
           // No patterns configured — allow DM through to avoid silent suppression.
           logVerbose(
