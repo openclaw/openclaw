@@ -147,6 +147,7 @@ describe("createVideoGenerateTool", () => {
       provider: "qwen",
       model: "wan2.6-t2v",
       attempts: [],
+      ignoredOverrides: [],
       videos: [
         {
           buffer: Buffer.from("video-bytes"),
