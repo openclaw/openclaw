@@ -1046,6 +1046,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         ),
       );
     }
+    defaultRuntime.exit(0);
     return;
   }
 
