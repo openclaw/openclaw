@@ -303,9 +303,7 @@ describe("session MCP runtime", () => {
     const effectiveWorkspace = await makeTempDir("openclaw-native-plugin-mcp-sandbox-");
     const pluginRoot = path.join(resolvedWorkspace, "native-plugins", "hello-world");
     const serverScriptPath = path.join(pluginRoot, "hello-world.mjs");
-    await writeBundleProbeMcpServer(serverScriptPath, {
-      responseText: "FROM-PLUGIN-SANDBOX",
-    });
+    await writeBundleProbeMcpServer(serverScriptPath);
 
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(
@@ -321,6 +319,9 @@ describe("session MCP runtime", () => {
       server: {
         command: "node",
         args: [serverScriptPath],
+        env: {
+          BUNDLE_PROBE_TEXT: "FROM-PLUGIN-SANDBOX",
+        },
       },
       source: path.join(pluginRoot, "index.mjs"),
       rootDir: pluginRoot,
