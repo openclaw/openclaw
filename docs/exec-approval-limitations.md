@@ -6,24 +6,23 @@ Currently, exec approvals are based on hashing the full command string.
 
 Example:
 
-python email_sender.py --content-file Day_007.md  
-python email_sender.py --content-file Day_008.md  
+python email\_sender.py --content-file Day\_007.md  
+python email\_sender.py --content-file Day\_008.md
 
 These generate different hashes, even though they execute the same script.
 
 ## Impact
 
-- "Allow always" becomes ineffective
-- Repeated approval prompts
-- Poor experience for dynamic workflows
+* "Allow always" becomes ineffective
+* Repeated approval prompts
+* Poor experience for dynamic workflows
 
 ## Suggested Improvements
 
-- Support executable-level trust (python.exe)
-- Support script-level trust (email_sender.py)
-- Support wildcard/pattern-based commands
-- Persist approvals across restarts
+* Support executable-level trust (python.exe)
+* Support script-level trust (email\_sender.py)
+* Support wildcard/pattern-based commands
+* Persist approvals across restarts
 
-## Related Issue
+## Related issue: #61667
 
-#61667
