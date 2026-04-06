@@ -430,7 +430,6 @@ export async function startQaLabServer(params?: {
   autoKickoffTarget?: string;
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
-  uiDistDir?: string;
 }) {
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;

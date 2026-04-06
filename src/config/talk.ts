@@ -147,7 +147,7 @@ export function resolveActiveTalkProviderConfig(
 }
 
 export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | undefined {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
   const normalized = normalizeTalkSection(value as TalkConfig);

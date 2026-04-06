@@ -22,7 +22,7 @@ import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import { note } from "../terminal/note.js";
-import { shortenHomePath } from "../utils.js";
+import { isRecord, shortenHomePath } from "../utils.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
