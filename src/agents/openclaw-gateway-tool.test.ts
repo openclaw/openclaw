@@ -516,6 +516,56 @@ describe("gateway tool", () => {
     );
   });
 
+  it("allows config.apply when dangerous hook mappings are only reordered", async () => {
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            hooks: {
+              mappings: [
+                {
+                  id: "gmail-a",
+                  allowUnsafeExternalContent: true,
+                },
+              ],
+            },
+            tools: {
+              exec: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+        };
+      }
+      return { ok: true };
+    });
+    const tool = requireGatewayTool(sessionKey);
+    const raw = `{
+      hooks: {
+        mappings: [
+          { id: "safe-new" },
+          { id: "gmail-a", allowUnsafeExternalContent: true }
+        ]
+      },
+      tools: { exec: { ask: "on-miss", security: "allowlist" } }
+    }`;
+
+    await tool.execute("call-reordered-dangerous-mapping", {
+      action: "config.apply",
+      raw,
+    });
+
+    expectConfigMutationCall({
+      callGatewayTool: vi.mocked(callGatewayTool),
+      action: "config.apply",
+      raw,
+      sessionKey,
+    });
+  });
+
   it("passes update.run through gateway call", async () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);

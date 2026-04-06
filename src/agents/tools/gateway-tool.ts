@@ -95,15 +95,41 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
   return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
+function normalizeDangerousConfigFlag(flag: string, config: Record<string, unknown>): string {
+  return flag.replace(/^(hooks\.mappings)\[(\d+)\]/, (_, prefix: string, indexStr: string) => {
+    const index = parseInt(indexStr, 10);
+    const mappings = (config as { hooks?: { mappings?: unknown[] } }).hooks?.mappings;
+    if (!Array.isArray(mappings)) {
+      return `${prefix}[${indexStr}]`;
+    }
+    const mapping = mappings[index];
+    if (mapping && typeof mapping === "object") {
+      const id = (mapping as Record<string, unknown>).id;
+      if (typeof id === "string") {
+        return `${prefix}[id=${id}]`;
+      }
+    }
+    return `${prefix}[${indexStr}]`;
+  });
+}
+
 function collectNewlyEnabledDangerousConfigFlags(
   currentConfig: Record<string, unknown>,
   nextConfig: Record<string, unknown>,
 ): string[] {
-  const currentFlags = new Set(
-    collectEnabledInsecureOrDangerousFlags(currentConfig as OpenClawConfig),
-  );
+  const currentFlagCounts = new Map<string, number>();
+  for (const flag of collectEnabledInsecureOrDangerousFlags(currentConfig as OpenClawConfig)) {
+    const normalizedFlag = normalizeDangerousConfigFlag(flag, currentConfig);
+    currentFlagCounts.set(normalizedFlag, (currentFlagCounts.get(normalizedFlag) ?? 0) + 1);
+  }
+  const seenNextFlagCounts = new Map<string, number>();
   const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig).filter(
-    (flag) => !currentFlags.has(flag),
+    (flag) => {
+      const normalizedFlag = normalizeDangerousConfigFlag(flag, nextConfig);
+      const nextCount = (seenNextFlagCounts.get(normalizedFlag) ?? 0) + 1;
+      seenNextFlagCounts.set(normalizedFlag, nextCount);
+      return nextCount > (currentFlagCounts.get(normalizedFlag) ?? 0);
+    },
   );
   if (
     getValueAtPath(currentConfig, "tools.exec.applyPatch.workspaceOnly") !== false &&
