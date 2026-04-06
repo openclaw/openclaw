@@ -38,6 +38,8 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerCommand() {},
     registerContextEngine() {},
     registerMemoryPromptSection() {},
+    registerMemoryPromptSupplement() {},
+    registerMemoryCorpusSupplement() {},
     registerMemoryFlushPlan() {},
     registerMemoryRuntime() {},
     registerMemoryEmbeddingProvider() {},

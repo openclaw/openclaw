@@ -138,7 +138,7 @@ describe("memory-core /dreaming command", () => {
     const result = await command.handler(createCommandContext("status"));
 
     expect(result.text).toContain("Dreaming status:");
-    expect(result.text).toContain("- enabled: on (America/Los_Angeles)");
+    expect(result.text).toContain("- enabled: off (America/Los_Angeles)");
     expect(result.text).toContain("- sweep cadence: 15 */8 * * *");
     expect(result.text).toContain("- promotion policy: score>=0.8, recalls>=3, uniqueQueries>=3");
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();

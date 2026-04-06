@@ -2117,6 +2117,14 @@ export type OpenClawPluginApi = {
   registerMemoryPromptSection: (
     builder: import("./memory-state.js").MemoryPromptSectionBuilder,
   ) => void;
+  /** Register an additive memory-adjacent prompt section (non-exclusive). */
+  registerMemoryPromptSupplement: (
+    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
+  ) => void;
+  /** Register an additive memory-adjacent search/read corpus supplement (non-exclusive). */
+  registerMemoryCorpusSupplement: (
+    supplement: import("./memory-state.js").MemoryCorpusSupplement,
+  ) => void;
   /** Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot). */
   registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;
   /** Register the active memory runtime adapter for this memory plugin (exclusive slot). */
