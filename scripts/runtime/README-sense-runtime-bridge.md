@@ -811,6 +811,21 @@ The manager policy bridge adds one more thin shortcut layer for high-confidence 
 
 This bridge is not a replacement for the full evaluator. It is only a high-confidence shortcut that keeps the normal path intact.
 
+The unified runtime entrypoint now also emits a top-level path summary:
+
+- `path_taken`
+  - human-readable route taken through handoff, triage, shortcut, bridge, or full evaluator
+- `used_handoff`
+  - whether a handoff payload was present at entry
+- `used_shortcut`
+  - whether a shortcut path was actually used
+- `used_bridge`
+  - whether the lightweight policy bridge was used
+- `used_full_evaluator`
+  - whether the normal full-evaluator path was taken
+
+This is observability only. It does not add retries or another runtime loop.
+
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 
 - `feedback_summary`

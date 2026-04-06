@@ -101,6 +101,35 @@ def infer_runtime_entry_state(dispatch_result: dict) -> str:
     return 'completed'
 
 
+def build_path_summary(args: argparse.Namespace, entry_result: dict, bridge_result: dict, dispatch_result: dict) -> dict:
+    entry_decision = str(entry_result.get('entry_decision') or 'unknown')
+    used_handoff = bool(args.handoff_json)
+    used_bridge = bridge_result.get('bridge_used') is True
+    used_shortcut = used_bridge or dispatch_result.get('shortcut_used') is True
+    used_full_evaluator = str(dispatch_result.get('dispatch_mode') or '') == 'full_evaluator'
+
+    if not used_handoff:
+        path_taken = 'no_handoff -> full_evaluator'
+    elif entry_decision == 'use_handoff' and used_shortcut and used_bridge:
+        path_taken = 'handoff -> triage(use_handoff) -> shortcut -> bridge -> executor'
+    elif entry_decision == 'hint_only':
+        path_taken = 'handoff -> triage(hint_only) -> full_evaluator'
+    elif entry_decision == 'rerun_full_evaluator':
+        path_taken = 'handoff -> triage(rerun_full_evaluator) -> full_evaluator'
+    elif entry_decision == 'use_handoff' and used_shortcut:
+        path_taken = 'handoff -> triage(use_handoff) -> shortcut -> executor'
+    else:
+        path_taken = f'handoff -> triage({entry_decision}) -> full_evaluator'
+
+    return {
+        'path_taken': path_taken,
+        'used_handoff': used_handoff,
+        'used_shortcut': used_shortcut,
+        'used_bridge': used_bridge,
+        'used_full_evaluator': used_full_evaluator,
+    }
+
+
 def extract_loop_convergence(dispatch_result: dict) -> dict | None:
     result = dispatch_result.get('dispatch_result')
     if isinstance(result, dict):
@@ -207,10 +236,16 @@ def main() -> int:
         dispatch_result = run_dispatch(script_dir, entry_result, runtime_args)
     feedback_summary = build_feedback_summary(entry_result, dispatch_result)
     feedback_memory = build_feedback_memory(entry_result, dispatch_result, feedback_summary)
+    path_summary = build_path_summary(args, entry_result, bridge_result, dispatch_result)
     output = {
         'entry_decision': entry_result.get('entry_decision'),
         'dispatch_mode': dispatch_result.get('dispatch_mode'),
         'runtime_entry_state': infer_runtime_entry_state(dispatch_result),
+        'path_taken': path_summary.get('path_taken'),
+        'used_handoff': path_summary.get('used_handoff'),
+        'used_shortcut': path_summary.get('used_shortcut'),
+        'used_bridge': path_summary.get('used_bridge'),
+        'used_full_evaluator': path_summary.get('used_full_evaluator'),
         'bridge_used': bridge_result.get('bridge_used') is True,
         'bridge_mode': bridge_result.get('bridge_mode'),
         'feedback_summary': feedback_summary,
