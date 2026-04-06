@@ -54,6 +54,19 @@ def run_handoff_triage(script_dir: Path, handoff: dict) -> dict:
     return json.loads(completed.stdout)
 
 
+def run_handoff_seed(script_dir: Path, handoff: dict) -> dict:
+    cmd = [
+        str(script_dir / 'sense-runtime-manager-handoff-seed.sh'),
+        '--input-json',
+        json.dumps(handoff, ensure_ascii=False),
+    ]
+    completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        error_text = completed.stderr.strip() or completed.stdout.strip() or 'handoff seed build failed'
+        raise RuntimeError(error_text)
+    return json.loads(completed.stdout)
+
+
 def run_full_evaluator(script_dir: Path, runtime_args: list[str]) -> dict:
     cmd = [str(script_dir / 'sense-runtime-routing-loop.sh'), *runtime_args]
     completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
@@ -88,11 +101,14 @@ def main() -> int:
     summary_confidence = triage.get('summary_confidence')
 
     if decision == 'use_handoff':
+        seed_result = run_handoff_seed(script_dir, handoff)
         entry_result = {
             'mode': 'handoff',
             'suggested_next_step': suggested_next_step,
             'primary_remaining_issue': primary_remaining_issue,
             'summary_confidence': summary_confidence,
+            'seed': seed_result.get('seed'),
+            'recommended_action': seed_result.get('recommended_action'),
         }
         output = {
             'entry_decision': decision,

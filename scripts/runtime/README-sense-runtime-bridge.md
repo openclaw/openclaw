@@ -730,6 +730,8 @@ Manager handoff triage helper:
 
 - `scripts/runtime/sense_runtime_manager_handoff_triage.py`
 - `scripts/runtime/sense-runtime-manager-handoff-triage.sh`
+- `scripts/runtime/sense_runtime_manager_handoff_seed.py`
+- `scripts/runtime/sense-runtime-manager-handoff-seed.sh`
 - `scripts/runtime/sense_runtime_manager_entry.py`
 - `scripts/runtime/sense-runtime-manager-entry.sh`
 
@@ -755,6 +757,7 @@ Manager entry now uses handoff triage as a thin pre-check before the full evalua
 - `use_handoff`
   - accept `suggested_next_step` as the provisional next move
   - do not run the full evaluator
+  - build a lightweight handoff seed and a recommended action from the suggested next step
 - `hint_only`
   - run the full evaluator
   - keep handoff fields as supplemental context in the entry result
@@ -762,6 +765,8 @@ Manager entry now uses handoff triage as a thin pre-check before the full evalua
   - ignore the handoff shortcut and run the full evaluator normally
 
 This keeps the handoff as a next-turn hint only. It does not add another runtime loop.
+
+The lightweight handoff seed is intentionally minimal. It is not a replacement for the full evaluator; it is a high-confidence shortcut for the next manager turn.
 
 Current convergence states are:
 
