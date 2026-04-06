@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyDiscordGatewayEvent,
+  DiscordGatewayLifecycleError,
   createDiscordGatewaySupervisor,
 } from "./gateway-supervisor.js";
 
@@ -31,6 +32,20 @@ describe("classifyDiscordGatewayEvent", () => {
     expect(transientEvent.type).toBe("fatal");
     expect(transientEvent.message).toBe("TypeError");
     expect(transientEvent.shouldStopLifecycle).toBe(true);
+  });
+
+  it("wraps fatal lifecycle stops with discord-specific context", () => {
+    const event = classifyDiscordGatewayEvent({
+      err: new TypeError(),
+      isDisallowedIntentsError: () => false,
+    });
+
+    const wrapped = new DiscordGatewayLifecycleError(event);
+
+    expect(wrapped.name).toBe("DiscordGatewayLifecycleError");
+    expect(wrapped.message).toBe("discord gateway fatal: TypeError");
+    expect(wrapped.eventType).toBe("fatal");
+    expect(wrapped.cause).toBeInstanceOf(TypeError);
   });
 });
 
@@ -99,6 +114,25 @@ describe("createDiscordGatewaySupervisor", () => {
     ).not.toThrow();
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
+    );
+  });
+
+  it("dedupes identical late gateway errors after dispose", () => {
+    const emitter = new EventEmitter();
+    const runtime = { error: vi.fn() };
+    const supervisor = createDiscordGatewaySupervisor({
+      gateway: { emitter },
+      isDisallowedIntentsError: () => false,
+      runtime: runtime as never,
+    });
+
+    supervisor.dispose();
+    emitter.emit("error", new TypeError());
+    emitter.emit("error", new TypeError());
+
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("suppressed late gateway fatal error after dispose: TypeError"),
     );
   });
 });

@@ -17,6 +17,18 @@ export type DiscordGatewayEvent = {
   shouldStopLifecycle: boolean;
 };
 
+export class DiscordGatewayLifecycleError extends Error {
+  readonly eventType: DiscordGatewayEventType;
+
+  constructor(event: Pick<DiscordGatewayEvent, "type" | "message" | "err">) {
+    super(`discord gateway ${event.type}: ${event.message}`, {
+      cause: event.err instanceof Error ? event.err : undefined,
+    });
+    this.name = "DiscordGatewayLifecycleError";
+    this.eventType = event.type;
+  }
+}
+
 export type DiscordGatewaySupervisor = {
   emitter?: EventEmitter;
   attachLifecycle: (handler: (event: DiscordGatewayEvent) => void) => void;
@@ -97,9 +109,15 @@ export function createDiscordGatewaySupervisor(params: {
 
   let lifecycleHandler: ((event: DiscordGatewayEvent) => void) | undefined;
   let phase: GatewaySupervisorPhase = "buffering";
+  const seenLateEventKeys = new Set<string>();
   const logLateEvent =
     (state: Extract<GatewaySupervisorPhase, "disposed" | "teardown">) =>
     (event: DiscordGatewayEvent) => {
+      const key = `${state}:${event.type}:${event.message}`;
+      if (seenLateEventKeys.has(key)) {
+        return;
+      }
+      seenLateEventKeys.add(key);
       params.runtime.error?.(
         danger(
           `discord: suppressed late gateway ${event.type} error ${
