@@ -27,6 +27,26 @@ export default defineConfig(() => {
     optimizeDeps: {
       include: ["lit/directives/repeat.js"],
     },
+    define: {
+      "process.env": "{}",
+      "process.cwd": "(() => '/')",
+      "process.platform": "'web'",
+    },
+    resolve: {
+      alias: [
+        { find: /^jiti$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:fs$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:fs\/promises$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:os$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:crypto$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:module$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:path$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:path\/posix$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:path\/win32$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:util$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+        { find: /^node:url$/, replacement: path.resolve(here, "src/stubs/dummy.ts") },
+      ],
+    },
     build: {
       outDir: path.resolve(here, "../dist/control-ui"),
       emptyOutDir: true,

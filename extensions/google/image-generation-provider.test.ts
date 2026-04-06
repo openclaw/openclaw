@@ -1,6 +1,6 @@
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 import { __testing as geminiWebSearchTesting } from "./src/gemini-web-search-provider.js";
 
@@ -44,6 +44,13 @@ function installGoogleFetchMock(params?: {
 }
 
 describe("Google image-generation provider", () => {
+  beforeEach(() => {
+    delete process.env.GOOGLE_GEMINI_BASE_URL;
+    delete process.env.GOOGLE_GEMINI_ENDPOINT;
+    delete process.env.GEMINI_BASE_URL;
+    delete process.env.GEMINI_API_TYPE;
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -319,5 +326,51 @@ describe("Google image-generation provider", () => {
     expect(geminiWebSearchTesting.resolveGeminiModel({ model: "gemini-2.5-pro" })).toBe(
       "gemini-2.5-pro",
     );
+  });
+
+  it("resolves the Gemini base URL from configuration or environment variable", () => {
+    const defaultUrl = "https://generativelanguage.googleapis.com/v1beta";
+    const originalEnv = process.env.GOOGLE_GEMINI_BASE_URL;
+    delete process.env.GOOGLE_GEMINI_BASE_URL;
+
+    try {
+      expect(geminiWebSearchTesting.resolveGeminiBaseUrl()).toBe(defaultUrl);
+
+      expect(
+        geminiWebSearchTesting.resolveGeminiBaseUrl({ baseUrl: "https://custom.api.com" }),
+      ).toBe("https://custom.api.com");
+
+      process.env.GOOGLE_GEMINI_BASE_URL = "https://env.api.com";
+      expect(geminiWebSearchTesting.resolveGeminiBaseUrl()).toBe("https://env.api.com");
+
+      // Config should override environment
+      expect(
+        geminiWebSearchTesting.resolveGeminiBaseUrl({ baseUrl: "https://config.api.com" }),
+      ).toBe("https://config.api.com");
+
+      // Check aliases
+      delete process.env.GOOGLE_GEMINI_BASE_URL;
+      process.env.GEMINI_BASE_URL = "https://gemini.alias.com";
+      expect(geminiWebSearchTesting.resolveGeminiBaseUrl()).toBe("https://gemini.alias.com");
+
+      delete process.env.GEMINI_BASE_URL;
+      process.env.GOOGLE_GEMINI_ENDPOINT = "https://endpoint.alias.com";
+      expect(geminiWebSearchTesting.resolveGeminiBaseUrl()).toBe("https://endpoint.alias.com");
+    } finally {
+      delete process.env.GOOGLE_GEMINI_BASE_URL;
+      delete process.env.GEMINI_BASE_URL;
+      delete process.env.GOOGLE_GEMINI_ENDPOINT;
+      if (originalEnv !== undefined) {
+        process.env.GOOGLE_GEMINI_BASE_URL = originalEnv;
+      }
+    }
+  });
+
+  it("normalizes the Gemini base URL (e.g. adding /v1beta if missing from canonical origin)", () => {
+    expect(
+      geminiWebSearchTesting.resolveGeminiBaseUrl({
+        baseUrl: "https://generativelanguage.googleapis.com",
+      }),
+    ).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 });
