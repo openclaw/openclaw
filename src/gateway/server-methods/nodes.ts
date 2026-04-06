@@ -222,6 +222,8 @@ function resolveAllowedPendingNodeActions(params: {
   const allowlist = resolveNodeCommandAllowlist(loadConfig(), {
     platform: connect?.client?.platform,
     deviceFamily: connect?.client?.deviceFamily,
+    nodeId: params.nodeId,
+    displayName: connect?.client?.displayName,
   });
   const allowed = pending.filter((entry) => {
     const result = isNodeCommandAllowed({

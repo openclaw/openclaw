@@ -2,10 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
+const persistVisibleAssistantTextToTranscriptMock = vi.fn();
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
     persistGatewaySessionLifecycleEventMock(...args),
+}));
+
+vi.mock("./chat-visible-text-persistence.js", () => ({
+  persistVisibleAssistantTextToTranscript: (...args: unknown[]) =>
+    persistVisibleAssistantTextToTranscriptMock(...args),
+}));
+
+vi.mock("./session-utils.js", () => ({
+  loadSessionEntry: vi.fn(() => ({ cfg: {}, entry: { sessionFile: "/tmp/session.jsonl" } })),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -42,6 +52,7 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
+    persistVisibleAssistantTextToTranscriptMock.mockReset().mockReturnValue(true);
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
@@ -419,6 +430,48 @@ describe("agent event handler", () => {
     expect(finalPayload.message?.content?.[0]?.text).toBe("Before tool call\nAfter tool call");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
     nowSpy.mockRestore();
+  });
+
+  it("preserves a visible prefix when a later assistant snapshot restarts shorter", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 4_000,
+    });
+    chatRunState.registry.add("run-prefix", {
+      sessionKey: "session-prefix",
+      clientRunId: "client-prefix",
+    });
+
+    handler({
+      runId: "run-prefix",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "补充一个架构图：" },
+    });
+    handler({
+      runId: "run-prefix",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "项目结构总结" },
+    });
+    emitLifecycleEnd(handler, "run-prefix", 3);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(3);
+    const finalPayload = chatCalls[2]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("补充一个架构图：项目结构总结");
+    expect(persistVisibleAssistantTextToTranscriptMock).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "session-prefix",
+      visibleText: "补充一个架构图：项目结构总结",
+    });
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy?.mockRestore();
   });
 
   it("does not flush an extra delta when the latest text already broadcast", () => {

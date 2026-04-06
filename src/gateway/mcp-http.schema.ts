@@ -42,6 +42,25 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
           mergedProps[key] = merged;
           continue;
         }
+        // enum + const: append the const value to the existing enum array.
+        if (Array.isArray(existing.enum) && "const" in incoming) {
+          mergedProps[key] = {
+            ...existing,
+            enum: [...new Set([...(existing.enum as unknown[]), incoming.const])],
+          };
+          continue;
+        }
+        if ("const" in existing && Array.isArray(incoming.enum)) {
+          mergedProps[key] = {
+            ...incoming,
+            enum: [...new Set([existing.const, ...(incoming.enum as unknown[])])],
+          };
+          continue;
+        }
+        // Same base type with different description/metadata — compatible, keep first.
+        if (existing.type && existing.type === incoming.type) {
+          continue;
+        }
         logWarn(
           `mcp loopback: conflicting schema definitions for "${key}", keeping the first variant`,
         );

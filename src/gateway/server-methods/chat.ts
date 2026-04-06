@@ -11,6 +11,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { transcriptFindIdempotencyKey } from "../../config/sessions/transcript.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -815,21 +816,7 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
 }
 
 function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: string): boolean {
-  try {
-    const lines = fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/);
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
-      if (parsed?.message?.idempotencyKey === idempotencyKey) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  }
+  return transcriptFindIdempotencyKey(transcriptPath, idempotencyKey) !== undefined;
 }
 
 function appendAssistantTranscriptMessage(params: {

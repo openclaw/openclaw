@@ -1,3 +1,4 @@
+import { mergeAssistantVisibleText } from "../../../../src/shared/assistant-visible-text-merge.ts";
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
@@ -13,6 +14,29 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
+}
+
+function mergeAssistantMessageWithStream(
+  message: Record<string, unknown>,
+  streamedText: string | null,
+): Record<string, unknown> {
+  if (!streamedText?.trim()) {
+    return message;
+  }
+  if (isSilentReplyStream(streamedText)) {
+    return message;
+  }
+
+  const messageVisibleText = extractText(message) ?? "";
+  const mergedText = mergeAssistantVisibleText(streamedText, messageVisibleText);
+  if (!mergedText || mergedText === messageVisibleText) {
+    return message;
+  }
+
+  return {
+    ...message,
+    text: mergedText,
+  };
 }
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {
@@ -295,12 +319,15 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (payload.state === "delta") {
     const next = extractText(payload.message);
     if (typeof next === "string" && !isSilentReplyStream(next)) {
-      state.chatStream = next;
+      state.chatStream = mergeAssistantVisibleText(state.chatStream ?? "", next);
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
-    if (finalMessage && !isAssistantSilentReply(finalMessage)) {
-      state.chatMessages = [...state.chatMessages, finalMessage];
+    const mergedFinalMessage = finalMessage
+      ? mergeAssistantMessageWithStream(finalMessage, state.chatStream)
+      : null;
+    if (mergedFinalMessage && !isAssistantSilentReply(mergedFinalMessage)) {
+      state.chatMessages = [...state.chatMessages, mergedFinalMessage];
     } else if (state.chatStream?.trim() && !isSilentReplyStream(state.chatStream)) {
       state.chatMessages = [
         ...state.chatMessages,
@@ -316,8 +343,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatStreamStartedAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
-    if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
-      state.chatMessages = [...state.chatMessages, normalizedMessage];
+    const mergedAbortedMessage = normalizedMessage
+      ? mergeAssistantMessageWithStream(normalizedMessage, state.chatStream)
+      : null;
+    if (mergedAbortedMessage && !isAssistantSilentReply(mergedAbortedMessage)) {
+      state.chatMessages = [...state.chatMessages, mergedAbortedMessage];
     } else {
       const streamedText = state.chatStream ?? "";
       if (streamedText.trim() && !isSilentReplyStream(streamedText)) {

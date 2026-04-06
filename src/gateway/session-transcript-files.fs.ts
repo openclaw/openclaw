@@ -158,8 +158,9 @@ export function archiveSessionTranscriptsDetailed(opts: {
   restrictToStoreDir?: boolean;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
+  const restrictToStoreDir = opts.restrictToStoreDir ?? true;
   const storeDir =
-    opts.restrictToStoreDir && opts.storePath
+    restrictToStoreDir && opts.storePath
       ? canonicalizePathForComparison(path.dirname(opts.storePath))
       : null;
   for (const candidate of resolveSessionTranscriptCandidates(

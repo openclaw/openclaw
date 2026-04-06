@@ -52,6 +52,8 @@ export async function reconcileNodePairingOnConnect(params: {
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
+    nodeId,
+    displayName: params.connectParams.client.displayName,
   });
   const declared = normalizeDeclaredNodeCommands({
     declaredCommands: Array.isArray(params.connectParams.commands)

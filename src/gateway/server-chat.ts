@@ -4,7 +4,9 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { mergeAssistantVisibleText } from "../shared/assistant-visible-text-merge.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { persistVisibleAssistantTextToTranscript } from "./chat-visible-text-persistence.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
@@ -129,7 +131,7 @@ function resolveMergedAssistantText(params: {
     return appendUniqueSuffix(previousText, nextDelta);
   }
   if (nextText) {
-    return nextText;
+    return mergeAssistantVisibleText(previousText, nextText);
   }
   return previousText;
 }
@@ -661,6 +663,21 @@ export function createAgentEventHandler({
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
+      if (text && !shouldSuppressSilent) {
+        try {
+          const { entry } = loadSessionEntry(sessionKey);
+          const sessionFile = typeof entry?.sessionFile === "string" ? entry.sessionFile : "";
+          if (sessionFile) {
+            persistVisibleAssistantTextToTranscript({
+              sessionFile,
+              sessionKey,
+              visibleText: text,
+            });
+          }
+        } catch {
+          // Best effort: chat final delivery should not fail when transcript repair cannot run.
+        }
+      }
       const payload = {
         runId: clientRunId,
         sessionKey,

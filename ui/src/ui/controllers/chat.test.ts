@@ -134,7 +134,7 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
-  it("replaces the stream when a delta snapshot gets shorter", () => {
+  it("preserves the visible stream when a later delta snapshot gets shorter", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -150,7 +150,7 @@ describe("handleChatEvent", () => {
       },
     };
     expect(handleChatEvent(state, payload)).toBe("delta");
-    expect(state.chatStream).toBe("Alpha");
+    expect(state.chatStream).toBe("Alpha beta");
   });
 
   it("returns final for another run when payload has no message", () => {
@@ -229,11 +229,11 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
-  it("prefers final payload message over streamed text", () => {
+  it("preserves the visible streamed prefix when final payload restarts from a shorter answer", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
-      chatStream: "Streamed partial",
+      chatStream: "Streamed prefix: ",
       chatStreamStartedAt: 100,
     });
     const finalMsg = {
@@ -248,7 +248,70 @@ describe("handleChatEvent", () => {
       message: finalMsg,
     };
     expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([
+      {
+        ...finalMsg,
+        text: "Streamed prefix: Complete reply",
+      },
+    ]);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("keeps the final payload unchanged when it already extends the streamed text", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Complete",
+      chatStreamStartedAt: 100,
+    });
+    const finalMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: "Complete reply" }],
+      timestamp: 101,
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: finalMsg,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toEqual([finalMsg]);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("fills assistant final messages that have no visible text with the streamed text", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Visible streamed text",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "thinking like caveman",
+            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+          },
+        ],
+        timestamp: 101,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([
+      {
+        ...(payload.message as Record<string, unknown>),
+        text: "Visible streamed text",
+      },
+    ]);
     expect(state.chatStream).toBe(null);
   });
 
