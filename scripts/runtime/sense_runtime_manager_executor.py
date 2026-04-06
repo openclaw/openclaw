@@ -138,10 +138,53 @@ def normalize_executor_error_source_layer(output: dict) -> str:
     return 'EXECUTOR'
 
 
+def normalize_executor_error_stage(output: dict) -> str:
+    error_code = str(output.get('error_code') or '')
+    error_detail_code = str(output.get('error_detail_code') or '')
+    executor_state = str(output.get('executor_state') or '')
+    if error_code == 'NONE':
+        return 'NONE'
+    if executor_state == 'stopped':
+        return 'EXECUTOR_GATE'
+
+    followup_result = output.get('post_task_followup_result')
+    followup_payload = extract_result_payload(followup_result)
+    followup_exit_code = extract_step_exit_code(followup_result or {})
+    if (
+        output.get('post_task_followup_executed') is True
+        and (
+            followup_payload.get('error')
+            or (followup_exit_code is not None and followup_exit_code != 0)
+        )
+    ):
+        return 'POST_TASK_FOLLOWUP'
+
+    main_action = output.get('main_action') if isinstance(output.get('main_action'), dict) else {}
+    secondary_action = output.get('secondary_action') if isinstance(output.get('secondary_action'), dict) else {}
+    action_name = str(
+        main_action.get('action')
+        or secondary_action.get('action')
+        or ''
+    )
+    error_text = str(
+        extract_result_payload(main_action).get('error')
+        or extract_result_payload(secondary_action).get('error')
+        or output.get('secondary_gate_reason')
+        or ''
+    ).lower()
+
+    if action_name == 'run_runtime_task':
+        if 'poll' in error_text or 'wait' in error_text or error_detail_code == 'TIMEOUT_EXECUTOR':
+            return 'TASK_POLL'
+        return 'TASK_SUBMIT'
+    return 'REMEDIATION'
+
+
 def finalize_output(output: dict) -> dict:
     output['error_code'] = normalize_executor_error_code(output)
     output['error_detail_code'] = normalize_executor_error_detail_code(output)
     output['error_source_layer'] = normalize_executor_error_source_layer(output)
+    output['error_stage'] = normalize_executor_error_stage(output)
     output['manager_handoff'] = build_manager_handoff(output)
     return output
 
@@ -597,6 +640,7 @@ def build_manager_handoff(report: dict) -> dict:
         'error_code': report.get('error_code'),
         'error_detail_code': report.get('error_detail_code'),
         'error_source_layer': report.get('error_source_layer'),
+        'error_stage': report.get('error_stage'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),
