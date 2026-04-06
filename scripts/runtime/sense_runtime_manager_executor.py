@@ -58,11 +58,40 @@ def build_runtime_args(args: argparse.Namespace) -> list[str]:
     return runtime_args
 
 
+def strip_input_arg(runtime_args: list[str]) -> list[str]:
+    stripped: list[str] = []
+    index = 0
+    while index < len(runtime_args):
+        item = runtime_args[index]
+        if item == '--input':
+            index += 2
+            continue
+        stripped.append(item)
+        index += 1
+    return stripped
+
+
+def normalize_task_payload(raw_payload: dict | None, fallback_input: str | None) -> dict:
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    raw_params = payload.get('params')
+    params = raw_params if isinstance(raw_params, dict) else {}
+    task = str(payload.get('task') or params.get('task_type') or 'run')
+    input_text = payload.get('input')
+    if not isinstance(input_text, str) or not input_text.strip():
+        input_text = fallback_input or 'Run a Sense runtime task from the manager executor.'
+    return {
+        'task': task,
+        'input': input_text,
+        'params': params,
+    }
+
+
 def execute_step(
     script_dir: Path,
     action: str | None,
     step: str | None,
     runtime_args: list[str],
+    task_payload: dict | None = None,
 ) -> dict:
     resolved_action = action or 'unknown'
     resolved_step = step or ACTION_STEP_DEFAULTS.get(resolved_action)
@@ -74,12 +103,25 @@ def execute_step(
             'result': None,
         }
 
-    cmd = [
-        str(script_dir / 'sense-runtime-remediation.sh'),
-        *runtime_args,
-        '--recommended-action',
-        resolved_step,
-    ]
+    if resolved_action == 'run_runtime_task' or resolved_step == 'run_runtime_task':
+        normalized_task_payload = normalize_task_payload(task_payload, None)
+        cmd = [
+            str(script_dir / 'sense-runtime-manager-task.sh'),
+            *strip_input_arg(runtime_args),
+            '--task',
+            normalized_task_payload['task'],
+            '--input',
+            normalized_task_payload['input'],
+            '--params-json',
+            json.dumps(normalized_task_payload['params'], ensure_ascii=False),
+        ]
+    else:
+        cmd = [
+            str(script_dir / 'sense-runtime-remediation.sh'),
+            *runtime_args,
+            '--recommended-action',
+            resolved_step,
+        ]
     completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
     if completed.returncode != 0:
         error_text = completed.stderr.strip() or completed.stdout.strip() or f'command failed with exit code {completed.returncode}'
@@ -212,6 +254,14 @@ def main() -> int:
     secondary_next_step = policy.get('secondary_next_step')
     fallback_action = policy.get('fallback_action')
     confidence_gate_applied = policy.get('confidence_gate_applied') is True
+    main_task_payload = normalize_task_payload(
+        policy.get('main_task_payload') or policy.get('task_payload'),
+        args.input,
+    )
+    secondary_task_payload = normalize_task_payload(
+        policy.get('secondary_task_payload') or policy.get('task_payload'),
+        args.input,
+    )
 
     secondary_placeholder = build_secondary_placeholder(
         secondary_action, secondary_next_step
@@ -235,6 +285,10 @@ def main() -> int:
             'warning_count': 0,
             'main_action': main_placeholder,
             'secondary_action': secondary_placeholder,
+            'task_payload': {
+                'main': main_task_payload if manager_action == 'run_runtime_task' else None,
+                'secondary': secondary_task_payload if secondary_action == 'run_runtime_task' else None,
+            },
             'fallback_action': fallback_action,
             'duration_sec': round(time.monotonic() - started_at, 3),
             'exit_summary': build_exit_summary(main_placeholder, secondary_placeholder),
@@ -243,7 +297,13 @@ def main() -> int:
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
-    main_result = execute_step(script_dir, manager_action, next_step, runtime_args)
+    main_result = execute_step(
+        script_dir,
+        manager_action,
+        next_step,
+        runtime_args,
+        main_task_payload,
+    )
     main_exit_code = extract_step_exit_code(main_result)
     main_error = (
         main_result.get('executed')
@@ -261,6 +321,10 @@ def main() -> int:
             'warning_count': len(main_warnings),
             'main_action': main_result,
             'secondary_action': secondary_placeholder,
+            'task_payload': {
+                'main': main_task_payload if manager_action == 'run_runtime_task' else None,
+                'secondary': secondary_task_payload if secondary_action == 'run_runtime_task' else None,
+            },
             'fallback_action': fallback_action,
             'duration_sec': round(time.monotonic() - started_at, 3),
             'exit_summary': build_exit_summary(main_result, secondary_placeholder),
@@ -279,6 +343,10 @@ def main() -> int:
             'warning_count': len(main_warnings),
             'main_action': main_result,
             'secondary_action': secondary_placeholder,
+            'task_payload': {
+                'main': main_task_payload if manager_action == 'run_runtime_task' else None,
+                'secondary': secondary_task_payload if secondary_action == 'run_runtime_task' else None,
+            },
             'fallback_action': fallback_action,
             'duration_sec': round(time.monotonic() - started_at, 3),
             'exit_summary': build_exit_summary(main_result, secondary_placeholder),
@@ -298,7 +366,13 @@ def main() -> int:
         else:
             secondary_gate_decision = 'continue_secondary'
             secondary_gate_reason = 'main action completed without an error payload or non-zero exit code'
-        secondary_result = execute_step(script_dir, secondary_action, secondary_next_step, runtime_args)
+        secondary_result = execute_step(
+            script_dir,
+            secondary_action,
+            secondary_next_step,
+            runtime_args,
+            secondary_task_payload,
+        )
         if secondary_result.get('executed') and isinstance(secondary_result.get('result'), dict) and secondary_result['result'].get('error'):
             output = {
                 'executor_state': 'failed',
@@ -309,6 +383,10 @@ def main() -> int:
                 'warning_count': len(main_warnings),
                 'main_action': main_result,
                 'secondary_action': secondary_result,
+                'task_payload': {
+                    'main': main_task_payload if manager_action == 'run_runtime_task' else None,
+                    'secondary': secondary_task_payload if secondary_action == 'run_runtime_task' else None,
+                },
                 'fallback_action': fallback_action,
                 'duration_sec': round(time.monotonic() - started_at, 3),
                 'exit_summary': build_exit_summary(main_result, secondary_result),
@@ -328,6 +406,10 @@ def main() -> int:
                 'warning_count': len(main_warnings),
                 'main_action': main_result,
                 'secondary_action': secondary_result,
+                'task_payload': {
+                    'main': main_task_payload if manager_action == 'run_runtime_task' else None,
+                    'secondary': secondary_task_payload if secondary_action == 'run_runtime_task' else None,
+                },
                 'fallback_action': fallback_action,
                 'duration_sec': round(time.monotonic() - started_at, 3),
                 'exit_summary': build_exit_summary(main_result, secondary_result),
@@ -345,6 +427,10 @@ def main() -> int:
         'warning_count': len(main_warnings),
         'main_action': main_result,
         'secondary_action': secondary_result,
+        'task_payload': {
+            'main': main_task_payload if manager_action == 'run_runtime_task' else None,
+            'secondary': secondary_task_payload if secondary_action == 'run_runtime_task' else None,
+        },
         'fallback_action': fallback_action,
         'duration_sec': round(time.monotonic() - started_at, 3),
         'exit_summary': build_exit_summary(main_result, secondary_result),

@@ -591,6 +591,8 @@ Thin manager executor:
 
 - `scripts/runtime/sense_runtime_manager_executor.py`
 - `scripts/runtime/sense-runtime-manager-executor.sh`
+- `scripts/runtime/sense_runtime_manager_task.py`
+- `scripts/runtime/sense-runtime-manager-task.sh`
 
 Current orchestration layers are:
 
@@ -632,13 +634,37 @@ Current execution mapping is:
 - `start_nim_runtime` -> `start_nim_runtime`
 - `review_runtime_capabilities` -> `review_runtime_capabilities`
 - `retry_once` -> `check_selected_model_config`
-- `run_runtime_task` -> `run_runtime_task`
+- `run_runtime_task` -> manager task helper -> Sense runtime `/execute`
+
+`run_runtime_task` now uses a real task launcher instead of a placeholder. The manager executor passes a task payload into a thin helper, and that helper reuses the existing Sense runtime bridge contract to submit a NemoClaw job and wait for completion.
+
+Minimal task payload shape:
+
+```json
+{
+  "task": "analyze",
+  "input": "Summarize current Sense runtime readiness.",
+  "params": {
+    "mode": "nemoclaw_job",
+    "scope": "nemoclaw",
+    "job_profile": "future-nemoclaw",
+    "task_type": "status"
+  }
+}
+```
+
+Current behavior is intentionally conservative:
+
+- the worker submission still uses the existing `heavy_task` runtime-plane contract
+- manager task intent is carried through structured task payload fields
+- `task_payload` is included in the executor report so the manager can see exactly what was launched
 
 Execution report shape includes:
 
 - `executor_state`
 - `main_action`
 - `secondary_action`
+- `task_payload`
 - `secondary_gate_decision`
 - `secondary_gate_reason`
 - `secondary_gate_warning`
