@@ -182,6 +182,78 @@ describe("loadEnabledPluginMcpServerConfig", () => {
     });
   });
 
+  it("drops workspace plugin MCP servers after an allowlist is cleared", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "plugin-a",
+        rootDir: "/tmp/plugin-a",
+        origin: "workspace",
+        activationSource: "explicit",
+      }),
+    );
+    registry.mcpServers.push({
+      pluginId: "plugin-a",
+      name: "helloWorld",
+      server: { command: "node", args: ["hello.mjs"] },
+      source: "/tmp/plugin-a/index.cjs",
+      rootDir: "/tmp/plugin-a",
+    });
+    setActivePluginRegistry(registry, "mcp-server-test", "default", "/tmp/workspace-a");
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        workspaceDir: "/tmp/workspace-a",
+        cfg: {
+          plugins: {},
+        },
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {},
+      },
+    });
+  });
+
+  it("keeps bundled default-enabled MCP servers when runtime config has no allowlist", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "plugin-a",
+        rootDir: "/tmp/plugin-a",
+        origin: "bundled",
+        activationSource: "default",
+      }),
+    );
+    registry.mcpServers.push({
+      pluginId: "plugin-a",
+      name: "helloWorld",
+      server: { command: "node", args: ["hello.mjs"] },
+      source: "/tmp/plugin-a/index.cjs",
+      rootDir: "/tmp/plugin-a",
+    });
+    setActivePluginRegistry(registry, "mcp-server-test", "default", "/tmp/workspace-a");
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        workspaceDir: "/tmp/workspace-a",
+        cfg: {
+          plugins: {},
+        },
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {
+          helloWorld: {
+            command: "node",
+            args: ["hello.mjs"],
+            cwd: "/tmp/plugin-a",
+          },
+        },
+      },
+    });
+  });
+
   it("honors plugins.allow allowlists from runtime config", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));

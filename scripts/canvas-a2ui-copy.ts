@@ -30,7 +30,8 @@ export async function copyA2uiAssets({ srcDir, outDir }: { srcDir: string; outDi
     throw new Error(message, { cause: err });
   }
   await fs.mkdir(path.dirname(outDir), { recursive: true });
-  await fs.cp(srcDir, outDir, { recursive: true });
+  await fs.rm(outDir, { recursive: true, force: true });
+  await fs.cp(srcDir, outDir, { recursive: true, force: true });
 }
 
 async function main() {

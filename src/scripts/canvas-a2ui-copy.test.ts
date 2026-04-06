@@ -66,4 +66,22 @@ describe("canvas a2ui copy", () => {
       await expect(fs.stat(path.join(outDir, "a2ui.bundle.js"))).resolves.toBeTruthy();
     });
   });
+
+  it("replaces an existing output directory on repeated copies", async () => {
+    await withA2uiFixture(async (dir) => {
+      const srcDir = path.join(dir, "src");
+      const outDir = path.join(dir, "dist");
+      await fs.mkdir(srcDir, { recursive: true });
+      await fs.writeFile(path.join(srcDir, "index.html"), "<html>first</html>", "utf8");
+      await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log(1);", "utf8");
+
+      await copyA2uiAssets({ srcDir, outDir });
+      await fs.writeFile(path.join(srcDir, "index.html"), "<html>second</html>", "utf8");
+
+      await expect(copyA2uiAssets({ srcDir, outDir })).resolves.toBeUndefined();
+      await expect(fs.readFile(path.join(outDir, "index.html"), "utf8")).resolves.toBe(
+        "<html>second</html>",
+      );
+    });
+  });
 });

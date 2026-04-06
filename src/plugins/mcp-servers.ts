@@ -37,19 +37,15 @@ function isPluginEnabledByConfig(
     return false;
   }
 
-  // The registry already reflects the active plugin set for this runtime. Only
-  // re-apply activation when config carries an explicit selection surface that
-  // can narrow or widen that set, such as allowlists or an explicit per-plugin
-  // enable override.
-  if (normalizedPlugins.allow.length === 0 && entry?.enabled !== true) {
-    return true;
-  }
-
   return resolveEffectivePluginActivationState({
     id: plugin.id,
     origin: plugin.origin,
     config: normalizedPlugins,
     rootConfig: cfg,
+    // Active runtime registries do not retain manifest-level enabledByDefault,
+    // but activationSource preserves whether this plugin was admitted by the
+    // bundled default policy versus an explicit selection.
+    enabledByDefault: plugin.activationSource === "default",
   }).activated;
 }
 
