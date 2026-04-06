@@ -115,6 +115,7 @@ import { applyExtraParamsToAgent } from "./extra-params.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
@@ -973,6 +974,28 @@ export async function compactEmbeddedPiSessionDirect(
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
           });
+          let effectiveFirstKeptEntryId = result.firstKeptEntryId;
+          let postCompactionLeafId =
+            typeof sessionManager.getLeafId === "function"
+              ? (sessionManager.getLeafId() ?? undefined)
+              : undefined;
+          if (params.trigger === "manual") {
+            try {
+              const hardenedBoundary = await hardenManualCompactionBoundary({
+                sessionFile: params.sessionFile,
+              });
+              if (hardenedBoundary.applied) {
+                effectiveFirstKeptEntryId =
+                  hardenedBoundary.firstKeptEntryId ?? effectiveFirstKeptEntryId;
+                postCompactionLeafId = hardenedBoundary.leafId ?? postCompactionLeafId;
+                session.agent.state.messages = hardenedBoundary.messages;
+              }
+            } catch (err) {
+              log.warn("[compaction] failed to harden manual compaction boundary", {
+                errorMessage: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
           // Estimate tokens after compaction by summing token estimates for remaining messages
           const tokensAfter = estimateTokensAfterCompaction({
             messagesAfter: session.messages,
@@ -984,7 +1007,6 @@ export async function compactEmbeddedPiSessionDirect(
           const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {
-              const postCompactionLeafId = sessionManager.getLeafId() ?? undefined;
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,
                 sessionKey: params.sessionKey,
@@ -994,7 +1016,7 @@ export async function compactEmbeddedPiSessionDirect(
                 }),
                 snapshot: checkpointSnapshot,
                 summary: result.summary,
-                firstKeptEntryId: result.firstKeptEntryId,
+                firstKeptEntryId: effectiveFirstKeptEntryId,
                 tokensBefore: observedTokenCount ?? result.tokensBefore,
                 tokensAfter,
                 postSessionFile: params.sessionFile,
@@ -1040,7 +1062,7 @@ export async function compactEmbeddedPiSessionDirect(
             sessionFile: params.sessionFile,
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
-            firstKeptEntryId: result.firstKeptEntryId,
+            firstKeptEntryId: effectiveFirstKeptEntryId,
           });
           // Truncate session file to remove compacted entries (#39953)
           if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
@@ -1072,7 +1094,7 @@ export async function compactEmbeddedPiSessionDirect(
             compacted: true,
             result: {
               summary: result.summary,
-              firstKeptEntryId: result.firstKeptEntryId,
+              firstKeptEntryId: effectiveFirstKeptEntryId,
               tokensBefore: observedTokenCount ?? result.tokensBefore,
               tokensAfter,
               details: result.details,
@@ -1368,6 +1390,7 @@ export const __testing = {
   containsRealConversationMessages,
   estimateTokensAfterCompaction,
   buildBeforeCompactionHookMetrics,
+  hardenManualCompactionBoundary,
   runBeforeCompactionHooks,
   runAfterCompactionHooks,
   runPostCompactionSideEffects,
