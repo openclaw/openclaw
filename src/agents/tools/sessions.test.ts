@@ -156,6 +156,13 @@ describe("sanitizeTextContent", () => {
     expect(result).not.toContain("Tool Call");
   });
 
+  it("strips tool_result XML via the shared assistant-visible sanitizer", () => {
+    const input = 'Prefix\n<tool_result>{"output":"hidden"}</tool_result>\nSuffix';
+    const result = sanitizeTextContent(input).trim();
+    expect(result).toBe("Prefix\n\nSuffix");
+    expect(result).not.toContain("tool_result");
+  });
+
   it("strips thinking tags", () => {
     const input = "Before <think>secret</think> after";
     const result = sanitizeTextContent(input).trim();
