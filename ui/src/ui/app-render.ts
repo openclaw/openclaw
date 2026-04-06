@@ -699,7 +699,9 @@ export function renderApp(state: AppViewState) {
                           ?disabled=${dreamingLoading || state.dreamDiaryLoading}
                           @click=${refreshDreaming}
                         >
-                          ${dreamingRefreshLoading ? "Refreshing…" : "Refresh"}
+                          ${dreamingRefreshLoading
+                            ? t("dreaming.header.refreshing")
+                            : t("dreaming.header.refresh")}
                         </button>
                         <button
                           class="dreams__phase-toggle ${dreamingOn
@@ -709,9 +711,9 @@ export function renderApp(state: AppViewState) {
                           @click=${() => applyDreamingEnabled(!dreamingOn)}
                         >
                           <span class="dreams__phase-toggle-dot"></span>
-                          <span class="dreams__phase-toggle-label"
-                            >${dreamingOn ? "Dreaming On" : "Dreaming Off"}</span
-                          >
+                          <span class="dreams__phase-toggle-label">
+                            ${dreamingOn ? t("dreaming.header.on") : t("dreaming.header.off")}
+                          </span>
                         </button>
                       </div>
                     `
@@ -1859,7 +1861,7 @@ export function renderApp(state: AppViewState) {
               assistantName: state.assistantName,
               configPath: state.configSnapshot?.path ?? null,
               rawAvailable: typeof state.configSnapshot?.raw === "string",
-              navRootLabel: "Appearance",
+              navRootLabel: t("tabs.appearance"),
               includeSections: [...APPEARANCE_SECTION_KEYS],
               includeVirtualSections: true,
             })
