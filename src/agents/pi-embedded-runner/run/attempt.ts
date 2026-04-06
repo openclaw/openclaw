@@ -38,7 +38,13 @@ import {
   buildBootstrapInjectionStats,
   prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
+import {
+  FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+  hasCompletedBootstrapTurn,
+  makeBootstrapWarn,
+  resolveBootstrapContextForRun,
+  resolveContextInjectionMode,
+} from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
@@ -366,17 +372,40 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
     });
 
+    const sessionLock = await acquireSessionWriteLock({
+      sessionFile: params.sessionFile,
+      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
+        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
+          runTimeoutMs: params.timeoutMs,
+          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
+        }),
+      }),
+    });
+
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
-      await resolveBootstrapContextForRun({
-        workspaceDir: effectiveWorkspace,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-      });
+    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const isContinuationTurn =
+      contextInjectionMode === "continuation-skip" &&
+      params.bootstrapContextRunKind !== "heartbeat" &&
+      (await hasCompletedBootstrapTurn(params.sessionFile));
+    const shouldRecordCompletedBootstrapTurn =
+      !isContinuationTurn &&
+      params.bootstrapContextMode !== "lightweight" &&
+      params.bootstrapContextRunKind !== "heartbeat";
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isContinuationTurn
+      ? {
+          bootstrapFiles: [],
+          contextFiles: [],
+        }
+      : await resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          contextMode: params.bootstrapContextMode,
+          runKind: params.bootstrapContextRunKind,
+        });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -739,16 +768,6 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
-
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
-          runTimeoutMs: params.timeoutMs,
-          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
-        }),
-      }),
-    });
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -1909,6 +1928,25 @@ export async function runEmbeddedAttempt(
             sessionManager,
             warn: (message) => log.warn(message),
           });
+        }
+
+        if (
+          shouldRecordCompletedBootstrapTurn &&
+          !promptError &&
+          !aborted &&
+          !yieldAborted &&
+          !timedOutDuringCompaction &&
+          !compactionOccurredThisAttempt
+        ) {
+          try {
+            sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+              timestamp: Date.now(),
+              runId: params.runId,
+              sessionId: params.sessionId,
+            });
+          } catch (entryErr) {
+            log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
+          }
         }
 
         cacheTrace?.recordStage("session:after", {
