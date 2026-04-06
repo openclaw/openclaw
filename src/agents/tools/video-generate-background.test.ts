@@ -16,14 +16,19 @@ const taskExecutorMocks = vi.hoisted(() => ({
 const announceDeliveryMocks = vi.hoisted(() => ({
   deliverSubagentAnnouncement: vi.fn(),
 }));
+const taskDeliveryRuntimeMocks = vi.hoisted(() => ({
+  sendMessage: vi.fn(),
+}));
 
 vi.mock("../../tasks/task-executor.js", () => taskExecutorMocks);
+vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskDeliveryRuntimeMocks);
 vi.mock("../subagent-announce-delivery.js", () => announceDeliveryMocks);
 
 describe("video generate background helpers", () => {
   beforeEach(() => {
     taskExecutorMocks.createRunningTaskRun.mockReset();
     taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+    taskDeliveryRuntimeMocks.sendMessage.mockReset();
     announceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
   });
 
@@ -75,7 +80,43 @@ describe("video generate background helpers", () => {
     );
   });
 
-  it("wakes the session with a video-generation completion event", async () => {
+  it("delivers completed video directly to the requester channel", async () => {
+    taskDeliveryRuntimeMocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      messageId: "msg-1",
+    });
+
+    await wakeVideoGenerationTaskCompletion({
+      handle: {
+        taskId: "task-123",
+        runId: "tool:video_generate:abc",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:1",
+          threadId: "thread-1",
+        },
+        taskLabel: "friendly lobster surfing",
+      },
+      status: "ok",
+      statusLabel: "completed successfully",
+      result: "Generated 1 video.\nMEDIA:/tmp/generated-lobster.mp4",
+    });
+
+    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:1",
+        threadId: "thread-1",
+        content: "Generated 1 video.",
+        mediaUrls: ["/tmp/generated-lobster.mp4"],
+      }),
+    );
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a video-generation completion event when direct delivery fails", async () => {
+    taskDeliveryRuntimeMocks.sendMessage.mockRejectedValue(new Error("discord upload failed"));
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",

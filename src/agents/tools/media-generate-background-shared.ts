@@ -1,11 +1,14 @@
 import crypto from "node:crypto";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
 } from "../../tasks/task-executor.js";
+import { sendMessage } from "../../tasks/task-registry-delivery-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
@@ -156,6 +159,44 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
+async function maybeDeliverMediaGenerationResultDirectly(params: {
+  handle: MediaGenerationTaskHandle;
+  status: "ok" | "error";
+  result: string;
+  idempotencyKey: string;
+}): Promise<boolean> {
+  const origin = params.handle.requesterOrigin;
+  const channel = origin?.channel?.trim();
+  const to = origin?.to?.trim();
+  if (!channel || !to) {
+    return false;
+  }
+  const parsed = parseReplyDirectives(params.result);
+  const content = parsed.text.trim();
+  const mediaUrls = parsed.mediaUrls?.filter((entry) => entry.trim().length > 0);
+  const requesterAgentId = parseAgentSessionKey(params.handle.requesterSessionKey)?.agentId;
+  await sendMessage({
+    channel,
+    to,
+    accountId: origin?.accountId,
+    threadId: origin?.threadId,
+    content:
+      content ||
+      (params.status === "ok"
+        ? `Finished ${params.handle.taskLabel}.`
+        : "Background media generation failed."),
+    ...(mediaUrls?.length ? { mediaUrls } : {}),
+    agentId: requesterAgentId,
+    idempotencyKey: params.idempotencyKey,
+    mirror: {
+      sessionKey: params.handle.requesterSessionKey,
+      agentId: requesterAgentId,
+      idempotencyKey: params.idempotencyKey,
+    },
+  });
+  return true;
+}
+
 export async function wakeMediaGenerationTaskCompletion(params: {
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
@@ -170,6 +211,25 @@ export async function wakeMediaGenerationTaskCompletion(params: {
 }) {
   if (!params.handle) {
     return;
+  }
+  const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
+  try {
+    const deliveredDirect = await maybeDeliverMediaGenerationResultDirectly({
+      handle: params.handle,
+      status: params.status,
+      result: params.result,
+      idempotencyKey: announceId,
+    });
+    if (deliveredDirect) {
+      return;
+    }
+  } catch (error) {
+    log.warn("Media generation direct completion delivery failed; falling back to announce", {
+      taskId: params.handle.taskId,
+      runId: params.handle.runId,
+      toolName: params.toolName,
+      error,
+    });
   }
   const internalEvents: AgentInternalEvent[] = [
     {
@@ -193,7 +253,6 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   const triggerMessage =
     formatAgentInternalEventsForPrompt(internalEvents) ||
     `A ${params.completionLabel} generation task finished. Process the completion update now.`;
-  const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
   const delivery = await deliverSubagentAnnouncement({
     requesterSessionKey: params.handle.requesterSessionKey,
     targetRequesterSessionKey: params.handle.requesterSessionKey,
