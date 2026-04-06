@@ -25,6 +25,7 @@ const queueMocks = vi.hoisted(() => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveDefaultAgentId: vi.fn(() => "main"),
   resolveSessionAgentId: vi.fn(() => "main"),
 }));
 
@@ -271,6 +272,39 @@ describe("/model chat UX", () => {
       model: "claude-opus-4-6",
       isDefault: true,
     });
+  });
+
+  it("persists provider-qualified context windows for same-named models", async () => {
+    const persisted = await persistInlineDirectives({
+      directives: parseInlineDirectives("hello"),
+      cfg: {
+        commands: { text: true },
+        agents: { defaults: {} },
+        models: {
+          providers: {
+            litellm: {
+              models: [{ id: "gpt-5.4", contextWindow: 128_000 }],
+            },
+            "openai-codex": {
+              models: [{ id: "gpt-5.4", contextWindow: 919_948 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      defaultProvider: "litellm",
+      defaultModel: "gpt-5.4",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["litellm/gpt-5.4", "openai-codex/gpt-5.4"]),
+      provider: "litellm",
+      model: "gpt-5.4",
+      initialModelLabel: "litellm/gpt-5.4",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: undefined,
+    });
+
+    expect(persisted.contextTokens).toBe(128_000);
   });
 
   it("keeps openrouter provider/model split for exact selections", () => {

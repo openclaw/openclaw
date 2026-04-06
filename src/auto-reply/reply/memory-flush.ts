@@ -1,14 +1,23 @@
 import crypto from "node:crypto";
-import { lookupContextTokens } from "../../agents/context.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 
 export function resolveMemoryFlushContextWindowTokens(params: {
+  cfg?: OpenClawConfig;
+  provider?: string;
+  model?: string;
   modelId?: string;
   agentCfgContextTokens?: number;
 }): number {
   return (
-    lookupContextTokens(params.modelId, { allowAsyncLoad: false }) ??
+    resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model ?? params.modelId,
+      allowAsyncLoad: false,
+    }) ??
     params.agentCfgContextTokens ??
     DEFAULT_CONTEXT_TOKENS
   );

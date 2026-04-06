@@ -328,6 +328,9 @@ export async function runPreflightCompactionIfNeeded(params: {
   }
 
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
+    model: params.followupRun.run.model ?? params.defaultModel,
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
@@ -492,6 +495,9 @@ export async function runMemoryFlushIfNeeded(params: {
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
+    model: params.followupRun.run.model ?? params.defaultModel,
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });

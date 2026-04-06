@@ -369,6 +369,29 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
   it("falls back to agent config or default tokens", () => {
     expect(resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 })).toBe(42_000);
   });
+
+  it("prefers provider-qualified context windows for same-named models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          litellm: {
+            models: [{ id: "gpt-5.4", contextWindow: 128_000 }],
+          },
+          "openai-codex": {
+            models: [{ id: "gpt-5.4", contextWindow: 919_948 }],
+          },
+        },
+      },
+    } as const;
+
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        cfg: cfg as never,
+        provider: "litellm",
+        model: "gpt-5.4",
+      }),
+    ).toBe(128_000);
+  });
 });
 
 describe("incrementCompactionCount", () => {

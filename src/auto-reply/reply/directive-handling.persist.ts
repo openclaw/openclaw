@@ -3,7 +3,7 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { lookupCachedContextTokens } from "../../agents/context-cache.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -221,6 +221,13 @@ export async function persistInlineDirectives(params: {
     provider,
     model,
     contextTokens:
-      agentCfg?.contextTokens ?? lookupCachedContextTokens(model) ?? DEFAULT_CONTEXT_TOKENS,
+      agentCfg?.contextTokens ??
+      resolveContextTokensForModel({
+        cfg,
+        provider,
+        model,
+        allowAsyncLoad: false,
+      }) ??
+      DEFAULT_CONTEXT_TOKENS,
   };
 }
