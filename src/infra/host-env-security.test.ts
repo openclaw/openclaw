@@ -140,6 +140,7 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("git_exec_path")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_INDEX_FILE")).toBe(true);
     expect(isDangerousHostEnvVarName("git_object_directory")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_alternate_object_directories")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_NAMESPACE")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_SEQUENCE_EDITOR")).toBe(true);
     expect(isDangerousHostEnvVarName("git_sequence_editor")).toBe(true);
@@ -232,6 +233,7 @@ describe("sanitizeHostExecEnv", () => {
         GIT_TEMPLATE_DIR: "/tmp/git-template",
         GIT_INDEX_FILE: "/tmp/evil-git-index",
         GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
         GIT_NAMESPACE: "evil-namespace",
         GIT_SEQUENCE_EDITOR: "/tmp/pwn-sequence-editor",
         HGRCPATH: "/tmp/evil-hgrc",
@@ -285,6 +287,7 @@ describe("sanitizeHostExecEnv", () => {
         GIT_EXEC_PATH: "/tmp/git-exec-path",
         GIT_INDEX_FILE: "/tmp/evil-git-index",
         GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
         GIT_NAMESPACE: "evil-namespace",
         GIT_SEQUENCE_EDITOR: "/tmp/git-sequence-editor",
         EDITOR: "/tmp/editor",
@@ -364,6 +367,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.GIT_TEMPLATE_DIR).toBeUndefined();
     expect(env.GIT_INDEX_FILE).toBeUndefined();
     expect(env.GIT_OBJECT_DIRECTORY).toBeUndefined();
+    expect(env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBeUndefined();
     expect(env.GIT_NAMESPACE).toBeUndefined();
     expect(env.GIT_SEQUENCE_EDITOR).toBeUndefined();
     expect(env.AWS_CONFIG_FILE).toBeUndefined();
@@ -552,6 +556,7 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("GIT_COMMON_DIR")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("git_index_file")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GIT_OBJECT_DIRECTORY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("git_alternate_object_directories")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("git_namespace")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GIT_SSH_COMMAND")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("editor")).toBe(true);
@@ -659,6 +664,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GIT_COMMON_DIR: "/tmp/evil-common-dir",
         GIT_INDEX_FILE: "/tmp/evil-git-index",
         GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: "/tmp/evil-git-alt-objects",
         GIT_NAMESPACE: "evil-namespace",
         GOPROXY: "https://example.invalid/proxy",
         GONOSUMCHECK: "example.invalid/*",
@@ -702,6 +708,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "DOCKER_CONTEXT",
       "DOCKER_HOST",
       "DOCKER_TLS_VERIFY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
       "GIT_COMMON_DIR",
       "GIT_DIR",
       "GIT_INDEX_FILE",
@@ -788,6 +795,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GIT_WORK_TREE).toBeUndefined();
     expect(result.env.GIT_COMMON_DIR).toBeUndefined();
     expect(result.env.GIT_INDEX_FILE).toBeUndefined();
+    expect(result.env.GIT_ALTERNATE_OBJECT_DIRECTORIES).toBeUndefined();
     expect(result.env.GIT_OBJECT_DIRECTORY).toBeUndefined();
     expect(result.env.GIT_NAMESPACE).toBeUndefined();
     expect(result.env.GOPROXY).toBeUndefined();
