@@ -17,15 +17,19 @@ function makeUser(text: string): AgentMessage {
   });
 }
 
-function makeToolResult(id: string, text: string): AgentMessage {
+function makeToolResult(id: string, text: string, toolName = "grep"): AgentMessage {
   return castAgentMessage({
     role: "toolResult",
     toolCallId: id,
-    toolName: "read",
+    toolName,
     content: [{ type: "text", text }],
     isError: false,
     timestamp: Date.now(),
   });
+}
+
+function makeReadToolResult(id: string, text: string): AgentMessage {
+  return makeToolResult(id, text, "read");
 }
 
 function makeLegacyToolResult(id: string, text: string): AgentMessage {
@@ -309,6 +313,51 @@ describe("installToolResultContextGuard", () => {
     expectReadableToolSlice(newResultText, "y");
     expect(oldResult.details).toBeUndefined();
     expect(newResult.details).toBeUndefined();
+  });
+
+  it("throws overflow instead of compacting the latest read result during aggregate compaction", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("u".repeat(2_600)),
+      makeToolResult("call_old", "x".repeat(300)),
+      makeReadToolResult("call_new", "y".repeat(500)),
+    ];
+
+    await expect(
+      agent.transformContext?.(contextForNextCall, new AbortController().signal),
+    ).rejects.toThrow(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+
+    expect(getToolResultText(contextForNextCall[1])).toBe("x".repeat(300));
+    expect(getToolResultText(contextForNextCall[2])).toBe("y".repeat(500));
+  });
+
+  it("keeps the latest read result when older outputs absorb the aggregate overflow", async () => {
+    const agent = makeGuardableAgent();
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    const contextForNextCall = [
+      makeUser("u".repeat(1_400)),
+      makeToolResult("call_old_1", "a".repeat(350)),
+      makeToolResult("call_old_2", "b".repeat(350)),
+      makeReadToolResult("call_new", "c".repeat(500)),
+    ];
+
+    const transformed = (await agent.transformContext?.(
+      contextForNextCall,
+      new AbortController().signal,
+    )) as AgentMessage[];
+
+    expect(getToolResultText(transformed[3])).toBe("c".repeat(500));
   });
 
   it("throws preemptive context overflow when context exceeds 90% after tool-result compaction", async () => {
