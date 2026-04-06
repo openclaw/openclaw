@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -160,6 +161,10 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
+function isAsyncMediaDirectSendEnabled(config: OpenClawConfig | undefined): boolean {
+  return config?.tools?.media?.asyncCompletion?.directSend === true;
+}
+
 async function maybeDeliverMediaGenerationResultDirectly(params: {
   handle: MediaGenerationTaskHandle;
   status: "ok" | "error";
@@ -199,6 +204,7 @@ async function maybeDeliverMediaGenerationResultDirectly(params: {
 }
 
 export async function wakeMediaGenerationTaskCompletion(params: {
+  config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
   statusLabel: string;
@@ -214,23 +220,25 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     return;
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
-  try {
-    const deliveredDirect = await maybeDeliverMediaGenerationResultDirectly({
-      handle: params.handle,
-      status: params.status,
-      result: params.result,
-      idempotencyKey: announceId,
-    });
-    if (deliveredDirect) {
-      return;
+  if (isAsyncMediaDirectSendEnabled(params.config)) {
+    try {
+      const deliveredDirect = await maybeDeliverMediaGenerationResultDirectly({
+        handle: params.handle,
+        status: params.status,
+        result: params.result,
+        idempotencyKey: announceId,
+      });
+      if (deliveredDirect) {
+        return;
+      }
+    } catch (error) {
+      log.warn("Media generation direct completion delivery failed; falling back to announce", {
+        taskId: params.handle.taskId,
+        runId: params.handle.runId,
+        toolName: params.toolName,
+        error,
+      });
     }
-  } catch (error) {
-    log.warn("Media generation direct completion delivery failed; falling back to announce", {
-      taskId: params.handle.taskId,
-      runId: params.handle.runId,
-      toolName: params.toolName,
-      error,
-    });
   }
   const internalEvents: AgentInternalEvent[] = [
     {
