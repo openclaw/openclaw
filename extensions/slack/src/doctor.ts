@@ -6,10 +6,7 @@ import {
 import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
 import { isSlackMutableAllowEntry } from "./security-doctor.js";
-import {
-  resolveSlackNativeStreaming,
-  resolveSlackStreamingMode,
-} from "./streaming-compat.js";
+import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -155,8 +152,7 @@ function normalizeSlackStreamingAliases(params: {
       params.changes.push(
         `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${resolvedStreaming}).`,
       );
-    }
-    if (typeof beforeStreaming === "boolean") {
+    } else if (typeof beforeStreaming === "boolean") {
       params.changes.push(
         `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${resolvedStreaming}).`,
       );

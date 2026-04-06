@@ -255,10 +255,7 @@ function hasLegacySlackStreamingKeys(value: unknown): boolean {
   );
 }
 
-function ensureNestedRecord(
-  owner: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
+function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
   const existing = getRecord(owner[key]);
   if (existing) {
     return existing;
@@ -277,6 +274,14 @@ function moveLegacyStreamingShapeForPath(params: {
 }): boolean {
   let changed = false;
   const legacyStreaming = params.entry.streaming;
+  const legacyStreamingInput = {
+    ...params.entry,
+    streaming: legacyStreaming,
+  };
+  const legacyNativeTransportInput = {
+    nativeStreaming: params.entry.nativeStreaming,
+    streaming: legacyStreaming,
+  };
   const hadLegacyStreamMode = hasOwnKey(params.entry, "streamMode");
   const hadLegacyStreamingScalar =
     typeof legacyStreaming === "string" || typeof legacyStreaming === "boolean";
@@ -284,19 +289,20 @@ function moveLegacyStreamingShapeForPath(params: {
   if (params.resolveMode && (hadLegacyStreamMode || hadLegacyStreamingScalar)) {
     const streaming = ensureNestedRecord(params.entry, "streaming");
     if (!hasOwnKey(streaming, "mode")) {
-      streaming.mode = params.resolveMode(params.entry);
+      const resolvedMode = params.resolveMode(legacyStreamingInput);
+      streaming.mode = resolvedMode;
       if (hadLegacyStreamMode) {
         params.changes.push(
-          `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${streaming.mode}).`,
+          `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${resolvedMode}).`,
         );
       }
       if (typeof legacyStreaming === "boolean") {
         params.changes.push(
-          `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${streaming.mode}).`,
+          `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${resolvedMode}).`,
         );
       } else if (typeof legacyStreaming === "string") {
         params.changes.push(
-          `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${streaming.mode}).`,
+          `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${resolvedMode}).`,
         );
       }
     } else {
@@ -386,7 +392,7 @@ function moveLegacyStreamingShapeForPath(params: {
   if (params.resolveNativeTransport && hasOwnKey(params.entry, "nativeStreaming")) {
     const streaming = ensureNestedRecord(params.entry, "streaming");
     if (!hasOwnKey(streaming, "nativeTransport")) {
-      streaming.nativeTransport = params.resolveNativeTransport(params.entry);
+      streaming.nativeTransport = params.resolveNativeTransport(legacyNativeTransportInput);
       params.changes.push(
         `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
       );
@@ -400,7 +406,7 @@ function moveLegacyStreamingShapeForPath(params: {
   } else if (params.resolveNativeTransport && typeof legacyStreaming === "boolean") {
     const streaming = ensureNestedRecord(params.entry, "streaming");
     if (!hasOwnKey(streaming, "nativeTransport")) {
-      streaming.nativeTransport = params.resolveNativeTransport(params.entry);
+      streaming.nativeTransport = params.resolveNativeTransport(legacyNativeTransportInput);
       params.changes.push(
         `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
       );

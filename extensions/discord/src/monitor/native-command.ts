@@ -13,6 +13,7 @@ import {
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
@@ -21,7 +22,6 @@ import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runt
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -1135,6 +1135,7 @@ async function dispatchDiscordCommandInteraction(params: {
     accountId: effectiveRoute.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
 
   let didReply = false;
   const dispatchResult = await dispatchReplyWithDispatcherImpl({
@@ -1176,9 +1177,7 @@ async function dispatchDiscordCommandInteraction(params: {
     replyOptions: {
       skillFilter: channelConfig?.skills,
       disableBlockStreaming:
-        typeof resolveChannelStreamingBlockEnabled(discordConfig) === "boolean"
-          ? !resolveChannelStreamingBlockEnabled(discordConfig)
-          : undefined,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
       onModelSelected,
     },
   });

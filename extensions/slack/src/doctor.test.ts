@@ -55,4 +55,31 @@ describe("slack doctor", () => {
       ]),
     );
   });
+
+  it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
+    const normalize = slackDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          slack: {
+            streamMode: "status_final",
+            streaming: false,
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.slack?.streaming).toEqual({
+      mode: "progress",
+      nativeTransport: false,
+    });
+    expect(
+      result.changes.filter((change) => change.includes("channels.slack.streaming.mode")),
+    ).toEqual(["Moved channels.slack.streamMode → channels.slack.streaming.mode (progress)."]);
+  });
 });

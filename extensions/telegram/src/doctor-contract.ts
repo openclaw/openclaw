@@ -47,14 +47,18 @@ function normalizeTelegramStreamingAliases(params: {
   const block = ensureNestedRecord(streaming, "block");
   const preview = ensureNestedRecord(streaming, "preview");
 
-  if ((hadLegacyStreamMode || typeof beforeStreaming === "boolean" || typeof beforeStreaming === "string") && streaming.mode === undefined) {
+  if (
+    (hadLegacyStreamMode ||
+      typeof beforeStreaming === "boolean" ||
+      typeof beforeStreaming === "string") &&
+    streaming.mode === undefined
+  ) {
     streaming.mode = resolved;
     if (hadLegacyStreamMode) {
       params.changes.push(
         `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${resolved}).`,
       );
-    }
-    if (typeof beforeStreaming === "boolean") {
+    } else if (typeof beforeStreaming === "boolean") {
       params.changes.push(
         `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${resolved}).`,
       );

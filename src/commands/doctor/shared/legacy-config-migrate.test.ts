@@ -3,7 +3,10 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
-import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import {
+  applyLegacyDoctorMigrations,
+  migrateLegacyConfig,
+} from "./legacy-config-migrate.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -338,6 +341,29 @@ describe("legacy migrate channel streaming aliases", () => {
             minChars: 100,
           },
         },
+        nativeTransport: false,
+      },
+    });
+  });
+
+  it("preserves slack streaming=false when deriving nativeTransport during migration", () => {
+    const raw = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          streaming: false,
+        },
+      },
+    };
+    const res = migrateLegacyConfig(raw);
+    const migrated = applyLegacyDoctorMigrations(raw);
+
+    expect(res.changes).toContain(
+      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.mode (off).",
+    );
+    expect((migrated.next as { channels?: { slack?: unknown } }).channels?.slack).toMatchObject({
+      streaming: {
+        mode: "off",
         nativeTransport: false,
       },
     });
@@ -900,7 +926,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
 
   it("does not overwrite existing allowedOrigins — returns null (no migration needed)", () => {
     // When allowedOrigins already exists, the migration is a no-op.
-    // applyLegacyMigrations returns next=null when changes.length===0, so config is null.
+    // applyLegacyDoctorMigrations returns next=null when changes.length===0, so config is null.
     const res = migrateLegacyConfig({
       gateway: {
         bind: "lan",

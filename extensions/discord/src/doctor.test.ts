@@ -70,6 +70,32 @@ describe("discord doctor", () => {
     );
   });
 
+  it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
+    const normalize = discordDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            streamMode: "block",
+            streaming: false,
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord?.streaming).toEqual({
+      mode: "block",
+    });
+    expect(
+      result.changes.filter((change) => change.includes("channels.discord.streaming.mode")),
+    ).toEqual(["Moved channels.discord.streamMode → channels.discord.streaming.mode (block)."]);
+  });
+
   it("finds numeric id entries across discord scopes", () => {
     const cfg = {
       channels: {

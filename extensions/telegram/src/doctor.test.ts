@@ -129,6 +129,32 @@ describe("telegram doctor", () => {
     );
   });
 
+  it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            streamMode: "block",
+            streaming: false,
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.telegram?.streaming).toEqual({
+      mode: "block",
+    });
+    expect(
+      result.changes.filter((change) => change.includes("channels.telegram.streaming.mode")),
+    ).toEqual(["Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block)."]);
+  });
+
   it("finds username allowFrom entries across scopes", () => {
     const hits = scanTelegramAllowFromUsernameEntries({
       channels: {

@@ -13,6 +13,7 @@ import {
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
@@ -20,7 +21,6 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -546,7 +546,7 @@ export async function processDiscordMessage(
   const draftMaxChars = Math.min(textLimit, 2000);
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(discordConfig) ??
-    (cfg.agents?.defaults?.blockStreamingDefault === "on");
+    cfg.agents?.defaults?.blockStreamingDefault === "on";
   const canStreamDraft = discordStreamMode !== "off" && !accountBlockStreamingEnabled;
   const draftReplyToMessageId = () => replyReference.use();
   const deliverChannelId = deliverTarget.startsWith("channel:")
@@ -835,6 +835,7 @@ export async function processDiscordMessage(
       },
     });
 
+  const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
@@ -853,8 +854,8 @@ export async function processDiscordMessage(
         skillFilter: channelConfig?.skills,
         disableBlockStreaming:
           disableBlockStreamingForDraft ??
-          (typeof resolveChannelStreamingBlockEnabled(discordConfig) === "boolean"
-            ? !resolveChannelStreamingBlockEnabled(discordConfig)
+          (typeof resolvedBlockStreamingEnabled === "boolean"
+            ? !resolvedBlockStreamingEnabled
             : undefined),
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream
