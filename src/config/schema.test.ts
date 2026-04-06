@@ -264,6 +264,32 @@ describe("config schema", () => {
     });
   });
 
+  it("accepts legacy AIMLAPI scoped web-search config in the runtime zod schema", () => {
+    const secretRef = {
+      source: "env",
+      provider: "default",
+      id: "AIMLAPI_WEB_SEARCH_REF",
+    } as const;
+
+    const parsed = ToolsSchema.parse({
+      web: {
+        search: {
+          aimlapi: {
+            apiKey: secretRef,
+            baseUrl: "https://api.aimlapi.com/v1",
+            model: "perplexity/sonar-pro",
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.search?.aimlapi).toEqual({
+      apiKey: secretRef,
+      baseUrl: "https://api.aimlapi.com/v1",
+      model: "perplexity/sonar-pro",
+    });
+  });
+
   it("accepts experimental tool flags in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       experimental: {
