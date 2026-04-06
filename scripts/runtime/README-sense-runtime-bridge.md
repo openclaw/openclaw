@@ -726,6 +726,28 @@ Current block reasons include:
 
 The executor now also emits a thin `manager_handoff` payload for the next manager turn. This is a report-to-input bridge only; it does not trigger another action by itself.
 
+Manager handoff triage helper:
+
+- `scripts/runtime/sense_runtime_manager_handoff_triage.py`
+- `scripts/runtime/sense-runtime-manager-handoff-triage.sh`
+
+This helper is intentionally lightweight. It reads `manager_handoff` and decides whether the next manager turn should:
+
+- use the handoff directly
+- treat it as a hint only
+- rerun the full evaluator
+
+Current confidence rule is:
+
+- `summary_confidence >= 0.7`
+  - `use_handoff`
+- `0.5 <= summary_confidence < 0.7`
+  - `hint_only`
+- `< 0.5`
+  - `rerun_full_evaluator`
+
+Failed or stopped handoffs also fall back to `rerun_full_evaluator`.
+
 Current convergence states are:
 
 - `resolved`
