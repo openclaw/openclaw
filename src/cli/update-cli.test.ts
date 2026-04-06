@@ -1013,6 +1013,9 @@ describe("update-cli", () => {
 
   it("skips plugin sync in the old process after switching from package to git", async () => {
     const tempDir = createCaseDir("openclaw-update");
+    const completionCacheSpy = vi
+      .spyOn(updateCliShared, "tryWriteCompletionCache")
+      .mockResolvedValue(undefined);
     mockPackageInstallStatus(tempDir);
     vi.mocked(runGatewayUpdate).mockResolvedValue(
       makeOkUpdateResult({
@@ -1021,6 +1024,7 @@ describe("update-cli", () => {
         after: { version: "2026.4.5" },
       }),
     );
+    serviceLoaded.mockResolvedValue(true);
     syncPluginsForUpdateChannel.mockRejectedValue(
       new Error("Config validation failed: old host version"),
     );
@@ -1029,6 +1033,9 @@ describe("update-cli", () => {
 
     expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(completionCacheSpy).not.toHaveBeenCalled();
+    expect(runRestartScript).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(
       vi
@@ -1037,6 +1044,14 @@ describe("update-cli", () => {
         .join("\n"),
     ).toContain(
       "Skipped plugin update sync in the pre-update CLI process after switching to a git install.",
+    );
+    expect(
+      vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n"),
+    ).toContain(
+      "Skipped completion/restart follow-ups in the pre-update CLI process after switching to a git install.",
     );
   });
   it("explains why git updates cannot run with edited files", async () => {
