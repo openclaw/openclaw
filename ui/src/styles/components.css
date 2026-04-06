@@ -1462,6 +1462,58 @@
   max-width: 100%;
 }
 
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.code-block-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.code-block-copy:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+/* Hide "Copied!" by default, show "Copy" */
+.code-block-copy__done {
+  display: none;
+}
+
+/* When copied class is active: hide "Copy", show "Copied!" */
+.code-block-copy.copied .code-block-copy__idle {
+  display: none;
+}
+
+.code-block-copy.copied .code-block-copy__done {
+  display: inline;
+}
+
+.code-block-header + pre {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
 :root[data-theme-mode="light"] .code-block,
 :root[data-theme-mode="light"] .list-item,
 :root[data-theme-mode="light"] .table-row,
