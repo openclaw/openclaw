@@ -19,6 +19,7 @@ const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>
   return undefined;
 });
 const resolveSessionKeyForRequestMock = vi.fn();
+const resolveStoredSessionKeyForSessionIdMock = vi.fn();
 const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
 
@@ -103,6 +104,8 @@ const installRunEmbeddedMocks = () => {
     return {
       ...actual,
       resolveSessionKeyForRequest: (opts: unknown) => resolveSessionKeyForRequestMock(opts),
+      resolveStoredSessionKeyForSessionId: (opts: unknown) =>
+        resolveStoredSessionKeyForSessionIdMock(opts),
     };
   });
   vi.doMock("./pi-embedded-runner/logger.js", async () => {
@@ -189,6 +192,7 @@ beforeEach(() => {
   runEmbeddedAttemptMock.mockReset();
   disposeSessionMcpRuntimeMock.mockReset();
   resolveSessionKeyForRequestMock.mockReset();
+  resolveStoredSessionKeyForSessionIdMock.mockReset();
   loggerWarnMock.mockReset();
   refreshRuntimeAuthOnFirstPromptError = false;
   runEmbeddedAttemptMock.mockImplementation(async () => {
@@ -413,7 +417,7 @@ describe("runEmbeddedPiAgent", () => {
   it("passes the current agentId when backfilling a session key", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
-    resolveSessionKeyForRequestMock.mockReturnValue({
+    resolveStoredSessionKeyForSessionIdMock.mockReturnValue({
       sessionKey: "agent:test:resolved",
       sessionStore: {},
       storePath: "/tmp/session-store.json",
@@ -443,11 +447,12 @@ describe("runEmbeddedPiAgent", () => {
       enqueue: immediateEnqueue,
     });
 
-    expect(resolveSessionKeyForRequestMock).toHaveBeenCalledWith({
+    expect(resolveStoredSessionKeyForSessionIdMock).toHaveBeenCalledWith({
       cfg,
       sessionId: "resume-agent-1",
       agentId: "embedded-agent",
     });
+    expect(resolveSessionKeyForRequestMock).not.toHaveBeenCalled();
   });
 
   it("disposes bundle MCP once when a one-shot local run completes", async () => {

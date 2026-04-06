@@ -19,7 +19,10 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
-import { resolveSessionKeyForRequest } from "../command/session.js";
+import {
+  resolveSessionKeyForRequest,
+  resolveStoredSessionKeyForSessionId,
+} from "../command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
   coerceToFailoverError,
@@ -123,11 +126,16 @@ function backfillSessionKey(params: {
     return undefined;
   }
   try {
-    const resolved = resolveSessionKeyForRequest({
-      cfg: params.config,
-      sessionId: params.sessionId,
-      agentId: params.agentId,
-    });
+    const resolved = params.agentId?.trim()
+      ? resolveStoredSessionKeyForSessionId({
+          cfg: params.config,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+        })
+      : resolveSessionKeyForRequest({
+          cfg: params.config,
+          sessionId: params.sessionId,
+        });
     return resolved.sessionKey?.trim() || undefined;
   } catch (err) {
     log.warn(
