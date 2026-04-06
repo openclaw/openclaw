@@ -260,12 +260,48 @@ def main() -> int:
             }
         priority_summary_output[owner_key] = ordered_priority_row
 
+    priority_heatmap: list[dict[str, object]] = []
+    priority_weights = {
+        'immediate': 100,
+        'high': 75,
+        'medium': 50,
+        'low': 25,
+        'none': 0,
+    }
+    priority_order = ['immediate', 'high', 'medium', 'low', 'none']
+    for owner_key in sorted(priority_summary_output.keys()):
+        row = priority_summary_output[owner_key]
+        for bucket_name, counts in row.items():
+            score = sum(int(counts.get(name, 0)) * priority_weights[name] for name in priority_order)
+            band = 'none'
+            for name in priority_order:
+                if int(counts.get(name, 0)) > 0:
+                    band = name
+                    break
+            priority_heatmap.append(
+                {
+                    'owner': owner_key,
+                    'bucket': bucket_name,
+                    'score': score,
+                    'band': band,
+                    'counts': {name: int(counts.get(name, 0)) for name in priority_order},
+                }
+            )
+    priority_heatmap.sort(
+        key=lambda item: (
+            -int(item.get('score', 0)),
+            str(item.get('owner') or ''),
+            str(item.get('bucket') or ''),
+        )
+    )
+
     output = {
         'total_records': len(filtered_records),
         'aggregated_routes': aggregated_routes,
         'owner_bucket_crosstab': crosstab_output,
         'owner_bucket_actionable_summary': actionable_summary_output,
         'owner_bucket_priority_summary': priority_summary_output,
+        'priority_heatmap': priority_heatmap,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
