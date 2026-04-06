@@ -122,13 +122,13 @@ vi.mock("./subagent-announce-delivery.js", () => ({
             }),
       },
     });
+    const configured = configOverride.agents?.defaults?.subagents?.completionAnnounceTimeoutMs;
+    const legacyConfigured = configOverride.agents?.defaults?.subagents?.announceTimeoutMs;
+    const effectiveConfigured =
+      typeof configured === "number" && Number.isFinite(configured) ? configured : legacyConfigured;
     const timeoutMs =
-      typeof configOverride.agents?.defaults?.subagents?.announceTimeoutMs === "number" &&
-      Number.isFinite(configOverride.agents.defaults.subagents.announceTimeoutMs)
-        ? Math.min(
-            Math.max(1, Math.floor(configOverride.agents.defaults.subagents.announceTimeoutMs)),
-            2_147_000_000,
-          )
+      typeof effectiveConfigured === "number" && Number.isFinite(effectiveConfigured)
+        ? Math.min(Math.max(1, Math.floor(effectiveConfigured)), 2_147_000_000)
         : 120_000;
     const retryDelaysMs =
       process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];

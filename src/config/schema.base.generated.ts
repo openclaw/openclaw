@@ -20746,7 +20746,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           },
           connectChallengeTimeoutMs: {
             type: "integer",
-            minimum: 1,
+            minimum: 250,
             maximum: 300000,
             description:
               "WebSocket pre-auth/connect handshake timeout in milliseconds for gateway clients and server-side handshake enforcement (default: 10000). Raise this when local control-plane stalls can delay connect challenge completion.",
