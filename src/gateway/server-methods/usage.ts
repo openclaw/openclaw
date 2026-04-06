@@ -24,7 +24,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import {
   buildUsageAggregateTail,
-  compareUsageTotalsByTokensThenCost,
+  sortUsageRankingEntries,
   mergeUsageDailyLatency,
   mergeUsageLatency,
 } from "../../shared/usage-aggregates.js";
@@ -810,9 +810,9 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
         return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       }),
-      byAgent: Array.from(byAgentMap.entries())
-        .map(([id, totals]) => ({ agentId: id, totals }))
-        .toSorted((a, b) => compareUsageTotalsByTokensThenCost(a.totals, b.totals)),
+      byAgent: sortUsageRankingEntries(
+        Array.from(byAgentMap.entries()).map(([id, totals]) => ({ agentId: id, totals })),
+      ),
       ...tail,
     };
 
