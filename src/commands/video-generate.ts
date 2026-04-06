@@ -117,7 +117,9 @@ export async function videoGenerateCommand(
   const inputImages = opts.image ? await loadAssets(opts.image) : undefined;
   const inputVideos = opts.video ? await loadAssets(opts.video) : undefined;
 
-  runtime.log("Generating video...");
+  if (!opts.json) {
+    runtime.log("Generating video...");
+  }
 
   const result = await generateVideo({
     cfg,
@@ -133,7 +135,7 @@ export async function videoGenerateCommand(
     inputVideos,
   });
 
-  if (result.ignoredOverrides.length > 0) {
+  if (!opts.json && result.ignoredOverrides.length > 0) {
     for (const override of result.ignoredOverrides) {
       runtime.log(
         `Warning: ${override.key}=${String(override.value)} not supported by ${result.provider}, ignored.`,
