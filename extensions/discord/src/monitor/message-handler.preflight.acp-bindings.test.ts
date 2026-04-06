@@ -187,8 +187,9 @@ function createAllowedGuildEntries(requireMention = false) {
 
 function createHydratedGuildClient(restPayload: Record<string, unknown>) {
   const restGet = vi.fn(async () => restPayload);
+  const baseClient = createGuildTextClient(CHANNEL_ID);
   const client = {
-    ...createGuildTextClient(CHANNEL_ID),
+    ...Object.assign(Object.create(Object.getPrototypeOf(baseClient)), baseClient),
     rest: {
       get: restGet,
     },
