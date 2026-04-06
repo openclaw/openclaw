@@ -553,8 +553,7 @@ function resolveFeishuOutboundMediaKind(params: {
   // message instead of a generic file attachment.  The Feishu audio msg_type
   // accepts uploaded files regardless of codec, so this works for mp3/wav/etc.
   if (audioAsVoice && (mimeKind === "audio" || [".mp3", ".wav", ".m4a", ".aac"].includes(ext))) {
-    const fileType = detectFileType(fileName);
-    return { fileType: fileType === "stream" ? "stream" : fileType, msgType: "audio" };
+    return { fileType: detectFileType(fileName), msgType: "audio" };
   }
 
   if (
