@@ -1,6 +1,7 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { InteractiveReply } from "../interactive/payload.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import type { FollowupRun } from "./reply/queue/types.js";
 import type { TypingController } from "./reply/typing.js";
 
 export type BlockReplyContext = {
@@ -152,6 +153,12 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Channel-specific full dispatch for followup turns.
+   * When set, the followup runner delegates user-initiated messages
+   * (those with originatingChannel) to this callback for full UX:
+   * streaming cards, typing indicators, progressive delivery.
+   * Returns true if the callback handled the dispatch. */
+  dispatchFullFollowupTurn?: (queued: FollowupRun) => Promise<boolean>;
 };
 
 export type ReplyPayload = {

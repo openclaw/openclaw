@@ -19,6 +19,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
+import type { FollowupRun } from "../../../src/auto-reply/reply/queue/types.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
@@ -1494,6 +1495,103 @@ export async function handleFeishuMessage(params: {
         onFinalTextDelivered,
       });
 
+      // Full followup dispatch callback for queued user messages.
+      // When a message is queued while the agent is busy and later drained,
+      // this callback provides the same streaming card + typing UX as a direct dispatch.
+      const dispatchFullFollowupTurn = async (queued: FollowupRun): Promise<boolean> => {
+        if (queued.originatingChannel !== "feishu") return false;
+
+        const followupChatId = queued.originatingTo ?? feishuTo;
+        const followupAccountId = queued.originatingAccountId ?? account.accountId;
+        const followupIsGroup = queued.originatingChatType === "group";
+        const followupReplyToMessageId = queued.messageId;
+        const followupThreadId =
+          typeof queued.originatingThreadId === "string" ? queued.originatingThreadId : undefined;
+        const followupReplyInThread = Boolean(followupThreadId);
+        const followupIdentity = resolveAgentOutboundIdentity(cfg, queued.run.agentId);
+        const followupSessionKey = queued.run.sessionKey ?? effectiveSessionKey;
+        const followupAllowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+          storePath: core.channel.session.resolveStorePath(cfg.session?.store, {
+            agentId: queued.run.agentId,
+          }),
+          sessionKey: followupSessionKey,
+        });
+        const followupOnFinalTextDelivered = followupIsGroup
+          ? undefined
+          : createDirectReplyMirrorHandler({
+              cfg,
+              agentId: queued.run.agentId,
+              sessionKey: followupSessionKey,
+              accountId: followupAccountId,
+              log,
+            });
+
+        const {
+          dispatcher: fDispatcher,
+          replyOptions: fReplyOptions,
+          markDispatchIdle: fMarkIdle,
+        } = createFeishuReplyDispatcher({
+          cfg,
+          agentId: queued.run.agentId,
+          runtime: runtime as RuntimeEnv,
+          chatId: followupChatId,
+          allowReasoningPreview: followupAllowReasoningPreview,
+          replyToMessageId: followupReplyToMessageId,
+          skipReplyToInMessages: !followupIsGroup,
+          replyInThread: followupReplyInThread,
+          streamingInThread: followupReplyInThread && streamingInThread,
+          rootId: followupThreadId,
+          threadReply: followupReplyInThread,
+          mentionTargets: ctx.mentionTargets,
+          accountId: followupAccountId,
+          sessionKey: followupSessionKey,
+          isGroup: followupIsGroup,
+          identity: followupIdentity,
+          messageCreateTimeMs: queued.enqueuedAt,
+          onFinalTextDelivered: followupOnFinalTextDelivered,
+        });
+
+        const followupCtx = core.channel.reply.finalizeInboundContext({
+          Body: queued.prompt,
+          BodyForAgent: queued.prompt,
+          RawBody: queued.prompt,
+          CommandBody: queued.prompt,
+          From: queued.run.senderId ?? "",
+          To: followupChatId,
+          SessionKey: followupSessionKey,
+          AccountId: followupAccountId,
+          ChatType: followupIsGroup ? "group" : "direct",
+          GroupSubject: followupIsGroup ? followupChatId : undefined,
+          SenderName: queued.run.senderName ?? queued.run.senderId ?? "",
+          SenderId: queued.run.senderId ?? "",
+          Provider: "feishu" as const,
+          Surface: "feishu" as const,
+          MessageSid: queued.messageId,
+          Timestamp: queued.enqueuedAt,
+          WasMentioned: false,
+          CommandAuthorized: false,
+          OriginatingChannel: "feishu" as const,
+          OriginatingTo: queued.originatingTo,
+          GroupSystemPrompt: followupIsGroup
+            ? groupConfig?.systemPrompt?.trim() || undefined
+            : undefined,
+        });
+
+        await core.channel.reply.withReplyDispatcher({
+          dispatcher: fDispatcher,
+          onSettled: () => fMarkIdle(),
+          run: () =>
+            core.channel.reply.dispatchReplyFromConfig({
+              ctx: followupCtx,
+              cfg,
+              dispatcher: fDispatcher,
+              replyOptions: { ...fReplyOptions, dispatchFullFollowupTurn },
+            }),
+        });
+
+        return true;
+      };
+
       log(`feishu[${account.accountId}]: dispatching to agent (session=${effectiveSessionKey})`);
       const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
@@ -1505,7 +1603,7 @@ export async function handleFeishuMessage(params: {
             ctx: ctxPayload,
             cfg,
             dispatcher,
-            replyOptions,
+            replyOptions: { ...replyOptions, dispatchFullFollowupTurn },
           }),
       });
 

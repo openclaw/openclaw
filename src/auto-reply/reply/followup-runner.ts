@@ -136,6 +136,25 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    // Delegate to channel-specific full dispatch for user-initiated messages.
+    // This provides streaming cards, typing indicators, and progressive delivery
+    // instead of the lightweight path that sends replies all at once.
+    if (opts?.dispatchFullFollowupTurn && queued.originatingChannel) {
+      try {
+        const handled = await opts.dispatchFullFollowupTurn(queued);
+        if (handled) {
+          typing.markRunComplete();
+          typing.markDispatchIdle();
+          return;
+        }
+      } catch (err) {
+        // If full dispatch fails, fall through to lightweight path.
+        logVerbose(
+          `followup full dispatch failed, falling back to lightweight path: ${String(err)}`,
+        );
+      }
+    }
+
     const replySessionKey = queued.run.sessionKey ?? sessionKey;
     const replyOperation = createReplyOperation({
       sessionId: queued.run.sessionId,
