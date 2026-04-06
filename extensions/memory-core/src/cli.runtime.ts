@@ -856,7 +856,19 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
           if (qmdIndexSummary) {
             defaultRuntime.log(qmdIndexSummary);
           }
-          defaultRuntime.log(`Memory index updated (${agentId}).`);
+          // HELM-0251: surface warning if vec0/chunks_vec was not updated
+          const postIndexStatus = manager.status();
+          const vectorEnabled = postIndexStatus.vector?.enabled ?? false;
+          const vectorAvailable = postIndexStatus.vector?.available;
+          const vectorLoadErr = postIndexStatus.vector?.loadError;
+          if (vectorEnabled && vectorAvailable === false) {
+            const errDetail = vectorLoadErr ? `: ${vectorLoadErr}` : "";
+            defaultRuntime.error(
+              `Memory index WARNING (${agentId}): chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded.`,
+            );
+          } else {
+            defaultRuntime.log(`Memory index updated (${agentId}).`);
+          }
         } catch (err) {
           const message = formatErrorMessage(err);
           defaultRuntime.error(`Memory index failed (${agentId}): ${message}`);
