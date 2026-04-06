@@ -588,13 +588,6 @@ export async function runExecProcess(opts: {
     if (!opts.onUpdate) {
       return;
     }
-    // Once the session has been backgrounded or has exited, the owning agent
-    // run that supplied `onUpdate` may have already finished.  Calling the
-    // callback at that point delivers a tool_execution_update event to a
-    // listener that no longer has an active run, which surfaces as an
-    // unhandled rejection and can crash the gateway process.  Output is still
-    // captured via `appendOutput` above, so nothing is lost – callers can
-    // retrieve it through the process poll/log commands.
     if (session.backgrounded || session.exited) {
       return;
     }
