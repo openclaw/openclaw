@@ -85,6 +85,17 @@ Example:
 | Google   | `lyria-3-clip-preview` | Up to 10 images  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
 | MiniMax  | `music-2.5+`           | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY`                      |
 
+### Declared capability matrix
+
+This is the explicit mode contract used by `music_generate`, contract tests,
+and the shared live sweep.
+
+| Provider | `generate` | `edit` | Edit limit | Shared live lanes                                                         |
+| -------- | ---------- | ------ | ---------- | ------------------------------------------------------------------------- |
+| ComfyUI  | Yes        | Yes    | 1 image    | Not in the shared sweep; covered by `extensions/comfy/comfy.live.test.ts` |
+| Google   | Yes        | Yes    | 10 images  | `generate`, `edit`                                                        |
+| MiniMax  | Yes        | No     | None       | `generate`                                                                |
+
 Use `action: "list"` to inspect available shared providers and models at
 runtime:
 
@@ -174,6 +185,36 @@ error includes details from each attempt.
 - ComfyUI support is workflow-driven and depends on the configured graph plus
   node mapping for prompt/output fields.
 
+## Provider capability modes
+
+The shared music-generation contract now supports explicit mode declarations:
+
+- `generate` for prompt-only generation
+- `edit` when the request includes one or more reference images
+
+New provider implementations should prefer explicit mode blocks:
+
+```typescript
+capabilities: {
+  generate: {
+    maxTracks: 1,
+    supportsLyrics: true,
+    supportsFormat: true,
+  },
+  edit: {
+    enabled: true,
+    maxTracks: 1,
+    maxInputImages: 1,
+    supportsFormat: true,
+  },
+}
+```
+
+Legacy flat fields such as `maxInputImages`, `supportsLyrics`, and
+`supportsFormat` are not enough to advertise edit support. Providers should
+declare `generate` and `edit` explicitly so live tests, contract tests, and
+the shared `music_generate` tool can validate mode support deterministically.
+
 ## Choosing the right path
 
 - Use the shared provider-backed path when you want model selection, provider failover, and the built-in async task/status flow.
@@ -187,6 +228,16 @@ Opt-in live coverage for the shared bundled providers:
 ```bash
 OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/music-generation-providers.live.test.ts
 ```
+
+This live file loads missing provider env vars from `~/.profile`, prefers
+live/env API keys ahead of stored auth profiles by default, and runs both
+`generate` and declared `edit` coverage when the provider enables edit mode.
+
+Today that means:
+
+- `google`: `generate` plus `edit`
+- `minimax`: `generate` only
+- `comfy`: separate Comfy live coverage, not the shared provider sweep
 
 Opt-in live coverage for the bundled ComfyUI music path:
 

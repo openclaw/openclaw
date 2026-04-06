@@ -475,10 +475,45 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - Exercises the shared bundled music-generation provider path
   - Currently covers Google and MiniMax
   - Loads provider env vars from your login shell (`~/.profile`) before probing
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
+  - Runs both declared runtime modes when available:
+    - `generate` with prompt-only input
+    - `edit` when the provider declares `capabilities.edit.enabled`
+  - Current shared-lane coverage:
+    - `google`: `generate`, `edit`
+    - `minimax`: `generate`
+    - `comfy`: separate Comfy live file, not this shared sweep
 - Optional narrowing:
   - `OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS="google,minimax"`
   - `OPENCLAW_LIVE_MUSIC_GENERATION_MODELS="google/lyria-3-clip-preview,minimax/music-2.5+"`
+- Optional auth behavior:
+  - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
+## Video generation live
+
+- Test: `extensions/video-generation-providers.live.test.ts`
+- Enable: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/video-generation-providers.live.test.ts`
+- Scope:
+  - Exercises the shared bundled video-generation provider path
+  - Loads provider env vars from your login shell (`~/.profile`) before probing
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Skips providers with no usable auth/profile/model
+  - Runs both declared runtime modes when available:
+    - `generate` with prompt-only input
+    - `imageToVideo` when the provider declares `capabilities.imageToVideo.enabled`
+    - `videoToVideo` when the provider declares `capabilities.videoToVideo.enabled` and the selected provider/model accepts buffer-backed local video input in the shared sweep
+  - Current `videoToVideo` live coverage:
+    - `google`
+    - `openai`
+    - `runway` only when the selected model is `runway/gen4_aleph`
+  - Current declared-but-skipped `videoToVideo` providers in the shared sweep:
+    - `alibaba`, `qwen`, `xai` because those paths currently require remote `http(s)` / MP4 reference URLs
+- Optional narrowing:
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="google,openai,runway"`
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="google/veo-3.1-fast-generate-preview,openai/sora-2,runway/gen4_aleph"`
+- Optional auth behavior:
+  - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 
 ## Docker runners (optional "works in Linux" checks)
 

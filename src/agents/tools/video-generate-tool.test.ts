@@ -305,9 +305,16 @@ describe("createVideoGenerateTool", () => {
         defaultModel: "veo-3.1-fast-generate-preview",
         models: ["veo-3.1-fast-generate-preview"],
         capabilities: {
-          maxInputImages: 1,
-          maxDurationSeconds: 8,
-          supportedDurationSeconds: [4, 6, 8],
+          generate: {
+            maxDurationSeconds: 8,
+            supportedDurationSeconds: [4, 6, 8],
+          },
+          imageToVideo: {
+            enabled: true,
+            maxInputImages: 1,
+            maxDurationSeconds: 8,
+            supportedDurationSeconds: [4, 6, 8],
+          },
         },
         generateVideo: vi.fn(async () => {
           throw new Error("not used");
@@ -389,7 +396,9 @@ describe("createVideoGenerateTool", () => {
         defaultModel: "sora-2",
         models: ["sora-2"],
         capabilities: {
-          supportsSize: true,
+          generate: {
+            supportsSize: true,
+          },
         },
         generateVideo: vi.fn(async () => {
           throw new Error("not used");

@@ -281,6 +281,12 @@ function validateVideoGenerationCapabilities(params: {
     inputImageCount: params.inputImageCount,
     inputVideoCount: params.inputVideoCount,
   });
+  if (!caps && mode === "imageToVideo" && params.inputVideoCount === 0) {
+    throw new ToolInputError(`${provider.id} does not support image-to-video reference inputs.`);
+  }
+  if (!caps && mode === "videoToVideo" && params.inputImageCount === 0) {
+    throw new ToolInputError(`${provider.id} does not support video-to-video reference inputs.`);
+  }
   if (!caps) {
     return;
   }

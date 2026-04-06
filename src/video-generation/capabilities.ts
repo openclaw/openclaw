@@ -2,45 +2,8 @@ import type {
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
   VideoGenerationProvider,
-  VideoGenerationProviderCapabilities,
   VideoGenerationTransformCapabilities,
 } from "./types.js";
-
-function pickModeCapabilities(
-  capabilities: VideoGenerationProviderCapabilities,
-): VideoGenerationModeCapabilities {
-  return {
-    maxVideos: capabilities.maxVideos,
-    maxInputImages: capabilities.maxInputImages,
-    maxInputVideos: capabilities.maxInputVideos,
-    maxDurationSeconds: capabilities.maxDurationSeconds,
-    supportedDurationSeconds: capabilities.supportedDurationSeconds,
-    supportedDurationSecondsByModel: capabilities.supportedDurationSecondsByModel,
-    supportsSize: capabilities.supportsSize,
-    supportsAspectRatio: capabilities.supportsAspectRatio,
-    supportsResolution: capabilities.supportsResolution,
-    supportsAudio: capabilities.supportsAudio,
-    supportsWatermark: capabilities.supportsWatermark,
-  };
-}
-
-function deriveLegacyImageToVideoCapabilities(
-  capabilities: VideoGenerationProviderCapabilities,
-): VideoGenerationTransformCapabilities {
-  return {
-    ...pickModeCapabilities(capabilities),
-    enabled: (capabilities.maxInputImages ?? 0) > 0,
-  };
-}
-
-function deriveLegacyVideoToVideoCapabilities(
-  capabilities: VideoGenerationProviderCapabilities,
-): VideoGenerationTransformCapabilities {
-  return {
-    ...pickModeCapabilities(capabilities),
-    enabled: (capabilities.maxInputVideos ?? 0) > 0,
-  };
-}
 
 export function resolveVideoGenerationMode(params: {
   inputImageCount?: number;
@@ -64,16 +27,12 @@ export function listSupportedVideoGenerationModes(
   provider: Pick<VideoGenerationProvider, "capabilities">,
 ): VideoGenerationMode[] {
   const modes: VideoGenerationMode[] = ["generate"];
-  const imageToVideo =
-    provider.capabilities.imageToVideo ??
-    deriveLegacyImageToVideoCapabilities(provider.capabilities);
-  if (imageToVideo.enabled) {
+  const imageToVideo = provider.capabilities.imageToVideo;
+  if (imageToVideo?.enabled) {
     modes.push("imageToVideo");
   }
-  const videoToVideo =
-    provider.capabilities.videoToVideo ??
-    deriveLegacyVideoToVideoCapabilities(provider.capabilities);
-  if (videoToVideo.enabled) {
+  const videoToVideo = provider.capabilities.videoToVideo;
+  if (videoToVideo?.enabled) {
     modes.push("videoToVideo");
   }
   return modes;
@@ -95,23 +54,23 @@ export function resolveVideoGenerationModeCapabilities(params: {
   if (mode === "generate") {
     return {
       mode,
-      capabilities: capabilities.generate ?? pickModeCapabilities(capabilities),
+      capabilities: capabilities.generate,
     };
   }
   if (mode === "imageToVideo") {
     return {
       mode,
-      capabilities: capabilities.imageToVideo ?? deriveLegacyImageToVideoCapabilities(capabilities),
+      capabilities: capabilities.imageToVideo,
     };
   }
   if (mode === "videoToVideo") {
     return {
       mode,
-      capabilities: capabilities.videoToVideo ?? deriveLegacyVideoToVideoCapabilities(capabilities),
+      capabilities: capabilities.videoToVideo,
     };
   }
   return {
     mode,
-    capabilities: pickModeCapabilities(capabilities),
+    capabilities: undefined,
   };
 }

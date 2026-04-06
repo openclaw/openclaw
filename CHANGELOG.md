@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Plugins/webhooks: add a bundled webhook ingress plugin so external automation can create and drive bound TaskFlows through per-route shared-secret endpoints. (#61892) Thanks @mbelinky.
+- Tools/media: document per-provider music and video generation capabilities, and add shared live video-to-video sweep coverage for providers that support local reference clips.
 
 ### Fixes
 

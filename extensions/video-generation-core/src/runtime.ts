@@ -53,30 +53,24 @@ function resolveVideoGenerationModeCapabilities(params: {
   if (mode === "generate") {
     return {
       mode,
-      capabilities: capabilities.generate ?? capabilities,
+      capabilities: capabilities.generate,
     };
   }
   if (mode === "imageToVideo") {
     return {
       mode,
-      capabilities: capabilities.imageToVideo ?? {
-        ...capabilities,
-        enabled: (capabilities.maxInputImages ?? 0) > 0,
-      },
+      capabilities: capabilities.imageToVideo,
     };
   }
   if (mode === "videoToVideo") {
     return {
       mode,
-      capabilities: capabilities.videoToVideo ?? {
-        ...capabilities,
-        enabled: (capabilities.maxInputVideos ?? 0) > 0,
-      },
+      capabilities: capabilities.videoToVideo,
     };
   }
   return {
     mode,
-    capabilities,
+    capabilities: undefined,
   };
 }
 
