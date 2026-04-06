@@ -61,6 +61,16 @@ function createConfig(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+async function updateMissionStateFile(
+  missionDir: string,
+  mutate: (state: Record<string, unknown>) => void,
+): Promise<void> {
+  const statePath = path.join(missionDir, "mission-state.json");
+  const rawState = JSON.parse(await fs.readFile(statePath, "utf-8")) as Record<string, unknown>;
+  mutate(rawState);
+  await fs.writeFile(statePath, `${JSON.stringify(rawState, null, 2)}\n`, "utf-8");
+}
+
 describe("createClawMissionService", () => {
   let workspaceDir: string;
 
@@ -273,6 +283,29 @@ describe("createClawMissionService", () => {
     expect(browserCheck?.detail).toContain("Remote browser profile is restarting");
     expect(created.mission?.blockedSummary).toBeNull();
     expect(inspectBrowserReadiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not infer browser-required work from generic page or tab wording", async () => {
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+    });
+
+    const docsMission = await service.createMission({
+      goal: "Update the documentation page for the REST API.",
+    });
+    const tabMission = await service.createMission({
+      goal: "Fix the tab behavior in the terminal component.",
+    });
+
+    expect(docsMission.mission?.status).toBe("awaiting_approval");
+    expect(tabMission.mission?.status).toBe("awaiting_approval");
+    expect(
+      docsMission.mission?.preflight.find((check) => check.id === "browser-runtime")?.status,
+    ).toBe("info");
+    expect(
+      tabMission.mission?.preflight.find((check) => check.id === "browser-runtime")?.status,
+    ).toBe("info");
   });
 
   it("blocks unattended continuation until required external readiness is proven and reuses it later", async () => {
@@ -662,7 +695,7 @@ describe("createClawMissionService", () => {
     await service.approveMissionStart(missionId);
     await service.runNextMissionCycle();
 
-    const recovered = await service.recoverInterruptedMissions();
+    const recovered = (await service.recoverInterruptedMissions())[0];
     expect(recovered?.mission?.status).toBe("blocked");
     expect(
       recovered?.mission?.decisions.some(
@@ -697,20 +730,19 @@ describe("createClawMissionService", () => {
     });
     const missionId = created.mission!.id;
     const approved = await service.approveMissionStart(missionId);
-    const statePath = path.join(approved.mission!.missionDir, "mission-state.json");
-    const rawState = JSON.parse(await fs.readFile(statePath, "utf-8")) as Record<string, unknown>;
-    rawState.status = "running";
-    rawState.currentStep = "Mission execution cycle started.";
-    rawState.startedAt = rawState.startedAt ?? new Date().toISOString();
-    rawState.runCycleCount = 0;
-    rawState.verifyCycleCount = 0;
-    rawState.recentEvidence = [];
-    rawState.lastFailureSummary = null;
-    rawState.lastVerifierRejectionSignature = null;
-    rawState.blockedSummary = null;
-    await fs.writeFile(statePath, `${JSON.stringify(rawState, null, 2)}\n`, "utf-8");
+    await updateMissionStateFile(approved.mission!.missionDir, (rawState) => {
+      rawState.status = "running";
+      rawState.currentStep = "Mission execution cycle started.";
+      rawState.startedAt = rawState.startedAt ?? new Date().toISOString();
+      rawState.runCycleCount = 0;
+      rawState.verifyCycleCount = 0;
+      rawState.recentEvidence = [];
+      rawState.lastFailureSummary = null;
+      rawState.lastVerifierRejectionSignature = null;
+      rawState.blockedSummary = null;
+    });
 
-    const recovered = await service.recoverInterruptedMissions();
+    const recovered = (await service.recoverInterruptedMissions())[0];
     expect(recovered?.mission?.status).toBe("recovering");
     expect(
       recovered?.mission?.decisions.some(
@@ -750,7 +782,7 @@ describe("createClawMissionService", () => {
     await service.approveMissionStart(missionId);
     await service.runNextMissionCycle();
 
-    const recovered = await service.recoverInterruptedMissions();
+    const recovered = (await service.recoverInterruptedMissions())[0];
     expect(recovered?.mission?.status).toBe("blocked");
     expect(recovered?.mission?.currentStep).toBe(
       "Awaiting operator confirmation before resuming recovery.",
@@ -807,7 +839,7 @@ describe("createClawMissionService", () => {
     await service.approveMissionStart(missionId);
     await service.runNextMissionCycle();
 
-    const recovered = await service.recoverInterruptedMissions();
+    const recovered = (await service.recoverInterruptedMissions())[0];
     const decision = recovered?.mission?.decisions.find(
       (entry) => entry.kind === "recovery_uncertain" && entry.status === "pending",
     );
@@ -855,7 +887,7 @@ describe("createClawMissionService", () => {
     await service.approveMissionStart(missionId);
     await service.runNextMissionCycle();
 
-    const recovered = await service.recoverInterruptedMissions();
+    const recovered = (await service.recoverInterruptedMissions())[0];
     const decision = recovered?.mission?.decisions.find(
       (entry) => entry.kind === "recovery_uncertain" && entry.status === "pending",
     );
@@ -896,7 +928,7 @@ describe("createClawMissionService", () => {
     await service.approveMissionStart(missionId);
     await service.runNextMissionCycle();
 
-    const recovered = await service.recoverInterruptedMissions();
+    const recovered = (await service.recoverInterruptedMissions())[0];
     const decision = recovered?.mission?.decisions.find(
       (entry) => entry.kind === "recovery_uncertain" && entry.status === "pending",
     );
@@ -908,5 +940,84 @@ describe("createClawMissionService", () => {
       action: "cancel",
     });
     expect(cancelled.mission?.status).toBe("cancelled");
+  });
+
+  it("returns snapshots for every recovered mission instead of only the last one", async () => {
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+    });
+
+    const first = await service.createMission({
+      goal: "Recover the first interrupted mission.",
+    });
+    const second = await service.createMission({
+      goal: "Recover the second interrupted mission.",
+    });
+    const approvedFirst = await service.approveMissionStart(first.mission!.id);
+    const approvedSecond = await service.approveMissionStart(second.mission!.id);
+
+    for (const missionDir of [
+      approvedFirst.mission!.missionDir,
+      approvedSecond.mission!.missionDir,
+    ]) {
+      await updateMissionStateFile(missionDir, (rawState) => {
+        rawState.status = "running";
+        rawState.currentStep = "Mission execution cycle started.";
+        rawState.startedAt = rawState.startedAt ?? new Date().toISOString();
+        rawState.runCycleCount = 0;
+        rawState.verifyCycleCount = 0;
+        rawState.recentEvidence = [];
+        rawState.lastFailureSummary = null;
+        rawState.lastVerifierRejectionSignature = null;
+        rawState.blockedSummary = null;
+      });
+    }
+
+    const recovered = await service.recoverInterruptedMissions();
+    expect(recovered).toHaveLength(2);
+    expect(recovered.map((snapshot) => snapshot.mission?.id)).toEqual(
+      expect.arrayContaining([first.mission!.id, second.mission!.id]),
+    );
+    expect(recovered.map((snapshot) => snapshot.mission?.status)).toEqual(
+      expect.arrayContaining(["recovering", "recovering"]),
+    );
+  });
+
+  it("continues reconciling other missions when one mission state fails to reconcile", async () => {
+    const service = createClawMissionService({
+      resolveWorkspaceDir: () => workspaceDir,
+      loadConfig: () => createConfig(),
+    });
+
+    const first = await service.createMission({
+      goal: "Pause the first running mission during reconciliation.",
+    });
+    const second = await service.createMission({
+      goal: "Pause the second running mission during reconciliation.",
+    });
+    const approvedFirst = await service.approveMissionStart(first.mission!.id);
+    const approvedSecond = await service.approveMissionStart(second.mission!.id);
+
+    await updateMissionStateFile(approvedFirst.mission!.missionDir, (rawState) => {
+      rawState.status = "running";
+      rawState.currentStep = "Mission execution cycle started.";
+      rawState.startedAt = rawState.startedAt ?? new Date().toISOString();
+    });
+    await updateMissionStateFile(approvedSecond.mission!.missionDir, (rawState) => {
+      rawState.status = "running";
+      rawState.currentStep = "Mission execution cycle started.";
+      rawState.startedAt = rawState.startedAt ?? new Date().toISOString();
+      rawState.flowRevision = Number(rawState.flowRevision ?? 0) + 999;
+    });
+
+    await service.pauseAll();
+    const dashboard = await service.buildDashboard();
+    const firstMission = dashboard.missions.find((mission) => mission.id === first.mission!.id);
+    const secondMission = dashboard.missions.find((mission) => mission.id === second.mission!.id);
+
+    expect(firstMission?.status).toBe("paused");
+    expect(firstMission?.currentStep).toBe("Paused by global control.");
+    expect(secondMission?.status).toBe("running");
   });
 });

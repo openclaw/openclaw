@@ -623,8 +623,8 @@ function inferMissionCapabilityNeeds(goal: string): ClawMissionCapabilityNeeds {
     /\bmfa\b/,
     /\b2fa\b/,
     /\boauth\b/,
-    /\btab\b/,
-    /\bpage\b/,
+    /\bbrowser tab\b/,
+    /\bweb page\b/,
     /\bgmail\b/,
   ]);
   const manualAuthRequired = goalMentionsAny(normalizedGoal, [
@@ -2027,7 +2027,14 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
       if (isTerminalMissionStatus(mission.status)) {
         continue;
       }
-      await reconcileMissionStateForControl(mission, effectiveControl);
+      try {
+        await reconcileMissionStateForControl(mission, effectiveControl);
+      } catch (error) {
+        log.warn("Failed to reconcile mission state", {
+          missionId: mission.id,
+          error,
+        });
+      }
     }
   }
 
@@ -2928,8 +2935,8 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
 
   async function recoverInterruptedMissions(
     workspaceDir = resolveWorkspaceDir(),
-  ): Promise<ClawMissionDetailSnapshot | null> {
-    let changedMissionId: string | null = null;
+  ): Promise<ClawMissionDetailSnapshot[]> {
+    const changedMissionIds: string[] = [];
     const nowIso = isoNow(now);
     const missions = await loadAllMissionStates(workspaceDir);
     for (const mission of missions) {
@@ -2953,7 +2960,7 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
           detail: summary,
         });
         await persistRuntimeState(mission);
-        changedMissionId = mission.id;
+        changedMissionIds.push(mission.id);
         continue;
       }
       moveMissionToRecovering(
@@ -2967,12 +2974,15 @@ export function createClawMissionService(deps: ClawServiceDeps = {}) {
         summary: "Mission moved into recovery after gateway startup.",
       });
       await persistRuntimeState(mission);
-      changedMissionId = mission.id;
+      changedMissionIds.push(mission.id);
     }
-    if (!changedMissionId) {
-      return null;
+    if (changedMissionIds.length === 0) {
+      return [];
     }
-    return await getMissionSnapshot(changedMissionId, workspaceDir);
+    const snapshots = await Promise.all(
+      changedMissionIds.map(async (missionId) => await getMissionSnapshot(missionId, workspaceDir)),
+    );
+    return snapshots;
   }
 
   async function runMissionCycles(
