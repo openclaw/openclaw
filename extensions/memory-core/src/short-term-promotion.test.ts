@@ -1086,6 +1086,7 @@ describe("short-term promotion", () => {
               source: "memory",
               snippet,
               recallCount: 2,
+              dailyCount: 0,
               totalScore: 1.8,
               maxScore: 0.95,
               firstRecalledAt: "2026-04-01T00:00:00.000Z",
@@ -1106,9 +1107,10 @@ describe("short-term promotion", () => {
 
       const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
 
-      expect(repair.changed).toBe(false);
-      expect(repair.rewroteStore).toBe(false);
-      expect(await fs.readFile(storePath, "utf-8")).toBe(raw);
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      const nextRaw = await fs.readFile(storePath, "utf-8");
+      expect(nextRaw).not.toBe(raw);
     });
   });
 

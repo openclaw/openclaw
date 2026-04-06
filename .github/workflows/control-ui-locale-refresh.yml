@@ -156,11 +156,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A ui/src/i18n
-          FAST_COMMIT=1 git commit -m "chore(ui): refresh ${LOCALE} control ui locale"
+          git commit --no-verify -m "chore(ui): refresh ${LOCALE} control ui locale"
 
           for attempt in 1 2 3 4 5; do
             git fetch origin "${TARGET_BRANCH}"
-            git rebase "origin/${TARGET_BRANCH}"
+            git rebase --autostash "origin/${TARGET_BRANCH}"
             if git push origin HEAD:"${TARGET_BRANCH}"; then
               exit 0
             fi

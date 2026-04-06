@@ -231,14 +231,31 @@
     ]
   },
   {
-    "id": "config-patch-hot-apply",
-    "title": "Config patch hot apply",
-    "surface": "config",
-    "objective": "Verify a hot-reloadable config.patch takes effect immediately without a disruptive restart.",
+    "id": "image-understanding-attachment",
+    "title": "Image understanding from attachment",
+    "surface": "image-understanding",
+    "objective": "Verify an attached image reaches the agent model and the agent can describe what it sees.",
     "successCriteria": [
-      "config.patch succeeds with no restart dependency.",
-      "Old mention routing behavior stops working immediately.",
-      "New mention routing behavior works in the same gateway lifetime."
+      "Agent receives at least one image attachment.",
+      "Final answer describes the visible image content in one short sentence.",
+      "The description mentions the expected red and blue regions."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/tools/index.md"],
+    "codeRefs": [
+      "src/gateway/server-methods/agent.ts",
+      "extensions/qa-lab/src/suite.ts",
+      "extensions/qa-lab/src/mock-openai-server.ts"
+    ]
+  },
+  {
+    "id": "config-patch-hot-apply",
+    "title": "Config patch skill disable",
+    "surface": "config",
+    "objective": "Verify config.patch can disable a workspace skill and the restarted gateway exposes the new disabled state cleanly.",
+    "successCriteria": [
+      "config.patch succeeds for the skill toggle change.",
+      "A workspace skill works before the patch.",
+      "The same skill is reported disabled after the restart triggered by the patch."
     ],
     "docsRefs": ["docs/gateway/configuration.md", "docs/gateway/protocol.md"],
     "codeRefs": ["src/gateway/server-methods/config.ts", "extensions/qa-lab/src/suite.ts"]

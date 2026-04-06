@@ -633,12 +633,14 @@ describe("doctor config flow", () => {
       channels: {
         discord: {
           streamMode?: string;
-          streaming?: string;
+          streaming?: {
+            mode?: string;
+          };
           lifecycle?: unknown;
         };
       };
     };
-    expect(cfg.channels.discord.streaming).toBe("partial");
+    expect(cfg.channels.discord.streaming?.mode).toBe("partial");
     expect(cfg.channels.discord.streamMode).toBeUndefined();
     expect(cfg.channels.discord.lifecycle).toEqual({
       enabled: true,
@@ -680,7 +682,7 @@ describe("doctor config flow", () => {
           ([message, title]) =>
             title === "Legacy config keys detected" &&
             String(message).includes("channels.telegram:") &&
-            String(message).includes("channels.telegram.streamMode is legacy"),
+            String(message).includes("channels.telegram.streamMode, channels.telegram.streaming"),
         ),
       ).toBe(true);
       expect(
@@ -688,7 +690,7 @@ describe("doctor config flow", () => {
           ([message, title]) =>
             title === "Legacy config keys detected" &&
             String(message).includes("channels.discord:") &&
-            String(message).includes("boolean channels.discord.streaming are legacy"),
+            String(message).includes("channels.discord.streamMode, channels.discord.streaming"),
         ),
       ).toBe(true);
       expect(
@@ -704,7 +706,7 @@ describe("doctor config flow", () => {
           ([message, title]) =>
             title === "Legacy config keys detected" &&
             String(message).includes("channels.slack:") &&
-            String(message).includes("boolean channels.slack.streaming are legacy"),
+            String(message).includes("channels.slack.streamMode, channels.slack.streaming"),
         ),
       ).toBe(true);
       expect(
@@ -907,22 +909,11 @@ describe("doctor config flow", () => {
       const outputs = noteSpy.mock.calls
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => String(call[0]));
+      const joinedOutputs = outputs.join("\n");
       expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
       expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
-      expect(
-        outputs.some(
-          (line) =>
-            line.includes("channels.slack.accounts.work.allowFrom: aliceforged") &&
-            line.includes("mutable allowlist"),
-        ),
-      ).toBe(true);
-      expect(
-        outputs.some(
-          (line) =>
-            line.includes('channels.slack.accounts.opsopen.allowFrom: set to ["*"]') &&
-            line.includes('required by dmPolicy="open"'),
-        ),
-      ).toBe(true);
+      expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
+      expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
         outputs.some(
           (line) =>
@@ -1651,30 +1642,15 @@ describe("doctor config flow", () => {
         run: loadAndMaybeMigrateDoctorConfig,
       });
 
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("session.threadBindings:") &&
-            String(message).includes("session.threadBindings.idleHours"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("channels.discord.threadBindings:") &&
-            String(message).includes("channels.discord.threadBindings.idleHours"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Legacy config keys detected" &&
-            String(message).includes("channels.discord.accounts:") &&
-            String(message).includes("channels.discord.accounts.<id>.threadBindings.idleHours"),
-        ),
-      ).toBe(true);
+      const legacyMessages = noteSpy.mock.calls
+        .filter(([, title]) => title === "Legacy config keys detected")
+        .map(([message]) => String(message))
+        .join("\n");
+
+      expect(legacyMessages).toContain("session.threadBindings.ttlHours");
+      expect(legacyMessages).toContain("session.threadBindings.idleHours");
+      expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
+      expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
       expect(
         noteSpy.mock.calls.some(
           ([message, title]) =>

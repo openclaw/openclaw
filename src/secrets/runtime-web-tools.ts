@@ -61,6 +61,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function hasPluginWebToolConfig(config: OpenClawConfig): boolean {
+  const entries = config.plugins?.entries;
+  if (!entries) {
+    return false;
+  }
+  return Object.values(entries).some((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+    const pluginConfig = isRecord(entry.config) ? entry.config : undefined;
+    return Boolean(pluginConfig?.webSearch || pluginConfig?.webFetch);
+  });
+}
+
 function normalizeProvider(
   value: unknown,
   providers: ReturnType<typeof resolvePluginWebSearchProviders>,
@@ -366,9 +380,50 @@ export async function resolveRuntimeWebTools(params: {
   const defaults = params.sourceConfig.secrets?.defaults;
   const diagnostics: RuntimeWebDiagnostic[] = [];
 
-  const tools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
-  const web = isRecord(tools?.web) ? tools.web : undefined;
-  const search = isRecord(web?.search) ? web.search : undefined;
+  const sourceTools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
+  const sourceWeb = isRecord(sourceTools?.web) ? sourceTools.web : undefined;
+  const resolvedTools = isRecord(params.resolvedConfig.tools)
+    ? params.resolvedConfig.tools
+    : undefined;
+  const resolvedWeb = isRecord(resolvedTools?.web) ? resolvedTools.web : undefined;
+  const legacyXSearchSourceRaw: unknown = sourceWeb?.x_search;
+  const legacyXSearchResolvedRaw: unknown = resolvedWeb?.x_search;
+  const legacyXSearchSource = isRecord(legacyXSearchSourceRaw) ? legacyXSearchSourceRaw : undefined;
+  const legacyXSearchResolved = isRecord(legacyXSearchResolvedRaw)
+    ? legacyXSearchResolvedRaw
+    : undefined;
+  if (!sourceWeb && !hasPluginWebToolConfig(params.sourceConfig)) {
+    return {
+      search: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      fetch: {
+        providerSource: "none",
+        diagnostics: [],
+      },
+      diagnostics,
+    };
+  }
+  if (
+    legacyXSearchSource &&
+    legacyXSearchResolved &&
+    Object.prototype.hasOwnProperty.call(legacyXSearchSource, "apiKey")
+  ) {
+    const apiKey = legacyXSearchSource["apiKey"];
+    const resolution = await resolveSecretInputWithEnvFallback({
+      sourceConfig: params.sourceConfig,
+      context: params.context,
+      defaults,
+      value: apiKey,
+      path: "tools.web.x_search.apiKey",
+      envVars: ["XAI_API_KEY"],
+    });
+    if (resolution.value) {
+      legacyXSearchResolved["apiKey"] = resolution.value;
+    }
+  }
+  const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
   const rawProvider =
     typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
   const configuredBundledPluginId = resolveManifestContractOwnerPluginId({
@@ -676,7 +731,7 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
-  const fetch = isRecord(web?.fetch) ? (web.fetch as FetchConfig) : undefined;
+  const fetch = isRecord(sourceWeb?.fetch) ? (sourceWeb.fetch as FetchConfig) : undefined;
   const rawFetchProvider =
     typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
   const configuredBundledFetchPluginId = resolveManifestContractOwnerPluginId({
