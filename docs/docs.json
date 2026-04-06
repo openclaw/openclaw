@@ -1272,6 +1272,7 @@
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",
+                  "providers/vydra",
                   "providers/vllm",
                   "providers/volcengine",
                   "providers/xai",
