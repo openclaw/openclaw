@@ -401,6 +401,12 @@ When fast mode is enabled, OpenClaw maps it to OpenAI priority processing:
 - existing payload `service_tier` values are preserved
 - fast mode does not rewrite `reasoning` or `text.verbosity`
 
+For GPT 5.4 specifically, the most common setup is:
+
+- send `/fast on` in a session using `openai/gpt-5.4` or `openai-codex/gpt-5.4`
+- or set `agents.defaults.models["openai/gpt-5.4"].params.fastMode = true`
+- if you also use Codex OAuth, set `agents.defaults.models["openai-codex/gpt-5.4"].params.fastMode = true` too
+
 Example:
 
 ```json5
