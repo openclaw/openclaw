@@ -22,6 +22,22 @@ PRIORITY_WEIGHTS = {
     'low': 25,
     'none': 0,
 }
+BUCKET_LABELS = {
+    'auth': 'Auth failure',
+    'runtime_submit': 'Runtime submit issue',
+    'runtime_poll': 'Runtime poll issue',
+    'control_plane': 'Control-plane issue',
+    'executor_gate': 'Executor gate stop',
+    'config_mapping': 'Config mapping issue',
+    'none': 'No issue',
+    'unknown': 'Unknown issue',
+}
+PATH_LABELS = {
+    'NO_HANDOFF>FULL_EVAL>FAILED': 'full-eval path',
+    'NO_HANDOFF>FULL_EVAL>EXECUTOR': 'full-eval executor path',
+    'HANDOFF>TRIAGE_HINT>FULL_EVAL>EXECUTOR': 'full-eval executor path',
+    'HANDOFF>TRIAGE_USE>SHORTCUT>BRIDGE>EXECUTOR': 'shortcut bridge path',
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,6 +95,13 @@ def derive_recovery_bucket_from_route_signature(route_signature: str) -> str:
     if not recovery_signature:
         return 'unknown'
     return recovery_signature.split(':', 1)[0].strip() or 'unknown'
+
+
+def derive_notification_title(route_signature: str, bucket: str) -> str:
+    path_signature = derive_path_signature(route_signature)
+    bucket_label = BUCKET_LABELS.get(bucket, bucket or 'unknown')
+    path_label = PATH_LABELS.get(path_signature, path_signature)
+    return f'{bucket_label} on {path_label}'
 
 
 def load_records(raw_input: str) -> list[dict]:
@@ -328,6 +351,10 @@ def main() -> int:
                 f"{derive_recovery_bucket_from_route_signature(str(item.get('route_signature') or ''))}."
                 f"{item.get('strongest_priority_band', 'none')}."
                 f"{derive_path_signature(str(item.get('route_signature') or ''))}"
+            ),
+            'notification_title': derive_notification_title(
+                str(item.get('route_signature') or ''),
+                derive_recovery_bucket_from_route_signature(str(item.get('route_signature') or '')),
             ),
             'count': item['count'],
             'score': item['max_recovery_rank'],
