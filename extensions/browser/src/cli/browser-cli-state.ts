@@ -12,7 +12,7 @@ function parseOnOff(raw: string): boolean | null {
 
 function runBrowserCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err as unknown)));
+    defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
   });
 }

@@ -23,13 +23,11 @@ import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
@@ -38,7 +36,6 @@ import {
   parseDiscordModalCustomIdForCarbon,
 } from "../component-custom-id.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
-import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
 import { type DiscordInteractiveHandlerContext } from "../interactive-dispatch.js";
 import { dispatchDiscordPluginInteractiveHandler } from "../interactive-dispatch.js";
 import { editDiscordComponentMessage } from "../send.components.js";
@@ -46,8 +43,6 @@ import {
   AGENT_BUTTON_KEY,
   AGENT_SELECT_KEY,
   ackComponentInteraction,
-  buildAgentButtonCustomId,
-  buildAgentSelectCustomId,
   type AgentComponentContext,
   type AgentComponentInteraction,
   type AgentComponentMessageInteraction,
@@ -69,7 +64,6 @@ import {
   resolveInteractionCustomId,
   resolveModalFieldValues,
   resolvePinnedMainDmOwnerFromAllowlist,
-  type DiscordUser,
 } from "./agent-components-helpers.js";
 import {
   enqueueSystemEvent,
@@ -77,7 +71,6 @@ import {
   resolveStorePath,
 } from "./agent-components.deps.runtime.js";
 import {
-  type DiscordGuildEntryResolved,
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
@@ -92,7 +85,6 @@ import { deliverDiscordReply } from "./reply-delivery.js";
 
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
-let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
 let replyPipelineRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
   | undefined;
@@ -108,10 +100,6 @@ async function loadComponentsRuntime() {
   return await componentsRuntimePromise;
 }
 
-async function loadReplyRuntime() {
-  replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
-  return await replyRuntimePromise;
-}
 async function loadReplyPipelineRuntime() {
   replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline");
   return await replyPipelineRuntimePromise;
