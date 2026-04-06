@@ -454,6 +454,12 @@ async function readUsageStats(agentDir: string) {
   return stored.usageStats ?? {};
 }
 
+async function readAuthStore(agentDir: string) {
+  return JSON.parse(
+    await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+  );
+}
+
 async function expectProfileP2UsageUnchanged(agentDir: string) {
   const usageStats = await readUsageStats(agentDir);
   expect(usageStats["openai:p2"]?.lastUsed).toBe(2);

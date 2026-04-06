@@ -248,6 +248,16 @@ export function extractRetryAfterMsFromError(err: unknown): number | undefined {
   if (retryAfterNum !== undefined && retryAfterNum >= 0) {
     return Math.round(retryAfterNum * 1000);
   }
+  // Handle HTTP-date format in retryAfter string (RFC 7231)
+  if (typeof retryAfterRaw === "string") {
+    const httpDateMs = parseHttpDate(retryAfterRaw);
+    if (httpDateMs !== undefined) {
+      const deltaMs = httpDateMs - Date.now();
+      if (deltaMs >= 0) {
+        return Math.round(deltaMs);
+      }
+    }
+  }
 
   // 3. Headers
   const resolveHeaderValue = (headers: unknown): string | undefined => {
