@@ -50,6 +50,7 @@ Common commands
 - Calendar show colors: `gog calendar colors`
 - Drive search: `gog drive search "query" --max 10`
 - Contacts: `gog contacts list --max 20`
+- For comprehensive Contacts search/export tasks where completeness matters, use the dedicated `google-contacts` skill instead of relying on `gog contacts search` alone.
 - Sheets get: `gog sheets get <sheetId> "Tab!A1:D10" --json`
 - Sheets update: `gog sheets update <sheetId> "Tab!A1:B2" --values-json '[["A","B"],["1","2"]]' --input USER_ENTERED`
 - Sheets append: `gog sheets append <sheetId> "Tab!A:C" --values-json '[["x","y","z"]]' --insert INSERT_ROWS`
