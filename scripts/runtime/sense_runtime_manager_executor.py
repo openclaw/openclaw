@@ -343,6 +343,12 @@ def build_recovery_signature(recovery_vector: dict | None) -> str:
     return f'{bucket}:{owner}:{actionable}:{rank_value}'
 
 
+def build_route_signature(path_signature: str | None, recovery_signature: str | None) -> str:
+    normalized_path = str(path_signature or '')
+    normalized_recovery = str(recovery_signature or '')
+    return f'{normalized_path} | {normalized_recovery}'.strip()
+
+
 def finalize_output(output: dict) -> dict:
     output['error_code'] = normalize_executor_error_code(output)
     output['error_detail_code'] = normalize_executor_error_detail_code(output)
@@ -383,6 +389,19 @@ def finalize_output(output: dict) -> dict:
         output.get('recovery_rank'),
     )
     output['recovery_signature'] = build_recovery_signature(output.get('recovery_vector'))
+    output['route_signature'] = build_route_signature(
+        build_path_signature(
+            compact_path_codes(
+                output.get('executor_state'),
+                {
+                    'policy_trace': output.get('policy_trace', {}),
+                    'policy_table_version': output.get('policy_table_version'),
+                    'manager_action': (output.get('main_action') or {}).get('action') if isinstance(output.get('main_action'), dict) else None,
+                },
+            )
+        ),
+        output.get('recovery_signature'),
+    )
     output['manager_handoff'] = build_manager_handoff(output)
     return output
 
@@ -850,6 +869,7 @@ def build_manager_handoff(report: dict) -> dict:
         'recovery_actionable': report.get('recovery_actionable'),
         'recovery_vector': report.get('recovery_vector'),
         'recovery_signature': report.get('recovery_signature'),
+        'route_signature': report.get('route_signature'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),

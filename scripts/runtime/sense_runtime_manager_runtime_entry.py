@@ -481,6 +481,12 @@ def build_recovery_signature(recovery_vector: dict | None) -> str:
     return f'{bucket}:{owner}:{actionable}:{rank_value}'
 
 
+def build_route_signature(path_signature: str | None, recovery_signature: str | None) -> str:
+    normalized_path = str(path_signature or '')
+    normalized_recovery = str(recovery_signature or '')
+    return f'{normalized_path} | {normalized_recovery}'.strip()
+
+
 def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
     entry_status = 'completed' if isinstance(entry_result, dict) else None
     bridge_status = None
@@ -612,6 +618,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_recovery_actionable': manager_handoff.get('recovery_actionable'),
         'last_recovery_vector': manager_handoff.get('recovery_vector'),
         'last_recovery_signature': manager_handoff.get('recovery_signature'),
+        'last_route_signature': manager_handoff.get('route_signature'),
     }
 
 
@@ -698,6 +705,8 @@ def main() -> int:
             recovery_rank,
         )
         path_codes = build_path_codes(path_tags)
+        path_signature = build_path_signature(path_codes)
+        recovery_signature = build_recovery_signature(recovery_vector)
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -711,7 +720,7 @@ def main() -> int:
             'path_taken': path_summary.get('path_taken'),
             'path_tags': path_tags,
             'path_codes': path_codes,
-            'path_signature': build_path_signature(path_codes),
+            'path_signature': path_signature,
             'error_code': error_code,
             'error_detail_code': error_detail_code,
             'error_source_layer': error_source_layer,
@@ -723,7 +732,8 @@ def main() -> int:
             'recovery_owner': recovery_owner,
             'recovery_actionable': recovery_actionable,
             'recovery_vector': recovery_vector,
-            'recovery_signature': build_recovery_signature(recovery_vector),
+            'recovery_signature': recovery_signature,
+            'route_signature': build_route_signature(path_signature, recovery_signature),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
@@ -784,6 +794,8 @@ def main() -> int:
             recovery_rank,
         )
         path_codes = build_path_codes(path_tags)
+        path_signature = build_path_signature(path_codes)
+        recovery_signature = build_recovery_signature(recovery_vector)
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -797,7 +809,7 @@ def main() -> int:
             'path_taken': path_summary.get('path_taken'),
             'path_tags': path_tags,
             'path_codes': path_codes,
-            'path_signature': build_path_signature(path_codes),
+            'path_signature': path_signature,
             'error_code': error_code,
             'error_detail_code': error_detail_code,
             'error_source_layer': error_source_layer,
@@ -809,7 +821,8 @@ def main() -> int:
             'recovery_owner': recovery_owner,
             'recovery_actionable': recovery_actionable,
             'recovery_vector': recovery_vector,
-            'recovery_signature': build_recovery_signature(recovery_vector),
+            'recovery_signature': recovery_signature,
+            'route_signature': build_route_signature(path_signature, recovery_signature),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
