@@ -11,16 +11,21 @@ import {
   parseStatusRouteArgs,
 } from "./route-args.js";
 
-export type RoutedCommandDefinition<TArgs = unknown> = {
-  parseArgs: (argv: string[]) => TArgs | null;
-  runParsedArgs: (args: TArgs) => Promise<void>;
+type RouteArgParser<TArgs> = (argv: string[]) => TArgs | null;
+
+type ParsedRouteArgs<TParse extends RouteArgParser<unknown>> = Exclude<ReturnType<TParse>, null>;
+
+export type RoutedCommandDefinition<TParse extends RouteArgParser<unknown>> = {
+  parseArgs: TParse;
+  runParsedArgs: (args: ParsedRouteArgs<TParse>) => Promise<void>;
 };
 
-function defineRoutedCommand<TParse extends (argv: string[]) => unknown>(definition: {
-  parseArgs: TParse;
-  runParsedArgs: (args: Exclude<ReturnType<TParse>, null>) => Promise<void>;
-}): RoutedCommandDefinition<Exclude<ReturnType<TParse>, null>> {
-  return definition as RoutedCommandDefinition<Exclude<ReturnType<TParse>, null>>;
+export type AnyRoutedCommandDefinition = RoutedCommandDefinition<RouteArgParser<unknown>>;
+
+function defineRoutedCommand<TParse extends RouteArgParser<unknown>>(
+  definition: RoutedCommandDefinition<TParse>,
+): RoutedCommandDefinition<TParse> {
+  return definition;
 }
 
 export const routedCommandDefinitions = {

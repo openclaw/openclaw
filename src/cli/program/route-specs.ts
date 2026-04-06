@@ -4,7 +4,7 @@ import { matchesCommandPath } from "../command-path-matches.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import {
   routedCommandDefinitions,
-  type RoutedCommandDefinition,
+  type AnyRoutedCommandDefinition,
 } from "./routed-command-definitions.js";
 
 export type RouteSpec = {
@@ -22,7 +22,7 @@ function createCommandLoadPlugins(commandPath: readonly string[]): (argv: string
 
 function createParsedRoute(params: {
   entry: CliCommandCatalogEntry;
-  definition: RoutedCommandDefinition;
+  definition: AnyRoutedCommandDefinition;
 }): RouteSpec {
   return {
     match: (path) =>
@@ -51,6 +51,6 @@ export const routedCommands: RouteSpec[] = cliCommandCatalog
   .map((entry) =>
     createParsedRoute({
       entry,
-      definition: routedCommandDefinitions[entry.route.id] as RoutedCommandDefinition,
+      definition: routedCommandDefinitions[entry.route.id],
     }),
   );

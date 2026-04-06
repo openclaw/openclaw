@@ -5,10 +5,22 @@ export type StructuredCommandPathMatchRule = {
 
 export type CommandPathMatchRule = readonly string[] | StructuredCommandPathMatchRule;
 
+type NormalizedCommandPathMatchRule = {
+  pattern: readonly string[];
+  exact: boolean;
+};
+
 function isStructuredCommandPathMatchRule(
   rule: CommandPathMatchRule,
 ): rule is StructuredCommandPathMatchRule {
   return !Array.isArray(rule);
+}
+
+function normalizeCommandPathMatchRule(rule: CommandPathMatchRule): NormalizedCommandPathMatchRule {
+  if (!isStructuredCommandPathMatchRule(rule)) {
+    return { pattern: rule, exact: false };
+  }
+  return { pattern: rule.pattern, exact: rule.exact ?? false };
 }
 
 export function matchesCommandPath(
@@ -23,10 +35,10 @@ export function matchesCommandPath(
 }
 
 export function matchesCommandPathRule(commandPath: string[], rule: CommandPathMatchRule): boolean {
-  if (!isStructuredCommandPathMatchRule(rule)) {
-    return matchesCommandPath(commandPath, rule);
-  }
-  return matchesCommandPath(commandPath, rule.pattern, { exact: rule.exact });
+  const normalizedRule = normalizeCommandPathMatchRule(rule);
+  return matchesCommandPath(commandPath, normalizedRule.pattern, {
+    exact: normalizedRule.exact,
+  });
 }
 
 export function matchesAnyCommandPath(

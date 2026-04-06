@@ -29,6 +29,14 @@ describe("command-path-matches", () => {
     ).toBe(false);
   });
 
+  it("treats structured rules without exact as prefix matches", () => {
+    expect(
+      matchesCommandPathRule(["plugins", "update", "now"], {
+        pattern: ["plugins", "update"],
+      }),
+    ).toBe(true);
+  });
+
   it("matches any command path from a rule set", () => {
     expect(
       matchesAnyCommandPath(

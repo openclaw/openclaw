@@ -1,8 +1,12 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../../..");
+const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
+  "extensions/tsconfig.package-boundary.paths.json" as const;
+const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
+  "extensions/tsconfig.package-boundary.base.json" as const;
 
 type TsConfigJson = {
   extends?: unknown;
@@ -28,10 +32,10 @@ function readJsonFile<T>(relativePath: string): T {
 }
 
 describe("opt-in extension package boundaries", () => {
-  it("keeps the opt-in extension base on real package resolution", () => {
-    const tsconfig = readJsonFile<TsConfigJson>("extensions/tsconfig.package-boundary.base.json");
-    expect(tsconfig.extends).toBe("../tsconfig.json");
-    expect(tsconfig.compilerOptions?.paths).toEqual({
+  it("keeps path aliases in a dedicated shared config", () => {
+    const pathsConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG);
+    expect(pathsConfig.extends).toBe("../tsconfig.json");
+    expect(pathsConfig.compilerOptions?.paths).toEqual({
       "openclaw/extension-api": ["../src/extensionAPI.ts"],
       "openclaw/plugin-sdk": ["../src/plugin-sdk/index.ts"],
       "openclaw/plugin-sdk/*": ["../src/plugin-sdk/*.ts"],
@@ -39,17 +43,40 @@ describe("opt-in extension package boundaries", () => {
       "@openclaw/*": ["../extensions/*"],
       "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"],
     });
+
+    const baseConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG);
+    expect(baseConfig.extends).toBe("./tsconfig.package-boundary.paths.json");
+    expect(baseConfig.compilerOptions).toEqual({
+      ignoreDeprecations: "6.0",
+    });
   });
 
-  it("roots xai inside its own package and depends on the package sdk", () => {
-    const tsconfig = readJsonFile<TsConfigJson>("extensions/xai/tsconfig.json");
-    expect(tsconfig.extends).toBe("../tsconfig.package-boundary.base.json");
-    expect(tsconfig.compilerOptions?.rootDir).toBe(".");
-    expect(tsconfig.include).toEqual(["./*.ts", "./src/**/*.ts"]);
-    expect(tsconfig.exclude).toEqual(["./**/*.test.ts", "./dist/**", "./node_modules/**"]);
+  it("keeps every opt-in extension rooted inside its package and on the package sdk", () => {
+    const optInExtensions = readdirSync(resolve(REPO_ROOT, "extensions"), {
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((extensionName) => {
+        const tsconfigPath = `extensions/${extensionName}/tsconfig.json`;
+        if (!existsSync(resolve(REPO_ROOT, tsconfigPath))) {
+          return false;
+        }
+        const tsconfig = readJsonFile<TsConfigJson>(tsconfigPath);
+        return tsconfig.extends === "../tsconfig.package-boundary.base.json";
+      });
 
-    const packageJson = readJsonFile<PackageJson>("extensions/xai/package.json");
-    expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
+    expect(optInExtensions).toEqual(["xai"]);
+
+    for (const extensionName of optInExtensions) {
+      const tsconfig = readJsonFile<TsConfigJson>(`extensions/${extensionName}/tsconfig.json`);
+      expect(tsconfig.compilerOptions?.rootDir).toBe(".");
+      expect(tsconfig.include).toEqual(["./*.ts", "./src/**/*.ts"]);
+      expect(tsconfig.exclude).toEqual(["./**/*.test.ts", "./dist/**", "./node_modules/**"]);
+
+      const packageJson = readJsonFile<PackageJson>(`extensions/${extensionName}/package.json`);
+      expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
+    }
   });
 
   it("keeps plugin-sdk package types generated from the package build, not a hand-maintained types bridge", () => {
