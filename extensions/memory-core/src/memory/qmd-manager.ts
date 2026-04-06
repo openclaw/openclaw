@@ -452,7 +452,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             addErrorMessage: message,
           });
           if (!rebound) {
-            log.warn(`qmd collection add skipped for ${collection.name}: ${message}`);
+            log.info(`qmd collection add skipped for ${collection.name} (already registered)`);
           }
           continue;
         }
