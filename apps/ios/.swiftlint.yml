@@ -1,0 +1,9 @@
+parent_config: ../../.swiftlint.yml
+
+included:
+  - Sources
+  - ../shared/ClawdisNodeKit/Sources
+
+type_body_length:
+  warning: 900
+  error: 1300

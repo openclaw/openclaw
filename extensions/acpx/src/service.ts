@@ -1,0 +1,108 @@
+import fs from "node:fs/promises";
+import type {
+  AcpRuntime,
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
+  PluginLogger,
+} from "../runtime-api.js";
+import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
+import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
+import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
+
+type AcpxRuntimeLike = AcpRuntime & {
+  probeAvailability(): Promise<void>;
+  isHealthy(): boolean;
+  doctor?(): Promise<{
+    ok: boolean;
+    message: string;
+    details?: string[];
+  }>;
+};
+
+type AcpxRuntimeFactoryParams = {
+  pluginConfig: ResolvedAcpxPluginConfig;
+  queueOwnerTtlSeconds: number;
+  logger?: PluginLogger;
+};
+
+type CreateAcpxRuntimeServiceParams = {
+  pluginConfig?: unknown;
+  runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike;
+};
+
+function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
+  return new AcpxRuntime(params.pluginConfig, {
+    logger: params.logger,
+  });
+}
+
+function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
+  const detailText = report.details?.filter(Boolean).join("; ").trim();
+  return detailText ? `${report.message} (${detailText})` : report.message;
+}
+
+export function createAcpxRuntimeService(
+  params: CreateAcpxRuntimeServiceParams = {},
+): OpenClawPluginService {
+  let runtime: AcpxRuntimeLike | null = null;
+  let lifecycleRevision = 0;
+
+  return {
+    id: "acpx-runtime",
+    async start(ctx: OpenClawPluginServiceContext): Promise<void> {
+      const pluginConfig = resolveAcpxPluginConfig({
+        rawConfig: params.pluginConfig,
+        workspaceDir: ctx.workspaceDir,
+      });
+      await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+
+      const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
+      runtime = runtimeFactory({
+        pluginConfig,
+        queueOwnerTtlSeconds: pluginConfig.queueOwnerTtlSeconds,
+        logger: ctx.logger,
+      });
+
+      registerAcpRuntimeBackend({
+        id: ACPX_BACKEND_ID,
+        runtime,
+        healthy: () => runtime?.isHealthy() ?? false,
+      });
+      ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
+
+      lifecycleRevision += 1;
+      const currentRevision = lifecycleRevision;
+      void (async () => {
+        try {
+          await runtime?.probeAvailability();
+          if (currentRevision !== lifecycleRevision) {
+            return;
+          }
+          if (runtime?.isHealthy()) {
+            ctx.logger.info("embedded acpx runtime backend ready");
+            return;
+          }
+          const doctorReport = await runtime?.doctor?.();
+          if (currentRevision !== lifecycleRevision) {
+            return;
+          }
+          ctx.logger.warn(
+            `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
+          );
+        } catch (err) {
+          if (currentRevision !== lifecycleRevision) {
+            return;
+          }
+          ctx.logger.warn(
+            `embedded acpx runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      })();
+    },
+    async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
+      lifecycleRevision += 1;
+      unregisterAcpRuntimeBackend(ACPX_BACKEND_ID);
+      runtime = null;
+    },
+  };
+}
