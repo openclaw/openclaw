@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Agents/heartbeat: stop truncating live session transcripts after no-op heartbeat acks, move heartbeat cleanup to prompt assembly and compaction, and keep post-filter context-engine ingestion aligned with the real session baseline. (#60998) Thanks @nxmxbbd.
 - macOS/gateway version: strip trailing commit metadata from CLI version output before semver parsing so the Mac app recognizes installed gateway versions like `OpenClaw 2026.4.2 (d74a122)` again. (#61111) Thanks @oliviareid-svg.
 - Memory/dreaming: strip managed Light Sleep and REM blocks before daily-note ingestion so dreaming summaries stop re-ingesting their own staged output into new candidates. (#61720) Thanks @MonkeyLeeT.
+- Plugins/Windows: disable native Jiti loading for setup and doctor contract registries on Windows so onboarding and config-doctor plugin probes stop crashing with `ERR_UNSUPPORTED_ESM_URL_SCHEME`. (#61836, #61853)
 
 ## 2026.4.5
 
