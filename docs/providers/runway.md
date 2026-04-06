@@ -43,6 +43,8 @@ The bundled `runway` video-generation provider defaults to `runway/gen4.5`.
 
 - Modes: text-to-video, single-image image-to-video, and single-video video-to-video
 - Runtime: async task submit + poll via `GET /v1/tasks/{id}`
+- Agent sessions: `video_generate` starts a background task, and later calls in the same session now return active-task status instead of spawning a duplicate run
+- Status lookup: `video_generate action=status`
 - Local image/video references: supported via data URIs
 - Current video-to-video caveat: OpenClaw currently requires `runway/gen4_aleph` for video inputs
 - Current text-to-video caveat: OpenClaw currently exposes `16:9` and `9:16` for text-only runs

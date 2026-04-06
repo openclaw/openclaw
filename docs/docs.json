@@ -1233,6 +1233,7 @@
               {
                 "group": "Providers",
                 "pages": [
+                  "providers/alibaba",
                   "providers/anthropic",
                   "providers/bedrock",
                   "providers/bedrock-mantle",
@@ -1241,6 +1242,7 @@
                   "providers/cloudflare-ai-gateway",
                   "providers/deepgram",
                   "providers/deepseek",
+                  "providers/fal",
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
@@ -1260,6 +1262,7 @@
                   "providers/perplexity-provider",
                   "providers/qianfan",
                   "providers/qwen",
+                  "providers/runway",
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
