@@ -1,3 +1,4 @@
+import type { Message, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   completeSimpleWithLiveTimeout,
@@ -6,13 +7,17 @@ import {
 } from "./live-cache-test-support.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./pi-embedded-runner/run/attempt.tool-call-normalization.js";
+import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 
 const ANTHROPIC_LIVE = isLiveTestEnabled(["ANTHROPIC_LIVE_TEST"]);
 const describeLive = ANTHROPIC_LIVE ? describe : describe.skip;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
 const TOOL_OUTPUT_SENTINEL = "TOOL-RESULT-LIVE-MAGENTA";
 
-function buildLiveAnthropicModel() {
+function buildLiveAnthropicModel(): {
+  apiKey: string;
+  model: Model<"anthropic-messages">;
+} {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("missing ANTHROPIC_API_KEY");
@@ -35,7 +40,7 @@ function buildLiveAnthropicModel() {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200_000,
       maxTokens: 8_192,
-    },
+    } satisfies Model<"anthropic-messages">,
   };
 }
 
@@ -44,25 +49,27 @@ describeLive("pi embedded anthropic replay sanitization (live)", () => {
     "preserves toolCall replay history that Anthropic accepts end-to-end",
     async () => {
       const { apiKey, model } = buildLiveAnthropicModel();
-      const messages = [
+      const messages: Message[] = [
         {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call_1", name: "noop", arguments: {} }],
+          ...buildAssistantMessageWithZeroUsage({
+            model: { api: model.api, provider: model.provider, id: model.id },
+            content: [{ type: "toolCall", id: "call_1", name: "noop", arguments: {} }],
+            stopReason: "toolUse",
+          }),
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "noop",
+          content: [{ type: "text", text: TOOL_OUTPUT_SENTINEL }],
+          isError: false,
+          timestamp: Date.now(),
         },
         {
           role: "user",
-          content: [
-            {
-              type: "toolResult",
-              toolUseId: "call_1",
-              content: [{ type: "text", text: TOOL_OUTPUT_SENTINEL }],
-            },
-            { type: "text", text: "The tool finished." },
-          ],
-        },
-        {
-          role: "user",
-          content: "Reply with exactly OK as plain text if this replay history is valid.",
+          content:
+            "The tool finished. Reply with exactly OK as plain text if this replay history is valid.",
+          timestamp: Date.now(),
         },
       ];
 
