@@ -7,6 +7,7 @@ import { createAgentsVitestConfig } from "../vitest.agents.config.ts";
 import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
 import { createCliVitestConfig } from "../vitest.cli.config.ts";
+import { createCommandsLightVitestConfig } from "../vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "../vitest.commands.config.ts";
 import { createCronVitestConfig } from "../vitest.cron.config.ts";
 import { createDaemonVitestConfig } from "../vitest.daemon.config.ts";
@@ -33,6 +34,7 @@ import { createInfraVitestConfig } from "../vitest.infra.config.ts";
 import { createLoggingVitestConfig } from "../vitest.logging.config.ts";
 import { createMediaUnderstandingVitestConfig } from "../vitest.media-understanding.config.ts";
 import { createMediaVitestConfig } from "../vitest.media.config.ts";
+import { createPluginSdkLightVitestConfig } from "../vitest.plugin-sdk-light.config.ts";
 import { createPluginSdkVitestConfig } from "../vitest.plugin-sdk.config.ts";
 import { createPluginsVitestConfig } from "../vitest.plugins.config.ts";
 import { createProcessVitestConfig } from "../vitest.process.config.ts";
@@ -160,6 +162,7 @@ describe("scoped vitest configs", () => {
   const defaultHooksConfig = createHooksVitestConfig({});
   const defaultInfraConfig = createInfraVitestConfig({});
   const defaultLoggingConfig = createLoggingVitestConfig({});
+  const defaultPluginSdkLightConfig = createPluginSdkLightVitestConfig({});
   const defaultPluginSdkConfig = createPluginSdkVitestConfig({});
   const defaultSecretsConfig = createSecretsVitestConfig({});
   const defaultRuntimeConfig = createRuntimeConfigVitestConfig({});
@@ -169,6 +172,7 @@ describe("scoped vitest configs", () => {
   const defaultMediaUnderstandingConfig = createMediaUnderstandingVitestConfig({});
   const defaultSharedCoreConfig = createSharedCoreVitestConfig({});
   const defaultTasksConfig = createTasksVitestConfig({});
+  const defaultCommandsLightConfig = createCommandsLightVitestConfig({});
   const defaultCommandsConfig = createCommandsVitestConfig({});
   const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
   const defaultAgentsConfig = createAgentsVitestConfig({});
@@ -210,6 +214,11 @@ describe("scoped vitest configs", () => {
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
+  });
+
+  it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {
+    expect(defaultPluginSdkLightConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(defaultCommandsLightConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
   });
 
   it("defaults channel tests to threads with the non-isolated runner", () => {

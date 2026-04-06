@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isChannelSurfaceTestFile } from "../vitest.channel-paths.mjs";
+import { isCommandsLightTestFile } from "../vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../vitest.extension-acpx-paths.mjs";
 import { isBlueBubblesExtensionRoot } from "../vitest.extension-bluebubbles-paths.mjs";
 import { isDiffsExtensionRoot } from "../vitest.extension-diffs-paths.mjs";
@@ -18,6 +19,7 @@ import { isTelegramExtensionRoot } from "../vitest.extension-telegram-paths.mjs"
 import { isVoiceCallExtensionRoot } from "../vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../vitest.extension-zalo-paths.mjs";
+import { isPluginSdkLightTestFile } from "../vitest.plugin-sdk-paths.mjs";
 import { isBoundaryTestFile, isBundledPluginDependentUnitTestFile } from "../vitest.unit-paths.mjs";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 
@@ -29,6 +31,7 @@ const BOUNDARY_VITEST_CONFIG = "vitest.boundary.config.ts";
 const BUNDLED_VITEST_CONFIG = "vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "vitest.channels.config.ts";
 const CLI_VITEST_CONFIG = "vitest.cli.config.ts";
+const COMMANDS_LIGHT_VITEST_CONFIG = "vitest.commands-light.config.ts";
 const COMMANDS_VITEST_CONFIG = "vitest.commands.config.ts";
 const CONTRACTS_VITEST_CONFIG = "vitest.contracts.config.ts";
 const CRON_VITEST_CONFIG = "vitest.cron.config.ts";
@@ -57,6 +60,7 @@ const INFRA_VITEST_CONFIG = "vitest.infra.config.ts";
 const MEDIA_VITEST_CONFIG = "vitest.media.config.ts";
 const MEDIA_UNDERSTANDING_VITEST_CONFIG = "vitest.media-understanding.config.ts";
 const LOGGING_VITEST_CONFIG = "vitest.logging.config.ts";
+const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "vitest.plugin-sdk-light.config.ts";
 const PLUGIN_SDK_VITEST_CONFIG = "vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "vitest.plugins.config.ts";
 const PROCESS_VITEST_CONFIG = "vitest.process.config.ts";
@@ -316,7 +320,7 @@ function classifyTarget(arg, cwd) {
     return "logging";
   }
   if (relative.startsWith("src/plugin-sdk/")) {
-    return "pluginSdk";
+    return isPluginSdkLightTestFile(relative) ? "pluginSdkLight" : "pluginSdk";
   }
   if (relative.startsWith("src/process/")) {
     return "process";
@@ -340,7 +344,7 @@ function classifyTarget(arg, cwd) {
     return "cli";
   }
   if (relative.startsWith("src/commands/")) {
-    return "command";
+    return isCommandsLightTestFile(relative) ? "commandLight" : "command";
   }
   if (relative.startsWith("src/auto-reply/")) {
     return "autoReply";
@@ -448,6 +452,7 @@ export function buildVitestRunPlans(
     "daemon",
     "media",
     "logging",
+    "pluginSdkLight",
     "pluginSdk",
     "process",
     "secrets",
@@ -457,6 +462,7 @@ export function buildVitestRunPlans(
     "mediaUnderstanding",
     "acp",
     "cli",
+    "commandLight",
     "command",
     "autoReply",
     "agent",
@@ -515,91 +521,97 @@ export function buildVitestRunPlans(
                             ? MEDIA_VITEST_CONFIG
                             : kind === "logging"
                               ? LOGGING_VITEST_CONFIG
-                              : kind === "pluginSdk"
-                                ? PLUGIN_SDK_VITEST_CONFIG
-                                : kind === "process"
-                                  ? PROCESS_VITEST_CONFIG
-                                  : kind === "secrets"
-                                    ? SECRETS_VITEST_CONFIG
-                                    : kind === "sharedCore"
-                                      ? SHARED_CORE_VITEST_CONFIG
-                                      : kind === "tasks"
-                                        ? TASKS_VITEST_CONFIG
-                                        : kind === "tui"
-                                          ? TUI_VITEST_CONFIG
-                                          : kind === "mediaUnderstanding"
-                                            ? MEDIA_UNDERSTANDING_VITEST_CONFIG
-                                            : kind === "acp"
-                                              ? ACP_VITEST_CONFIG
-                                              : kind === "cli"
-                                                ? CLI_VITEST_CONFIG
-                                                : kind === "command"
-                                                  ? COMMANDS_VITEST_CONFIG
-                                                  : kind === "autoReply"
-                                                    ? AUTO_REPLY_VITEST_CONFIG
-                                                    : kind === "agent"
-                                                      ? AGENTS_VITEST_CONFIG
-                                                      : kind === "plugin"
-                                                        ? PLUGINS_VITEST_CONFIG
-                                                        : kind === "ui"
-                                                          ? UI_VITEST_CONFIG
-                                                          : kind === "utils"
-                                                            ? UTILS_VITEST_CONFIG
-                                                            : kind === "wizard"
-                                                              ? WIZARD_VITEST_CONFIG
-                                                              : kind === "e2e"
-                                                                ? E2E_VITEST_CONFIG
-                                                                : kind === "extensionAcpx"
-                                                                  ? EXTENSION_ACPX_VITEST_CONFIG
-                                                                  : kind === "extensionDiffs"
-                                                                    ? EXTENSION_DIFFS_VITEST_CONFIG
-                                                                    : kind ===
-                                                                        "extensionBlueBubbles"
-                                                                      ? EXTENSION_BLUEBUBBLES_VITEST_CONFIG
-                                                                      : kind === "extensionFeishu"
-                                                                        ? EXTENSION_FEISHU_VITEST_CONFIG
-                                                                        : kind === "extensionIrc"
-                                                                          ? EXTENSION_IRC_VITEST_CONFIG
+                              : kind === "pluginSdkLight"
+                                ? PLUGIN_SDK_LIGHT_VITEST_CONFIG
+                                : kind === "pluginSdk"
+                                  ? PLUGIN_SDK_VITEST_CONFIG
+                                  : kind === "process"
+                                    ? PROCESS_VITEST_CONFIG
+                                    : kind === "secrets"
+                                      ? SECRETS_VITEST_CONFIG
+                                      : kind === "sharedCore"
+                                        ? SHARED_CORE_VITEST_CONFIG
+                                        : kind === "tasks"
+                                          ? TASKS_VITEST_CONFIG
+                                          : kind === "tui"
+                                            ? TUI_VITEST_CONFIG
+                                            : kind === "mediaUnderstanding"
+                                              ? MEDIA_UNDERSTANDING_VITEST_CONFIG
+                                              : kind === "acp"
+                                                ? ACP_VITEST_CONFIG
+                                                : kind === "cli"
+                                                  ? CLI_VITEST_CONFIG
+                                                  : kind === "commandLight"
+                                                    ? COMMANDS_LIGHT_VITEST_CONFIG
+                                                    : kind === "command"
+                                                      ? COMMANDS_VITEST_CONFIG
+                                                      : kind === "autoReply"
+                                                        ? AUTO_REPLY_VITEST_CONFIG
+                                                        : kind === "agent"
+                                                          ? AGENTS_VITEST_CONFIG
+                                                          : kind === "plugin"
+                                                            ? PLUGINS_VITEST_CONFIG
+                                                            : kind === "ui"
+                                                              ? UI_VITEST_CONFIG
+                                                              : kind === "utils"
+                                                                ? UTILS_VITEST_CONFIG
+                                                                : kind === "wizard"
+                                                                  ? WIZARD_VITEST_CONFIG
+                                                                  : kind === "e2e"
+                                                                    ? E2E_VITEST_CONFIG
+                                                                    : kind === "extensionAcpx"
+                                                                      ? EXTENSION_ACPX_VITEST_CONFIG
+                                                                      : kind === "extensionDiffs"
+                                                                        ? EXTENSION_DIFFS_VITEST_CONFIG
+                                                                        : kind ===
+                                                                            "extensionBlueBubbles"
+                                                                          ? EXTENSION_BLUEBUBBLES_VITEST_CONFIG
                                                                           : kind ===
-                                                                              "extensionMattermost"
-                                                                            ? EXTENSION_MATTERMOST_VITEST_CONFIG
+                                                                              "extensionFeishu"
+                                                                            ? EXTENSION_FEISHU_VITEST_CONFIG
                                                                             : kind ===
-                                                                                "extensionChannel"
-                                                                              ? EXTENSION_CHANNELS_VITEST_CONFIG
+                                                                                "extensionIrc"
+                                                                              ? EXTENSION_IRC_VITEST_CONFIG
                                                                               : kind ===
-                                                                                  "extensionTelegram"
-                                                                                ? EXTENSION_TELEGRAM_VITEST_CONFIG
+                                                                                  "extensionMattermost"
+                                                                                ? EXTENSION_MATTERMOST_VITEST_CONFIG
                                                                                 : kind ===
-                                                                                    "extensionVoiceCall"
-                                                                                  ? EXTENSION_VOICE_CALL_VITEST_CONFIG
+                                                                                    "extensionChannel"
+                                                                                  ? EXTENSION_CHANNELS_VITEST_CONFIG
                                                                                   : kind ===
-                                                                                      "extensionWhatsApp"
-                                                                                    ? EXTENSION_WHATSAPP_VITEST_CONFIG
+                                                                                      "extensionTelegram"
+                                                                                    ? EXTENSION_TELEGRAM_VITEST_CONFIG
                                                                                     : kind ===
-                                                                                        "extensionZalo"
-                                                                                      ? EXTENSION_ZALO_VITEST_CONFIG
+                                                                                        "extensionVoiceCall"
+                                                                                      ? EXTENSION_VOICE_CALL_VITEST_CONFIG
                                                                                       : kind ===
-                                                                                          "extensionMatrix"
-                                                                                        ? EXTENSION_MATRIX_VITEST_CONFIG
+                                                                                          "extensionWhatsApp"
+                                                                                        ? EXTENSION_WHATSAPP_VITEST_CONFIG
                                                                                         : kind ===
-                                                                                            "extensionMemory"
-                                                                                          ? EXTENSION_MEMORY_VITEST_CONFIG
+                                                                                            "extensionZalo"
+                                                                                          ? EXTENSION_ZALO_VITEST_CONFIG
                                                                                           : kind ===
-                                                                                              "extensionMsTeams"
-                                                                                            ? EXTENSION_MSTEAMS_VITEST_CONFIG
+                                                                                              "extensionMatrix"
+                                                                                            ? EXTENSION_MATRIX_VITEST_CONFIG
                                                                                             : kind ===
-                                                                                                "extensionMessaging"
-                                                                                              ? EXTENSION_MESSAGING_VITEST_CONFIG
+                                                                                                "extensionMemory"
+                                                                                              ? EXTENSION_MEMORY_VITEST_CONFIG
                                                                                               : kind ===
-                                                                                                  "extensionProvider"
-                                                                                                ? EXTENSION_PROVIDERS_VITEST_CONFIG
+                                                                                                  "extensionMsTeams"
+                                                                                                ? EXTENSION_MSTEAMS_VITEST_CONFIG
                                                                                                 : kind ===
-                                                                                                    "channel"
-                                                                                                  ? CHANNEL_VITEST_CONFIG
+                                                                                                    "extensionMessaging"
+                                                                                                  ? EXTENSION_MESSAGING_VITEST_CONFIG
                                                                                                   : kind ===
-                                                                                                      "extension"
-                                                                                                    ? EXTENSIONS_VITEST_CONFIG
-                                                                                                    : DEFAULT_VITEST_CONFIG;
+                                                                                                      "extensionProvider"
+                                                                                                    ? EXTENSION_PROVIDERS_VITEST_CONFIG
+                                                                                                    : kind ===
+                                                                                                        "channel"
+                                                                                                      ? CHANNEL_VITEST_CONFIG
+                                                                                                      : kind ===
+                                                                                                          "extension"
+                                                                                                        ? EXTENSIONS_VITEST_CONFIG
+                                                                                                        : DEFAULT_VITEST_CONFIG;
     const useCliTargetArgs =
       kind === "e2e" ||
       (kind === "default" &&

@@ -67,4 +67,30 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     ]);
   });
+
+  it("routes explicit plugin-sdk light tests to the lighter plugin-sdk lane", () => {
+    const plans = buildVitestRunPlans(["src/plugin-sdk/temp-path.test.ts"], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: "vitest.plugin-sdk-light.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugin-sdk/temp-path.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes explicit commands light tests to the lighter commands lane", () => {
+    const plans = buildVitestRunPlans(["src/commands/cleanup-utils.test.ts"], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: "vitest.commands-light.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/commands/cleanup-utils.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
 });
