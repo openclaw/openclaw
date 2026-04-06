@@ -50,6 +50,68 @@ func TestPostprocessLocalizedDocsFixesStaleLinksAfterLaterPagesExist(t *testing.
 	}
 }
 
+func TestPostprocessLocalizedDocsRewritesPublishedPageLinksForEachLocale(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		lang       string
+		title      string
+		wantPrefix string
+	}{
+		{name: "zh-CN", lang: "zh-CN", title: "网关", wantPrefix: "/zh-CN"},
+		{name: "ja-JP", lang: "ja-JP", title: "ゲートウェイ", wantPrefix: "/ja-JP"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			docsRoot := t.TempDir()
+			writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+			writeFile(t, filepath.Join(docsRoot, "gateway", "index.md"), "# Gateway\n")
+			writeFile(t, filepath.Join(docsRoot, "gateway", "troubleshooting.md"), "# Troubleshooting\n")
+			writeFile(t, filepath.Join(docsRoot, "providers", "alibaba.md"), "# Alibaba\n")
+			writeFile(t, filepath.Join(docsRoot, tt.lang, "gateway", "troubleshooting.md"), "# Localized troubleshooting\n")
+			writeFile(t, filepath.Join(docsRoot, tt.lang, "providers", "alibaba.md"), "# Localized Alibaba\n")
+
+			pagePath := filepath.Join(docsRoot, tt.lang, "gateway", "index.md")
+			writeFile(t, pagePath, stringsJoin(
+				"---",
+				"title: "+tt.title,
+				"x-i18n:",
+				"  source_hash: test",
+				"---",
+				"",
+				"See [Troubleshooting](/gateway/troubleshooting).",
+				"",
+				"See [Alibaba](/providers/alibaba).",
+				"",
+				`<Card href="/gateway/troubleshooting" title="Troubleshooting" />`,
+				`<Card href="`+tt.wantPrefix+`/providers/alibaba" title="Alibaba" />`,
+			))
+
+			if err := postprocessLocalizedDocs(docsRoot, tt.lang, []string{pagePath}); err != nil {
+				t.Fatalf("postprocessLocalizedDocs failed: %v", err)
+			}
+
+			got := mustReadFile(t, pagePath)
+			expectedLinks := []string{
+				"See [Troubleshooting](" + tt.wantPrefix + "/gateway/troubleshooting).",
+				"See [Alibaba](" + tt.wantPrefix + "/providers/alibaba).",
+				`<Card href="` + tt.wantPrefix + `/gateway/troubleshooting" title="Troubleshooting" />`,
+				`<Card href="` + tt.wantPrefix + `/providers/alibaba" title="Alibaba" />`,
+			}
+			for _, want := range expectedLinks {
+				if !containsLine(got, want) {
+					t.Fatalf("expected rewritten link %q in output:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
+
 func TestPostprocessLocalizedDocsOnlyTouchesScopedFiles(t *testing.T) {
 	t.Parallel()
 

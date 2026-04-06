@@ -17,7 +17,7 @@ const (
 	bodyTagEnd          = "</body>"
 )
 
-func processFileDoc(ctx context.Context, translator *PiTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool) (bool, string, error) {
+func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool) (bool, string, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
 		return false, "", err

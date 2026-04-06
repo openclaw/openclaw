@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, string, error) {
+func processFile(ctx context.Context, translator docsTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, string, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
 		return false, "", err
@@ -133,7 +133,7 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 	return fmt.Sprintf("---\n%s---\n\n", string(encoded)), nil
 }
 
-func translateFrontMatter(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, data map[string]any, relPath, srcLang, tgtLang string) error {
+func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *TranslationMemory, data map[string]any, relPath, srcLang, tgtLang string) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -170,7 +170,7 @@ func translateFrontMatter(ctx context.Context, translator *PiTranslator, tm *Tra
 	return nil
 }
 
-func translateSnippet(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) (string, error) {
+func translateSnippet(ctx context.Context, translator docsTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) (string, error) {
 	if strings.TrimSpace(textValue) == "" {
 		return textValue, nil
 	}
