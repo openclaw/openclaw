@@ -116,11 +116,6 @@ export async function truncateSessionAfterCompaction(params: {
     }
   }
 
-  // Drop no-op heartbeat user+assistant pairs from the *summarized* portion
-  // of the branch to prevent unbounded disk growth now that heartbeat entries
-  // are append-only (#39609).  Pairs in the unsummarized tail (from
-  // firstKeptEntryId onward) are preserved — buildSessionContext() expects
-  // them to reconstruct the session after compaction.
   for (let i = 0; i < branch.length - 1; i++) {
     const userEntry = branch[i];
     const assistantEntry = branch[i + 1];
@@ -136,7 +131,7 @@ export async function truncateSessionAfterCompaction(params: {
     ) {
       removedIds.add(userEntry.id);
       removedIds.add(assistantEntry.id);
-      i++; // Skip the assistant entry
+      i++;
     }
   }
 

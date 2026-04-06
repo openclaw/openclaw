@@ -1667,9 +1667,6 @@ export async function runEmbeddedAttempt(
             activeSession.agent.state.messages = activeSession.messages;
           }
 
-          // Filter out no-op heartbeat user+assistant pairs from session context.
-          // Heartbeat entries are now kept in the JSONL (append-only) to avoid the
-          // fs.truncate race that caused orphaned parentId chains (#39609).
           const filteredMessages = filterHeartbeatPairs(
             activeSession.messages,
             params.config
