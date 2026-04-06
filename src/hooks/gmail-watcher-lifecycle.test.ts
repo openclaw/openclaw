@@ -42,7 +42,8 @@ describe("startGmailWatcherWithLogs", () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
-  it("logs actionable non-start reason", async () => {
+  it("logs actionable non-start reason with external webhook note", async () => {
+    // 1. We simulate a failed start with the reason "auth failed"
     startGmailWatcherMock.mockResolvedValue({ started: false, reason: "auth failed" });
 
     await startGmailWatcherWithLogs({
@@ -50,7 +51,12 @@ describe("startGmailWatcherWithLogs", () => {
       log,
     });
 
-    expect(log.warn).toHaveBeenCalledWith("gmail watcher not started: auth failed");
+    // 2. This must match your NEW message in the source code EXACTLY
+    expect(log.warn).toHaveBeenCalledWith(
+      `gmail watcher not started: auth failed. ` +
+        `Note: If using external webhook (e.g. gog + Pub/Sub), this is expected. ` +
+        `Ensure your configured Gmail hook endpoint is reachable.`,
+    );
   });
 
   it("suppresses expected non-start reasons", async () => {

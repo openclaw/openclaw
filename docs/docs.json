@@ -125,6 +125,14 @@
       "destination": "/concepts/context"
     },
     {
+      "source": "/zh-CN",
+      "destination": "/zh-CN/index"
+    },
+    {
+      "source": "/zh-CN/",
+      "destination": "/zh-CN/index"
+    },
+    {
       "source": "/compaction",
       "destination": "/concepts/compaction"
     },
@@ -1191,6 +1199,7 @@
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
+                  "tools/exec-approval-limitations",
                   "tools/image-generation",
                   "tools/music-generation",
                   "tools/llm-task",
