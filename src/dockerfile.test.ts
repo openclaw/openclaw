@@ -101,8 +101,23 @@ describe("Dockerfile", () => {
   it("pins Go and Homebrew sources for reproducible Docker builds", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("ARG GO_VERSION=1.26.1");
+    expect(dockerfile).toContain(
+      "ARG GO_LINUX_AMD64_SHA256=031f088e5d955bab8657ede27ad4e3bc5b7c1ba281f05f245bcc304f327c987a",
+    );
+    expect(dockerfile).toContain(
+      "ARG GO_LINUX_ARM64_SHA256=a290581cfe4fe28ddd737dde3095f3dbeb7f2e4065cab4eae44dfc53b760c2f7",
+    );
     expect(dockerfile).toContain('GOVERSION="go${GO_VERSION#go}"');
+    expect(dockerfile).toContain("sha256sum -c -");
     expect(dockerfile).not.toContain("https://go.dev/dl/?mode=json");
+    expect(dockerfile).toContain("ARG GOGCLI_DEFAULT_TAG=v0.11.0");
+    expect(dockerfile).toContain(
+      "ARG GOGCLI_LINUX_AMD64_SHA256=ca98ba56e29ccd3713fe7bf835fdca00ae1b97cdcb7b0bc5e393e7edb4089c84",
+    );
+    expect(dockerfile).toContain(
+      "ARG GOGCLI_LINUX_ARM64_SHA256=1bfe980545641501488fed93c66fc76671c72a4605285f574572dac700efdd35",
+    );
+    expect(dockerfile).toContain("checksums.txt");
     expect(dockerfile).toContain("ARG HOMEBREW_BREW_TAG=5.1.3");
     expect(dockerfile).toContain(
       "https://github.com/Homebrew/brew/archive/refs/tags/${HOMEBREW_BREW_TAG}.tar.gz",

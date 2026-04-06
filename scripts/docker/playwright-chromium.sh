@@ -2,9 +2,20 @@
 set -euo pipefail
 
 resolve_playwright_chromium() {
+  local -a roots=()
+  local root=""
+  for root in /opt/openclaw/ms-playwright /home/node/.cache/ms-playwright; do
+    if [[ -d "$root" ]]; then
+      roots+=("$root")
+    fi
+  done
+
+  if [[ ${#roots[@]} -eq 0 ]]; then
+    return 0
+  fi
+
   find \
-    /opt/openclaw/ms-playwright \
-    /home/node/.cache/ms-playwright \
+    "${roots[@]}" \
     -maxdepth 4 \
     -type f \
     -path '*/chromium-*/*' \

@@ -241,16 +241,19 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # ---- Install Go (official) ----
 # Pin Go so Docker rebuilds stay reproducible across hosts and CI runs.
 ARG GO_VERSION=1.26.1
+ARG GO_LINUX_AMD64_SHA256=031f088e5d955bab8657ede27ad4e3bc5b7c1ba281f05f245bcc304f327c987a
+ARG GO_LINUX_ARM64_SHA256=a290581cfe4fe28ddd737dde3095f3dbeb7f2e4065cab4eae44dfc53b760c2f7
 RUN set -eux; \
   arch="$(dpkg --print-architecture)"; \
   case "$arch" in \
-  amd64) GOARCH=amd64 ;; \
-  arm64) GOARCH=arm64 ;; \
+  amd64) GOARCH=amd64; GOSHA256="$GO_LINUX_AMD64_SHA256" ;; \
+  arm64) GOARCH=arm64; GOSHA256="$GO_LINUX_ARM64_SHA256" ;; \
   *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
   esac; \
   GOVERSION="go${GO_VERSION#go}"; \
   echo "Installing ${GOVERSION} for linux-${GOARCH}"; \
   curl -fsSL "https://go.dev/dl/${GOVERSION}.linux-${GOARCH}.tar.gz" -o /tmp/go.tgz; \
+  printf '%s  %s\n' "$GOSHA256" /tmp/go.tgz | sha256sum -c -; \
   rm -rf /usr/local/go; \
   tar -C /usr/local -xzf /tmp/go.tgz; \
   rm -f /tmp/go.tgz; \
@@ -263,11 +266,14 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 # Pin version by setting GOGCLI_TAG at build time.
 # Default stays pinned for reproducible CI builds.
 ARG GOGCLI_TAG=v0.11.0
+ARG GOGCLI_DEFAULT_TAG=v0.11.0
+ARG GOGCLI_LINUX_AMD64_SHA256=ca98ba56e29ccd3713fe7bf835fdca00ae1b97cdcb7b0bc5e393e7edb4089c84
+ARG GOGCLI_LINUX_ARM64_SHA256=1bfe980545641501488fed93c66fc76671c72a4605285f574572dac700efdd35
 RUN set -eux; \
   arch="$(dpkg --print-architecture)"; \
   case "$arch" in \
-  amd64) GOGARCH=amd64 ;; \
-  arm64) GOGARCH=arm64 ;; \
+  amd64) GOGARCH=amd64; GOGSHA256="$GOGCLI_LINUX_AMD64_SHA256" ;; \
+  arm64) GOGARCH=arm64; GOGSHA256="$GOGCLI_LINUX_ARM64_SHA256" ;; \
   *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
   esac; \
   tag="$GOGCLI_TAG"; \
@@ -279,9 +285,18 @@ RUN set -eux; \
   fi; \
   fi; \
   ver="${tag#v}"; \
+  asset="gogcli_${ver}_linux_${GOGARCH}.tar.gz"; \
+  if [ "$tag" != "$GOGCLI_DEFAULT_TAG" ] || [ -z "$GOGSHA256" ]; then \
+    GOGSHA256="$(curl -fsSL "https://github.com/steipete/gogcli/releases/download/$tag/checksums.txt" | awk -v asset="$asset" '$2 == asset { print $1; exit }')"; \
+  fi; \
+  if [ -z "$GOGSHA256" ]; then \
+    echo "ERROR: Missing checksum for $asset" >&2; \
+    exit 1; \
+  fi; \
   url="https://github.com/steipete/gogcli/releases/download/$tag/gogcli_${ver}_linux_${GOGARCH}.tar.gz"; \
   echo "Downloading: $url"; \
   curl -fsSL "$url" -o /tmp/gogcli.tgz; \
+  printf '%s  %s\n' "$GOGSHA256" /tmp/gogcli.tgz | sha256sum -c -; \
   tar -xzf /tmp/gogcli.tgz -C /tmp; \
   install -m 0755 /tmp/gog /usr/local/bin/gog; \
   rm -f /tmp/gog /tmp/gogcli.tgz; \
