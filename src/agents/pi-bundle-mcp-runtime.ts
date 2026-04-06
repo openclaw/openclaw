@@ -1,14 +1,22 @@
 import crypto from "node:crypto";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { logWarn } from "../logger.js";
+import { logDebug, logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
+import {
+  createMcpOAuthProvider,
+  loadMcpOAuthState,
+  saveMcpOAuthState,
+  waitForOAuthCallback,
+} from "./mcp-oauth-provider.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 import { sanitizeServerName } from "./pi-bundle-mcp-names.js";
 import type {
@@ -158,7 +166,18 @@ export function createSessionMcpRuntime(params: {
       try {
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
-          const resolved = resolveMcpTransport(serverName, rawServer);
+
+          // Only create an OAuth provider when the server config requests it.
+          const wantsOAuth = isMcpConfigRecord(rawServer) && rawServer.auth === "oauth";
+          const authProvider = wantsOAuth
+            ? createMcpOAuthProvider({
+                serverName,
+                loadState: () => loadMcpOAuthState(serverName),
+                saveState: (s) => saveMcpOAuthState(serverName, s),
+              })
+            : undefined;
+
+          const resolved = resolveMcpTransport(serverName, rawServer, { authProvider });
           if (!resolved) {
             continue;
           }
@@ -187,7 +206,27 @@ export function createSessionMcpRuntime(params: {
 
           try {
             failIfDisposed();
-            await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+
+            try {
+              await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+            } catch (connectError) {
+              if (connectError instanceof UnauthorizedError && resolved.auth === "oauth") {
+                logDebug(
+                  `bundle-mcp: "${serverName}": OAuth authorization required, waiting for callback...`,
+                );
+                const code = await waitForOAuthCallback({ serverName });
+                if (
+                  resolved.transport instanceof StreamableHTTPClientTransport ||
+                  resolved.transport instanceof SSEClientTransport
+                ) {
+                  await resolved.transport.finishAuth(code);
+                }
+                await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+              } else {
+                throw connectError;
+              }
+            }
+
             failIfDisposed();
             const listedTools = await listAllTools(client);
             failIfDisposed();
