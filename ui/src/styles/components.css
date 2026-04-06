@@ -2897,6 +2897,9 @@ td.data-table-key-col {
 
 .exec-approval-card {
   width: min(540px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -2941,6 +2944,9 @@ td.data-table-key-col {
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
+  overflow-y: auto;
+  flex-shrink: 1;
+  min-height: 0;
 }
 
 .exec-approval-meta {
