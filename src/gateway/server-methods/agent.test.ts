@@ -759,6 +759,44 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("accepts music generation internal events", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "music generation finished",
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "compose a loop",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "MEDIA: https://example.test/song.mp3",
+            replyInstruction: "Reply in your normal assistant voice now.",
+          },
+        ],
+        idempotencyKey: "music-generation-event",
+      },
+      { reqId: "music-generation-event-1", respond },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid agent params"),
+      }),
+    );
+  });
+
   it("only forwards workspaceDir for spawned sessions with stored workspace inheritance", async () => {
     primeMainAgentRun();
     mockMainSessionEntry({
