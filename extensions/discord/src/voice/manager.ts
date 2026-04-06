@@ -176,8 +176,14 @@ function isAbortLikeError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
-  const name = "name" in err ? String((err as { name?: unknown }).name ?? "") : "";
-  const message = "message" in err ? String((err as { message?: unknown }).message ?? "") : "";
+  const name =
+    "name" in err && typeof (err as { name?: unknown }).name === "string"
+      ? (err as { name: string }).name
+      : "";
+  const message =
+    "message" in err && typeof (err as { message?: unknown }).message === "string"
+      ? (err as { message: string }).message
+      : "";
   return (
     name === "AbortError" ||
     message.includes("The operation was aborted") ||
@@ -653,11 +659,7 @@ export class DiscordVoiceManager {
       .catch((err) => logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`));
   }
 
-  private clearCaptureFinalizeTimer(
-    entry: VoiceSessionEntry,
-    userId: string,
-    generation?: number,
-  ) {
+  private clearCaptureFinalizeTimer(entry: VoiceSessionEntry, userId: string, generation?: number) {
     const scheduled = entry.captureFinalizeTimers.get(userId);
     if (!scheduled || (generation !== undefined && scheduled.generation !== generation)) {
       return false;
