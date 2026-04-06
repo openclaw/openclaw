@@ -20,6 +20,7 @@ import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
 
 let sshConfigModulePromise: Promise<typeof import("../infra/ssh-config.js")> | undefined;
 let sshTunnelModulePromise: Promise<typeof import("../infra/ssh-tunnel.js")> | undefined;
+let gatewayTlsModulePromise: Promise<typeof import("../infra/tls/gateway.js")> | undefined;
 
 function loadSshConfigModule() {
   sshConfigModulePromise ??= import("../infra/ssh-config.js");
@@ -29,6 +30,11 @@ function loadSshConfigModule() {
 function loadSshTunnelModule() {
   sshTunnelModulePromise ??= import("../infra/ssh-tunnel.js");
   return sshTunnelModulePromise;
+}
+
+function loadGatewayTlsModule() {
+  gatewayTlsModulePromise ??= import("../infra/tls/gateway.js");
+  return gatewayTlsModulePromise;
 }
 
 export async function gatewayStatusCommand(
@@ -80,6 +86,13 @@ export async function gatewayStatusCommand(
     }
   }
 
+  const localTlsRuntime =
+    cfg.gateway?.tls?.enabled === true
+      ? await loadGatewayTlsModule().then(({ loadGatewayTlsRuntime }) =>
+          loadGatewayTlsRuntime(cfg.gateway?.tls),
+        )
+      : undefined;
+
   const probePass = await withProgress(
     {
       label: "Inspecting gateways…",
@@ -98,6 +111,9 @@ export async function gatewayStatusCommand(
         sshTarget,
         sshIdentity,
         loadSshTunnelModule,
+        localTlsFingerprint: localTlsRuntime?.enabled
+          ? localTlsRuntime.fingerprintSha256
+          : undefined,
       }),
   );
 
