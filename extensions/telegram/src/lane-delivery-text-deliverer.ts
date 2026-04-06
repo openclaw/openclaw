@@ -274,7 +274,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       return best;
     }, undefined);
     const activePreviewScore = scorePreviewAffinity(getLanePreviewText(lane), text);
-    if (!bestArchived && activePreviewScore <= 0) {
+    const hasActivePreviewMessage = typeof lane.stream?.messageId() === "number";
+    if (
+      hasActivePreviewMessage &&
+      (!bestArchived || bestArchived.score <= 0) &&
+      activePreviewScore <= 0
+    ) {
       return undefined;
     }
     if (activePreviewScore > 0 && activePreviewScore > (bestArchived?.score ?? 0)) {

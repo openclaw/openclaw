@@ -118,7 +118,7 @@ async function expectFinalPreviewRetained(params: {
 function seedArchivedAnswerPreview(harness: ReturnType<typeof createHarness>) {
   harness.archivedAnswerPreviews.push({
     messageId: 5555,
-    textSnapshot: "Partial streaming...",
+    textSnapshot: "Complete final",
     deleteIfUnused: true,
   });
 }
@@ -641,6 +641,39 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.deletePreviewMessage).toHaveBeenCalledWith(1001);
     expect(harness.deletePreviewMessage).not.toHaveBeenCalledWith(1002);
     expect(harness.archivedAnswerPreviews).toEqual([]);
+  });
+
+  it("does not select an archived preview when both archived and active affinity are zero", async () => {
+    const harness = createHarness({
+      answerMessageId: 1003,
+      answerHasStreamedMessage: true,
+      answerLastPartialText: "Current preview text",
+    });
+    harness.archivedAnswerPreviews.push({
+      messageId: 1001,
+      textSnapshot: "Old boundary preview",
+      deleteIfUnused: false,
+    });
+
+    const result = await deliverFinalAnswer(harness, "Completely different final");
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: "Completely different final",
+      messageId: 1003,
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        laneName: "answer",
+        messageId: 1003,
+        text: "Completely different final",
+        context: "final",
+      }),
+    );
+    expect(harness.editPreview).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 1001,
+      }),
+    );
   });
 
   it("deletes consumed boundary previews after fallback final send", async () => {
