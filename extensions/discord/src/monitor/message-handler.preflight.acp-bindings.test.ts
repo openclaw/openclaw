@@ -187,13 +187,12 @@ function createAllowedGuildEntries(requireMention = false) {
 
 function createHydratedGuildClient(restPayload: Record<string, unknown>) {
   const restGet = vi.fn(async () => restPayload);
-  const baseClient = createGuildTextClient(CHANNEL_ID);
-  const client = {
-    ...Object.assign(Object.create(Object.getPrototypeOf(baseClient)), baseClient),
+  const client = Object.assign(createGuildTextClient(CHANNEL_ID), {
     rest: {
       get: restGet,
     },
-  } as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
+  });
+  }) as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
   return { client, restGet };
 }
 

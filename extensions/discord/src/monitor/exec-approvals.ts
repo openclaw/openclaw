@@ -10,15 +10,7 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  createChannelNativeApprovalRuntime,
-  type ExecApprovalChannelRuntime,
-} from "openclaw/plugin-sdk/infra-runtime";
-import { buildExecApprovalActionDescriptors } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
-import { getExecApprovalApproverDmNoticeText } from "openclaw/plugin-sdk/infra-runtime";
+import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   ExecApprovalActionDescriptor,
   ExecApprovalDecision,
@@ -26,6 +18,13 @@ import type {
   ExecApprovalResolved,
   PluginApprovalRequest,
   PluginApprovalResolved,
+} from "openclaw/plugin-sdk/infra-runtime";
+import {
+  buildExecApprovalActionDescriptors,
+  createChannelNativeApprovalRuntime,
+  getExecApprovalApproverDmNoticeText,
+  resolveExecApprovalCommandDisplay,
+  type ExecApprovalChannelRuntime,
 } from "openclaw/plugin-sdk/infra-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
@@ -560,7 +559,12 @@ export class DiscordExecApprovalHandler {
           },
         };
       },
-      deliverTarget: async ({ plannedTarget, preparedTarget, pendingContent }) => {
+      deliverTarget: async ({
+        plannedTarget,
+        preparedTarget,
+        pendingContent,
+        request: _request,
+      }) => {
         const { rest, request: discordRequest } = createDiscordClient(
           { token: this.opts.token, accountId: this.opts.accountId },
           this.opts.cfg,

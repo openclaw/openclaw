@@ -1,23 +1,22 @@
-import "./lifecycle.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import type { RuntimeEnv } from "../runtime-api.js";
+import "./lifecycle.test-support.js";
 import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import {
   createFeishuLifecycleConfig,
   createFeishuLifecycleReplyDispatcher,
   createFeishuTextMessageEvent,
   createResolvedFeishuLifecycleAccount,
+  expectFeishuReplyDispatcherSentFinalReplyOnce,
   expectFeishuReplyPipelineDedupedAcrossReplay,
   expectFeishuReplyPipelineDedupedAfterPostSendFailure,
-  expectFeishuReplyDispatcherSentFinalReplyOnce,
   installFeishuLifecycleReplyRuntime,
   mockFeishuReplyOnceDispatch,
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
 } from "./test-support/lifecycle-test-support.js";
-import type { ResolvedFeishuAccount } from "./types.js";
 
 const {
   createEventDispatcherMock,
@@ -30,7 +29,7 @@ const {
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
+let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
 let lastRuntime: RuntimeEnv | null = null;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const lifecycleConfig = createFeishuLifecycleConfig({
@@ -47,7 +46,7 @@ const lifecycleConfig = createFeishuLifecycleConfig({
       },
     },
   },
-}) as ClawdbotConfig;
+});
 
 const lifecycleAccount = createResolvedFeishuLifecycleAccount({
   accountId: "acct-lifecycle",
@@ -63,7 +62,7 @@ const lifecycleAccount = createResolvedFeishuLifecycleAccount({
       },
     },
   },
-}) as ResolvedFeishuAccount;
+});
 
 async function setupLifecycleMonitor() {
   lastRuntime = createRuntimeEnv();

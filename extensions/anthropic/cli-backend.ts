@@ -1,4 +1,4 @@
-import type { CliBackendPlugin, CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
+import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,

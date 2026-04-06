@@ -173,7 +173,7 @@ function resolveXaiToolSearchConfig(ctx: {
     ctx.searchConfig as SearchConfigRecord | undefined,
     "grok",
     resolveProviderWebSearchPluginConfig(ctx.config, "xai"),
-  ) as SearchConfigRecord | undefined;
+  );
 }
 
 function resolveXaiWebSearchCredential(searchConfig?: SearchConfigRecord): string | undefined {

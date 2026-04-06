@@ -201,7 +201,7 @@ export function createTelegramDraftStream(params: {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
         throw err;
       }
-      const threadlessParams: TelegramSendMessageParams = { ...(sendParams ?? {}) };
+      const threadlessParams: TelegramSendMessageParams = { ...sendParams };
       delete threadlessParams.message_thread_id;
       params.warn?.(sendArgs.fallbackWarnMessage);
       return {

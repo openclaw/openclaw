@@ -559,7 +559,7 @@ describe("memory-core dreaming phases", () => {
       nowMs,
     });
     expect(baseline).toHaveLength(1);
-    const baselineScore = baseline[0]!.score;
+    const baselineScore = baseline[0].score;
 
     const { beforeAgentReply } = createHarness(
       {
@@ -607,7 +607,7 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs,
     });
-    const reinforcedCandidate = reinforced.find((candidate) => candidate.key === baseline[0]!.key);
+    const reinforcedCandidate = reinforced.find((candidate) => candidate.key === baseline[0].key);
     expect(reinforcedCandidate).toBeDefined();
     expect(reinforcedCandidate!.score).toBeGreaterThan(baselineScore);
 
@@ -615,7 +615,7 @@ describe("memory-core dreaming phases", () => {
     const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
       entries: Record<string, { lightHits: number; remHits: number }>;
     };
-    expect(phaseSignalStore.entries[baseline[0]!.key]).toMatchObject({
+    expect(phaseSignalStore.entries[baseline[0].key]).toMatchObject({
       lightHits: 1,
       remHits: 1,
     });

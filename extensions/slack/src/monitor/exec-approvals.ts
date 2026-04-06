@@ -267,7 +267,7 @@ export class SlackExecApprovalHandler {
               : undefined,
         },
       }),
-      deliverTarget: async ({ preparedTarget, pendingContent }) => {
+      deliverTarget: async ({ preparedTarget, pendingContent, request: _request }) => {
         const message = await sendMessageSlack(preparedTarget.to, pendingContent.text, {
           cfg: this.opts.cfg,
           accountId: this.opts.accountId,

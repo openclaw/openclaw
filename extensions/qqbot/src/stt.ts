@@ -15,7 +15,7 @@ export interface STTConfig {
 }
 
 export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null {
-  const c = cfg as any;
+  const c = cfg as unknown;
 
   // Prefer plugin-specific STT config.
   const channelStt = c?.channels?.qqbot?.stt;
@@ -51,7 +51,9 @@ export async function transcribeAudio(
   cfg: Record<string, unknown>,
 ): Promise<string | null> {
   const sttCfg = resolveSTTConfig(cfg);
-  if (!sttCfg) return null;
+  if (!sttCfg) {
+    return null;
+  }
 
   const fileBuffer = fs.readFileSync(audioPath);
   const fileName = sanitizeFileName(path.basename(audioPath));

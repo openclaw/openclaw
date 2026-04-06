@@ -16,7 +16,7 @@ export async function fetchGroupChanges(
       return changes;
     }
     return null;
-  } catch (error: any) {
+  } catch (error: unknown) {
     runtime.log?.(
       `[tlon] Failed to fetch changes (falling back to full init): ${error?.message ?? String(error)}`,
     );
@@ -39,11 +39,11 @@ export async function fetchInitData(
 ): Promise<InitData> {
   try {
     runtime.log?.("[tlon] Fetching groups-ui init data...");
-    const initData = (await api.scry("/groups-ui/v6/init.json")) as any;
+    const initData = await api.scry("/groups-ui/v6/init.json");
 
     const channels: string[] = [];
     if (initData?.groups) {
-      for (const groupData of Object.values(initData.groups as Record<string, any>)) {
+      for (const groupData of Object.values(initData.groups as Record<string, unknown>)) {
         if (groupData && typeof groupData === "object" && groupData.channels) {
           for (const channelNest of Object.keys(groupData.channels)) {
             if (channelNest.startsWith("chat/")) {
@@ -71,7 +71,7 @@ export async function fetchInitData(
     }
 
     return { channels, foreigns };
-  } catch (error: any) {
+  } catch (error: unknown) {
     runtime.log?.(`[tlon] Init data fetch failed: ${error?.message ?? String(error)}`);
     return { channels: [], foreigns: null };
   }

@@ -42,6 +42,17 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function readRealtimeErrorDetail(error: unknown): string {
+  if (typeof error === "string" && error) {
+    return error;
+  }
+  const message = asObject(error)?.message;
+  if (typeof message === "string" && message) {
+    return message;
+  }
+  return "Unknown error";
+}
+
 function normalizeProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
 ): OpenAIRealtimeTranscriptionProviderConfig {
@@ -218,12 +229,7 @@ class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession
         return;
 
       case "error": {
-        const detail =
-          event.error && typeof event.error === "object" && "message" in event.error
-            ? String((event.error as { message?: unknown }).message ?? "Unknown error")
-            : event.error
-              ? String(event.error)
-              : "Unknown error";
+        const detail = readRealtimeErrorDetail(event.error);
         this.config.onError?.(new Error(detail));
         return;
       }

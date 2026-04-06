@@ -44,7 +44,7 @@ let _log:
   | { info: (msg: string) => void; error: (msg: string) => void; debug?: (msg: string) => void }
   | undefined;
 
-function fetchJson(url: string, timeoutMs: number): Promise<any> {
+function fetchJson(url: string, timeoutMs: number): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const req = https.get(
       url,
@@ -81,8 +81,10 @@ async function fetchDistTags(): Promise<Record<string, string>> {
     try {
       const json = await fetchJson(url, 10_000);
       const tags = json["dist-tags"];
-      if (tags && typeof tags === "object") return tags;
-    } catch (e: any) {
+      if (tags && typeof tags === "object") {
+        return tags;
+      }
+    } catch (e: unknown) {
       _log?.debug?.(`[qqbot:update-checker] ${url} failed: ${e.message}`);
     }
   }
@@ -118,7 +120,9 @@ export function triggerUpdateCheck(log?: {
   error: (msg: string) => void;
   debug?: (msg: string) => void;
 }): void {
-  if (log) _log = log;
+  if (log) {
+    _log = log;
+  }
   // Warm the cache without blocking startup.
   getUpdateInfo()
     .then((info) => {
@@ -136,7 +140,7 @@ export async function getUpdateInfo(): Promise<UpdateInfo> {
   try {
     const tags = await fetchDistTags();
     return buildUpdateInfo(tags);
-  } catch (err: any) {
+  } catch (err: unknown) {
     _log?.debug?.(`[qqbot:update-checker] check failed: ${err.message}`);
     return {
       current: CURRENT_VERSION,
@@ -158,7 +162,9 @@ export async function checkVersionExists(version: string): Promise<boolean> {
     try {
       const url = `${baseUrl}/${version}`;
       const json = await fetchJson(url, 10_000);
-      if (json && json.version === version) return true;
+      if (json && json.version === version) {
+        return true;
+      }
     } catch {
       // try next registry
     }
@@ -177,12 +183,20 @@ function compareVersions(a: string, b: string): number {
   // Compare the numeric core version first.
   for (let i = 0; i < 3; i++) {
     const diff = (pa.parts[i] || 0) - (pb.parts[i] || 0);
-    if (diff !== 0) return diff;
+    if (diff !== 0) {
+      return diff;
+    }
   }
   // For equal core versions, stable beats prerelease.
-  if (!pa.pre && pb.pre) return 1;
-  if (pa.pre && !pb.pre) return -1;
-  if (!pa.pre && !pb.pre) return 0;
+  if (!pa.pre && pb.pre) {
+    return 1;
+  }
+  if (pa.pre && !pb.pre) {
+    return -1;
+  }
+  if (!pa.pre && !pb.pre) {
+    return 0;
+  }
   // When both are prereleases, compare each prerelease segment in order.
   const aParts = pa.pre!.split(".");
   const bParts = pb.pre!.split(".");
@@ -193,11 +207,17 @@ function compareVersions(a: string, b: string): number {
     const bNum = Number(bP);
     // Compare numerically when both segments are numbers.
     if (!isNaN(aNum) && !isNaN(bNum)) {
-      if (aNum !== bNum) return aNum - bNum;
+      if (aNum !== bNum) {
+        return aNum - bNum;
+      }
     } else {
       // Fall back to lexical comparison for string segments.
-      if (aP < bP) return -1;
-      if (aP > bP) return 1;
+      if (aP < bP) {
+        return -1;
+      }
+      if (aP > bP) {
+        return 1;
+      }
     }
   }
   return 0;
