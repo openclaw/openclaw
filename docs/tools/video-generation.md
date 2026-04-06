@@ -9,7 +9,7 @@ title: "Video Generation"
 
 # Video Generation
 
-OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Twelve provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
+OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Thirteen provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
 
 <Note>
 The `video_generate` tool only appears when at least one video-generation provider is available. If you do not see it in your agent tools, set a provider API key or configure `agents.defaults.videoGenerationModel`.
@@ -87,6 +87,7 @@ Duplicate prevention: if a video task is already `queued` or `running` for the c
 | Google   | `veo-3.1-fast-generate-preview` | Yes  | 1 image           | 1 video          | `GEMINI_API_KEY`                         |
 | MiniMax  | `MiniMax-Hailuo-2.3`            | Yes  | 1 image           | No               | `MINIMAX_API_KEY`                        |
 | OpenAI   | `sora-2`                        | Yes  | 1 image           | 1 video          | `OPENAI_API_KEY`                         |
+| Prodia   | `veo-fast`                      | Yes  | 1 image           | No               | `PRODIA_TOKEN`                           |
 | Qwen     | `wan2.6-t2v`                    | Yes  | Yes (remote URL)  | Yes (remote URL) | `QWEN_API_KEY`                           |
 | Runway   | `gen4.5`                        | Yes  | 1 image           | 1 video          | `RUNWAYML_API_SECRET`                    |
 | Together | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image           | No               | `TOGETHER_API_KEY`                       |
@@ -112,6 +113,7 @@ and the shared live sweep.
 | Google   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; shared `videoToVideo` skipped because the current buffer-backed Gemini/Veo sweep does not accept that input  |
 | MiniMax  | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
 | OpenAI   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; shared `videoToVideo` skipped because this org/input path currently needs provider-side inpaint/remix access |
+| Prodia   | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
 | Qwen     | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                               |
 | Runway   | Yes        | Yes            | Yes            | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                      |
 | Together | Yes        | Yes            | No             | `generate`, `imageToVideo`                                                                                                               |
@@ -206,6 +208,7 @@ If a provider fails, the next candidate is tried automatically. If all candidate
 | Google   | Uses Gemini/Veo. Supports one image or one video reference.                                                                                                 |
 | MiniMax  | Single image reference only.                                                                                                                                |
 | OpenAI   | Only `size` override is forwarded. Other style overrides (`aspectRatio`, `resolution`, `audio`, `watermark`) are ignored with a warning.                    |
+| Prodia   | Synchronous `/v2/job` API. Supports Veo (text + image) and Seedance (image-only). Single image reference only.                                              |
 | Qwen     | Same DashScope backend as Alibaba. Reference inputs must be remote `http(s)` URLs; local files are rejected upfront.                                        |
 | Runway   | Supports local files via data URIs. Video-to-video requires `runway/gen4_aleph`. Text-only runs expose `16:9` and `9:16` aspect ratios.                     |
 | Together | Single image reference only.                                                                                                                                |
@@ -307,6 +310,7 @@ openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2
 - [Google (Gemini)](/providers/google)
 - [MiniMax](/providers/minimax)
 - [OpenAI](/providers/openai)
+- [Prodia](/providers/prodia)
 - [Qwen](/providers/qwen)
 - [Runway](/providers/runway)
 - [Together AI](/providers/together)

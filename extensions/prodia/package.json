@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/prodia-provider",
+  "version": "2026.4.5",
+  "private": true,
+  "description": "OpenClaw Prodia image and video provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

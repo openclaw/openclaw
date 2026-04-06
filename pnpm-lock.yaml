@@ -611,6 +611,8 @@ importers:
 
   extensions/perplexity: {}
 
+  extensions/prodia: {}
+
   extensions/qa-channel:
     devDependencies:
       openclaw:

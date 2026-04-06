@@ -1257,6 +1257,7 @@
                   "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
+                  "providers/prodia",
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",

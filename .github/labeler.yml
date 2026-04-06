@@ -317,6 +317,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/phone-control/**"
+"extensions: prodia":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/prodia/**"
 "extensions: qianfan":
   - changed-files:
       - any-glob-to-any-file:

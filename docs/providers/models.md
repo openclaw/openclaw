@@ -40,6 +40,7 @@ model as `provider/model`.
 - [OpenAI (API + Codex)](/providers/openai)
 - [OpenCode (Zen + Go)](/providers/opencode)
 - [OpenRouter](/providers/openrouter)
+- [Prodia](/providers/prodia)
 - [Qianfan](/providers/qianfan)
 - [Qwen](/providers/qwen)
 - [Runway](/providers/runway)

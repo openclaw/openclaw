@@ -1,0 +1,31 @@
+{
+  "id": "prodia",
+  "enabledByDefault": true,
+  "providerAuthEnvVars": {
+    "prodia": ["PRODIA_TOKEN"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "prodia",
+      "method": "api-key",
+      "choiceId": "prodia-api-key",
+      "choiceLabel": "Prodia API key",
+      "groupId": "prodia",
+      "groupLabel": "Prodia",
+      "groupHint": "API key",
+      "optionKey": "prodiaApiKey",
+      "cliFlag": "--prodia-api-key",
+      "cliOption": "--prodia-api-key <key>",
+      "cliDescription": "Prodia API key"
+    }
+  ],
+  "contracts": {
+    "imageGenerationProviders": ["prodia"],
+    "videoGenerationProviders": ["prodia"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
