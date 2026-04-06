@@ -209,7 +209,7 @@ export async function executeNodeHostCommand(
       durableApprovalSatisfied,
     }) ||
     inlineEvalHit !== null ||
-    obfuscation.detected;
+    (hostSecurity !== "full" && obfuscation.detected);
   const invokeTimeoutMs = Math.max(
     10_000,
     (typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec) * 1000 +
