@@ -736,6 +736,8 @@ Manager handoff triage helper:
 - `scripts/runtime/sense-runtime-manager-policy-shortcut.sh`
 - `scripts/runtime/sense_runtime_manager_entry.py`
 - `scripts/runtime/sense-runtime-manager-entry.sh`
+- `scripts/runtime/sense_runtime_manager_dispatch.py`
+- `scripts/runtime/sense-runtime-manager-dispatch.sh`
 
 This helper is intentionally lightweight. It reads `manager_handoff` and decides whether the next manager turn should:
 
@@ -772,6 +774,16 @@ This keeps the handoff as a next-turn hint only. It does not add another runtime
 The lightweight handoff seed is intentionally minimal. It is not a replacement for the full evaluator; it is a high-confidence shortcut for the next manager turn.
 
 The lightweight policy shortcut is also intentionally minimal. It exists only for high-confidence `use_handoff` cases, returns a minimal `manager_action` / `next_step` pair, and does not replace the full evaluator.
+
+The manager dispatch layer can now connect the shortcut directly to the thin executor:
+
+- if `shortcut_used == true`
+  - dispatch converts the shortcut manager plan into a minimal executor policy
+  - dispatch sends that policy directly to the thin manager executor
+- if `shortcut_used == false`
+  - dispatch falls back to the existing full evaluator -> manager policy -> executor path
+
+This is still a shortcut only. It does not add another loop, and it does not replace the full evaluator path when shortcut confidence is not high enough.
 
 Current convergence states are:
 
