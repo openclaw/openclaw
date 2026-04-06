@@ -667,6 +667,7 @@ Current behavior is intentionally conservative:
   - `post_task_followup_blocked`
   - `post_task_followup_block_reason`
   - `post_task_followup_result`
+  - `loop_convergence`
 
 Execution report shape includes:
 
@@ -718,6 +719,21 @@ Current block reasons include:
 - `incomplete_followup_candidate`
 - `fallback_action`
 - `non_executing_followup_action`
+
+`loop_convergence` is observational only. It does not trigger a new retry or a third execution pass.
+
+Current convergence states are:
+
+- `resolved`
+  - follow-up reached ready state without remaining warnings or missing requirements
+- `partially_resolved`
+  - follow-up completed but degraded signals, warnings, or missing requirements remain
+- `unresolved`
+  - follow-up failed, returned a non-zero exit code, or regressed readiness
+- `no_followup`
+  - no follow-up action was executed
+
+This second-order evaluation is intentionally report-only to avoid adding another loop layer.
 
 Current confidence gate is intentionally small:
 

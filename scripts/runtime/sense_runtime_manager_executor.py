@@ -243,6 +243,129 @@ def collect_main_warnings(step_result: dict) -> list[str]:
     return deduped
 
 
+def extract_result_payload(step_result: dict | None) -> dict:
+    if not isinstance(step_result, dict):
+        return {}
+    result = step_result.get('result')
+    return result if isinstance(result, dict) else {}
+
+
+def collect_remaining_issues(result: dict) -> list[str]:
+    issues: list[str] = []
+    missing_requirements = result.get('missing_requirements')
+    if isinstance(missing_requirements, list):
+        for item in missing_requirements:
+            if isinstance(item, str) and item.strip():
+                issues.append(item.strip())
+    for status_key in ('provider_status', 'gpu_status', 'nim_status_info', 'model_status'):
+        status = result.get(status_key)
+        if not isinstance(status, dict):
+            continue
+        nested_missing = status.get('missing_requirements')
+        if isinstance(nested_missing, list):
+            for item in nested_missing:
+                if isinstance(item, str) and item.strip():
+                    issues.append(item.strip())
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in issues:
+        if item not in seen:
+            deduped.append(item)
+            seen.add(item)
+    return deduped
+
+
+def derive_readiness(result: dict) -> str | None:
+    readiness = result.get('readiness')
+    if isinstance(readiness, str) and readiness.strip():
+        return readiness.strip()
+    if (
+        isinstance(result.get('provider_status'), dict)
+        and result['provider_status'].get('provider_ready') is True
+        and isinstance(result.get('gpu_status'), dict)
+        and result['gpu_status'].get('gpu_ready') is True
+        and isinstance(result.get('nim_status_info'), dict)
+        and result['nim_status_info'].get('nim_ready') is True
+        and isinstance(result.get('model_status'), dict)
+        and result['model_status'].get('model_ready') is True
+    ):
+        return 'ready'
+    return None
+
+
+def evaluate_loop_convergence(
+    main_result: dict | None,
+    followup_result: dict | None,
+    main_warnings: list[str],
+) -> dict:
+    if not isinstance(followup_result, dict) or not followup_result.get('executed'):
+        return {
+            'state': 'no_followup',
+            'reason': 'no post-task follow-up was executed',
+            'improvement_detected': False,
+            'remaining_issues': [],
+        }
+
+    followup_payload = extract_result_payload(followup_result)
+    followup_error = followup_payload.get('error')
+    followup_exit_code = extract_step_exit_code(followup_result)
+    if followup_error or (followup_exit_code is not None and followup_exit_code != 0):
+        return {
+            'state': 'unresolved',
+            'reason': 'post-task follow-up failed or returned a non-zero exit code',
+            'improvement_detected': False,
+            'remaining_issues': collect_remaining_issues(followup_payload),
+        }
+
+    main_payload = extract_result_payload(main_result)
+    main_readiness = derive_readiness(main_payload) or 'unknown'
+    followup_readiness = derive_readiness(followup_payload) or 'unknown'
+    followup_warnings = collect_main_warnings(followup_result)
+    remaining_issues = collect_remaining_issues(followup_payload)
+    improvement_detected = (
+        main_readiness == 'degraded' and followup_readiness == 'ready'
+    )
+
+    if followup_readiness == 'ready' and not remaining_issues and not followup_warnings:
+        return {
+            'state': 'resolved',
+            'reason': 'post-task follow-up reached ready state without remaining issues or warnings',
+            'improvement_detected': improvement_detected or not bool(main_warnings),
+            'remaining_issues': [],
+        }
+
+    if main_readiness == 'ready' and followup_readiness == 'degraded':
+        return {
+            'state': 'unresolved',
+            'reason': 'post-task follow-up regressed runtime readiness from ready to degraded',
+            'improvement_detected': False,
+            'remaining_issues': remaining_issues or followup_warnings,
+        }
+
+    if followup_readiness == 'ready' and (remaining_issues or followup_warnings):
+        return {
+            'state': 'partially_resolved',
+            'reason': 'post-task follow-up reached ready state but still reports issues or warnings',
+            'improvement_detected': improvement_detected or bool(main_warnings),
+            'remaining_issues': remaining_issues or followup_warnings,
+        }
+
+    if followup_readiness == 'degraded' or remaining_issues or followup_warnings:
+        return {
+            'state': 'partially_resolved',
+            'reason': 'post-task follow-up completed but degraded signals or remaining issues are still present',
+            'improvement_detected': improvement_detected,
+            'remaining_issues': remaining_issues or followup_warnings,
+        }
+
+    return {
+        'state': 'partially_resolved',
+        'reason': 'post-task follow-up completed but convergence could not be confirmed as fully resolved',
+        'improvement_detected': improvement_detected,
+        'remaining_issues': remaining_issues or followup_warnings,
+    }
+
+
 def derive_post_task_final_state(result: dict) -> str:
     provider_status = result.get('provider_status')
     gpu_status = result.get('gpu_status')
@@ -613,6 +736,11 @@ def main() -> int:
         output['post_task_followup_blocked'] = not allow_followup
         output['post_task_followup_block_reason'] = block_reason
         output['post_task_followup_result'] = None
+        output['loop_convergence'] = evaluate_loop_convergence(
+            main_result,
+            None,
+            main_warnings,
+        )
         if allow_followup:
             followup_action = str(post_task_evaluation.get('next_action'))
             followup_step = str(post_task_evaluation.get('next_step'))
@@ -630,6 +758,11 @@ def main() -> int:
             output['post_task_followup_blocked'] = False
             output['post_task_followup_block_reason'] = None
             output['post_task_followup_result'] = followup_result
+            output['loop_convergence'] = evaluate_loop_convergence(
+                main_result,
+                followup_result,
+                main_warnings,
+            )
             output['executor_state'] = 'completed_with_followup_executed'
         elif post_task_evaluation.get('next_action'):
             output['executor_state'] = 'completed_with_followup_candidate'
