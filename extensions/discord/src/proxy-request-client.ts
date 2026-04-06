@@ -41,6 +41,8 @@ const defaultOptions = {
   timeout: 15_000,
   queueRequests: true,
   maxQueueSize: 1000,
+  runtimeProfile: "persistent",
+  scheduler: {},
 } satisfies Omit<ProxyRequestClientOptions, "fetch">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {

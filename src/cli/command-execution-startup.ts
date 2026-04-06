@@ -1,5 +1,5 @@
 import { routeLogsToStderr } from "../logging/console.js";
-import type { RuntimeInterface } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { getCommandPathWithRootOptions } from "./argv.js";
 import { ensureCliCommandBootstrap } from "./command-bootstrap.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
@@ -46,7 +46,7 @@ export async function applyCliExecutionStartupPresentation(params: {
 }
 
 export async function ensureCliExecutionBootstrap(params: {
-  runtime: RuntimeInterface;
+  runtime: RuntimeEnv;
   commandPath: string[];
   startupPolicy: CliStartupPolicy;
   allowInvalid?: boolean;
