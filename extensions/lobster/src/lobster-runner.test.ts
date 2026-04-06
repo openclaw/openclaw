@@ -205,6 +205,46 @@ describe("createEmbeddedLobsterRunner", () => {
     });
   });
 
+  it("loads the embedded runtime once per runner", async () => {
+    const runtime = {
+      runToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+      resumeToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "cancelled",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+    const loadRuntime = vi.fn().mockResolvedValue(runtime);
+
+    const runner = createEmbeddedLobsterRunner({ loadRuntime });
+
+    await runner.run({
+      action: "run",
+      pipeline: "exec --json=true echo hi",
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+    await runner.run({
+      action: "resume",
+      token: "resume-token",
+      approve: false,
+      cwd: process.cwd(),
+      timeoutMs: 2000,
+      maxStdoutBytes: 4096,
+    });
+
+    expect(loadRuntime).toHaveBeenCalledTimes(1);
+  });
+
   it("requires a pipeline for run", async () => {
     const runner = createEmbeddedLobsterRunner({
       loadRuntime: vi.fn().mockResolvedValue({
