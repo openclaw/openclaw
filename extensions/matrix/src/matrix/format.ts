@@ -309,9 +309,28 @@ function mutateInlineTokensWithMentions(params: {
   return { children: nextChildren, roomMentioned };
 }
 
+// Compact loose lists by hiding paragraph tokens inside list items,
+// mirroring what markdown-it already does for tight lists. Without this
+// Element renders <p> margins inside <li>, splitting numbers from content.
+function compactLooseListTokens(tokens: MarkdownToken[]): void {
+  let insideListItem = 0;
+  for (const token of tokens) {
+    if (token.type === "list_item_open") {
+      insideListItem++;
+    } else if (token.type === "list_item_close") {
+      insideListItem--;
+    } else if (insideListItem > 0) {
+      if (token.type === "paragraph_open" || token.type === "paragraph_close") {
+        token.hidden = true;
+      }
+    }
+  }
+}
+
 export function markdownToMatrixHtml(markdown: string): string {
-  const rendered = md.render(markdown ?? "");
-  return rendered.trimEnd();
+  const tokens = md.parse(markdown ?? "", {});
+  compactLooseListTokens(tokens);
+  return md.renderer.render(tokens, md.options, {}).trimEnd();
 }
 
 async function resolveMarkdownMentionState(params: {
@@ -366,6 +385,7 @@ export async function renderMarkdownToMatrixHtmlWithMentions(params: {
   client: MatrixClient;
 }): Promise<{ html?: string; mentions: MatrixMentions }> {
   const state = await resolveMarkdownMentionState(params);
+  compactLooseListTokens(state.tokens);
   const html = md.renderer.render(state.tokens, md.options, {}).trimEnd();
   return {
     html: html || undefined,
