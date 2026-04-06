@@ -24,11 +24,13 @@ model as `provider/model`.
 
 ## Supported providers (starter set)
 
+- [Alibaba Model Studio](/providers/alibaba)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Amazon Bedrock](/providers/bedrock)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
+- [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
@@ -39,6 +41,7 @@ model as `provider/model`.
 - [OpenRouter](/providers/openrouter)
 - [Qianfan](/providers/qianfan)
 - [Qwen](/providers/qwen)
+- [Runway](/providers/runway)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
