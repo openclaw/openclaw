@@ -23,9 +23,13 @@ export function estimatePrePromptTokens(params: {
   const { messages, systemPrompt, prompt } = params;
   const syntheticMessages: AgentMessage[] = [];
   if (typeof systemPrompt === "string" && systemPrompt.trim().length > 0) {
-    syntheticMessages.push({ role: "system", content: systemPrompt } as AgentMessage);
+    syntheticMessages.push({
+      role: "system",
+      content: systemPrompt,
+      timestamp: 0,
+    } as unknown as AgentMessage);
   }
-  syntheticMessages.push({ role: "user", content: prompt } as AgentMessage);
+  syntheticMessages.push({ role: "user", content: prompt, timestamp: 0 } as AgentMessage);
 
   const estimated =
     estimateMessagesTokens(messages) +

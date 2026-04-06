@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import {
@@ -5,6 +6,27 @@ import {
   estimatePrePromptTokens,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
+
+let timestamp = 1;
+
+function makeAssistantHistory(text: string): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: timestamp++,
+  } as AgentMessage;
+}
+
+function makeToolResultMessage(...texts: string[]): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: `call_${timestamp}`,
+    toolName: "read",
+    content: texts.map((text) => ({ type: "text", text })),
+    isError: false,
+    timestamp: timestamp++,
+  } as AgentMessage;
+}
 
 describe("preemptive-compaction", () => {
   const verboseHistory =
@@ -21,12 +43,12 @@ describe("preemptive-compaction", () => {
 
   it("raises the estimate as prompt-side content grows", () => {
     const smaller = estimatePrePromptTokens({
-      messages: [{ role: "assistant", content: verboseHistory }],
+      messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: "sys",
       prompt: "hello",
     });
     const larger = estimatePrePromptTokens({
-      messages: [{ role: "assistant", content: verboseHistory }],
+      messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: verboseSystem,
       prompt: verbosePrompt,
     });
@@ -36,7 +58,7 @@ describe("preemptive-compaction", () => {
 
   it("requests preemptive compaction when the reserve-based prompt budget would be exceeded", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [{ role: "assistant", content: verboseHistory }],
+      messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: verboseSystem,
       prompt: verbosePrompt,
       contextTokenBudget: 500,
@@ -50,7 +72,7 @@ describe("preemptive-compaction", () => {
 
   it("does not request preemptive compaction when the reserve-based prompt budget still fits", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [{ role: "assistant", content: "short history" }],
+      messages: [makeAssistantHistory("short history")],
       systemPrompt: "sys",
       prompt: "hello",
       contextTokenBudget: 10_000,
@@ -64,17 +86,9 @@ describe("preemptive-compaction", () => {
 
   it("routes to direct tool-result truncation when recent tool tails can clearly absorb the overflow", () => {
     const medium = "alpha beta gamma delta epsilon ".repeat(2200);
-    const messages = [
-      { role: "assistant", content: "short history" },
-      {
-        role: "toolResult",
-        content: [
-          { type: "text", text: medium },
-          { type: "text", text: medium },
-          { type: "text", text: medium },
-          { type: "text", text: medium },
-        ],
-      } as never,
+    const messages: AgentMessage[] = [
+      makeAssistantHistory("short history"),
+      makeToolResultMessage(medium, medium, medium, medium),
     ];
     const reserveTokens = 2_000;
     const contextTokenBudget = 26_000;
@@ -106,10 +120,10 @@ describe("preemptive-compaction", () => {
       5000,
     );
     const messages = [
-      { role: "assistant", content: longHistory },
-      { role: "toolResult", content: [{ type: "text", text: medium }] } as never,
-      { role: "toolResult", content: [{ type: "text", text: medium }] } as never,
-      { role: "toolResult", content: [{ type: "text", text: medium }] } as never,
+      makeAssistantHistory(longHistory),
+      makeToolResultMessage(medium),
+      makeToolResultMessage(medium),
+      makeToolResultMessage(medium),
     ];
     const reserveTokens = 500;
     const baseContextTokenBudget = 3_500;
@@ -119,7 +133,7 @@ describe("preemptive-compaction", () => {
       prompt: verbosePrompt,
     });
     const toolResultPotential = estimateToolResultReductionPotential({
-      messages: messages as never,
+      messages,
       contextWindowTokens: baseContextTokenBudget,
     });
     const desiredOverflowTokens = Math.ceil((toolResultPotential.maxReducibleChars + 4_096) / 4);
@@ -138,5 +152,41 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(true);
     expect(result.overflowTokens).toBeGreaterThan(0);
     expect(result.toolResultReducibleChars).toBeGreaterThan(0);
+  });
+
+  it("treats mixed oversized-plus-aggregate tool tails as cumulative recovery potential", () => {
+    const oversized = "x".repeat(45_000);
+    const medium = "alpha beta gamma delta epsilon ".repeat(500);
+    const messages: AgentMessage[] = [
+      makeAssistantHistory("short history"),
+      makeToolResultMessage(oversized),
+      makeToolResultMessage(medium),
+      makeToolResultMessage(medium),
+    ];
+    const reserveTokens = 2_000;
+    const estimatedPromptTokens = estimatePrePromptTokens({
+      messages,
+      systemPrompt: "sys",
+      prompt: "hello",
+    });
+    const potential = estimateToolResultReductionPotential({
+      messages,
+      contextWindowTokens: 128_000,
+    });
+    const desiredOverflowTokens = 2_000;
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: estimatedPromptTokens - desiredOverflowTokens + reserveTokens,
+      reserveTokens,
+    });
+
+    expect(potential.oversizedReducibleChars).toBeGreaterThan(0);
+    expect(potential.aggregateReducibleChars).toBeGreaterThan(0);
+    expect(potential.oversizedReducibleChars).toBeLessThan(desiredOverflowTokens * 4);
+    expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
+    expect(result.route).toBe("truncate_tool_results_only");
+    expect(result.shouldCompact).toBe(false);
   });
 });

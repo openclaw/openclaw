@@ -1769,17 +1769,18 @@ export async function runEmbeddedAttempt(
           }
 
           const reserveTokens = settingsManager.getCompactionReserveTokens();
+          const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
           const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
             messages: activeSession.messages,
             systemPrompt: systemPromptText,
             prompt: effectivePrompt,
-            contextTokenBudget: params.contextTokenBudget,
+            contextTokenBudget,
             reserveTokens,
           });
           if (preemptiveCompaction.route === "truncate_tool_results_only") {
             const truncationResult = truncateOversizedToolResultsInSessionManager({
               sessionManager,
-              contextWindowTokens: params.contextTokenBudget,
+              contextWindowTokens: contextTokenBudget,
               sessionFile: params.sessionFile,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,

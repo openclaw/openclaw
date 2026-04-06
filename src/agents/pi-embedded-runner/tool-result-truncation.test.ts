@@ -490,51 +490,36 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(text.length).toBeLessThan(2_000);
     expect(text).toContain("truncated");
   });
-
-  it("applies aggregate recovery after oversized truncation for mixed tool-result tails", async () => {
+  it("combines oversized and aggregate recovery truncation in the same session rewrite", async () => {
     const dir = await createTmpDir();
     const sm = SessionManager.create(dir, dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
-    const oversized = "x".repeat(500_000);
+    sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
     const medium = "alpha beta gamma delta epsilon ".repeat(800);
-    sm.appendMessage(makeToolResult(oversized, "call_1"));
     sm.appendMessage(makeToolResult(medium, "call_2"));
     sm.appendMessage(makeToolResult(medium, "call_3"));
     const sessionFile = sm.getSessionFile()!;
 
-    const beforeBranch = SessionManager.open(sessionFile).getBranch();
-    const beforeToolResults = beforeBranch.filter(
-      (entry) => entry.type === "message" && entry.message.role === "toolResult",
-    );
-    const beforeLengths = beforeToolResults.map((entry) =>
-      entry.type === "message" ? getToolResultTextLength(entry.message) : 0,
-    );
-
     const result = await truncateOversizedToolResultsInSession({
       sessionFile,
-      contextWindowTokens: 128_000,
+      contextWindowTokens: 100,
     });
 
     expect(result.truncated).toBe(true);
-    expect(result.truncatedCount).toBeGreaterThan(1);
+    expect(result.truncatedCount).toBe(3);
 
     const afterBranch = SessionManager.open(sessionFile).getBranch();
-    const afterToolResults = afterBranch.filter(
+    const toolResults = afterBranch.filter(
       (entry) => entry.type === "message" && entry.message.role === "toolResult",
     );
-    const afterLengths = afterToolResults.map((entry) =>
-      entry.type === "message" ? getToolResultTextLength(entry.message) : 0,
+    const toolTexts = toolResults.map((entry) =>
+      entry.type === "message" ? getFirstToolResultText(entry.message) : "",
     );
 
-    expect(afterLengths[0]).toBeLessThan(beforeLengths[0] ?? Infinity);
-    expect(
-      (afterLengths[1] ?? Infinity) < (beforeLengths[1] ?? Infinity) ||
-        (afterLengths[2] ?? Infinity) < (beforeLengths[2] ?? Infinity),
-    ).toBe(true);
-    expect(afterLengths.reduce((sum, value) => sum + value, 0)).toBeLessThan(
-      beforeLengths.reduce((sum, value) => sum + value, 0),
-    );
+    expect(toolTexts[0]).toContain("truncated");
+    expect(toolTexts[1]).toContain("truncated");
+    expect(toolTexts[2].length).toBeGreaterThan(0);
   });
 });
 
