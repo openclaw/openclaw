@@ -23,7 +23,7 @@ const {
   finalizeInboundContextMock,
   resolveAgentRouteMock,
   resolveBoundConversationMock,
-  sendMessageFeishuMock,
+  _sendMessageFeishuMock,
   withReplyDispatcherMock,
 } = getFeishuLifecycleTestMocks();
 

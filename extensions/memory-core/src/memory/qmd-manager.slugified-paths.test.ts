@@ -233,7 +233,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
+    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
       path: actualRelative,
       text: "line-1\nline-2\nline-3",
     });
@@ -303,7 +303,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
+    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
       path: `qmd/${collectionName}/${actualRelative}`,
       text: "vault memory",
     });
@@ -360,7 +360,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0]!.path })).resolves.toEqual({
+    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
       path: exactRelative,
       text: "exact slugified path",
     });

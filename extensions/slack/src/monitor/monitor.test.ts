@@ -35,7 +35,7 @@ describe("resolveSlackChannelConfig", () => {
   it("uses wildcard entries when no direct channel config exists", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
-      channels: { "*": { allow: true, requireMention: false } },
+      channels: { "*": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({
@@ -49,7 +49,7 @@ describe("resolveSlackChannelConfig", () => {
   it("uses direct match metadata when channel config exists", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
-      channels: { C1: { allow: true, requireMention: false } },
+      channels: { C1: { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({
@@ -63,7 +63,7 @@ describe("resolveSlackChannelConfig", () => {
     // Users commonly copy them in lowercase from docs or older CLI output.
     const res = resolveSlackChannelConfig({
       channelId: "C0ABC12345", // pragma: allowlist secret
-      channels: { c0abc12345: { allow: true, requireMention: false } },
+      channels: { c0abc12345: { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({ allowed: true, requireMention: false });
@@ -73,7 +73,7 @@ describe("resolveSlackChannelConfig", () => {
     // Defensive: also handle the inverse direction.
     const res = resolveSlackChannelConfig({
       channelId: "c0abc12345", // pragma: allowlist secret
-      channels: { C0ABC12345: { allow: true, requireMention: false } },
+      channels: { C0ABC12345: { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({ allowed: true, requireMention: false });
@@ -83,7 +83,7 @@ describe("resolveSlackChannelConfig", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
       channelName: "ops-room",
-      channels: { "ops-room": { allow: true, requireMention: false } },
+      channels: { "ops-room": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
     });
     expect(res).toMatchObject({ allowed: false, requireMention: true });
@@ -93,7 +93,7 @@ describe("resolveSlackChannelConfig", () => {
     const res = resolveSlackChannelConfig({
       channelId: "C1",
       channelName: "ops-room",
-      channels: { "ops-room": { allow: true, requireMention: false } },
+      channels: { "ops-room": { enabled: true, requireMention: false } },
       defaultRequireMention: true,
       allowNameMatching: true,
     });
@@ -266,8 +266,8 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
       ...baseParams(),
       groupPolicy: "open",
       channelsConfig: {
-        C_ALLOWED: { allow: true },
-        C_DENIED: { allow: false },
+        C_ALLOWED: { enabled: true },
+        C_DENIED: { enabled: false },
       },
     });
     // Explicitly allowed channel

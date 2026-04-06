@@ -28,8 +28,6 @@ export type AgentSandboxConfig = {
   sessionToolsVisibility?: "spawned" | "all";
   /** Container/workspace scope for sandbox isolation. */
   scope?: "session" | "agent" | "shared";
-  /** @deprecated Legacy sandbox scope toggle; normalized to `scope` on load. */
-  perSession?: boolean;
   workspaceRoot?: string;
   /** Docker-specific sandbox settings. */
   docker?: SandboxDockerSettings;

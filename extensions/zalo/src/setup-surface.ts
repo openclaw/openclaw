@@ -5,7 +5,6 @@ import {
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
-  normalizeAccountId,
   promptSingleChannelSecretInput,
   runSingleChannelSecretStep,
   type ChannelSetupDmPolicy,
@@ -13,8 +12,8 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
-import { zaloDmPolicy, zaloSetupAdapter } from "./setup-core.js";
+import { resolveZaloAccount } from "./accounts.js";
+import { zaloDmPolicy } from "./setup-core.js";
 
 const channel = "zalo" as const;
 

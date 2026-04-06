@@ -127,6 +127,8 @@ describe("isBillingErrorMessage", () => {
         "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
         "This model requires more credits to use",
         "This endpoint require more credits",
+        "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+        "Extra usage is required for long context requests.",
       ],
       expected: true,
     },
@@ -214,6 +216,20 @@ describe("isBillingErrorMessage", () => {
       "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
     expect(isBillingErrorMessage(sample)).toBe(true);
     expect(classifyFailoverReason(sample)).toBe("billing");
+  });
+
+  it("classifies Anthropic extra-usage exhaustion variants as billing", () => {
+    const samples = [
+      "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+      "Extra usage is required for long context requests.",
+      '{"type":"error","error":{"type":"invalid_request_error","message":"You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}',
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Extra usage is required for long context requests."}}',
+    ];
+
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample, { provider: "anthropic" })).toBe("billing");
+    }
   });
 });
 
@@ -570,6 +586,20 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBeNull();
   });
 
+  it("lets OpenRouter billing-classified HTTP 401 responses bypass generic auth", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(401, "401 Key limit exceeded (monthly limit)", {
+        provider: "openrouter",
+      }),
+    ).toBe("billing");
+  });
+
+  it("keeps generic HTTP 401 key-limit text on the auth path without provider context", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(401, "401 Key limit exceeded (monthly limit)"),
+    ).toBe("auth");
+  });
+
   it("treats HTTP 499 as transient for structured errors", () => {
     expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
     expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");
@@ -631,6 +661,28 @@ describe("classifyFailoverReason", () => {
         "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
     ).toBeNull();
+  });
+
+  it("classifies provider-scoped generic upstream messages", () => {
+    expect(classifyFailoverReason("An unknown error occurred", { provider: "anthropic" })).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason("Provider returned error", { provider: "openrouter" })).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason("Key limit exceeded", { provider: "openrouter" })).toBe(
+      "billing",
+    );
+  });
+
+  it("does not classify provider-scoped generic upstream messages without provider context", () => {
+    expect(classifyFailoverReason("An unknown error occurred")).toBeNull();
+    expect(
+      classifyFailoverReason("An unknown error occurred", { provider: "openrouter" }),
+    ).toBeNull();
+    expect(classifyFailoverReason("Provider returned error")).toBeNull();
+    expect(classifyFailoverReason("Provider returned error", { provider: "anthropic" })).toBeNull();
+    expect(classifyFailoverReason("Key limit exceeded")).toBeNull();
   });
 });
 

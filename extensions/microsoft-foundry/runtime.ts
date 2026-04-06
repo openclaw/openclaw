@@ -96,6 +96,8 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
     };
   } catch (err) {
     const details = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to refresh Azure Entra ID token via az CLI: ${details}`);
+    throw new Error(`Failed to refresh Azure Entra ID token via az CLI: ${details}`, {
+      cause: err,
+    });
   }
 }

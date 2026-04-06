@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { matrixSetupAdapter, matrixSetupWizard } from "../../test/helpers/plugins/matrix-setup.js";
+import {
+  matrixSetupAdapter,
+  matrixSetupWizard,
+} from "../../test/helpers/channels/matrix-setup-contract.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -601,7 +604,7 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   };
 });
 
-vi.mock("../../extensions/matrix/src/matrix/deps.js", () => ({
+vi.mock("../plugin-sdk/matrix-deps.js", () => ({
   ensureMatrixSdkInstalled: vi.fn(async () => {}),
   isMatrixSdkAvailable: vi.fn(() => true),
 }));
@@ -812,6 +815,51 @@ describe("setupChannels", () => {
         pluginId: "@openclaw/msteams-plugin",
       }),
     );
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("hides channels marked hidden from setup in the picker", async () => {
+    const qaChannelBase = createChannelTestPluginBase({
+      id: "qa-channel",
+      label: "QA Channel",
+      docsPath: "/channels/qa-channel",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "qa-channel",
+          source: "test",
+          plugin: {
+            ...qaChannelBase,
+            meta: {
+              ...qaChannelBase.meta,
+              showInSetup: false,
+            },
+          },
+        },
+      ]),
+    );
+
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select a channel") {
+        expect(
+          (options as Array<{ label?: string }>).some((option) =>
+            option.label?.includes("QA Channel"),
+          ),
+        ).toBe(false);
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter);
+
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
     expect(multiselect).not.toHaveBeenCalled();
   });
 

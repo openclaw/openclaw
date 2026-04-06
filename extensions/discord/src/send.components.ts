@@ -16,12 +16,12 @@ import {
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
+import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import {
   buildDiscordSendError,
   createDiscordClient,
-  parseAndResolveRecipient,
   resolveChannelId,
   resolveDiscordChannelType,
   toDiscordFileBlob,
@@ -61,7 +61,7 @@ function withImplicitComponentAttachmentBlock(
       ...(spec.blocks ?? []),
       {
         type: "file",
-        file: `attachment://${attachmentName}` as `attachment://${string}`,
+        file: `attachment://${attachmentName}`,
       },
     ],
   };

@@ -3,8 +3,8 @@ import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
+import { normalizeE164 } from "../../text-runtime.js";
 import { loadConfig } from "../config.runtime.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
@@ -150,7 +150,7 @@ export function createWebOnMessageHandler(params: {
       if (!msg.sender?.e164 && !msg.senderE164 && peerId && peerId.startsWith("+")) {
         const normalized = normalizeE164(peerId);
         if (normalized) {
-          msg.sender = { ...(msg.sender ?? {}), e164: normalized };
+          msg.sender = { ...msg.sender, e164: normalized };
           msg.senderE164 = normalized;
         }
       }

@@ -2,14 +2,10 @@ import {
   type ChannelDoctorAdapter,
   type ChannelDoctorConfigMutation,
 } from "openclaw/plugin-sdk/channel-contract";
-import {
-  resolveDiscordPreviewStreamMode,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import {
-  collectProviderDangerousNameMatchingScopes,
-  isDiscordMutableAllowEntry,
-} from "openclaw/plugin-sdk/runtime";
+import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime-doctor";
+import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
+import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 type DiscordNumericIdHit = { path: string; entry: number; safe: boolean };
 
@@ -25,8 +21,37 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
+  const existing = asObjectRecord(owner[key]);
+  if (existing) {
+    return { ...existing };
+  }
+  return {};
+}
+
 function sanitizeForLog(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return value.replace(/\p{Cc}+/gu, " ").trim();
+}
+
+function isDiscordMutableAllowEntry(raw: string): boolean {
+  const text = raw.trim();
+  if (!text || text === "*") {
+    return false;
+  }
+
+  const maybeMentionId = text.replace(/^<@!?/, "").replace(/>$/, "");
+  if (/^\d+$/.test(maybeMentionId)) {
+    return false;
+  }
+
+  for (const prefix of ["discord:", "user:", "pk:"]) {
+    if (!text.startsWith(prefix)) {
+      continue;
+    }
+    return text.slice(prefix.length).trim().length === 0;
+  }
+
+  return true;
 }
 
 function normalizeDiscordDmAliases(params: {
@@ -121,45 +146,101 @@ function normalizeDiscordStreamingAliases(params: {
   pathPrefix: string;
   changes: string[];
 }): { entry: Record<string, unknown>; changed: boolean } {
-  let updated = params.entry;
-  const hadLegacyStreamMode = updated.streamMode !== undefined;
-  const beforeStreaming = updated.streaming;
-  const resolved = resolveDiscordPreviewStreamMode(updated);
+  const beforeStreaming = params.entry.streaming;
+  const hadLegacyStreamMode = params.entry.streamMode !== undefined;
+  const hasLegacyFlatFields =
+    params.entry.chunkMode !== undefined ||
+    params.entry.blockStreaming !== undefined ||
+    params.entry.draftChunk !== undefined ||
+    params.entry.blockStreamingCoalesce !== undefined;
+  const resolved = resolveDiscordPreviewStreamMode(params.entry);
   const shouldNormalize =
     hadLegacyStreamMode ||
     typeof beforeStreaming === "boolean" ||
-    (typeof beforeStreaming === "string" && beforeStreaming !== resolved);
+    typeof beforeStreaming === "string" ||
+    hasLegacyFlatFields;
   if (!shouldNormalize) {
-    return { entry: updated, changed: false };
+    return { entry: params.entry, changed: false };
   }
 
+  let updated = { ...params.entry };
   let changed = false;
-  if (beforeStreaming !== resolved) {
-    updated = { ...updated, streaming: resolved };
+  const streaming = ensureNestedRecord(updated, "streaming");
+  const block = ensureNestedRecord(streaming, "block");
+  const preview = ensureNestedRecord(streaming, "preview");
+
+  if (
+    (hadLegacyStreamMode ||
+      typeof beforeStreaming === "boolean" ||
+      typeof beforeStreaming === "string") &&
+    streaming.mode === undefined
+  ) {
+    streaming.mode = resolved;
+    if (hadLegacyStreamMode) {
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${resolved}).`,
+      );
+    } else if (typeof beforeStreaming === "boolean") {
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${resolved}).`,
+      );
+    } else if (typeof beforeStreaming === "string") {
+      params.changes.push(
+        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${resolved}).`,
+      );
+    }
     changed = true;
   }
   if (hadLegacyStreamMode) {
-    const { streamMode: _ignored, ...rest } = updated;
-    updated = rest;
+    delete updated.streamMode;
     changed = true;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
-    );
   }
-  if (typeof beforeStreaming === "boolean") {
-    params.changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-  } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
+  if (updated.chunkMode !== undefined && streaming.chunkMode === undefined) {
+    streaming.chunkMode = updated.chunkMode;
+    delete updated.chunkMode;
     params.changes.push(
-      `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
+      `Moved ${params.pathPrefix}.chunkMode → ${params.pathPrefix}.streaming.chunkMode.`,
     );
+    changed = true;
   }
+  if (updated.blockStreaming !== undefined && block.enabled === undefined) {
+    block.enabled = updated.blockStreaming;
+    delete updated.blockStreaming;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.blockStreaming → ${params.pathPrefix}.streaming.block.enabled.`,
+    );
+    changed = true;
+  }
+  if (updated.draftChunk !== undefined && preview.chunk === undefined) {
+    preview.chunk = updated.draftChunk;
+    delete updated.draftChunk;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.draftChunk → ${params.pathPrefix}.streaming.preview.chunk.`,
+    );
+    changed = true;
+  }
+  if (updated.blockStreamingCoalesce !== undefined && block.coalesce === undefined) {
+    block.coalesce = updated.blockStreamingCoalesce;
+    delete updated.blockStreamingCoalesce;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.blockStreamingCoalesce → ${params.pathPrefix}.streaming.block.coalesce.`,
+    );
+    changed = true;
+  }
+  if (Object.keys(preview).length > 0) {
+    streaming.preview = preview;
+  }
+  if (Object.keys(block).length > 0) {
+    streaming.block = block;
+  }
+  updated.streaming = streaming;
   if (
     params.pathPrefix.startsWith("channels.discord") &&
     resolved === "off" &&
     hadLegacyStreamMode
   ) {
     params.changes.push(
-      `${params.pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${params.pathPrefix}.streaming="partial" to opt in explicitly.`,
+      `${params.pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${params.pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
     );
   }
   return { entry: updated, changed };
@@ -376,14 +457,14 @@ export function collectDiscordNumericIdWarnings(params: {
 
   const lines: string[] = [];
   if (repairableHits.length > 0) {
-    const sample = repairableHits[0]!;
+    const sample = repairableHits[0];
     lines.push(
       `- Discord allowlists contain ${repairableHits.length} numeric ${repairableHits.length === 1 ? "entry" : "entries"} (e.g. ${sanitizeForLog(sample.path)}=${sanitizeForLog(String(sample.entry))}).`,
       `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
     );
   }
   if (blockedHits.length > 0) {
-    const sample = blockedHits[0]!;
+    const sample = blockedHits[0];
     lines.push(
       `- Discord allowlists contain ${blockedHits.length} numeric ${blockedHits.length === 1 ? "entry" : "entries"} in lists that cannot be auto-repaired (e.g. ${sanitizeForLog(sample.path)}).`,
       `- These lists include invalid or precision-losing numeric IDs; manually quote the original values in your config file, then rerun "${params.doctorFixCommand}".`,
@@ -522,6 +603,7 @@ export const discordDoctor: ChannelDoctorAdapter = {
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
+  legacyConfigRules: DISCORD_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: ({ cfg }) => normalizeDiscordCompatibilityConfig(cfg),
   collectPreviewWarnings: ({ cfg, doctorFixCommand }) =>
     collectDiscordNumericIdWarnings({

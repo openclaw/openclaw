@@ -1,3 +1,4 @@
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -27,7 +28,7 @@ function buildClient(params: {
   return createMattermostClient({
     baseUrl: account.baseUrl,
     botToken: account.botToken,
-    allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
   });
 }
 
@@ -79,12 +80,18 @@ export async function listMattermostDirectoryGroups(
         `/users/${me.id}/channels?per_page=200`,
       );
       for (const ch of channels) {
-        if (ch.type !== "O" && ch.type !== "P") continue;
-        if (seenIds.has(ch.id)) continue;
+        if (ch.type !== "O" && ch.type !== "P") {
+          continue;
+        }
+        if (seenIds.has(ch.id)) {
+          continue;
+        }
         if (q) {
           const name = (ch.name ?? "").toLowerCase();
           const display = (ch.display_name ?? "").toLowerCase();
-          if (!name.includes(q) && !display.includes(q)) continue;
+          if (!name.includes(q) && !display.includes(q)) {
+            continue;
+          }
         }
         seenIds.add(ch.id);
         entries.push({

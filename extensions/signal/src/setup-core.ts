@@ -6,24 +6,20 @@ import {
   createSetupInputPresenceValidator,
   DEFAULT_ACCOUNT_ID,
   mergeAllowFromEntries,
-  patchChannelConfigForAccount,
   parseSetupEntriesAllowingWildcard,
+  patchChannelConfigForAccount,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
-  type OpenClawConfig,
-  type WizardPrompter,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type ChannelSetupWizardTextInput,
+  type OpenClawConfig,
+  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
-import {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-} from "./accounts.js";
+import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
 
 const channel = "signal" as const;
 const MIN_E164_DIGITS = 5;
@@ -140,7 +136,11 @@ export const signalDmPolicy = {
   getCurrent: (cfg: OpenClawConfig, accountId?: string) =>
     resolveSignalAccount({ cfg, accountId: accountId ?? resolveDefaultSignalAccountId(cfg) }).config
       .dmPolicy ?? "pairing",
-  setPolicy: (cfg: OpenClawConfig, policy: "pairing" | "allowlist" | "open" | "disabled", accountId?: string) =>
+  setPolicy: (
+    cfg: OpenClawConfig,
+    policy: "pairing" | "allowlist" | "open" | "disabled",
+    accountId?: string,
+  ) =>
     patchChannelConfigForAccount({
       cfg,
       channel,

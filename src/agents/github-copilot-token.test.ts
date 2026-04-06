@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import {
   deriveCopilotApiBaseUrlFromToken,
   resolveCopilotApiToken,
@@ -44,5 +45,35 @@ describe("resolveCopilotApiToken", () => {
     });
 
     expect(result.expiresAt).toBe(12_345_678_901_000);
+  });
+
+  it("sends IDE headers when exchanging the GitHub token", async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        token: "copilot-token",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    }));
+
+    await resolveCopilotApiToken({
+      githubToken: "github-token",
+      cachePath: "/tmp/github-copilot-token-test.json",
+      loadJsonFileImpl: () => undefined,
+      saveJsonFileImpl: () => undefined,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.github.com/copilot_internal/v2/token",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          Authorization: "Bearer github-token",
+          ...buildCopilotIdeHeaders({ includeApiVersion: true }),
+        }),
+      }),
+    );
   });
 });

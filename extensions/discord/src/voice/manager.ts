@@ -10,18 +10,17 @@ import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
-import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
-import { textToSpeech } from "openclaw/plugin-sdk/speech-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
+import { getDiscordRuntime } from "../runtime.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
@@ -226,7 +225,7 @@ async function transcribeAudio(params: {
   agentId: string;
   filePath: string;
 }): Promise<string | undefined> {
-  const result = await transcribeAudioFile({
+  const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
     filePath: params.filePath,
     cfg: params.cfg,
     agentDir: resolveAgentDir(params.cfg, params.agentId),
@@ -835,7 +834,7 @@ export class DiscordVoiceManager {
 
             ffmpeg.stderr.on("data", (d: Buffer) => {
               const msg = d.toString().trim();
-              if (msg) logger.warn(`discord voice: ffmpeg stderr: ${msg.slice(0, 200)}`);
+              if (msg) {logger.warn(`discord voice: ffmpeg stderr: ${msg.slice(0, 200)}`);}
             });
 
             // Silence padding: 500ms of zeros at start and end (24kHz mono s16le = 48000 B/s)
@@ -863,7 +862,7 @@ export class DiscordVoiceManager {
             };
 
             pcmStream.on("data", (chunk: Buffer) => {
-              if (preBufferDone) return; // already piping
+              if (preBufferDone) {return;} // already piping
               buffered.push(chunk);
               bufferedBytes += chunk.length;
               if (bufferedBytes >= PRE_BUFFER_BYTES) {
@@ -882,7 +881,7 @@ export class DiscordVoiceManager {
 
             pcmStream.on("error", (err: Error) => {
               logger.warn(`discord voice: pcmStream error: ${err.message}`);
-              if (!preBufferDone) startPipeline();
+              if (!preBufferDone) {startPipeline();}
               ffmpeg.stdin.end();
             });
 
@@ -927,7 +926,7 @@ export class DiscordVoiceManager {
     }
     // --- END FORK ---
 
-    const ttsResult = await textToSpeech({
+    const ttsResult = await getDiscordRuntime().tts.textToSpeech({
       text: speakText,
       cfg: ttsCfg,
       channel: "discord",

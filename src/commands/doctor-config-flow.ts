@@ -1,7 +1,9 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
+import { findLegacyConfigIssues } from "../config/legacy.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
 import { note } from "../terminal/note.js";
 import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
@@ -25,10 +27,6 @@ import {
   collectMissingDefaultAccountBindingWarnings,
   collectMissingExplicitDefaultAccountWarnings,
 } from "./doctor/shared/default-account-warnings.js";
-import {
-  collectMutableAllowlistWarnings,
-  scanMutableAllowlistEntries,
-} from "./doctor/shared/mutable-allowlist.js";
 import { collectDoctorPreviewWarnings } from "./doctor/shared/preview-warnings.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
@@ -58,8 +56,34 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
-  if (legacyStep.issueLines.length > 0) {
-    note(legacyStep.issueLines.join("\n"), "Legacy config keys detected");
+  const pluginLegacyIssues = findLegacyConfigIssues(
+    snapshot.parsed,
+    snapshot.parsed,
+    listPluginDoctorLegacyConfigRules(),
+  );
+  const seenLegacyIssues = new Set(
+    snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
+  );
+  const pluginIssueLines = pluginLegacyIssues
+    .filter((issue) => {
+      const key = `${issue.path}:${issue.message}`;
+      if (seenLegacyIssues.has(key)) {
+        return false;
+      }
+      seenLegacyIssues.add(key);
+      return true;
+    })
+    .map((issue) => `- ${issue.path}: ${issue.message}`);
+  const legacyIssueLines = [...legacyStep.issueLines, ...pluginIssueLines];
+  if (
+    pluginIssueLines.length > 0 &&
+    !shouldRepair &&
+    !fixHints.includes(`Run "${doctorFixCommand}" to migrate legacy config keys.`)
+  ) {
+    fixHints = [...fixHints, `Run "${doctorFixCommand}" to migrate legacy config keys.`];
+  }
+  if (legacyIssueLines.length > 0) {
+    note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
   if (legacyStep.changeLines.length > 0) {
     note(legacyStep.changeLines.join("\n"), "Doctor changes");
@@ -165,13 +189,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   }
 
-  const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
-  const mutableAllowlistWarnings = [
-    ...(mutableAllowlistHits.length > 0
-      ? collectMutableAllowlistWarnings(mutableAllowlistHits)
-      : []),
-    ...(await collectChannelDoctorMutableAllowlistWarnings({ cfg: candidate })),
-  ];
+  const mutableAllowlistWarnings = await collectChannelDoctorMutableAllowlistWarnings({
+    cfg: candidate,
+  });
   if (mutableAllowlistWarnings.length > 0) {
     note(mutableAllowlistWarnings.join("\n"), "Doctor warnings");
   }

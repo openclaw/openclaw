@@ -31,6 +31,7 @@ export function getCliSessionBinding(
     return {
       sessionId: bindingSessionId,
       authProfileId: trimOptional(fromBindings?.authProfileId),
+      authEpoch: trimOptional(fromBindings?.authEpoch),
       extraSystemPromptHash: trimOptional(fromBindings?.extraSystemPromptHash),
       mcpConfigHash: trimOptional(fromBindings?.mcpConfigHash),
     };
@@ -76,6 +77,7 @@ export function setCliSessionBinding(
       ...(trimOptional(binding.authProfileId)
         ? { authProfileId: trimOptional(binding.authProfileId) }
         : {}),
+      ...(trimOptional(binding.authEpoch) ? { authEpoch: trimOptional(binding.authEpoch) } : {}),
       ...(trimOptional(binding.extraSystemPromptHash)
         ? { extraSystemPromptHash: trimOptional(binding.extraSystemPromptHash) }
         : {}),
@@ -116,20 +118,29 @@ export function clearAllCliSessions(entry: SessionEntry): void {
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;
+  authEpoch?: string;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
-}): { sessionId?: string; invalidatedReason?: "auth-profile" | "system-prompt" | "mcp" } {
+}): {
+  sessionId?: string;
+  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
+} {
   const binding = params.binding;
   const sessionId = trimOptional(binding?.sessionId);
   if (!sessionId) {
     return {};
   }
   const currentAuthProfileId = trimOptional(params.authProfileId);
+  const currentAuthEpoch = trimOptional(params.authEpoch);
   const currentExtraSystemPromptHash = trimOptional(params.extraSystemPromptHash);
   const currentMcpConfigHash = trimOptional(params.mcpConfigHash);
   const storedAuthProfileId = trimOptional(binding?.authProfileId);
   if (storedAuthProfileId !== currentAuthProfileId) {
     return { invalidatedReason: "auth-profile" };
+  }
+  const storedAuthEpoch = trimOptional(binding?.authEpoch);
+  if (storedAuthEpoch !== currentAuthEpoch) {
+    return { invalidatedReason: "auth-epoch" };
   }
   const storedExtraSystemPromptHash = trimOptional(binding?.extraSystemPromptHash);
   if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {

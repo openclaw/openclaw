@@ -19,7 +19,7 @@ async function runSetup(params: {
 }) {
   return await runSetupWizardConfigure({
     configure: zalouserConfigure,
-    cfg: params.cfg as OpenClawConfig | undefined,
+    cfg: params.cfg,
     prompter: params.prompter,
     options: params.options,
     forceAllowFrom: params.forceAllowFrom,
@@ -158,6 +158,23 @@ describe("zalouser setup wizard", () => {
         String(message).includes("No group allowlist entries added yet."),
       ),
     ).toBe(true);
+  });
+
+  it("writes canonical enabled entries for configured groups", async () => {
+    const prompter = createQuickstartPrompter({
+      groupAccess: true,
+      groupPolicy: "allowlist",
+      textByMessage: {
+        "Zalo groups allowlist (comma-separated)": "Family, Work",
+      },
+    });
+
+    const result = await runSetup({ prompter });
+
+    expect(result.cfg.channels?.zalouser?.groups).toEqual({
+      Family: { enabled: true, requireMention: true },
+      Work: { enabled: true, requireMention: true },
+    });
   });
 
   it("preserves non-quickstart forceAllowFrom behavior", async () => {

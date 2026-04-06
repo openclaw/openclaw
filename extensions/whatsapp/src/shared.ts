@@ -4,31 +4,71 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
-  formatWhatsAppConfigAllowFromEntries,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
   type ChannelSetupWizard,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import {
+  hasAnyWhatsAppAuth,
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
-  hasAnyWhatsAppAuth,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
-import { resolveWhatsAppGroupIntroHint } from "./group-intro.js";
-import {
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
-} from "./group-policy.js";
+import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
+import { applyWhatsAppSecurityConfigFixes } from "./security-fix.js";
+import { canonicalizeLegacySessionKey, isLegacyGroupSessionKey } from "./session-contract.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
+const WHATSAPP_UNSUPPORTED_SECRET_REF_SURFACE_PATTERNS = [
+  "channels.whatsapp.creds.json",
+  "channels.whatsapp.accounts.*.creds.json",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function collectUnsupportedSecretRefConfigCandidates(raw: unknown): Array<{
+  path: string;
+  value: unknown;
+}> {
+  if (!isRecord(raw) || !isRecord(raw.channels) || !isRecord(raw.channels.whatsapp)) {
+    return [];
+  }
+
+  const candidates: Array<{ path: string; value: unknown }> = [];
+  const whatsapp = raw.channels.whatsapp;
+  const creds = isRecord(whatsapp.creds) ? whatsapp.creds : null;
+  if (creds) {
+    candidates.push({
+      path: "channels.whatsapp.creds.json",
+      value: creds.json,
+    });
+  }
+
+  const accounts = isRecord(whatsapp.accounts) ? whatsapp.accounts : null;
+  if (!accounts) {
+    return candidates;
+  }
+  for (const [accountId, account] of Object.entries(accounts)) {
+    if (!isRecord(account) || !isRecord(account.creds)) {
+      continue;
+    }
+    candidates.push({
+      path: `channels.whatsapp.accounts.${accountId}.creds.json`,
+      value: account.creds.json,
+    });
+  }
+  return candidates;
+}
 
 export async function loadWhatsAppChannelRuntime() {
   return await import("./channel.runtime.js");
@@ -72,8 +112,7 @@ export function createWhatsAppSetupWizardProxy(
       configuredScore: 5,
       unconfiguredScore: 4,
     },
-    resolveShouldPromptAccountIds: (params) =>
-      (params.shouldPromptAccountIds || params.options?.promptWhatsAppAccountId) ?? false,
+    resolveShouldPromptAccountIds: (params) => Boolean(params.shouldPromptAccountIds),
     credentials: [],
     delegateFinalize: true,
     disable: (cfg) => ({
@@ -87,7 +126,7 @@ export function createWhatsAppSetupWizardProxy(
       },
     }),
     onAccountRecorded: (accountId, options) => {
-      options?.onWhatsAppAccountId?.(accountId);
+      options?.onAccountId?.(WHATSAPP_CHANNEL, accountId);
     },
   });
 }
@@ -156,6 +195,7 @@ export function createWhatsAppPluginBase(params: {
         }),
     },
     security: {
+      applyConfigFixes: applyWhatsAppSecurityConfigFixes,
       resolveDmPolicy: whatsappResolveDmPolicy,
       collectWarnings: collectWhatsAppSecurityWarnings,
     },
@@ -171,6 +211,17 @@ export function createWhatsAppPluginBase(params: {
     gatewayMethods: base.gatewayMethods!,
     configSchema: base.configSchema!,
     config: base.config!,
+    messaging: {
+      defaultMarkdownTableMode: "bullets",
+      resolveLegacyGroupSessionKey,
+      isLegacyGroupSessionKey,
+      canonicalizeLegacySessionKey: (params) =>
+        canonicalizeLegacySessionKey({ key: params.key, agentId: params.agentId }),
+    },
+    secrets: {
+      unsupportedSecretRefSurfacePatterns: WHATSAPP_UNSUPPORTED_SECRET_REF_SURFACE_PATTERNS,
+      collectUnsupportedSecretRefConfigCandidates,
+    },
     security: base.security!,
     groups: base.groups!,
   } satisfies Pick<
@@ -183,6 +234,8 @@ export function createWhatsAppPluginBase(params: {
     | "gatewayMethods"
     | "configSchema"
     | "config"
+    | "messaging"
+    | "secrets"
     | "security"
     | "doctor"
     | "setup"

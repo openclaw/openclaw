@@ -63,7 +63,6 @@ export function isSenderAllowed(
 
 type GoogleChatGroupEntry = {
   requireMention?: boolean;
-  allow?: boolean;
   enabled?: boolean;
   users?: Array<string | number>;
   systemPrompt?: string;
@@ -130,7 +129,7 @@ function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, 
   }
   const key = deprecated
     .map((v) => v.toLowerCase())
-    .sort()
+    .toSorted()
     .join(",");
   if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
     return;
@@ -153,7 +152,7 @@ function warnMutableGroupKeysConfigured(
   }
   const warningKey = mutableKeys
     .map((key) => key.toLowerCase())
-    .sort()
+    .toSorted()
     .join(",");
   if (warnedMutableGroupKeys.has(warningKey)) {
     return;
@@ -242,7 +241,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       groupPolicy,
       routeAllowlistConfigured: groupAllowlistConfigured,
       routeMatched: Boolean(groupEntry),
-      routeEnabled: groupEntry?.enabled !== false && groupEntry?.allow !== false,
+      routeEnabled: groupEntry?.enabled !== false,
     });
     if (!routeAccess.allowed) {
       if (routeAccess.reason === "disabled") {

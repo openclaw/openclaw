@@ -53,8 +53,8 @@ export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
         firecrawlEntry.config &&
         typeof firecrawlEntry.config === "object" &&
         !Array.isArray(firecrawlEntry.config)
-          ? (firecrawlEntry.config as Record<string, unknown>)
-          : ((firecrawlEntry.config = {}), firecrawlEntry.config as Record<string, unknown>);
+          ? firecrawlEntry.config
+          : ((firecrawlEntry.config = {}), firecrawlEntry.config);
       const webFetch =
         pluginConfig.webFetch &&
         typeof pluginConfig.webFetch === "object" &&

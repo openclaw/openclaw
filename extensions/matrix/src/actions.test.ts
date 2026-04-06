@@ -59,7 +59,7 @@ describe("matrixMessageActions", () => {
     expect(describeMessageTool).toBeTypeOf("function");
     expect(supportsAction).toBeTypeOf("function");
 
-    const discovery = describeMessageTool!({
+    const discovery = describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
     } as never);
     if (!discovery) {
@@ -76,7 +76,7 @@ describe("matrixMessageActions", () => {
     const describeMessageTool = matrixMessageActions.describeMessageTool;
     const supportsAction = matrixMessageActions.supportsAction ?? (() => false);
 
-    const discovery = describeMessageTool!({
+    const discovery = describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
     } as never);
     if (!discovery) {
@@ -97,7 +97,7 @@ describe("matrixMessageActions", () => {
   });
 
   it("hides gated actions when the default Matrix account disables them", () => {
-    const discovery = matrixMessageActions.describeMessageTool!({
+    const discovery = matrixMessageActions.describeMessageTool({
       cfg: {
         channels: {
           matrix: {
@@ -141,7 +141,7 @@ describe("matrixMessageActions", () => {
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
-    const discovery = matrixMessageActions.describeMessageTool!({
+    const discovery = matrixMessageActions.describeMessageTool({
       cfg: {
         channels: {
           matrix: {

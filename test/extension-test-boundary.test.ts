@@ -13,8 +13,13 @@ const allowedNonExtensionTests = new Set<string>([
   "src/agents/pi-embedded-runner-extraparams.test.ts",
   "src/channels/plugins/contracts/dm-policy.contract.test.ts",
   "src/channels/plugins/contracts/group-policy.contract.test.ts",
+  "src/commands/channels.surfaces-signal-runtime-errors-channels-status-output.test.ts",
+  "src/commands/onboard-channels.e2e.test.ts",
+  "src/gateway/hooks.test.ts",
+  "src/infra/outbound/deliver.test.ts",
   "src/plugins/interactive.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
+  "src/plugin-sdk/telegram-command-config.test.ts",
 ]);
 
 function walk(dir: string, entries: string[] = []): string[] {
@@ -142,7 +147,6 @@ describe("non-extension test boundaries", () => {
       "../plugin-sdk/synthetic.js",
       "../plugin-sdk/xai.js",
       "../plugin-sdk/xiaomi.js",
-      "../plugin-sdk/zai.js",
     ]);
     const file = "src/commands/onboard-auth.test.ts";
     const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
@@ -156,7 +160,6 @@ describe("non-extension test boundaries", () => {
   it("keeps bundled plugin public-surface imports on an explicit core allowlist", () => {
     const allowed = new Set([
       "src/auto-reply/reply.triggers.trigger-handling.test-harness.ts",
-      "src/channels/plugins/contracts/slack-outbound-harness.ts",
       "src/commands/channel-test-registry.ts",
       "src/plugin-sdk/testing.ts",
     ]);

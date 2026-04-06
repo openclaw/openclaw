@@ -241,11 +241,11 @@ describe("whatsapp setup wizard", () => {
 
     expect(status.configured).toBe(true);
     expect(status.statusLines).toEqual(["WhatsApp (work): linked"]);
-    expect(hoisted.detectWhatsAppLinked).toHaveBeenCalledWith(expect.any(Object), "work");
-    expect(hoisted.detectWhatsAppLinked).not.toHaveBeenCalledWith(
+    expect(hoisted.detectWhatsAppLinked).toHaveBeenCalledWith(
       expect.any(Object),
       DEFAULT_ACCOUNT_ID,
     );
+    expect(hoisted.detectWhatsAppLinked).toHaveBeenCalledWith(expect.any(Object), "work");
   });
 
   it("uses configured defaultAccount for omitted-account finalize writes", async () => {

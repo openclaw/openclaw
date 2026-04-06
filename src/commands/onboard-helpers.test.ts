@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeGatewayTokenInput,
   openUrl,
+  probeGatewayReachable,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
   validateGatewayPasswordInput,
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     killed: false,
   })),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
+  probeGateway: vi.fn(),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -30,6 +32,10 @@ vi.mock("../process/exec.js", () => ({
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
+}));
+
+vi.mock("../gateway/probe.js", () => ({
+  probeGateway: mocks.probeGateway,
 }));
 
 afterEach(() => {
@@ -71,6 +77,62 @@ describe("resolveBrowserOpenCommand", () => {
     expect(resolved.argv).toEqual(["cmd", "/c", "start", ""]);
     expect(resolved.quoteUrl).toBe(true);
     platformSpy.mockRestore();
+  });
+});
+
+describe("probeGatewayReachable", () => {
+  it("uses a hello-only probe for onboarding reachability", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: true,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 42,
+      error: null,
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await probeGatewayReachable({
+      url: "ws://127.0.0.1:18789",
+      token: "tok_test",
+      timeoutMs: 2500,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mocks.probeGateway).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 2500,
+      auth: {
+        token: "tok_test",
+        password: undefined,
+      },
+      detailLevel: "none",
+    });
+  });
+
+  it("returns the probe error detail on failure", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "connect failed: timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await probeGatewayReachable({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: "connect failed: timeout",
+    });
   });
 });
 

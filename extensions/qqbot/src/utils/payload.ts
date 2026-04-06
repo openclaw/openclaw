@@ -125,7 +125,7 @@ export function decodeCronPayload(message: string): {
     if (payload.type !== "cron_reminder") {
       return {
         isCronPayload: true,
-        error: `Expected type cron_reminder but got ${payload.type}`,
+        error: `Expected type cron_reminder but got ${String(payload.type)}`,
       };
     }
 

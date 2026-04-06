@@ -150,7 +150,7 @@ export class MatrixVerificationManager {
       return;
     }
 
-    const sortedByAge = Array.from(this.verificationSessions.entries()).sort(
+    const sortedByAge = Array.from(this.verificationSessions.entries()).toSorted(
       (a, b) => a[1].updatedAtMs - b[1].updatedAtMs,
     );
     const overflow = this.verificationSessions.size - MAX_TRACKED_VERIFICATION_SESSIONS;
@@ -527,7 +527,7 @@ export class MatrixVerificationManager {
     const summaries = Array.from(this.verificationSessions.values()).map((session) =>
       this.buildVerificationSummary(session),
     );
-    return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return summaries.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async requestVerification(

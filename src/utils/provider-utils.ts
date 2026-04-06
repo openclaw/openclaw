@@ -3,15 +3,7 @@ import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provide
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 
 const BUILTIN_REASONING_OUTPUT_MODES = {
-  anthropic: "native",
-  google: "tagged",
-  "google-gemini-cli": "tagged",
   "google-generative-ai": "tagged",
-  minimax: "native",
-  "minimax-cn": "native",
-  ollama: "native",
-  openai: "native",
-  openrouter: "native",
 } as const;
 
 /**
@@ -33,12 +25,6 @@ export function resolveReasoningOutputMode(params: {
   }
 
   const normalized = provider.toLowerCase();
-  const builtInMode =
-    BUILTIN_REASONING_OUTPUT_MODES[normalized as keyof typeof BUILTIN_REASONING_OUTPUT_MODES];
-  if (builtInMode) {
-    return builtInMode;
-  }
-
   const pluginMode = resolveProviderReasoningOutputModeWithPlugin({
     provider,
     config: params.config,
@@ -58,14 +44,13 @@ export function resolveReasoningOutputMode(params: {
     return pluginMode;
   }
 
-  // Check for exact matches or known prefixes/substrings for reasoning providers.
-  // Note: Ollama is intentionally excluded - its OpenAI-compatible endpoint
-  // handles reasoning natively via the `reasoning` field in streaming chunks,
-  // so tag-based enforcement is unnecessary and causes all output to be
-  // discarded as "(no output)" (#2279).
-  // Note: MiniMax is also intentionally excluded. In production it does not
-  // reliably wrap user-visible output in <final> tags, so forcing tag
-  // enforcement suppresses normal assistant replies.
+  const builtInMode =
+    BUILTIN_REASONING_OUTPUT_MODES[normalized as keyof typeof BUILTIN_REASONING_OUTPUT_MODES];
+  if (builtInMode) {
+    return builtInMode;
+  }
+
+  // Keep a tiny built-in fallback for non-plugin Google surfaces.
   return "native";
 }
 

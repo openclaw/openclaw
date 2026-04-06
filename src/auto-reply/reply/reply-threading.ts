@@ -7,7 +7,8 @@ import { normalizeChannelId as normalizeBuiltInChannelId } from "../../channels/
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OriginatingChannelType } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
+import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
+import { isSingleUseReplyToMode } from "./reply-reference.js";
 
 type ReplyToModeChannelConfig = {
   replyToMode?: ReplyToMode;
@@ -124,7 +125,7 @@ export function createReplyToModeFilter(
     if (mode === "all") {
       return payload;
     }
-    if (hasThreaded) {
+    if (isSingleUseReplyToMode(mode) && hasThreaded) {
       // Compaction notices are transient status messages that should always
       // appear in-thread, even after the first assistant block has already
       // consumed the "first" slot.  Let them keep their replyToId.
@@ -135,12 +136,38 @@ export function createReplyToModeFilter(
     }
     // Compaction notices are transient status messages — they should be
     // threaded (so they appear in-context), but they must not consume the
-    // "first" slot of the replyToMode=first filter.  Skip advancing
+    // "first" slot of the replyToMode=first|batched filter.  Skip advancing
     // hasThreaded so the real assistant reply still gets replyToId.
-    if (!payload.isCompactionNotice) {
+    if (isSingleUseReplyToMode(mode) && !payload.isCompactionNotice) {
       hasThreaded = true;
     }
     return payload;
+  };
+}
+
+export function resolveImplicitCurrentMessageReplyAllowance(
+  mode: ReplyToMode | undefined,
+  policy?: ReplyThreadingPolicy,
+): boolean {
+  const implicitCurrentMessage = policy?.implicitCurrentMessage ?? "default";
+  if (implicitCurrentMessage === "allow") {
+    return true;
+  }
+  if (implicitCurrentMessage === "deny") {
+    return false;
+  }
+  return mode !== "batched";
+}
+
+export function resolveBatchedReplyThreadingPolicy(
+  mode: ReplyToMode,
+  isBatched: boolean,
+): ReplyThreadingPolicy | undefined {
+  if (mode !== "batched") {
+    return undefined;
+  }
+  return {
+    implicitCurrentMessage: isBatched ? "allow" : "deny",
   };
 }
 

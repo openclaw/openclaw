@@ -29,15 +29,15 @@ async function settleTimers<T>(promise: Promise<T>): Promise<T> {
 
 function mockResponse(statusCode: number, body: string) {
   const httpsRequest = vi.mocked(https.request);
-  httpsRequest.mockImplementation((_url: any, _opts: any, callback: any) => {
-    const res = new EventEmitter() as any;
+  httpsRequest.mockImplementation((_url: unknown, _opts: unknown, callback: unknown) => {
+    const res = new EventEmitter() as unknown;
     res.statusCode = statusCode;
     process.nextTick(() => {
       callback(res);
       res.emit("data", Buffer.from(body));
       res.emit("end");
     });
-    const req = new EventEmitter() as any;
+    const req = new EventEmitter() as unknown;
     req.write = vi.fn();
     req.end = vi.fn();
     req.destroy = vi.fn();
@@ -94,6 +94,20 @@ describe("sendMessage", () => {
     const callArgs = httpsRequest.mock.calls[0];
     expect(callArgs[0]).toBe("https://nas.example.com/incoming");
   });
+
+  it("verifies TLS by default", async () => {
+    mockSuccessResponse();
+    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+
+  it("only disables TLS verification when explicitly requested", async () => {
+    mockSuccessResponse();
+    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: false });
+  });
 });
 
 describe("sendFileUrl", () => {
@@ -114,6 +128,15 @@ describe("sendFileUrl", () => {
     );
     expect(result).toBe(false);
   });
+
+  it("verifies TLS by default", async () => {
+    mockSuccessResponse();
+    await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+    );
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+  });
 });
 
 // Helper to mock the user_list API response for fetchChatUsers / resolveLegacyWebhookNameToChatUserId
@@ -133,16 +156,16 @@ function mockUserListResponseImpl(
   users: Array<{ user_id: number; username: string; nickname: string }>,
   once: boolean,
 ) {
-  const httpsGet = vi.mocked((https as any).get);
-  const impl = (_url: any, _opts: any, callback: any) => {
-    const res = new EventEmitter() as any;
+  const httpsGet = vi.mocked((https as unknown).get);
+  const impl = (_url: unknown, _opts: unknown, callback: unknown) => {
+    const res = new EventEmitter() as unknown;
     res.statusCode = 200;
     process.nextTick(() => {
       callback(res);
       res.emit("data", Buffer.from(JSON.stringify({ success: true, data: { users } })));
       res.emit("end");
     });
-    const req = new EventEmitter() as any;
+    const req = new EventEmitter() as unknown;
     req.destroy = vi.fn();
     return req;
   };
@@ -228,7 +251,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       incomingUrl: baseUrl,
       mutableWebhookUsername: "anyone",
     });
-    const httpsGet = vi.mocked((https as any).get);
+    const httpsGet = vi.mocked((https as unknown).get);
     expect(httpsGet).toHaveBeenCalledWith(
       expect.stringContaining("method=user_list"),
       expect.any(Object),
@@ -251,7 +274,7 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
 
     expect(result1).toBe(4);
     expect(result2).toBe(9);
-    const httpsGet = vi.mocked((https as any).get);
+    const httpsGet = vi.mocked((https as unknown).get);
     expect(httpsGet).toHaveBeenCalledTimes(2);
   });
 });
@@ -260,9 +283,9 @@ describe("fetchChatUsers", () => {
   installFakeTimerHarness();
 
   it("filters malformed user entries while keeping valid ones", async () => {
-    const httpsGet = vi.mocked((https as any).get);
-    httpsGet.mockImplementation((_url: any, _opts: any, callback: any) => {
-      const res = new EventEmitter() as any;
+    const httpsGet = vi.mocked((https as unknown).get);
+    httpsGet.mockImplementation((_url: unknown, _opts: unknown, callback: unknown) => {
+      const res = new EventEmitter() as unknown;
       res.statusCode = 200;
       process.nextTick(() => {
         callback(res);
@@ -282,7 +305,7 @@ describe("fetchChatUsers", () => {
         );
         res.emit("end");
       });
-      const req = new EventEmitter() as any;
+      const req = new EventEmitter() as unknown;
       req.destroy = vi.fn();
       return req;
     });
@@ -292,5 +315,16 @@ describe("fetchChatUsers", () => {
     );
 
     expect(users).toEqual([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+  });
+
+  it("verifies TLS by default for user_list lookups", async () => {
+    mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+    const freshUrl =
+      "https://fresh-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22fresh%22";
+
+    await fetchChatUsers(freshUrl);
+
+    const httpsGet = vi.mocked((https as unknown).get);
+    expect(httpsGet.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
   });
 });

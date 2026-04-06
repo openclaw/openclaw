@@ -101,6 +101,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
+    transformReplyPayload: plugin?.messaging?.transformReplyPayload
+      ? (nextPayload) =>
+          plugin.messaging?.transformReplyPayload?.({
+            payload: nextPayload,
+            cfg,
+            accountId,
+          }) ?? nextPayload
+      : undefined,
   });
   if (!normalized) {
     return { ok: true };

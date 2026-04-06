@@ -3,6 +3,7 @@ import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 type TestPayload = {
   messages: Array<{ role: string; content: unknown }>;
@@ -101,5 +102,126 @@ describe("anthropic payload policy", () => {
       role: "user",
       content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
     });
+  });
+
+  it("splits cached stable system content from uncached dynamic content", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      cacheRetention: "long",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [
+        {
+          type: "text",
+          text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic lab suffix`,
+        },
+      ],
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.system).toEqual([
+      {
+        type: "text",
+        text: "Stable prefix",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+      {
+        type: "text",
+        text: "Dynamic lab suffix",
+      },
+    ]);
+  });
+
+  it("applies 1h TTL for Vertex AI endpoints with long cache retention", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic-vertex",
+      api: "anthropic-messages",
+      baseUrl: "https://us-east5-aiplatform.googleapis.com",
+      cacheRetention: "long",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [
+        { type: "text", text: "Follow policy." },
+        { type: "text", text: "Use tools carefully." },
+      ],
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.system).toEqual([
+      {
+        type: "text",
+        text: "Follow policy.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+      {
+        type: "text",
+        text: "Use tools carefully.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ]);
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
+    });
+  });
+
+  it("applies 5m ephemeral cache for Vertex AI endpoints with short cache retention", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic-vertex",
+      api: "anthropic-messages",
+      baseUrl: "https://us-east5-aiplatform.googleapis.com",
+      cacheRetention: "short",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [{ type: "text", text: "Follow policy." }],
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.system).toEqual([
+      {
+        type: "text",
+        text: "Follow policy.",
+        cache_control: { type: "ephemeral" },
+      },
+    ]);
+  });
+
+  it("strips the boundary even when cache retention is disabled", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      cacheRetention: "none",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [
+        {
+          type: "text",
+          text: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic lab suffix`,
+        },
+      ],
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.system).toEqual([
+      {
+        type: "text",
+        text: "Stable prefix\nDynamic lab suffix",
+      },
+    ]);
   });
 });

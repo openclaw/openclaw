@@ -177,7 +177,6 @@ function createAllowedGuildEntries(requireMention = false) {
       id: GUILD_ID,
       channels: {
         [CHANNEL_ID]: {
-          allow: true,
           enabled: true,
           requireMention,
         },
@@ -188,12 +187,11 @@ function createAllowedGuildEntries(requireMention = false) {
 
 function createHydratedGuildClient(restPayload: Record<string, unknown>) {
   const restGet = vi.fn(async () => restPayload);
-  const client = {
-    ...createGuildTextClient(CHANNEL_ID),
+  const client = Object.assign(createGuildTextClient(CHANNEL_ID), {
     rest: {
       get: restGet,
     },
-  } as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
+  }) as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
   return { client, restGet };
 }
 
@@ -250,7 +248,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
-                allow: true,
                 enabled: false,
               },
             },
@@ -272,7 +269,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
-                allow: true,
                 enabled: true,
                 requireMention: false,
               },

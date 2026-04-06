@@ -1,17 +1,25 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type {
+  ImageDescriptionRequest,
+  ImagesDescriptionRequest,
+  MediaUnderstandingProvider,
+} from "../../plugin-sdk/media-understanding.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { minimaxUnderstandImage } from "../minimax-vlm.js";
+import { createOpenClawCodingTools } from "../pi-tools.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
+import { makeZeroUsageSnapshot } from "../usage.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 
-type PiToolsModule = typeof import("../pi-tools.js");
-type CreateOpenClawCodingToolsArgs = Parameters<PiToolsModule["createOpenClawCodingTools"]>[0];
+type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -33,10 +41,39 @@ const piToolsHarness = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../bash-tools.js", () => ({
-  createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
-  createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
-}));
+const imageProviderHarness = vi.hoisted(() => {
+  let providers = new Map<string, MediaUnderstandingProvider>();
+  return {
+    setProviders(next: MediaUnderstandingProvider[]) {
+      providers = new Map(next.map((provider) => [provider.id.toLowerCase(), provider]));
+    },
+    reset() {
+      providers = new Map();
+    },
+    buildProviderRegistry(overrides?: Record<string, MediaUnderstandingProvider>) {
+      const registry = new Map(providers);
+      for (const [id, provider] of Object.entries(overrides ?? {})) {
+        registry.set(id.toLowerCase(), provider);
+      }
+      return registry;
+    },
+    getMediaUnderstandingProvider(
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ): MediaUnderstandingProvider | undefined {
+      return registry.get(id.toLowerCase()) ?? providers.get(id.toLowerCase());
+    },
+  };
+});
+
+vi.mock("../bash-tools.js", async () => {
+  const actual = await vi.importActual<typeof import("../bash-tools.js")>("../bash-tools.js");
+  return {
+    ...actual,
+    createExecTool: vi.fn(() => piToolsHarness.createStubTool("exec")),
+    createProcessTool: vi.fn(() => piToolsHarness.createStubTool("process")),
+  };
+});
 
 vi.mock("../channel-tools.js", () => ({
   copyChannelAgentToolMeta: vi.fn((_from, to) => to),
@@ -53,6 +90,50 @@ vi.mock("../pi-tools.before-tool-call.js", () => ({
 
 vi.mock("../pi-tools.abort.js", () => ({
   wrapToolWithAbortSignal: vi.fn((tool) => tool),
+}));
+
+vi.mock("../auth-profiles.js", () => ({
+  ensureAuthProfileStore: (agentDir?: string) => {
+    if (!agentDir) {
+      return { version: 1, profiles: {} };
+    }
+    const pathname = path.join(agentDir, "auth-profiles.json");
+    try {
+      return JSON.parse(fsSync.readFileSync(pathname, "utf8")) as {
+        version?: number;
+        profiles?: Record<string, { provider?: string }>;
+      };
+    } catch {
+      return { version: 1, profiles: {} };
+    }
+  },
+  listProfilesForProvider: (
+    store: { profiles?: Record<string, { provider?: string }> },
+    provider: string,
+  ) => Object.values(store.profiles ?? {}).filter((profile) => profile?.provider === provider),
+}));
+
+vi.mock("../model-auth.js", () => ({
+  resolveEnvApiKey: (provider: string) => {
+    const envVarByProvider: Record<string, string[]> = {
+      anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+      minimax: ["MINIMAX_API_KEY", "MINIMAX_OAUTH_TOKEN"],
+      "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
+      moonshot: ["MOONSHOT_API_KEY"],
+      openai: ["OPENAI_API_KEY"],
+      openrouter: ["OPENROUTER_API_KEY"],
+      zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+    };
+    const envVar = (envVarByProvider[provider] ?? []).find((key) => {
+      const value = process.env[key];
+      return typeof value === "string" && value.length > 0;
+    });
+    return {
+      apiKey: envVar ? process.env[envVar] : undefined,
+      source: envVar ? "env" : undefined,
+      envVar,
+    };
+  },
 }));
 
 vi.mock("../openclaw-tools.js", async () => {
@@ -88,8 +169,27 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 }
 
 async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
-  vi.resetModules();
-  const { createOpenClawCodingTools } = await import("../pi-tools.js");
+  const defaultImageModels = new Map<string, string>([
+    ["anthropic", "claude-opus-4-6"],
+    ["minimax", "MiniMax-VL-01"],
+    ["minimax-portal", "MiniMax-VL-01"],
+    ["openai", "gpt-5.4-mini"],
+    ["zai", "glm-4.6v"],
+  ]);
+  __testing.setProviderDepsForTest({
+    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+      imageProviderHarness.buildProviderRegistry(overrides),
+    getMediaUnderstandingProvider: (
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    describeImageWithModel: describeGenericImageWithModel,
+    describeImagesWithModel: describeGenericImagesWithModel,
+    resolveAutoMediaKeyProviders: ({ capability }) =>
+      capability === "image" ? ["openai", "anthropic"] : [],
+    resolveDefaultMediaModel: ({ providerId, capability }) =>
+      capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+  });
   return createOpenClawCodingTools(options);
 }
 
@@ -233,8 +333,162 @@ function createMinimaxImageConfig(): OpenClawConfig {
 function createDefaultImageFallbackExpectation(primary: string) {
   return {
     primary,
-    fallbacks: ["openai/gpt-5-mini", "anthropic/claude-opus-4-5"],
+    fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
   };
+}
+
+const minimaxProvider = {
+  id: "minimax",
+  capabilities: ["image"],
+  describeImage: async (params: ImageDescriptionRequest) => ({
+    text: await minimaxUnderstandImage({
+      apiKey: process.env.MINIMAX_API_KEY ?? "",
+      prompt: params.prompt ?? "Describe the image.",
+      imageDataUrl: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer.toString("base64")}`,
+    }),
+    model: "MiniMax-VL-01",
+  }),
+  describeImages: async (params: ImagesDescriptionRequest) => {
+    const parts: string[] = [];
+    for (const [index, image] of params.images.entries()) {
+      const text = await minimaxUnderstandImage({
+        apiKey: process.env.MINIMAX_API_KEY ?? "",
+        prompt:
+          params.images.length > 1
+            ? `${params.prompt ?? "Describe the image."}\n\nDescribe image ${index + 1} of ${params.images.length} independently.`
+            : (params.prompt ?? "Describe the image."),
+        imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
+      });
+      parts.push(params.images.length > 1 ? `Image ${index + 1}:\n${text.trim()}` : text.trim());
+    }
+    return {
+      text: parts.join("\n\n").trim(),
+      model: "MiniMax-VL-01",
+    };
+  },
+} satisfies MediaUnderstandingProvider;
+
+async function describeMoonshotImage(
+  params: ImageDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const baseUrl =
+    params.cfg.models?.providers?.moonshot?.baseUrl?.trim() ?? "https://api.moonshot.ai/v1";
+  await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env.MOONSHOT_API_KEY ?? ""}`,
+    },
+    body: JSON.stringify({
+      model: params.model,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: params.prompt ?? "Describe the image." },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:${params.mime ?? "image/jpeg"};base64,${params.buffer.toString("base64")}`,
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  });
+  return { text: "ok moonshot", model: params.model };
+}
+
+async function describeMoonshotImages(
+  params: ImagesDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const [first] = params.images;
+  if (!first) {
+    return { text: "", model: params.model };
+  }
+  return await describeMoonshotImage({
+    ...params,
+    buffer: first.buffer,
+    fileName: first.fileName,
+    mime: first.mime,
+  });
+}
+
+async function readMockResponseText(response: Response): Promise<string> {
+  const contentType =
+    response.headers instanceof Headers ? (response.headers.get("content-type") ?? "") : "";
+  if (contentType.includes("application/json") || typeof response.text !== "function") {
+    const payload = (await response.json()) as { content?: string };
+    return payload.content ?? "";
+  }
+  const raw = await response.text();
+  const match = raw.match(/"content":"([^"]*)"/);
+  return match?.[1] ?? "";
+}
+
+async function describeGenericImageWithModel(
+  params: ImageDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const response = await global.fetch("https://example.invalid/media-image", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      mime: params.mime,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
+}
+
+async function describeGenericImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const response = await global.fetch("https://example.invalid/media-images", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      imageCount: params.images.length,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
+}
+
+const moonshotProvider = {
+  id: "moonshot",
+  capabilities: ["image"],
+  describeImage: describeMoonshotImage,
+  describeImages: describeMoonshotImages,
+} satisfies MediaUnderstandingProvider;
+
+function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
+  imageProviderHarness.setProviders(providers);
+  const defaultImageModels = new Map<string, string>([
+    ["anthropic", "claude-opus-4-6"],
+    ["minimax", "MiniMax-VL-01"],
+    ["minimax-portal", "MiniMax-VL-01"],
+    ["openai", "gpt-5.4-mini"],
+    ["zai", "glm-4.6v"],
+  ]);
+  __testing.setProviderDepsForTest({
+    buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+      imageProviderHarness.buildProviderRegistry(overrides),
+    getMediaUnderstandingProvider: (
+      id: string,
+      registry: Map<string, MediaUnderstandingProvider>,
+    ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    describeImageWithModel: describeGenericImageWithModel,
+    describeImagesWithModel: describeGenericImagesWithModel,
+    resolveAutoMediaKeyProviders: ({ capability }) =>
+      capability === "image" ? ["openai", "anthropic"] : [],
+    resolveDefaultMediaModel: ({ providerId, capability }) =>
+      capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+  });
 }
 
 function makeModelDefinition(id: string, input: Array<"text" | "image">): ModelDefinitionConfig {
@@ -261,10 +515,7 @@ async function expectImageToolExecOk(
       image,
     }),
   ).resolves.toMatchObject({
-    content: expect.arrayContaining([
-      { type: "text", text: "Describe the image." },
-      expect.objectContaining({ type: "image" }),
-    ]),
+    content: [{ type: "text", text: "ok" }],
   });
 }
 
@@ -331,7 +582,12 @@ describe("image tool implicit imageModel config", () => {
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_OAUTH_TOKEN",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
     "MINIMAX_API_KEY",
+    "MODELSTUDIO_API_KEY",
+    "QWEN_API_KEY",
+    "DASHSCOPE_API_KEY",
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
     // Avoid implicit Copilot provider discovery hitting the network in tests.
@@ -340,10 +596,19 @@ describe("image tool implicit imageModel config", () => {
     "GITHUB_TOKEN",
   ]);
 
+  beforeEach(() => {
+    installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider);
+  });
+
+  afterEach(() => {
+    imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
+  });
+
   it("stays disabled without auth when no pairing is possible", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
       expect(createImageTool({ config: cfg, agentDir })).toBeNull();
@@ -353,14 +618,16 @@ describe("image tool implicit imageModel config", () => {
   it("pairs minimax primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+      vi.stubEnv("MINIMAX_OAUTH_TOKEN", "minimax-oauth-test");
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       const cfg: OpenClawConfig = {
         agents: { defaults: { model: { primary: "minimax/MiniMax-M2.7" } } },
       };
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
-        createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
-      );
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
+        fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
+      });
       expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
     });
   });
@@ -474,12 +741,12 @@ describe("image tool implicit imageModel config", () => {
         agents: {
           defaults: {
             model: { primary: "minimax/MiniMax-M2.7" },
-            imageModel: { primary: "openai/gpt-5-mini" },
+            imageModel: { primary: "openai/gpt-5.4-mini" },
           },
         },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5-mini",
+        primary: "openai/gpt-5.4-mini",
       });
     });
   });
@@ -494,7 +761,7 @@ describe("image tool implicit imageModel config", () => {
         agents: {
           defaults: {
             model: { primary: "acme/vision-1" },
-            imageModel: { primary: "openai/gpt-5-mini" },
+            imageModel: { primary: "openai/gpt-5.4-mini" },
           },
         },
         models: {
@@ -508,7 +775,7 @@ describe("image tool implicit imageModel config", () => {
       };
       // Tool should still be available for explicit image analysis requests
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5-mini",
+        primary: "openai/gpt-5.4-mini",
       });
       const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
       expect(tool).not.toBeNull();
@@ -546,12 +813,39 @@ describe("image tool implicit imageModel config", () => {
         image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
 
-      expect(fetch).not.toHaveBeenCalled();
-      expect(result.content).toEqual(
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url, init] = fetch.mock.calls[0] as [unknown, { body?: unknown }];
+      expect(String(url)).toBe("https://api.moonshot.ai/v1/chat/completions");
+      expect(typeof init?.body).toBe("string");
+      const bodyRaw = typeof init?.body === "string" ? init.body : "";
+      const payload = JSON.parse(bodyRaw) as {
+        messages?: Array<{
+          role?: string;
+          content?: Array<{
+            type?: string;
+            text?: string;
+            image_url?: { url?: string };
+          }>;
+        }>;
+      };
+
+      expect(payload.messages?.map((message) => message.role)).toEqual(["user"]);
+      const userContent = payload.messages?.[0]?.content ?? [];
+      expect(userContent).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ type: "text", text: "Describe this image in one word." }),
-          expect.objectContaining({ type: "image" }),
+          expect.objectContaining({
+            type: "text",
+            text: "Describe this image in one word.",
+          }),
+          expect.objectContaining({ type: "image_url" }),
         ]),
+      );
+      expect(userContent.find((block) => block.type === "image_url")?.image_url?.url).toContain(
+        "data:image/png;base64,",
+      );
+      expect(bodyRaw).not.toContain('"role":"developer"');
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok moonshot" })]),
       );
     });
   });
@@ -584,12 +878,9 @@ describe("image tool implicit imageModel config", () => {
         image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
 
-      expect(fetch).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(1);
       expect(result.content).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "text", text: "Describe the image." }),
-          expect.objectContaining({ type: "image" }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok openrouter" })]),
       );
     });
   });
@@ -625,21 +916,16 @@ describe("image tool implicit imageModel config", () => {
         ],
       });
 
-      expect(fetch).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(1);
       expect(result.content).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "text", text: "Describe the images." }),
-          expect.objectContaining({ type: "image" }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok multi" })]),
       );
-      expect(
-        result.content?.filter((block) => block.type === "image").length ?? 0,
-      ).toBeGreaterThanOrEqual(1);
     });
   });
 
   it("falls back to the generic image runtime when minimax-portal has no media provider registration", async () => {
     await withTempAgentDir(async (agentDir) => {
+      installImageUnderstandingProviderStubs();
       await writeAuthProfiles(agentDir, {
         version: 1,
         profiles: {
@@ -664,7 +950,7 @@ describe("image tool implicit imageModel config", () => {
 
       const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
       await expectImageToolExecOk(tool, `data:image/png;base64,${ONE_PIXEL_PNG_B64}`);
-      expect(fetch).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -708,20 +994,22 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows local image paths outside default media roots when workspaceOnly is off", async () => {
+  it("still rejects temp workspace paths outside allowed local roots when workspaceOnly is off", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const cfg = createMinimaxImageConfig();
 
         const withoutWorkspace = createRequiredImageTool({ config: cfg, agentDir });
-        await expectImageToolExecOk(withoutWorkspace, imagePath);
+        await expect(
+          withoutWorkspace.execute("t1", { prompt: "Describe.", image: imagePath }),
+        ).rejects.toThrow(/not under an allowed directory/i);
 
         const withWorkspace = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
 
         await expectImageToolExecOk(withWorkspace, imagePath);
 
-        expect(fetch).not.toHaveBeenCalled();
+        expect(fetch).toHaveBeenCalledTimes(1);
       });
     });
   });
@@ -741,7 +1029,7 @@ describe("image tool implicit imageModel config", () => {
 
         // File inside workspace is allowed.
         await expectImageToolExecOk(tool, imagePath);
-        expect(fetch).not.toHaveBeenCalled();
+        expect(fetch).toHaveBeenCalledTimes(1);
 
         // File outside workspace is rejected even without sandbox.
         const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-outside-"));
@@ -758,7 +1046,7 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows non-workspace local image paths when workspaceOnly is disabled", async () => {
+  it("still rejects non-workspace local image paths when workspaceOnly is disabled", async () => {
     const fetch = stubMinimaxOkFetch();
     await withTempAgentDir(async (agentDir) => {
       const cfg = createMinimaxImageConfig();
@@ -772,7 +1060,9 @@ describe("image tool implicit imageModel config", () => {
           fsPolicy: { workspaceOnly: false },
         });
 
-        await expectImageToolExecOk(tool, outsideImage);
+        await expect(
+          tool.execute("t1", { prompt: "Describe.", image: outsideImage }),
+        ).rejects.toThrow(/not under an allowed directory/i);
         expect(fetch).not.toHaveBeenCalled();
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
@@ -795,7 +1085,7 @@ describe("image tool implicit imageModel config", () => {
 
         await expectImageToolExecOk(tool, imagePath);
 
-        expect(fetch).not.toHaveBeenCalled();
+        expect(fetch).toHaveBeenCalledTimes(1);
       });
     });
   });
@@ -907,7 +1197,7 @@ describe("image tool implicit imageModel config", () => {
         image: "@/Users/steipete/.openclaw/media/inbound/photo.png",
       });
 
-      expect(fetch).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledTimes(1);
       expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toContain("photo.png");
     });
   });
@@ -941,6 +1231,15 @@ describe("image tool MiniMax VLM routing", () => {
     "GITHUB_TOKEN",
   ]);
 
+  beforeEach(() => {
+    installImageUnderstandingProviderStubs(minimaxProvider);
+  });
+
+  afterEach(() => {
+    imageProviderHarness.reset();
+    __testing.setProviderDepsForTest();
+  });
+
   async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
     const fetch = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
 
@@ -959,10 +1258,18 @@ describe("image tool MiniMax VLM routing", () => {
       image: `data:image/png;base64,${pngB64}`,
     });
 
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = fetch.mock.calls[0];
+    expect(String(url)).toBe("https://api.minimax.io/v1/coding_plan/vlm");
+    expect(init?.method).toBe("POST");
+    expect(String((init?.headers as Record<string, string>)?.Authorization)).toBe(
+      "Bearer minimax-test",
+    );
+    expect(String(init?.body)).toContain('"prompt":"Describe the image."');
+    expect(String(init?.body)).toContain('"image_url":"data:image/png;base64,');
+
     const text = res.content?.find((b) => b.type === "text")?.text ?? "";
-    expect(text).toBe("Describe the image.");
-    expect(res.content?.filter((b) => b.type === "image")).toHaveLength(1);
+    expect(text).toBe("ok");
   });
 
   it("accepts images[] for multi-image requests", async () => {
@@ -973,15 +1280,13 @@ describe("image tool MiniMax VLM routing", () => {
       images: [`data:image/png;base64,${pngB64}`, `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`],
     });
 
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(2);
     const details = res.details as
       | {
           images?: Array<{ image: string }>;
         }
       | undefined;
     expect(details?.images).toHaveLength(2);
-    expect(res.content?.find((b) => b.type === "text")?.text).toBe("Compare these images.");
-    expect(res.content?.filter((b) => b.type === "image").length ?? 0).toBeGreaterThanOrEqual(1);
   });
 
   it("combines image + images with dedupe and enforces maxImages", async () => {
@@ -997,16 +1302,13 @@ describe("image tool MiniMax VLM routing", () => {
       ],
     });
 
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(2);
     const dedupedDetails = deduped.details as
       | {
           images?: Array<{ image: string }>;
         }
       | undefined;
     expect(dedupedDetails?.images).toHaveLength(2);
-    expect(
-      deduped.content?.filter((block) => block.type === "image").length ?? 0,
-    ).toBeGreaterThanOrEqual(1);
 
     const tooMany = await tool.execute("t2", {
       prompt: "Compare these images.",
@@ -1015,7 +1317,7 @@ describe("image tool MiniMax VLM routing", () => {
       maxImages: 1,
     });
 
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(2);
     expect(tooMany.details).toMatchObject({
       error: "too_many_images",
       count: 2,
@@ -1023,19 +1325,101 @@ describe("image tool MiniMax VLM routing", () => {
     });
   });
 
-  it("does not call the MiniMax VLM endpoint anymore", async () => {
-    const { fetch, tool } = await createMinimaxVlmFixture({
-      status_code: 1004,
-      status_msg: "bad key",
-    });
+  it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
+    const { tool } = await createMinimaxVlmFixture({ status_code: 1004, status_msg: "bad key" });
 
-    const res = await tool.execute("t1", {
-      prompt: "Describe the image.",
-      image: `data:image/png;base64,${pngB64}`,
-    });
+    await expect(
+      tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: `data:image/png;base64,${pngB64}`,
+      }),
+    ).rejects.toThrow(/MiniMax VLM API error/i);
+  });
+});
 
-    expect(fetch).not.toHaveBeenCalled();
-    expect(res.content?.find((b) => b.type === "text")?.text).toBe("Describe the image.");
-    expect(res.content?.filter((b) => b.type === "image")).toHaveLength(1);
+describe("image tool response validation", () => {
+  function createAssistantMessage(
+    overrides: Partial<{
+      api: string;
+      provider: string;
+      model: string;
+      stopReason: string;
+      errorMessage: string;
+      content: unknown[];
+    }>,
+  ) {
+    return {
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      usage: makeZeroUsageSnapshot(),
+      content: [] as unknown[],
+      ...overrides,
+    };
+  }
+
+  it.each([
+    {
+      name: "caps image-tool max tokens by model capability",
+      maxOutputTokens: 4000,
+      expected: 4000,
+    },
+    {
+      name: "keeps requested image-tool max tokens when model capability is higher",
+      maxOutputTokens: 8192,
+      expected: 4096,
+    },
+    {
+      name: "falls back to requested image-tool max tokens when model capability is missing",
+      maxOutputTokens: undefined,
+      expected: 4096,
+    },
+  ])("$name", ({ maxOutputTokens, expected }) => {
+    expect(__testing.resolveImageToolMaxTokens(maxOutputTokens)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "rejects image-model responses with no final text",
+      message: createAssistantMessage({
+        content: [{ type: "thinking", thinking: "hmm" }],
+      }) as never,
+      expectedError: /returned no text/i,
+    },
+    {
+      name: "surfaces provider errors from image-model responses",
+      message: createAssistantMessage({
+        stopReason: "error",
+        errorMessage: "boom",
+      }) as never,
+      expectedError: /boom/i,
+    },
+  ])("$name", ({ message, expectedError }) => {
+    expect(() =>
+      __testing.coerceImageAssistantText({
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        message,
+      }),
+    ).toThrow(expectedError);
+  });
+
+  it("returns trimmed text from image-model responses", () => {
+    const text = __testing.coerceImageAssistantText({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      message: {
+        ...createAssistantMessage({
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+        }),
+        content: [{ type: "text", text: "  hello  " }],
+      } as never,
+    });
+    expect(text).toBe("hello");
   });
 });

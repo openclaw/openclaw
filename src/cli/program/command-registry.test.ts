@@ -67,6 +67,7 @@ describe("command-registry", () => {
 
   it("includes both agent and agents in core CLI command names", () => {
     const names = getCoreCliCommandNames();
+    expect(names).toContain("mcp");
     expect(names).toContain("agent");
     expect(names).toContain("agents");
   });
@@ -76,6 +77,7 @@ describe("command-registry", () => {
     expect(names).toContain("config");
     expect(names).toContain("agents");
     expect(names).toContain("backup");
+    expect(names).toContain("mcp");
     expect(names).toContain("sessions");
     expect(names).toContain("tasks");
     expect(names).not.toContain("agent");

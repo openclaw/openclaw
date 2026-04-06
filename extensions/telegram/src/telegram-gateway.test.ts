@@ -34,7 +34,7 @@ function createCfg(): OpenClawConfig {
 }
 
 function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegramAccount {
-  return telegramPlugin.config.resolveAccount(cfg, accountId) as ResolvedTelegramAccount;
+  return telegramPlugin.config.resolveAccount(cfg, accountId);
 }
 
 function createStartTelegramContext(cfg: OpenClawConfig, accountId: string) {
@@ -48,7 +48,7 @@ function startTelegramAccount(cfg: OpenClawConfig, accountId: string) {
   return telegramGateway.startAccount(createStartTelegramContext(cfg, accountId));
 }
 
-function installTelegramRuntime(telegram?: Record<string, unknown>) {
+function _installTelegramRuntime(telegram?: Record<string, unknown>) {
   setTelegramRuntime({
     channel: telegram ? { telegram } : undefined,
     logging: {

@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ConfiguredBindingRule } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
@@ -12,6 +13,8 @@ import type {
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
+import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
 import type {
   ChannelAccountSnapshot,
@@ -19,6 +22,7 @@ import type {
   ChannelDirectoryEntry,
   ChannelGroupContext,
   ChannelHeartbeatDeps,
+  ChannelLegacyStateMigrationPlan,
   ChannelLogSink,
   ChannelOutboundTargetMode,
   ChannelPollContext,
@@ -93,6 +97,11 @@ export type ChannelSetupAdapter = {
     accountId: string;
     input: ChannelSetupInput;
   }) => string | null;
+  singleAccountKeysToMove?: readonly string[];
+  namedAccountPromotionKeys?: readonly string[];
+  resolveSingleAccountPromotionTarget?: (params: {
+    channel: Record<string, unknown>;
+  }) => string | undefined;
 };
 
 export type ChannelConfigAdapter<ResolvedAccount> = {
@@ -120,11 +129,26 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
+  hasConfiguredState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
   hasPersistedAuthState?: (params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) => boolean;
   resolveDefaultTo?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string | undefined;
+};
+
+export type ChannelSecretsAdapter = {
+  secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
+  unsupportedSecretRefSurfacePatterns?: readonly string[];
+  collectUnsupportedSecretRefConfigCandidates?: (raw: unknown) => Array<{
+    path: string;
+    value: unknown;
+  }>;
+  collectRuntimeConfigAssignments?: (params: {
+    config: OpenClawConfig;
+    defaults: SecretDefaults | undefined;
+    context: ResolverContext;
+  }) => void;
 };
 
 export type ChannelGroupAdapter = {
@@ -201,7 +225,14 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     hint?: ChannelOutboundPayloadHint;
   }) => Promise<void> | void;
+  /**
+   * @deprecated Use shouldTreatDeliveredTextAsVisible instead.
+   */
   shouldTreatRoutedTextAsVisible?: (params: {
+    kind: "tool" | "block" | "final";
+    text?: string;
+  }) => boolean;
+  shouldTreatDeliveredTextAsVisible?: (params: {
     kind: "tool" | "block" | "final";
     text?: string;
   }) => boolean;
@@ -393,6 +424,7 @@ export type ChannelPairingAdapter = {
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
+  resolveGatewayAuthBypassPaths?: (params: { cfg: OpenClawConfig }) => string[];
   loginWithQrStart?: (params: {
     accountId?: string;
     force?: boolean;
@@ -543,6 +575,8 @@ export type ChannelDoctorConfigMutation = {
   warnings?: string[];
 };
 
+export type ChannelDoctorLegacyConfigRule = LegacyConfigRule;
+
 export type ChannelDoctorSequenceResult = {
   changeNotes: string[];
   warningNotes: string[];
@@ -562,6 +596,7 @@ export type ChannelDoctorAdapter = {
   groupModel?: "sender" | "route" | "hybrid";
   groupAllowFromFallbackToAllowFrom?: boolean;
   warnOnEmptyGroupSenderAllowlist?: boolean;
+  legacyConfigRules?: LegacyConfigRule[];
   normalizeCompatibilityConfig?: (params: { cfg: OpenClawConfig }) => ChannelDoctorConfigMutation;
   collectPreviewWarnings?: (params: {
     cfg: OpenClawConfig;
@@ -612,6 +647,12 @@ export type ChannelLifecycleAdapter = {
     trigger?: string;
     logPrefix?: string;
   }) => Promise<void> | void;
+  detectLegacyStateMigrations?: (params: {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    stateDir: string;
+    oauthDir: string;
+  }) => ChannelLegacyStateMigrationPlan[] | Promise<ChannelLegacyStateMigrationPlan[]>;
 };
 
 export type ChannelApprovalDeliveryAdapter = {
@@ -700,6 +741,17 @@ export type ChannelApprovalRenderAdapter = {
   };
 };
 
+export type ChannelApprovalAdapter = {
+  delivery?: ChannelApprovalDeliveryAdapter;
+  render?: ChannelApprovalRenderAdapter;
+  native?: ChannelApprovalNativeAdapter;
+  describeExecApprovalSetup?: (params: {
+    channel: string;
+    channelLabel: string;
+    accountId?: string;
+  }) => string | null | undefined;
+};
+
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
   authorizeActorAction?: ChannelAuthAdapter["authorizeActorAction"];
   getActionAvailabilityState?: ChannelAuthAdapter["getActionAvailabilityState"];
@@ -709,12 +761,6 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
     senderId?: string | null;
     approvalKind: ChannelApprovalKind;
   }) => ChannelApproveCommandBehavior | undefined;
-};
-
-export type ChannelApprovalAdapter = {
-  delivery?: ChannelApprovalDeliveryAdapter;
-  render?: ChannelApprovalRenderAdapter;
-  native?: ChannelApprovalNativeAdapter;
 };
 
 export type ChannelAllowlistAdapter = {
@@ -840,6 +886,9 @@ export type ChannelConversationBindingSupport = {
       parentConversationId?: string;
     };
   }) => ReplyPayload["channelData"] | null | Promise<ReplyPayload["channelData"] | null>;
+  buildModelOverrideParentCandidates?: (params: {
+    parentConversationId?: string | null;
+  }) => string[] | null | undefined;
   shouldStripThreadFromAnnounceOrigin?: (params: {
     requester: {
       channel?: string;
@@ -882,6 +931,10 @@ export type ChannelConversationBindingSupport = {
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
+  applyConfigFixes?: (params: {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+  }) => ChannelDoctorConfigMutation | Promise<ChannelDoctorConfigMutation>;
   resolveDmPolicy?: (
     ctx: ChannelSecurityContext<ResolvedAccount>,
   ) => ChannelSecurityDmPolicy | null;

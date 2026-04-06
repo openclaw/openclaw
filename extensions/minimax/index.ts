@@ -3,8 +3,6 @@ import {
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderCatalogContext,
-  type ProviderReplayPolicy,
-  type ProviderReplayPolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
@@ -13,11 +11,8 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import {
-  buildOpenAICompatibleReplayPolicy,
-  buildStrictAnthropicReplayPolicy,
-} from "openclaw/plugin-sdk/provider-model-shared";
-import { createMinimaxFastModeWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import {
@@ -28,9 +23,13 @@ import {
   minimaxMediaUnderstandingProvider,
   minimaxPortalMediaUnderstandingProvider,
 } from "./media-understanding-provider.js";
+import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
+import { buildMinimaxVideoGenerationProvider } from "./video-generation-provider.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -38,24 +37,22 @@ const PROVIDER_LABEL = "MiniMax";
 const DEFAULT_MODEL = MINIMAX_DEFAULT_MODEL_ID;
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
+const MINIMAX_USAGE_ENV_VAR_KEYS = [
+  "MINIMAX_OAUTH_TOKEN",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_API_KEY",
+] as const;
+const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "hybrid-anthropic-openai",
+  anthropicModelDropThinkingBlocks: true,
+});
+const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
 
 function resolveMinimaxReasoningOutputMode(): "native" {
   // Keep MiniMax on native reasoning mode. Tagged enforcement previously
   // suppressed normal assistant replies on this Anthropic-compatible surface.
   return "native";
-}
-
-function buildMinimaxReplayPolicy(
-  ctx: ProviderReplayPolicyContext,
-): ProviderReplayPolicy | undefined {
-  if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
-    const modelId = ctx.modelId?.toLowerCase() ?? "";
-    return buildStrictAnthropicReplayPolicy({
-      dropThinkingBlocks: modelId.includes("claude"),
-    });
-  }
-
-  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
 }
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
@@ -85,7 +82,7 @@ function resolveApiCatalog(ctx: ProviderCatalogContext) {
   }
   return {
     provider: {
-      ...buildMinimaxProvider(),
+      ...buildMinimaxProvider(ctx.env),
       apiKey,
     },
   };
@@ -110,7 +107,7 @@ function resolvePortalCatalog(ctx: ProviderCatalogContext) {
 
   return {
     provider: buildPortalProviderCatalog({
-      baseUrl: explicitBaseUrl || DEFAULT_BASE_URL_GLOBAL,
+      baseUrl: explicitBaseUrl || buildMinimaxPortalProvider(ctx.env).baseUrl,
       apiKey,
     }),
   };
@@ -249,14 +246,18 @@ export default definePluginEntry({
         run: async (ctx) => resolveApiCatalog(ctx),
       },
       resolveUsageAuth: async (ctx) => {
+        const portalOauth = await ctx.resolveOAuthToken({ provider: PORTAL_PROVIDER_ID });
+        if (portalOauth) {
+          return portalOauth;
+        }
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env.MINIMAX_CODE_PLAN_KEY, ctx.env.MINIMAX_API_KEY],
+          providerIds: [API_PROVIDER_ID, PORTAL_PROVIDER_ID],
+          envDirect: MINIMAX_USAGE_ENV_VAR_KEYS.map((name) => ctx.env[name]),
         });
         return apiKey ? { token: apiKey } : null;
       },
-      buildReplayPolicy: (ctx) => buildMinimaxReplayPolicy(ctx),
-      wrapStreamFn: (ctx) =>
-        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
+      ...MINIMAX_FAST_MODE_STREAM_HOOKS,
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
       isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
       fetchUsageSnapshot: async (ctx) =>
@@ -307,13 +308,16 @@ export default definePluginEntry({
           run: createOAuthHandler("cn"),
         },
       ],
-      buildReplayPolicy: (ctx) => buildMinimaxReplayPolicy(ctx),
-      wrapStreamFn: (ctx) =>
-        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
+      ...MINIMAX_FAST_MODE_STREAM_HOOKS,
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
       isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     });
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildMinimaxMusicGenerationProvider());
+    api.registerVideoGenerationProvider(buildMinimaxVideoGenerationProvider());
+    api.registerSpeechProvider(buildMinimaxSpeechProvider());
+    api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
   },
 });

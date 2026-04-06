@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig } from "@openclaw/plugin-sdk/plugin-entry";
 
 type JsonRecord = Record<string, unknown>;
 

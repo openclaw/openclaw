@@ -156,6 +156,13 @@ describe("sanitizeTextContent", () => {
     expect(result).not.toContain("Tool Call");
   });
 
+  it("strips tool_result XML via the shared assistant-visible sanitizer", () => {
+    const input = 'Prefix\n<tool_result>{"output":"hidden"}</tool_result>\nSuffix';
+    const result = sanitizeTextContent(input).trim();
+    expect(result).toBe("Prefix\n\nSuffix");
+    expect(result).not.toContain("tool_result");
+  });
+
   it("strips thinking tags", () => {
     const input = "Before <think>secret</think> after";
     const result = sanitizeTextContent(input).trim();
@@ -217,6 +224,25 @@ describe("extractAssistantText", () => {
       content: [{ type: "text", text: "Handle payment required errors in your API." }],
     };
     expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
+  });
+
+  it("prefers final_answer text when phased assistant history is present", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "internal reasoning",
+          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+    };
+    expect(extractAssistantText(message)).toBe("Done.");
   });
 });
 

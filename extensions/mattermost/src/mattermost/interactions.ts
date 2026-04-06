@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "./runtime-api.js";
@@ -72,7 +72,9 @@ export function resolveInteractionCallbackPath(accountId: string): string {
 
 function isWildcardBindHost(rawHost: string): boolean {
   const trimmed = rawHost.trim();
-  if (!trimmed) return false;
+  if (!trimmed) {
+    return false;
+  }
   const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
   return host === "0.0.0.0" || host === "::" || host === "0:0:0:0:0:0:0:0" || host === "::0";
 }
@@ -202,7 +204,7 @@ function canonicalizeInteractionContext(value: unknown): unknown {
   if (value && typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([, entryValue]) => entryValue !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, entryValue]) => [key, canonicalizeInteractionContext(entryValue)]);
     return Object.fromEntries(entries);
   }

@@ -5,11 +5,10 @@ import type {
   PluginWebFetchProviderEntry,
   WebFetchProviderToolDefinition,
 } from "../plugins/types.js";
-import { resolveBundledPluginWebFetchProviders } from "../plugins/web-fetch-providers.js";
 import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.runtime.js";
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
+import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
 type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -86,9 +85,10 @@ function hasEntryCredential(
 export function listWebFetchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebFetchProviderEntry[] {
-  return resolveBundledPluginWebFetchProviders({
+  return resolvePluginWebFetchProviders({
     config: params?.config,
     bundledAllowlistCompat: true,
+    origin: "bundled",
   });
 }
 
@@ -108,9 +108,10 @@ export function resolveWebFetchProviderId(params: {
 }): string {
   const providers = sortWebFetchProvidersForAutoDetect(
     params.providers ??
-      resolveBundledPluginWebFetchProviders({
+      resolvePluginWebFetchProviders({
         config: params.config,
         bundledAllowlistCompat: true,
+        origin: "bundled",
       }),
   );
   const raw =
@@ -154,9 +155,10 @@ export function resolveWebFetchDefinition(
   }
 
   const providers = sortWebFetchProvidersForAutoDetect(
-    resolveBundledPluginWebFetchProviders({
+    resolvePluginWebFetchProviders({
       config: options?.config,
       bundledAllowlistCompat: true,
+      origin: "bundled",
     }),
   ).filter(Boolean);
   if (providers.length === 0) {

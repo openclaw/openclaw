@@ -210,7 +210,7 @@ describe("nextcloud talk setup", () => {
     ).toBe("Nextcloud Talk requires --base-url.");
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             "nextcloud-talk": {},
@@ -235,7 +235,7 @@ describe("nextcloud talk setup", () => {
     });
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             "nextcloud-talk": {

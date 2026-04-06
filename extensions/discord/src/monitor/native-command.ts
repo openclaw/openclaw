@@ -3,16 +3,17 @@ import {
   ChannelType,
   Command,
   StringSelectMenu,
-  type TopLevelComponents,
   type AutocompleteInteraction,
   type ButtonInteraction,
   type CommandInteraction,
   type CommandOptions,
   type StringSelectMenuInteraction,
+  type TopLevelComponents,
 } from "@buape/carbon";
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
@@ -24,7 +25,6 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
-  listChatCommands,
   parseCommandArgs,
   resolveCommandArgChoices,
   resolveCommandArgMenu,
@@ -45,22 +45,21 @@ import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
-  isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
-  resolveGroupDmAllow,
-  resolveDiscordChannelConfigWithFallback,
   resolveDiscordAllowListMatch,
+  resolveDiscordChannelConfigWithFallback,
+  resolveDiscordChannelPolicyCommandAuthorizer,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
   resolveDiscordOwnerAccess,
+  resolveGroupDmAllow,
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
@@ -185,6 +184,65 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
   return { configured: true, allowed: match.allowed } as const;
 }
 
+function resolveDiscordGuildNativeCommandAuthorized(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  discordConfig: DiscordConfig;
+  useAccessGroups: boolean;
+  commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
+  guildInfo?: ReturnType<typeof resolveDiscordGuildEntry> | null;
+  channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback> | null;
+  memberRoleIds: string[];
+  sender: { id: string; name?: string; tag?: string };
+  allowNameMatching: boolean;
+  ownerAllowListConfigured: boolean;
+  ownerAllowed: boolean;
+}) {
+  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.discord !== undefined,
+    groupPolicy: params.discordConfig?.groupPolicy,
+    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+  });
+  const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
+    groupPolicy,
+    guildInfo: params.guildInfo,
+    channelConfig: params.channelConfig,
+  });
+  if (!policyAuthorizer.allowed) {
+    return false;
+  }
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+    channelConfig: params.channelConfig,
+    guildInfo: params.guildInfo,
+    memberRoleIds: params.memberRoleIds,
+    sender: params.sender,
+    allowNameMatching: params.allowNameMatching,
+  });
+  const commandAllowlistAuthorizer = {
+    configured: params.commandsAllowFromAccess.configured,
+    allowed: params.commandsAllowFromAccess.allowed,
+  };
+  const ownerAuthorizer = {
+    configured: params.ownerAllowListConfigured,
+    allowed: params.ownerAllowed,
+  };
+  const memberAuthorizer = {
+    configured: hasAccessRestrictions,
+    allowed: memberAllowed,
+  };
+  const fallbackAuthorizers = [policyAuthorizer, ownerAuthorizer, memberAuthorizer];
+  return resolveCommandAuthorizedFromAuthorizers({
+    useAccessGroups: params.useAccessGroups,
+    authorizers: params.useAccessGroups
+      ? params.commandsAllowFromAccess.configured
+        ? [commandAllowlistAuthorizer]
+        : fallbackAuthorizers
+      : params.commandsAllowFromAccess.configured
+        ? [commandAllowlistAuthorizer]
+        : fallbackAuthorizers,
+    modeWhenAccessGroupsOff: "configured",
+  });
+}
+
 function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
   cfg: ReturnType<typeof loadConfig>;
@@ -283,7 +341,9 @@ function buildDiscordCommandOptions(params: {
 
 function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
   const normalized = commandName.trim().toLowerCase();
-  return normalized === "acp" || normalized === "new" || normalized === "reset";
+  // Recovery slash commands still need configured ACP readiness so stale dead
+  // bindings are recreated before /new or /reset dispatches through them.
+  return normalized === "acp";
 }
 
 function resolveDiscordNativeGroupDmAccess(params: {
@@ -411,21 +471,17 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
     return false;
   }
   if (useAccessGroups && interaction.guild) {
-    const channelAllowlistConfigured =
-      Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-    const channelAllowed = channelConfig?.allowed !== false;
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
       defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
     });
-    const allowByPolicy = isDiscordGroupAllowedByPolicy({
+    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
       groupPolicy,
-      guildAllowlisted: Boolean(guildInfo),
-      channelAllowlistConfigured,
-      channelAllowed,
+      guildInfo,
+      channelConfig,
     });
-    if (!allowByPolicy) {
+    if (!policyAuthorizer.allowed) {
       return false;
     }
   }
@@ -463,33 +519,18 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
     return false;
   }
   if (!isDirectMessage) {
-    const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-      channelConfig,
+    return resolveDiscordGuildNativeCommandAuthorized({
+      cfg,
+      discordConfig,
+      useAccessGroups,
+      commandsAllowFromAccess,
       guildInfo,
+      channelConfig,
       memberRoleIds,
       sender,
       allowNameMatching,
-    });
-    const authorizers = useAccessGroups
-      ? [
-          {
-            configured: commandsAllowFromAccess.configured,
-            allowed: commandsAllowFromAccess.allowed,
-          },
-          { configured: ownerAllowList != null, allowed: ownerOk },
-          { configured: hasAccessRestrictions, allowed: memberAllowed },
-        ]
-      : [
-          {
-            configured: commandsAllowFromAccess.configured,
-            allowed: commandsAllowFromAccess.allowed,
-          },
-          { configured: hasAccessRestrictions, allowed: memberAllowed },
-        ];
-    return resolveCommandAuthorizedFromAuthorizers({
-      useAccessGroups,
-      authorizers,
-      modeWhenAccessGroupsOff: "configured",
+      ownerAllowListConfigured: ownerAllowList != null,
+      ownerAllowed: ownerOk,
     });
   }
   return true;
@@ -637,11 +678,17 @@ export function createDiscordNativeCommand(params: {
       value: command.description,
       label: `command:${command.name}`,
     });
-    defer = true;
+    defer = false;
     ephemeral = ephemeralDefault;
     options = options;
 
     async run(interaction: CommandInteraction) {
+      const deferred = await safeDiscordInteractionCall("interaction defer", () =>
+        interaction.defer(),
+      );
+      if (deferred === null) {
+        return;
+      }
       const commandArgs = argDefinitions?.length
         ? readDiscordCommandArgs(interaction, argDefinitions)
         : command.acceptsArgs
@@ -804,21 +851,17 @@ async function dispatchDiscordCommandInteraction(params: {
     return;
   }
   if (useAccessGroups && interaction.guild) {
-    const channelAllowlistConfigured =
-      Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
-    const channelAllowed = channelConfig?.allowed !== false;
     const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.discord !== undefined,
       groupPolicy: discordConfig?.groupPolicy,
       defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
     });
-    const allowByPolicy = isDiscordGroupAllowedByPolicy({
+    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
       groupPolicy,
-      guildAllowlisted: Boolean(guildInfo),
-      channelAllowlistConfigured,
-      channelAllowed,
+      guildInfo,
+      channelConfig,
     });
-    if (!allowByPolicy) {
+    if (!policyAuthorizer.allowed) {
       await respond("This channel is not allowed.");
       return;
     }
@@ -887,33 +930,18 @@ async function dispatchDiscordCommandInteraction(params: {
     return;
   }
   if (!isDirectMessage) {
-    const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-      channelConfig,
+    commandAuthorized = resolveDiscordGuildNativeCommandAuthorized({
+      cfg,
+      discordConfig,
+      useAccessGroups,
+      commandsAllowFromAccess,
       guildInfo,
+      channelConfig,
       memberRoleIds,
       sender,
       allowNameMatching,
-    });
-    const authorizers = useAccessGroups
-      ? [
-          {
-            configured: commandsAllowFromAccess.configured,
-            allowed: commandsAllowFromAccess.allowed,
-          },
-          { configured: ownerAllowList != null, allowed: ownerOk },
-          { configured: hasAccessRestrictions, allowed: memberAllowed },
-        ]
-      : [
-          {
-            configured: commandsAllowFromAccess.configured,
-            allowed: commandsAllowFromAccess.allowed,
-          },
-          { configured: hasAccessRestrictions, allowed: memberAllowed },
-        ];
-    commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-      useAccessGroups,
-      authorizers,
-      modeWhenAccessGroupsOff: "configured",
+      ownerAllowListConfigured: ownerAllowList != null,
+      ownerAllowed: ownerOk,
     });
     if (!commandAuthorized) {
       await respond("You are not authorized to use this command.", { ephemeral: true });
@@ -1106,6 +1134,7 @@ async function dispatchDiscordCommandInteraction(params: {
     accountId: effectiveRoute.accountId,
   });
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
 
   let didReply = false;
   const dispatchResult = await dispatchReplyWithDispatcherImpl({
@@ -1147,9 +1176,7 @@ async function dispatchDiscordCommandInteraction(params: {
     replyOptions: {
       skillFilter: channelConfig?.skills,
       disableBlockStreaming:
-        typeof discordConfig?.blockStreaming === "boolean"
-          ? !discordConfig.blockStreaming
-          : undefined,
+        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
       onModelSelected,
     },
   });

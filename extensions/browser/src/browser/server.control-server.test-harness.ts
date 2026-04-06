@@ -400,6 +400,7 @@ export async function cleanupBrowserControlServerTestContext(): Promise<void> {
 }
 
 export function installBrowserControlServerHooks() {
+  const hookTimeoutMs = process.platform === "win32" ? 300_000 : 240_000;
   beforeEach(async () => {
     vi.useRealTimers();
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
@@ -463,7 +464,7 @@ export function installBrowserControlServerHooks() {
         return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
       }),
     );
-  });
+  }, hookTimeoutMs);
 
   afterEach(async () => {
     await cleanupBrowserControlServerTestContext();

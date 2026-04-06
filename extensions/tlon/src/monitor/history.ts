@@ -54,12 +54,12 @@ export async function fetchChannelHistory(
     const scryPath = `/channels/v4/${channelNest}/posts/newest/${count}/outline.json`;
     runtime?.log?.(`[tlon] Fetching history: ${scryPath}`);
 
-    const data: any = await api.scry(scryPath);
+    const data: unknown = await api.scry(scryPath);
     if (!data) {
       return [];
     }
 
-    let posts: any[] = [];
+    let posts: unknown[] = [];
     if (Array.isArray(data)) {
       posts = data;
     } else if (data.posts && typeof data.posts === "object") {
@@ -84,7 +84,7 @@ export async function fetchChannelHistory(
 
     runtime?.log?.(`[tlon] Extracted ${messages.length} messages from history`);
     return messages;
-  } catch (error: any) {
+  } catch (error: unknown) {
     runtime?.log?.(`[tlon] Error fetching channel history: ${error?.message ?? String(error)}`);
     return [];
   }
@@ -129,13 +129,13 @@ export async function fetchThreadHistory(
     const scryPath = `/channels/v4/${channelNest}/posts/post/id/${formattedParentId}/replies/newest/${count}.json`;
     runtime?.log?.(`[tlon] Fetching thread history: ${scryPath}`);
 
-    const data: any = await api.scry(scryPath);
+    const data: unknown = await api.scry(scryPath);
     if (!data) {
       runtime?.log?.(`[tlon] No thread history data returned`);
       return [];
     }
 
-    let replies: any[] = [];
+    let replies: unknown[] = [];
     if (Array.isArray(data)) {
       replies = data;
     } else if (data.replies && Array.isArray(data.replies)) {
@@ -161,18 +161,18 @@ export async function fetchThreadHistory(
 
     runtime?.log?.(`[tlon] Extracted ${messages.length} thread replies from history`);
     return messages;
-  } catch (error: any) {
+  } catch (error: unknown) {
     runtime?.log?.(`[tlon] Error fetching thread history: ${error?.message ?? String(error)}`);
     // Fall back to trying alternate path structure
     try {
       const altPath = `/channels/v4/${channelNest}/posts/post/id/${formatUd(parentId)}.json`;
       runtime?.log?.(`[tlon] Trying alternate path: ${altPath}`);
-      const data: any = await api.scry(altPath);
+      const data: unknown = await api.scry(altPath);
 
       if (data?.seal?.meta?.replyCount > 0 && data?.replies) {
         const replies = Array.isArray(data.replies) ? data.replies : Object.values(data.replies);
         const messages = replies
-          .map((reply: any) => ({
+          .map((reply: unknown) => ({
             author: reply.memo?.author || "unknown",
             content: extractMessageText(reply.memo?.content || []),
             timestamp: reply.memo?.sent || Date.now(),
@@ -183,7 +183,7 @@ export async function fetchThreadHistory(
         runtime?.log?.(`[tlon] Extracted ${messages.length} replies from post data`);
         return messages;
       }
-    } catch (altError: any) {
+    } catch (altError: unknown) {
       runtime?.log?.(`[tlon] Alternate path also failed: ${altError?.message ?? String(altError)}`);
     }
     return [];

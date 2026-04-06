@@ -1,16 +1,17 @@
-import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import type {
+  ChannelSetupDmPolicy,
+  ChannelSetupWizard,
+  WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
 import {
   createAllowFromSection,
   createPromptParsedAllowFromForAccount,
   createStandardChannelSetupStatus,
+  formatDocsLink,
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup";
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./accounts.js";
+import { resolveDefaultIrcAccountId, resolveIrcAccount } from "./accounts.js";
 import {
   isChannelTarget,
   normalizeIrcAllowEntry,
@@ -25,7 +26,7 @@ import {
   setIrcNickServ,
   updateIrcAccountConfig,
 } from "./setup-core.js";
-import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const channel = "irc" as const;
 const USE_ENV_FLAG = "__ircUseEnv";
@@ -258,7 +259,7 @@ export const ircSetupWizard: ChannelSetupWizard = {
       shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
       initialValue: ({ cfg, accountId, credentialValues }) => {
         const resolved = resolveIrcAccount({ cfg: cfg as CoreConfig, accountId });
-        const tls = credentialValues[TLS_FLAG] === "0" ? false : true;
+        const tls = credentialValues[TLS_FLAG] !== "0";
         const defaultPort = resolved.config.port ?? (tls ? 6697 : 6667);
         return String(defaultPort);
       },

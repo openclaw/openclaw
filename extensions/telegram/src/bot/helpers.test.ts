@@ -1,4 +1,3 @@
-import type { Message } from "grammy/types";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildTelegramRoutingTarget,
