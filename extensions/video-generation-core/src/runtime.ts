@@ -2,7 +2,7 @@ import {
   buildNoCapabilityModelConfiguredMessage,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
-} from "../../../src/media-generation/runtime-shared.js";
+} from "openclaw/plugin-sdk/media-generation-runtime-shared";
 import {
   createSubsystemLogger,
   describeFailoverError,
