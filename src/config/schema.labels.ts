@@ -144,6 +144,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.media.image.scope": "Image Understanding Scope",
   "tools.media.models": "Media Understanding Shared Models",
   "tools.media.concurrency": "Media Understanding Concurrency",
+  "tools.media.asyncCompletion.directSend": "Async Media Completion Direct Send",
   ...MEDIA_AUDIO_FIELD_LABELS,
   "tools.media.video.enabled": "Enable Video Understanding",
   "tools.media.video.maxBytes": "Video Understanding Max Bytes",

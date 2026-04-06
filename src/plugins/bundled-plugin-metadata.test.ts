@@ -5,6 +5,7 @@ import {
   clearBundledPluginMetadataCache,
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
+  resolveBundledPluginRepoEntryPath,
 } from "./bundled-plugin-metadata.js";
 import {
   createGeneratedPluginTempRoot,
@@ -173,6 +174,45 @@ describe("bundled plugin metadata", () => {
 
     fs.writeFileSync(path.join(tempRoot, "plugin", "index.js"), "export {};\n", "utf8");
     expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.js"));
+  });
+
+  it("resolves bundled repo entry paths from dist before workspace source", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-entry-");
+    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
+    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
+
+    writeJson(path.join(pluginRoot, "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+
+    expect(
+      resolveBundledPluginRepoEntryPath({
+        rootDir: tempRoot,
+        pluginId: "alpha",
+        preferBuilt: true,
+      }),
+    ).toBe(path.join(pluginRoot, "index.ts"));
+
+    fs.mkdirSync(distPluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export const built = true;\n", "utf8");
+
+    clearBundledPluginMetadataCache();
+    expect(
+      resolveBundledPluginRepoEntryPath({
+        rootDir: tempRoot,
+        pluginId: "alpha",
+        preferBuilt: true,
+      }),
+    ).toBe(path.join(distPluginRoot, "index.js"));
   });
 
   it("merges runtime channel schema metadata with manifest-owned channel config fields", () => {

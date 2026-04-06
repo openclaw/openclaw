@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -147,8 +149,8 @@ function buildMediaGenerationReplyInstruction(params: {
   if (params.status === "ok") {
     return [
       `A completed ${params.completionLabel} generation task is ready for user delivery.`,
-      `Reply in your normal assistant voice and post the finished ${params.completionLabel} to the original message channel now.`,
-      "If the result includes MEDIA: lines, include those exact MEDIA: lines in your reply so OpenClaw attaches the generated media.",
+      `Prefer the message tool for delivery: use action="send" to the current/original chat, put your user-facing caption in message, attach each generated file with path/filePath using the exact path from the result, then reply ONLY: ${SILENT_REPLY_TOKEN}.`,
+      `If you cannot use the message tool, reply in your normal assistant voice and include the exact MEDIA: lines from the result so OpenClaw attaches the finished ${params.completionLabel}.`,
       "Keep internal task/session details private and do not copy the internal event text verbatim.",
     ].join(" ");
   }
@@ -157,6 +159,10 @@ function buildMediaGenerationReplyInstruction(params: {
     "Reply in your normal assistant voice with the failure summary now.",
     "Keep internal task/session details private and do not copy the internal event text verbatim.",
   ].join(" ");
+}
+
+function isAsyncMediaDirectSendEnabled(config: OpenClawConfig | undefined): boolean {
+  return config?.tools?.media?.asyncCompletion?.directSend === true;
 }
 
 async function maybeDeliverMediaGenerationResultDirectly(params: {
@@ -198,6 +204,7 @@ async function maybeDeliverMediaGenerationResultDirectly(params: {
 }
 
 export async function wakeMediaGenerationTaskCompletion(params: {
+  config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
   statusLabel: string;
@@ -213,23 +220,25 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     return;
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
-  try {
-    const deliveredDirect = await maybeDeliverMediaGenerationResultDirectly({
-      handle: params.handle,
-      status: params.status,
-      result: params.result,
-      idempotencyKey: announceId,
-    });
-    if (deliveredDirect) {
-      return;
+  if (isAsyncMediaDirectSendEnabled(params.config)) {
+    try {
+      const deliveredDirect = await maybeDeliverMediaGenerationResultDirectly({
+        handle: params.handle,
+        status: params.status,
+        result: params.result,
+        idempotencyKey: announceId,
+      });
+      if (deliveredDirect) {
+        return;
+      }
+    } catch (error) {
+      log.warn("Media generation direct completion delivery failed; falling back to announce", {
+        taskId: params.handle.taskId,
+        runId: params.handle.runId,
+        toolName: params.toolName,
+        error,
+      });
     }
-  } catch (error) {
-    log.warn("Media generation direct completion delivery failed; falling back to announce", {
-      taskId: params.handle.taskId,
-      runId: params.handle.runId,
-      toolName: params.toolName,
-      error,
-    });
   }
   const internalEvents: AgentInternalEvent[] = [
     {
