@@ -14,6 +14,18 @@ export function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function normalizeTempFileExtension(ext: string): string {
+  const trimmed = ext.trim();
+  if (!trimmed) {
+    throw new Error("invalid temp file extension");
+  }
+  const normalized = trimmed.startsWith(".") ? trimmed.slice(1) : trimmed;
+  if (!/^[a-z0-9][a-z0-9._+-]{0,31}$/i.test(normalized)) {
+    throw new Error(`invalid temp file extension: ${ext}`);
+  }
+  return `.${normalized}`;
+}
+
 export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: string }): {
   ext: string;
   tmpDir: string;
@@ -26,6 +38,6 @@ export function resolveTempPathParts(opts: { ext: string; tmpDir?: string; id?: 
   return {
     tmpDir,
     id: opts.id ?? randomUUID(),
-    ext: opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`,
+    ext: normalizeTempFileExtension(opts.ext),
   };
 }

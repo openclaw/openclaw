@@ -127,4 +127,47 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       root,
     });
   });
+
+  it("checks configured alternate path params like outPath", async () => {
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+      pathParamNames: ["outPath"],
+    });
+
+    await wrapped.execute("tc-out-path", { outPath: "/workspace/docs/recording.mp4" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "docs", "recording.mp4"),
+      cwd: root,
+      root,
+    });
+  });
+
+  it("trims and rewrites guarded path params to the resolved workspace path", async () => {
+    const { execute, tool } = createToolHarness();
+    mocks.assertSandboxPath.mockResolvedValueOnce({
+      resolved: path.resolve(root, "docs", "recording.mp4"),
+      relative: "docs/recording.mp4",
+    });
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      pathParamNames: ["outPath"],
+    });
+
+    await wrapped.execute("tc-trim-out-path", { outPath: "  docs/recording.mp4  " });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "docs/recording.mp4",
+      cwd: root,
+      root,
+    });
+    expect(execute).toHaveBeenCalledWith(
+      "tc-trim-out-path",
+      {
+        outPath: path.resolve(root, "docs", "recording.mp4"),
+      },
+      undefined,
+      undefined,
+    );
+  });
 });

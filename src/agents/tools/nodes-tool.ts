@@ -9,6 +9,7 @@ import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
@@ -141,12 +142,15 @@ export function createNodesTool(options?: {
   config?: OpenClawConfig;
   modelHasVision?: boolean;
   allowMediaInvokeCommands?: boolean;
+  workspaceDir?: string;
+  workspaceOnly?: boolean;
 }): AnyAgentTool {
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
   });
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
+  const workspaceDir = normalizeWorkspaceDir(options?.workspaceDir) ?? undefined;
   return {
     label: "Nodes",
     name: "nodes",
@@ -225,6 +229,8 @@ export function createNodesTool(options?: {
               gatewayOpts,
               modelHasVision: options?.modelHasVision,
               imageSanitization,
+              workspaceDir,
+              workspaceOnly: options?.workspaceOnly === true,
             });
           }
           case "photos_latest": {
@@ -234,6 +240,8 @@ export function createNodesTool(options?: {
               gatewayOpts,
               modelHasVision: options?.modelHasVision,
               imageSanitization,
+              workspaceDir,
+              workspaceOnly: options?.workspaceOnly === true,
             });
           }
           case "camera_list":
@@ -266,6 +274,8 @@ export function createNodesTool(options?: {
               gatewayOpts,
               modelHasVision: options?.modelHasVision,
               imageSanitization,
+              workspaceDir,
+              workspaceOnly: options?.workspaceOnly === true,
             });
           }
           case "screen_record": {
@@ -275,6 +285,8 @@ export function createNodesTool(options?: {
               gatewayOpts,
               modelHasVision: options?.modelHasVision,
               imageSanitization,
+              workspaceDir,
+              workspaceOnly: options?.workspaceOnly === true,
             });
           }
           case "location_get": {

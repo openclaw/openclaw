@@ -566,6 +566,7 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       onYield: options?.onYield,
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+      containerWorkdir: sandbox?.containerWorkdir,
     }),
   ];
   const toolsForMemoryFlush =

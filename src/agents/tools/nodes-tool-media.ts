@@ -18,6 +18,7 @@ import { imageMimeFromFormat } from "../../media/mime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
+import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
 import { resolveNode, resolveNodeId } from "./nodes-utils.js";
@@ -37,6 +38,8 @@ type ExecuteNodeMediaActionParams = {
   gatewayOpts: GatewayCallOptions;
   modelHasVision?: boolean;
   imageSanitization: ImageSanitizationLimits;
+  workspaceDir?: string;
+  workspaceOnly?: boolean;
 };
 
 export async function executeNodeMediaAction(
@@ -59,10 +62,13 @@ async function executeCameraSnap({
   gatewayOpts,
   modelHasVision,
   imageSanitization,
+  workspaceDir,
+  workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
+  const tmpDir = resolveWorkspaceOnlyNodesTmpDir({ workspaceDir, workspaceOnly });
   const facingRaw = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   const facings: CameraFacing[] =
     facingRaw === "both"
@@ -118,6 +124,7 @@ async function executeCameraSnap({
       kind: "snap",
       facing,
       ext: isJpeg ? "jpg" : "png",
+      ...(tmpDir ? { tmpDir } : {}),
     });
     await writeCameraPayloadToFile({
       filePath,
@@ -162,10 +169,13 @@ async function executePhotosLatest({
   gatewayOpts,
   modelHasVision,
   imageSanitization,
+  workspaceDir,
+  workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
+  const tmpDir = resolveWorkspaceOnlyNodesTmpDir({ workspaceDir, workspaceOnly });
   const limitRaw =
     typeof params.limit === "number" && Number.isFinite(params.limit)
       ? Math.floor(params.limit)
@@ -220,6 +230,7 @@ async function executePhotosLatest({
       kind: "snap",
       ext: isJpeg ? "jpg" : "png",
       id: crypto.randomUUID(),
+      ...(tmpDir ? { tmpDir } : {}),
     });
     await writeCameraPayloadToFile({
       filePath,
@@ -269,10 +280,13 @@ async function executePhotosLatest({
 async function executeCameraClip({
   params,
   gatewayOpts,
+  workspaceDir,
+  workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
+  const tmpDir = resolveWorkspaceOnlyNodesTmpDir({ workspaceDir, workspaceOnly });
   const facing = normalizeLowercaseStringOrEmpty(params.facing) || "front";
   if (facing !== "front" && facing !== "back") {
     throw new Error("invalid facing (front|back)");
@@ -304,6 +318,7 @@ async function executeCameraClip({
   const filePath = await writeCameraClipPayloadToFile({
     payload,
     facing,
+    ...(tmpDir ? { tmpDir } : {}),
     expectedHost: resolvedNode.remoteIp,
   });
   return {
@@ -320,9 +335,12 @@ async function executeCameraClip({
 async function executeScreenRecord({
   params,
   gatewayOpts,
+  workspaceDir,
+  workspaceOnly,
 }: ExecuteNodeMediaActionParams): Promise<AgentToolResult<unknown>> {
   const node = requireString(params, "node");
   const nodeId = await resolveNodeId(gatewayOpts, node);
+  const tmpDir = resolveWorkspaceOnlyNodesTmpDir({ workspaceDir, workspaceOnly });
   const durationMs = Math.min(
     typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
       ? params.durationMs
@@ -353,7 +371,10 @@ async function executeScreenRecord({
   const filePath =
     typeof params.outPath === "string" && params.outPath.trim()
       ? params.outPath.trim()
-      : screenRecordTempPath({ ext: payload.format || "mp4" });
+      : screenRecordTempPath({
+          ext: payload.format || "mp4",
+          ...(tmpDir ? { tmpDir } : {}),
+        });
   const written = await writeScreenRecordToFile(filePath, payload.base64);
   return {
     content: [{ type: "text", text: `FILE:${written.path}` }],
@@ -373,6 +394,20 @@ function requireString(params: Record<string, unknown>, key: string): string {
     throw new Error(`${key} required`);
   }
   return raw.trim();
+}
+
+function resolveWorkspaceOnlyNodesTmpDir(params: {
+  workspaceDir?: string;
+  workspaceOnly?: boolean;
+}): string | undefined {
+  if (!params.workspaceOnly) {
+    return undefined;
+  }
+  const workspaceDir = normalizeWorkspaceDir(params.workspaceDir);
+  if (!workspaceDir) {
+    throw new Error("workspaceDir is required when nodes workspaceOnly is enabled");
+  }
+  return workspaceDir;
 }
 
 const DEFAULT_PHOTOS_LIMIT = 1;

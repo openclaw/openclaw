@@ -551,22 +551,39 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   root: string,
   options?: {
     containerWorkdir?: string;
+    pathParamNames?: string[];
   },
 ): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
-      const filePath = record?.path;
-      if (typeof filePath === "string" && filePath.trim()) {
+      const nextArgs = record ? { ...record } : undefined;
+      const pathParamNames =
+        options?.pathParamNames && options.pathParamNames.length > 0
+          ? options.pathParamNames
+          : ["path"];
+      for (const pathParamName of pathParamNames) {
+        const filePath = record?.[pathParamName];
+        if (typeof filePath !== "string") {
+          continue;
+        }
+        const normalizedFilePath = filePath.trim();
+        if (!normalizedFilePath) {
+          continue;
+        }
         const sandboxPath = mapContainerPathToWorkspaceRoot({
-          filePath,
+          filePath: normalizedFilePath,
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        const resolvedPath = (await assertSandboxPath({ filePath: sandboxPath, cwd: root, root }))
+          .resolved;
+        if (nextArgs) {
+          nextArgs[pathParamName] = resolvedPath;
+        }
       }
-      return tool.execute(toolCallId, args, signal, onUpdate);
+      return tool.execute(toolCallId, nextArgs ?? args, signal, onUpdate);
     },
   };
 }

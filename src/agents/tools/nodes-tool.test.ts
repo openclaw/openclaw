@@ -159,6 +159,129 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
+  it("keeps an explicit screen_record outPath when provided", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    await tool.execute("call-explicit-out-path", {
+      action: "screen_record",
+      node: "macbook",
+      outPath: "/tmp/custom-screen-record.mp4",
+    });
+
+    expect(screenMocks.writeScreenRecordToFile).toHaveBeenCalledWith(
+      "/tmp/custom-screen-record.mp4",
+      "ZmFrZQ==",
+    );
+  });
+
+  it("uses the workspace temp dir for implicit screen_record output when workspaceOnly is enabled", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool({
+      workspaceDir: "/tmp/workspace",
+      workspaceOnly: true,
+    });
+
+    await tool.execute("call-workspace-screen-record", {
+      action: "screen_record",
+      node: "macbook",
+    });
+
+    expect(screenMocks.screenRecordTempPath).toHaveBeenCalledWith({
+      ext: "mp4",
+      tmpDir: "/tmp/workspace",
+    });
+  });
+
+  it("uses the workspace temp dir for implicit camera output when workspaceOnly is enabled", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool({
+      workspaceDir: "/tmp/workspace",
+      workspaceOnly: true,
+    });
+
+    await tool.execute("call-workspace-camera-snap", {
+      action: "camera_snap",
+      node: "macbook",
+      facing: "front",
+    });
+
+    expect(nodesCameraMocks.cameraTempPath).toHaveBeenCalledWith({
+      kind: "snap",
+      facing: "front",
+      ext: "jpg",
+      tmpDir: "/tmp/workspace",
+    });
+  });
+
+  it("uses the workspace temp dir for implicit photos_latest output when workspaceOnly is enabled", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        photos: [{ base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600 }],
+      },
+    });
+    const tool = createNodesTool({
+      workspaceDir: "/tmp/workspace",
+      workspaceOnly: true,
+    });
+
+    await tool.execute("call-workspace-photos-latest", {
+      action: "photos_latest",
+      node: "macbook",
+    });
+
+    expect(nodesCameraMocks.cameraTempPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "snap",
+        ext: "jpg",
+        tmpDir: "/tmp/workspace",
+      }),
+    );
+  });
+
+  it("passes the workspace temp dir through camera_clip when workspaceOnly is enabled", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    nodesCameraMocks.parseCameraClipPayload.mockReturnValueOnce({
+      base64: "ZmFrZQ==",
+      format: "mp4",
+      durationMs: 1_000,
+      hasAudio: true,
+    });
+    nodesCameraMocks.writeCameraClipPayloadToFile.mockResolvedValueOnce(
+      "/tmp/workspace/camera-clip.mp4",
+    );
+    const tool = createNodesTool({
+      workspaceDir: "/tmp/workspace",
+      workspaceOnly: true,
+    });
+
+    await tool.execute("call-workspace-camera-clip", {
+      action: "camera_clip",
+      node: "macbook",
+      facing: "front",
+    });
+
+    expect(nodesCameraMocks.writeCameraClipPayloadToFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tmpDir: "/tmp/workspace",
+      }),
+    );
+  });
+
+  it("fails closed when workspaceOnly media output has no workspaceDir", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool({
+      workspaceOnly: true,
+    });
+
+    await expect(
+      tool.execute("call-missing-workspace", {
+        action: "screen_record",
+        node: "macbook",
+      }),
+    ).rejects.toThrow("workspaceDir is required when nodes workspaceOnly is enabled");
+  });
+
   it("rejects the removed run action", async () => {
     const tool = createNodesTool();
 

@@ -1,14 +1,16 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
+import { resolvePluginTools } from "../plugins/tools.js";
+import {
+  getActiveSecretsRuntimeSnapshot,
+  getActiveRuntimeWebToolsMetadata,
+} from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
-import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
-import {
-  collectPresentOpenClawTools,
-  isUpdatePlanToolEnabledForOpenClawTools,
-} from "./openclaw-tools.registration.js";
+import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
+import { wrapToolWorkspaceRootGuardWithOptions } from "./pi-tools.read.js";
+import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -46,6 +48,15 @@ const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
 };
 
 let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
+
+function isOpenAIProvider(provider?: string): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === "openai" || normalized === "openai-codex";
+}
+
+function isExperimentalPlanToolEnabled(config?: OpenClawConfig): boolean {
+  return config?.tools?.experimental?.planTool === true;
+}
 
 export function createOpenClawTools(
   options?: {
@@ -106,6 +117,8 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
+    /** Sandbox container workdir for workspace-path remapping. */
+    containerWorkdir?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config ?? openClawToolsDeps.config;
@@ -130,6 +143,7 @@ export function createOpenClawTools(
     threadId: options?.agentThreadId,
   });
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
+  const runtimeSnapshot = getActiveSecretsRuntimeSnapshot();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
@@ -205,18 +219,26 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const nodesTool = createNodesTool({
+    agentSessionKey: options?.agentSessionKey,
+    agentChannel: options?.agentChannel,
+    agentAccountId: options?.agentAccountId,
+    currentChannelId: options?.currentChannelId,
+    currentThreadTs: options?.currentThreadTs,
+    config: options?.config,
+    modelHasVision: options?.modelHasVision,
+    allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+    workspaceDir,
+    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+  });
   const tools: AnyAgentTool[] = [
     createCanvasTool({ config: options?.config }),
-    createNodesTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      currentChannelId: options?.currentChannelId,
-      currentThreadTs: options?.currentThreadTs,
-      config: options?.config,
-      modelHasVision: options?.modelHasVision,
-      allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-    }),
+    options?.fsPolicy?.workspaceOnly
+      ? wrapToolWorkspaceRootGuardWithOptions(nodesTool, workspaceDir, {
+          containerWorkdir: options?.containerWorkdir,
+          pathParamNames: ["outPath"],
+        })
+      : nodesTool,
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),
@@ -225,7 +247,9 @@ export function createOpenClawTools(
       agentChannel: options?.agentChannel,
       config: options?.config,
     }),
-    ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
+    ...(imageGenerateTool ? [imageGenerateTool] : []),
+    ...(musicGenerateTool ? [musicGenerateTool] : []),
+    ...(videoGenerateTool ? [videoGenerateTool] : []),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
@@ -234,7 +258,7 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
     }),
-    ...(isUpdatePlanToolEnabledForOpenClawTools(resolvedConfig, options?.modelProvider)
+    ...(isExperimentalPlanToolEnabled(resolvedConfig) || isOpenAIProvider(options?.modelProvider)
       ? [createUpdatePlanTool()]
       : []),
     createSessionsListTool({
@@ -281,17 +305,29 @@ export function createOpenClawTools(
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
     }),
-    ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
+    ...(webSearchTool ? [webSearchTool] : []),
+    ...(webFetchTool ? [webFetchTool] : []),
+    ...(imageTool ? [imageTool] : []),
+    ...(pdfTool ? [pdfTool] : []),
   ];
 
   if (options?.disablePluginTools) {
     return tools;
   }
 
-  const wrappedPluginTools = resolveOpenClawPluginToolsForOptions({
-    options,
-    resolvedConfig,
+  const pluginTools = resolvePluginTools({
+    ...resolveOpenClawPluginToolInputs({
+      options,
+      resolvedConfig,
+      runtimeConfig: runtimeSnapshot?.config,
+    }),
     existingToolNames: new Set(tools.map((tool) => tool.name)),
+    toolAllowlist: options?.pluginToolAllowlist,
+  });
+
+  const wrappedPluginTools = applyPluginToolDeliveryDefaults({
+    tools: pluginTools,
+    deliveryContext,
   });
 
   return [...tools, ...wrappedPluginTools];
