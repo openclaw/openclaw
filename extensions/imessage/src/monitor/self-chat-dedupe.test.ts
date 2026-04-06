@@ -354,6 +354,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
           id: 123703,
           sender: "+15551234567",
           chat_identifier: "+15551234567",
+          destination_caller_id: "+15551234567",
           text: "Hello this is a test message",
           is_from_me: true,
           is_group: false,
@@ -576,6 +577,36 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     );
 
     // sender != chat_identifier → not self-chat → dropped as "from me"
+    expect(decision).toEqual({ kind: "drop", reason: "from me" });
+  });
+
+  it("uses destination_caller_id to avoid DM self-chat false positives", () => {
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    echoCache.remember("default:imessage:+15551234567", {
+      text: "Clean outbound text",
+      messageId: "p:0/GUID-outbound",
+    });
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 10001,
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          destination_caller_id: "+15550001111",
+          text: "�\u0001corrupted stored text",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "�\u0001corrupted stored text",
+        bodyText: "�\u0001corrupted stored text",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
     expect(decision).toEqual({ kind: "drop", reason: "from me" });
   });
 
