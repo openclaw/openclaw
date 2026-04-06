@@ -619,7 +619,7 @@ describe("convertMessagesToInputItems", () => {
       [{ id: "call_1", name: "exec", args: { cmd: "ls" } }],
       "commentary",
     );
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     const textItem = items.find((i) => i.type === "message");
@@ -648,7 +648,7 @@ describe("convertMessagesToInputItems", () => {
       usage: {},
       timestamp: 0,
     };
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toHaveLength(1);
@@ -704,7 +704,45 @@ describe("convertMessagesToInputItems", () => {
     ]);
   });
 
-  it("inherits message-level phase for untagged blocks, merging with phased text", () => {
+  it("inherits message-level phase for id-only textSignature blocks, merging with phased text", () => {
+    const msg = {
+      role: "assistant" as const,
+      phase: "final_answer" as const,
+      content: [
+        {
+          type: "text" as const,
+          text: "Replay. ",
+          textSignature: JSON.stringify({ v: 1, id: "item_pending_phase" }),
+        },
+        {
+          type: "text" as const,
+          text: "Done.",
+          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+        },
+      ],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.2",
+      usage: {},
+      timestamp: 0,
+    };
+
+    expect(
+      convertMessagesToInputItems([msg] as unknown as Parameters<
+        typeof convertMessagesToInputItems
+      >[0]),
+    ).toEqual([
+      {
+        type: "message",
+        role: "assistant",
+        content: "Replay. Done.",
+        phase: "final_answer",
+      },
+    ]);
+  });
+
+  it("keeps truly unsigned legacy blocks separate when phased siblings are present", () => {
     const msg = {
       role: "assistant" as const,
       phase: "final_answer" as const,
@@ -735,10 +773,12 @@ describe("convertMessagesToInputItems", () => {
       {
         type: "message",
         role: "assistant",
-        // Both blocks share the same effective phase (final_answer):
-        // the untagged block now inherits message-level phase instead
-        // of being forced to undefined (#61476).
-        content: "Legacy. Done.",
+        content: "Legacy. ",
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: "Done.",
         phase: "final_answer",
       },
     ]);
@@ -868,7 +908,7 @@ describe("convertMessagesToInputItems", () => {
 
   it("handles assistant messages with only tool calls (no text)", () => {
     const msg = assistantMsg([], [{ id: "call_2", name: "read", args: { path: "/etc/hosts" } }]);
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     expect(items).toHaveLength(1);
@@ -3163,12 +3203,17 @@ describe("releaseWsSession / hasWsSession", () => {
 });
 
 describe("convertMessagesToInputItems — phase inheritance", () => {
-  it("untagged text blocks inherit message-level phase when siblings have explicit textSignature", () => {
+  it("keeps unsigned legacy text unphased while id-only replay text inherits message phase", () => {
     const msg = {
       role: "assistant" as const,
       phase: "commentary",
       content: [
         { type: "text", text: "Untagged block A" },
+        {
+          type: "text",
+          text: "Replay block",
+          textSignature: JSON.stringify({ v: 1, id: "s0" }),
+        },
         {
           type: "text",
           text: "Explicitly final",
@@ -3177,15 +3222,30 @@ describe("convertMessagesToInputItems — phase inheritance", () => {
         { type: "text", text: "Untagged block B" },
       ],
     };
-    const items = convertMessagesToInputItems([msg] as Parameters<
+    const items = convertMessagesToInputItems([msg] as unknown as Parameters<
       typeof convertMessagesToInputItems
     >[0]);
     const assistantItems = items.filter((i: Record<string, unknown>) => i.role === "assistant");
-    // Should produce 3 separate assistant items because phase changes:
-    // A=commentary, Explicit=final_answer, B=commentary
-    expect(assistantItems).toHaveLength(3);
-    expect((assistantItems[0] as Record<string, unknown>).phase).toBe("commentary");
-    expect((assistantItems[1] as Record<string, unknown>).phase).toBe("final_answer");
-    expect((assistantItems[2] as Record<string, unknown>).phase).toBe("commentary");
+    expect(assistantItems).toHaveLength(4);
+    expect(assistantItems[0]).toMatchObject({
+      role: "assistant",
+      content: "Untagged block A",
+    });
+    expect((assistantItems[0] as Record<string, unknown>).phase).toBeUndefined();
+    expect(assistantItems[1]).toMatchObject({
+      role: "assistant",
+      content: "Replay block",
+      phase: "commentary",
+    });
+    expect(assistantItems[2]).toMatchObject({
+      role: "assistant",
+      content: "Explicitly final",
+      phase: "final_answer",
+    });
+    expect(assistantItems[3]).toMatchObject({
+      role: "assistant",
+      content: "Untagged block B",
+    });
+    expect((assistantItems[3] as Record<string, unknown>).phase).toBeUndefined();
   });
 });
