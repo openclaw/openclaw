@@ -780,7 +780,7 @@ Current behavior:
 ## History context
 
 - `channels.matrix.historyLimit` controls how many recent room messages are included as `InboundHistory` when a Matrix room message triggers the agent.
-- It falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
+- It falls back to `messages.groupChat.historyLimit`. If both are unset, the effective default is `0`, so mention-gated room messages are not buffered. Set `0` to disable.
 - Matrix room history is room-only. DMs keep using normal session history.
 - Matrix room history is pending-only: OpenClaw buffers room messages that did not trigger a reply yet, then snapshots that window when a mention or other trigger arrives.
 - The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
@@ -1002,7 +1002,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `contextVisibility`: supplemental room-context visibility mode (`all`, `allowlist`, `allowlist_quote`).
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `groupAllowFrom` entries should be full Matrix user IDs. Unresolved names are ignored at runtime.
-- `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
+- `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`; if both are unset, the effective default is `0`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, or `all`.
 - `markdown`: optional Markdown rendering configuration for outbound Matrix text.
 - `streaming`: `off` (default), `partial`, `quiet`, `true`, or `false`. `partial` and `true` enable preview-first draft updates with normal Matrix text messages. `quiet` uses non-notifying preview notices for self-hosted push-rule setups.
