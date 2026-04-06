@@ -779,6 +779,17 @@ describe("isFailoverErrorMessage", () => {
     ]);
   });
 
+  it("matches Provider finish_reason: network_error as timeout (#61281)", () => {
+    // OpenAI-compatible providers like Z.AI emit this exact format.
+    // `\breason:` does not match `finish_reason:` because `_` is a word
+    // character and there is no word boundary before `reason`.
+    expectTimeoutFailoverSamples([
+      "Provider finish_reason: network_error",
+      "Provider finish_reason: abort",
+      "Provider finish_reason: malformed_response",
+    ]);
+  });
+
   it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
     const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
     expect(isTimeoutErrorMessage(sample)).toBe(false);
