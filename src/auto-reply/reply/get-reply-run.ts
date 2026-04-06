@@ -31,6 +31,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
+import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
@@ -180,6 +181,10 @@ export async function runPreparedReply(
     execOverrides,
     abortedLastRun,
   } = params;
+  const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
+    cfg,
+    isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
+  });
   let currentSystemSent = systemSent;
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
@@ -218,6 +223,7 @@ export async function runPreparedReply(
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+    { includeFormattingHints: !useFastReplyRuntime },
   );
   const extraSystemPromptParts = [
     inboundMetaPrompt,
@@ -312,14 +318,16 @@ export async function runPreparedReply(
     prefixedCommandBody: string;
     queuedBody: string;
   }> => {
-    const eventsBlock = await drainFormattedSystemEvents({
-      cfg,
-      sessionKey,
-      isMainSession,
-      isNewSession,
-    });
-    if (eventsBlock) {
-      drainedSystemEventBlocks.push(eventsBlock);
+    if (!useFastReplyRuntime) {
+      const eventsBlock = await drainFormattedSystemEvents({
+        cfg,
+        sessionKey,
+        isMainSession,
+        isNewSession,
+      });
+      if (eventsBlock) {
+        drainedSystemEventBlocks.push(eventsBlock);
+      }
     }
     return buildReplyPromptBodies({
       ctx,
@@ -405,53 +413,59 @@ export async function runPreparedReply(
     };
   };
   let preparedSessionState = resolvePreparedSessionState();
-  const resolvedQueue = resolveQueueSettings({
-    cfg,
-    channel: sessionCtx.Provider,
-    sessionEntry,
-    inlineMode: perMessageQueueMode,
-    inlineOptions: perMessageQueueOptions,
-  });
-  const {
-    abortEmbeddedPiRun,
-    isEmbeddedPiRunActive,
-    isEmbeddedPiRunStreaming,
-    resolveActiveEmbeddedRunSessionId,
-    resolveEmbeddedSessionLane,
-    waitForEmbeddedPiRunEnd,
-  } = await loadPiEmbeddedRuntime();
-  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
-  const laneSize = getQueueSize(sessionLaneKey);
-  if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
+  const resolvedQueue = useFastReplyRuntime
+    ? {
+        mode: "collect" as const,
+        debounceMs: 0,
+        cap: 1,
+        dropPolicy: "summarize" as const,
+      }
+    : resolveQueueSettings({
+        cfg,
+        channel: sessionCtx.Provider,
+        sessionEntry,
+        inlineMode: perMessageQueueMode,
+        inlineOptions: perMessageQueueOptions,
+      });
+  const piRuntime = useFastReplyRuntime ? null : await loadPiEmbeddedRuntime();
+  const sessionLaneKey = piRuntime
+    ? piRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
+    : undefined;
+  const laneSize = sessionLaneKey ? getQueueSize(sessionLaneKey) : 0;
+  if (resolvedQueue.mode === "interrupt" && sessionLaneKey && laneSize > 0) {
     const cleared = clearCommandLane(sessionLaneKey);
-    const activeSessionId = resolveActiveEmbeddedRunSessionId(sessionKey);
-    const aborted = abortEmbeddedPiRun(activeSessionId ?? preparedSessionState.sessionId);
+    const activeSessionId = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
+    const aborted = piRuntime?.abortEmbeddedPiRun(
+      activeSessionId ?? preparedSessionState.sessionId,
+    );
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
-  let authProfileId = await resolveSessionAuthProfileOverride({
-    cfg,
-    provider,
-    agentDir,
-    sessionEntry: preparedSessionState.sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    isNewSession,
-  });
+  let authProfileId = useFastReplyRuntime
+    ? undefined
+    : await resolveSessionAuthProfileOverride({
+        cfg,
+        provider,
+        agentDir,
+        sessionEntry: preparedSessionState.sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isNewSession,
+      });
   const { runReplyAgent } = await loadAgentRunnerRuntime();
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
   const resolveActiveQueueSessionId = () =>
-    resolveActiveEmbeddedRunSessionId(sessionKey) ?? preparedSessionState.sessionId;
+    piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? preparedSessionState.sessionId;
   const resolveQueueBusyState = () => {
     const activeSessionId = resolveActiveQueueSessionId();
-    if (!activeSessionId) {
+    if (!activeSessionId || !piRuntime) {
       return { activeSessionId: undefined, isActive: false, isStreaming: false };
     }
     return {
       activeSessionId,
-      isActive: isEmbeddedPiRunActive(activeSessionId),
-      isStreaming: isEmbeddedPiRunStreaming(activeSessionId),
+      isActive: piRuntime.isEmbeddedPiRunActive(activeSessionId),
+      isStreaming: piRuntime.isEmbeddedPiRunStreaming(activeSessionId),
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
@@ -473,20 +487,24 @@ export async function runPreparedReply(
       queueMode: resolvedQueue.mode,
       sessionKey,
       sessionId: sessionIdFinal,
-      abortActiveRun: abortEmbeddedPiRun,
-      waitForActiveRunEnd: waitForEmbeddedPiRunEnd,
+      abortActiveRun: (activeRunSessionId) =>
+        piRuntime?.abortEmbeddedPiRun(activeRunSessionId) ?? false,
+      waitForActiveRunEnd: (activeRunSessionId) =>
+        piRuntime?.waitForEmbeddedPiRunEnd(activeRunSessionId) ?? Promise.resolve(undefined),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
-        authProfileId = await resolveSessionAuthProfileOverride({
-          cfg,
-          provider,
-          agentDir,
-          sessionEntry: preparedSessionState.sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          isNewSession,
-        });
+        authProfileId = useFastReplyRuntime
+          ? undefined
+          : await resolveSessionAuthProfileOverride({
+              cfg,
+              provider,
+              agentDir,
+              sessionEntry: preparedSessionState.sessionEntry,
+              sessionStore,
+              sessionKey,
+              storePath,
+              isNewSession,
+            });
         preparedSessionState = resolvePreparedSessionState();
         ({ prefixedCommandBody, queuedBody } = await rebuildPromptBodies());
       },
@@ -582,8 +600,8 @@ export async function runPreparedReply(
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();
       const latestActiveSessionId =
-        resolveActiveEmbeddedRunSessionId(sessionKey) ?? latestSessionState.sessionId;
-      return isEmbeddedPiRunActive(latestActiveSessionId);
+        piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? latestSessionState.sessionId;
+      return piRuntime?.isEmbeddedPiRunActive(latestActiveSessionId) ?? false;
     },
     isStreaming,
     opts,

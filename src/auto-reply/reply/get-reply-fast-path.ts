@@ -78,6 +78,31 @@ export function shouldUseReplyFastTestBootstrap(params: {
   return params.isFastTestEnv && isCompleteReplyConfig(params.configOverride);
 }
 
+export function shouldUseReplyFastTestRuntime(params: {
+  cfg: OpenClawConfig;
+  isFastTestEnv: boolean;
+}): boolean {
+  return params.isFastTestEnv && isCompleteReplyConfig(params.cfg);
+}
+
+export function shouldUseReplyFastDirectiveExecution(params: {
+  isFastTestBootstrap: boolean;
+  isGroup: boolean;
+  isHeartbeat: boolean;
+  resetTriggered: boolean;
+  triggerBodyNormalized: string;
+}): boolean {
+  if (
+    !params.isFastTestBootstrap ||
+    params.isGroup ||
+    params.isHeartbeat ||
+    params.resetTriggered
+  ) {
+    return false;
+  }
+  return !params.triggerBodyNormalized.includes("/");
+}
+
 export function initFastReplySessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

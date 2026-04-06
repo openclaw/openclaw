@@ -71,6 +71,10 @@ export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unk
 export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
+export const listPluginDoctorLegacyConfigRules = vi.fn(() => []) as unknown as MockFn;
+export const runDoctorHealthContributions = vi
+  .fn()
+  .mockResolvedValue(undefined) as unknown as MockFn;
 export const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
   changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
@@ -259,12 +263,49 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout,
 }));
 
+vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+  isNonSecretApiKeyMarker: () => false,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
+  DEFAULT_CONTEXT_TOKENS: 32768,
+  normalizeProviderId: (value: string) => value.trim().toLowerCase(),
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-stream-shared", () => ({
+  createMoonshotThinkingWrapper: () => undefined,
+  resolveMoonshotThinkingType: () => undefined,
+  streamWithPayloadPatch: () => undefined,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    debug: () => {},
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+  }),
+}));
+
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot,
+  resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
 }));
 
 vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate,
+}));
+
+vi.mock("../flows/doctor-health-contributions.js", () => ({
+  runDoctorHealthContributions,
+}));
+
+vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  listPluginDoctorLegacyConfigRules,
+}));
+
+vi.mock("./doctor-bundled-plugin-runtime-deps.js", () => ({
+  maybeRepairBundledPluginRuntimeDeps: vi.fn(async () => {}),
 }));
 
 vi.mock("../agents/auth-profiles.js", async () => {
@@ -412,6 +453,8 @@ beforeEach(() => {
   writeConfigFile.mockReset().mockResolvedValue(undefined);
   resolveOpenClawPackageRoot.mockReset().mockResolvedValue(null);
   runGatewayUpdate.mockReset().mockResolvedValue(createGatewayUpdateResult());
+  listPluginDoctorLegacyConfigRules.mockReset().mockReturnValue([]);
+  runDoctorHealthContributions.mockReset().mockResolvedValue(undefined);
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue(createLegacyConfigSnapshot());
   createConfigIO.mockReset().mockImplementation(() => ({
     readConfigFileSnapshot: legacyReadConfigFileSnapshot,

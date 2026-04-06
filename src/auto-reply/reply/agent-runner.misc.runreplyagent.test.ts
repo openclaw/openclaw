@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing as embeddedRunTesting,
   abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
   isEmbeddedPiRunActive,
@@ -20,6 +21,10 @@ import {
 import type { TemplateContext } from "../templating.js";
 import { __testing as abortTesting, tryFastAbortFromMessage } from "./abort.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import {
+  __testing as replyRunRegistryTesting,
+  abortActiveReplyRuns,
+} from "./reply-run-registry.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -37,6 +42,7 @@ function createCliBackendTestConfig() {
 }
 
 const runEmbeddedPiAgentMock = vi.fn();
+const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
 const abortEmbeddedPiRunMock = vi.fn();
@@ -77,6 +83,10 @@ vi.mock("../../agents/pi-embedded.js", () => {
     abortEmbeddedPiRun: (...args: unknown[]) => abortEmbeddedPiRunMock(...args),
   };
 });
+
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
+}));
 
 vi.mock("../../runtime.js", () => {
   return {
@@ -127,7 +137,10 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
+  embeddedRunTesting.resetActiveEmbeddedRuns();
+  replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedPiAgentMock.mockClear();
+  runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
   abortEmbeddedPiRunMock.mockClear();
@@ -154,6 +167,8 @@ afterEach(() => {
   vi.useRealTimers();
   resetSystemEventsForTest();
   clearMemoryPluginState();
+  replyRunRegistryTesting.resetReplyRunRegistry();
+  embeddedRunTesting.resetActiveEmbeddedRuns();
 });
 
 describe("runReplyAgent onAgentRunStart", () => {
@@ -243,8 +258,8 @@ describe("runReplyAgent onAgentRunStart", () => {
     });
   });
 
-  it("emits start callback when the embedded runner starts", async () => {
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+  it("emits start callback when the CLI runner starts", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
@@ -768,7 +783,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     });
     expect(getActiveEmbeddedRunCount()).toBe(1);
 
-    expect(abortEmbeddedPiRun(undefined, { mode: "compacting" })).toBe(true);
+    expect(abortActiveReplyRuns({ mode: "all" })).toBe(true);
 
     await expect(runPromise).resolves.toEqual({
       text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
@@ -1577,7 +1592,7 @@ describe("runReplyAgent claude-cli routing", () => {
     });
   }
 
-  it("uses the embedded runner for claude-cli provider", async () => {
+  it("uses the CLI runner for claude-cli provider", async () => {
     const runId = "00000000-0000-0000-0000-000000000001";
     const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
     const lifecyclePhases: string[] = [];
@@ -1593,7 +1608,7 @@ describe("runReplyAgent claude-cli routing", () => {
         lifecyclePhases.push(phase);
       }
     });
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
@@ -1607,7 +1622,8 @@ describe("runReplyAgent claude-cli routing", () => {
     unsubscribe();
     randomSpy.mockRestore();
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(lifecyclePhases).toEqual(["start", "end"]);
     expect(result).toMatchObject({ text: "ok" });
   });

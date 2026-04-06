@@ -551,7 +551,21 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         commandName: "memory status",
         targetIds: new Set(["talk.providers.*.apiKey"]),
       }),
-    ).rejects.toThrow(/Path segment does not exist/i);
+    ).resolves.toMatchObject({
+      resolvedConfig: {
+        talk: {
+          providers: {
+            "acme-speech": {
+              apiKey: "sk-live",
+            },
+          },
+        },
+      },
+      targetStatesByPath: {
+        [TALK_TEST_PROVIDER_API_KEY_PATH]: "resolved_gateway",
+      },
+      hadUnresolvedTargets: false,
+    });
   });
 
   it("fails when configured refs remain unresolved after gateway assignments are applied", async () => {

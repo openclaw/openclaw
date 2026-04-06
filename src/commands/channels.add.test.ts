@@ -228,6 +228,11 @@ describe("channelsAddCommand", () => {
   beforeEach(async () => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
+    configMocks.replaceConfigFile
+      .mockReset()
+      .mockImplementation(async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
+      });
     offsetMocks.deleteTelegramUpdateOffset.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();

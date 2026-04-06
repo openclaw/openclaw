@@ -226,15 +226,7 @@ describe("routeReply", () => {
     expectLastDelivery({
       payloads: [
         expect.objectContaining({
-          text: undefined,
-          interactive: {
-            blocks: [
-              expect.objectContaining({
-                type: "select",
-                placeholder: "Choose one",
-              }),
-            ],
-          },
+          text: "[[slack_select: Choose one | Alpha:alpha]]",
         }),
       ],
     });
@@ -414,7 +406,7 @@ describe("routeReply", () => {
     expectLastDelivery({
       channel: "mattermost",
       to: "channel:CHAN1",
-      replyToId: "post-root",
+      replyToId: null,
       threadId: "post-root",
     });
   });

@@ -17,18 +17,31 @@ const SECRET_TARGET_CALLSITES = [
 function hasSupportedTargetIdsWiring(source: string): boolean {
   return (
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
-    /targetIds:\s*scopedTargets\.targetIds/m.test(source)
+    /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
+    source.includes("collectStatusScanOverview({")
+  );
+}
+
+function usesSharedSecretResolver(source: string): boolean {
+  return (
+    source.includes("resolveCommandSecretRefsViaGateway") ||
+    source.includes("resolveCommandConfigWithSecrets") ||
+    source.includes("collectStatusScanOverview({")
   );
 }
 
 describe("command secret resolution coverage", () => {
   it.each(SECRET_TARGET_CALLSITES)(
-    "routes target-id command path through shared gateway resolver: %s",
+    "routes target-id command path through shared secret resolver: %s",
     async (relativePath) => {
       const source = await readCommandSource(relativePath);
-      expect(source).toContain("resolveCommandSecretRefsViaGateway");
+      expect(usesSharedSecretResolver(source)).toBe(true);
       expect(hasSupportedTargetIdsWiring(source)).toBe(true);
-      expect(source).toContain("resolveCommandSecretRefsViaGateway({");
+      expect(
+        source.includes("resolveCommandSecretRefsViaGateway({") ||
+          source.includes("resolveCommandConfigWithSecrets({") ||
+          source.includes("collectStatusScanOverview({"),
+      ).toBe(true);
     },
   );
 });

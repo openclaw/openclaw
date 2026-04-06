@@ -21,9 +21,15 @@ vi.mock("./provider-transport-stream.js", () => ({
   prepareTransportAwareSimpleModel,
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderStreamFn,
-}));
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderStreamFn,
+  };
+});
 
 let prepareModelForSimpleCompletion: typeof import("./simple-completion-transport.js").prepareModelForSimpleCompletion;
 
