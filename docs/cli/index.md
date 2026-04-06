@@ -1478,20 +1478,14 @@ Tip: the owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Billing note: for Anthropic in OpenClaw, the practical split is **API key** or
-**Claude subscription with Extra Usage**. Anthropic notified OpenClaw users on
-**April 4, 2026 at 12:00 PM PT / 8:00 PM BST** that the **OpenClaw**
-Claude-login path counts as third-party harness usage and requires
-**Extra Usage** billed separately from the subscription. Our local repros also
-show the OpenClaw-identifying prompt string does not reproduce on the
-Anthropic SDK + API-key path. For production, prefer an Anthropic API key or
-another supported subscription-style provider such as OpenAI Codex, Alibaba
-Cloud Model Studio Coding Plan, MiniMax Coding Plan, or Z.AI / GLM Coding
-Plan.
+Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is
+allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as
+sanctioned for this integration unless Anthropic publishes a new policy. For
+production, prefer an Anthropic API key or another supported
+subscription-style provider such as OpenAI Codex, Alibaba Cloud Model Studio
+Coding Plan, MiniMax Coding Plan, or Z.AI / GLM Coding Plan.
 
 Anthropic setup-token is available again as a legacy/manual auth path.
-Use it only with the expectation that Anthropic told OpenClaw users the
-OpenClaw-managed Anthropic subscription path requires **Extra Usage**.
 
 ### `models` (root)
 
@@ -1601,7 +1595,7 @@ Notes:
 - `setup-token` and `paste-token` are generic token commands for providers that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth method.
 - `paste-token` prompts for the token value and defaults to auth profile id `<provider>:manual` when `--profile-id` is omitted.
-- Anthropic `setup-token` / `paste-token` are available again as a legacy/manual OpenClaw path. Anthropic told OpenClaw users this path requires **Extra Usage** on the Claude account.
+- Anthropic `setup-token` / `paste-token` are available again as a legacy/manual OpenClaw path.
 
 ### `models auth order get|set|clear`
 

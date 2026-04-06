@@ -598,7 +598,7 @@ describe("modelsAuthLoginCommand", () => {
       "Anthropic setup-token auth is a legacy/manual path in OpenClaw.",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Anthropic told OpenClaw users this path requires Extra Usage on the Claude account.",
+      "Anthropic staff told us this OpenClaw path is allowed again.",
     );
   });
 
