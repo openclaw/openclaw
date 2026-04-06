@@ -10,6 +10,52 @@ installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core interaction navigation guard", () => {
+  it("does not wait for the grace window after a successful non-navigating click", async () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Set<() => void>();
+      const click = vi.fn(async () => {});
+      const page = {
+        on: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.add(listener);
+          }
+        }),
+        off: vi.fn((event: string, listener: () => void) => {
+          if (event === "framenavigated") {
+            listeners.delete(listener);
+          }
+        }),
+        url: vi.fn(() => "http://127.0.0.1:9222/json/version"),
+      };
+      setPwToolsCoreCurrentRefLocator({ click });
+      setPwToolsCoreCurrentPage(page);
+
+      const completion = vi.fn();
+      const task = mod
+        .clickViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "T1",
+          ref: "1",
+          ssrfPolicy: { allowPrivateNetwork: false },
+        })
+        .then(completion);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completion).toHaveBeenCalledTimes(1);
+      expect(listeners.size).toBe(1);
+      expect(
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+      ).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(listeners.size).toBe(0);
+      await task;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs the post-click navigation guard when navigation starts shortly after the click resolves", async () => {
     vi.useFakeTimers();
     try {
@@ -21,7 +67,7 @@ describe("pw-tools-core interaction navigation guard", () => {
           for (const listener of listeners) {
             listener();
           }
-        }, 0);
+        }, 10);
       });
       const page = {
         on: vi.fn((event: string, listener: () => void) => {
@@ -39,14 +85,23 @@ describe("pw-tools-core interaction navigation guard", () => {
       setPwToolsCoreCurrentRefLocator({ click });
       setPwToolsCoreCurrentPage(page);
 
-      const task = mod.clickViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        targetId: "T1",
-        ref: "1",
-        ssrfPolicy: { allowPrivateNetwork: false },
-      });
+      const completion = vi.fn();
+      const task = mod
+        .clickViaPlaywright({
+          cdpUrl: "http://127.0.0.1:18792",
+          targetId: "T1",
+          ref: "1",
+          ssrfPolicy: { allowPrivateNetwork: false },
+        })
+        .then(completion);
 
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completion).toHaveBeenCalledTimes(1);
+      expect(
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
+      ).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10);
       await task;
 
       expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(

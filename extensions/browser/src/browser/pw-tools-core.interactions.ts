@@ -98,6 +98,52 @@ function observeDelayedInteractionNavigation(
   });
 }
 
+function scheduleDelayedInteractionNavigationGuard(opts: {
+  cdpUrl: string;
+  page: Page;
+  previousUrl: string;
+  ssrfPolicy?: SsrFPolicy;
+  targetId?: string;
+}): void {
+  const page = opts.page as unknown as NavigationObservablePage;
+  if (didPageUrlChange(page, opts.previousUrl)) {
+    void assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    }).catch(() => {});
+    return;
+  }
+  if (typeof page.on !== "function" || typeof page.off !== "function") {
+    return;
+  }
+
+  const onFrameNavigated = (_frame: Frame) => {
+    if (!didPageUrlChange(page, opts.previousUrl)) {
+      return;
+    }
+    cleanup();
+    void assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    }).catch(() => {});
+  };
+  const timeout = setTimeout(() => {
+    cleanup();
+  }, INTERACTION_NAVIGATION_GRACE_MS);
+  const cleanup = () => {
+    clearTimeout(timeout);
+    page.off!("framenavigated", onFrameNavigated);
+  };
+
+  page.on("framenavigated", onFrameNavigated);
+}
+
 async function assertInteractionNavigationCompletedSafely<T>(opts: {
   action: () => Promise<T>;
   cdpUrl: string;
@@ -133,17 +179,40 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
     }
   }
 
-  // Phase 2: after the action completes, apply a brief grace window so navigations
-  // that are delayed slightly past action resolution are still caught.
-  const navigationObserved =
-    navigatedDuringAction ||
-    (await observeDelayedInteractionNavigation(opts.page, opts.previousUrl));
+  const navigationObserved = navigatedDuringAction || didPageUrlChange(opts.page, opts.previousUrl);
 
   if (navigationObserved) {
     await assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
       page: opts.page,
       response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  } else if (actionError) {
+    // Preserve the action-error path semantics: if a rejected click/evaluate still
+    // triggers a delayed navigation, the SSRF block must win over the original
+    // action error instead of surfacing a stale interaction failure.
+    const delayedNavigationObserved = await observeDelayedInteractionNavigation(
+      opts.page,
+      opts.previousUrl,
+    );
+    if (delayedNavigationObserved) {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page: opts.page,
+        response: null,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
+    }
+  } else {
+    // Successful non-navigating interactions should not wait out the grace window,
+    // but we still keep a short-lived listener alive to quarantine late SSRF hops.
+    scheduleDelayedInteractionNavigationGuard({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      previousUrl: opts.previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
       targetId: opts.targetId,
     });
