@@ -150,6 +150,30 @@ export function parseModelRef(
   return normalizeModelRef(providerRaw, model, options);
 }
 
+export function resolvePersistedOverrideModelRef(params: {
+  defaultProvider: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): ModelRef | null {
+  const defaultProvider = params.defaultProvider.trim();
+  const overrideProvider = params.overrideProvider?.trim();
+  const overrideModel = params.overrideModel?.trim();
+  if (!overrideModel) {
+    return null;
+  }
+  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
+  return (
+    parseModelRef(encodedOverride, defaultProvider) ?? {
+      provider: overrideProvider || defaultProvider,
+      model: overrideModel,
+    }
+  );
+}
+
+/**
+ * Runtime-first resolver for persisted model metadata.
+ * Use this when callers intentionally want the last executed model identity.
+ */
 export function resolvePersistedModelRef(params: {
   defaultProvider: string;
   runtimeProvider?: string;
@@ -171,19 +195,38 @@ export function resolvePersistedModelRef(params: {
       }
     );
   }
+  return resolvePersistedOverrideModelRef({
+    defaultProvider,
+    overrideProvider: params.overrideProvider,
+    overrideModel: params.overrideModel,
+  });
+}
 
-  const overrideProvider = params.overrideProvider?.trim();
-  const overrideModel = params.overrideModel?.trim();
-  if (!overrideModel) {
-    return null;
+/**
+ * Selected-model resolver for persisted model metadata.
+ * Use this for control/status/UI surfaces that should honor explicit session
+ * overrides before falling back to runtime identity.
+ */
+export function resolvePersistedSelectedModelRef(params: {
+  defaultProvider: string;
+  runtimeProvider?: string;
+  runtimeModel?: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): ModelRef | null {
+  const override = resolvePersistedOverrideModelRef({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.overrideProvider,
+    overrideModel: params.overrideModel,
+  });
+  if (override) {
+    return override;
   }
-  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
-  return (
-    parseModelRef(encodedOverride, defaultProvider) ?? {
-      provider: overrideProvider || defaultProvider,
-      model: overrideModel,
-    }
-  );
+  return resolvePersistedModelRef({
+    defaultProvider: params.defaultProvider,
+    runtimeProvider: params.runtimeProvider,
+    runtimeModel: params.runtimeModel,
+  });
 }
 
 export function inferUniqueProviderFromConfiguredModels(params: {
