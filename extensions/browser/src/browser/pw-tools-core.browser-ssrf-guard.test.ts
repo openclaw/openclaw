@@ -71,6 +71,26 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
   });
 
+  it("re-checks click-triggered navigations even when no ssrfPolicy is provided", async () => {
+    pageState.page = { url: vi.fn(() => "https://example.com") };
+    pageState.locator = { click: vi.fn(async () => {}) };
+
+    await interactions.clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      ref: "1",
+      // no ssrfPolicy — guard must still run to enforce default-deny
+    });
+
+    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      response: null,
+      ssrfPolicy: undefined,
+      targetId: "tab-1",
+    });
+  });
+
   it("re-checks batched click-triggered navigations with the session safety helper", async () => {
     pageState.page = { url: vi.fn(() => "https://example.com") };
     pageState.locator = { click: vi.fn(async () => {}) };
