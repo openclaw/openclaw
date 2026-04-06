@@ -147,6 +147,7 @@ export const en: TranslationMap = {
   tabs: {
     agents: "Agents",
     overview: "Overview",
+    claw: "Claw",
     channels: "Channels",
     instances: "Instances",
     sessions: "Sessions",
@@ -168,6 +169,7 @@ export const en: TranslationMap = {
   subtitles: {
     agents: "Workspaces, tools, identities.",
     overview: "Status, entry points, health.",
+    claw: "Goal intake, approvals, and mission state.",
     channels: "Channels and settings.",
     instances: "Connected clients and nodes.",
     sessions: "Active sessions and defaults.",

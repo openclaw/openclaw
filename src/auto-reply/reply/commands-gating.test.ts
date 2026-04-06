@@ -23,7 +23,7 @@ const getConfigValueAtPathMock = vi.hoisted(() => vi.fn());
 const parseConfigPathMock = vi.hoisted(() => vi.fn());
 const setConfigValueAtPathMock = vi.hoisted(() => vi.fn());
 const resolveConfigWriteDeniedTextMock = vi.hoisted(() =>
-  vi.fn<(...args: never[]) => string | null>(() => null),
+  vi.fn<(params: unknown) => string | null>(() => null),
 );
 const isInternalMessageChannelMock = vi.hoisted(() => vi.fn(() => false));
 
@@ -163,7 +163,7 @@ function buildParams(commandBody: string, cfg: OpenClawConfig): HandleCommandsPa
       from: "user-1",
       to: "bot-1",
     },
-    directives: parseInlineDirectives(""),
+    directives: parseInlineDirectives(commandBody),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
     workspaceDir: "/tmp",

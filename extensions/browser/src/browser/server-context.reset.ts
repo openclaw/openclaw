@@ -43,7 +43,7 @@ export function createProfileResetOps({
 
     const userDataDir = resolveOpenClawUserDataDir(profile.name);
     const profileState = getProfileState();
-    const httpReachable = await isHttpReachable(300);
+    const httpReachable = await isHttpReachable(5000);
     if (httpReachable && !profileState.running) {
       // Port in use but not by us - kill it.
       await closePlaywrightBrowserConnectionForProfile(profile.cdpUrl);

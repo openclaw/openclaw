@@ -10,7 +10,8 @@ import {
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
   resolveProfile,
   type ResolvedBrowserConfig,
-} from "../../plugin-sdk/browser-profiles.js";
+  type ResolvedBrowserProfile,
+} from "../../plugin-sdk/browser-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
@@ -42,13 +43,23 @@ import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./worksp
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
 
-async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
+async function waitForSandboxCdp(params: {
+  cdpPort: number;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
   const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
   while (Date.now() < deadline) {
+    if (params.signal?.aborted) {
+      throw params.signal.reason instanceof Error
+        ? params.signal.reason
+        : new Error("sandbox browser attach aborted");
+    }
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(ctrl.abort.bind(ctrl), 1000);
+      const remainingMs = Math.max(250, Math.min(5000, deadline - Date.now()));
+      const t = setTimeout(ctrl.abort.bind(ctrl), remainingMs);
       try {
         const res = await fetch(url, { signal: ctrl.signal });
         if (res.ok) {
@@ -82,8 +93,8 @@ function buildSandboxBrowserResolvedConfig(params: {
     cdpIsLoopback: true,
     cdpPortRangeStart: cdpPortRange.start,
     cdpPortRangeEnd: cdpPortRange.end,
-    remoteCdpTimeoutMs: 1500,
-    remoteCdpHandshakeTimeoutMs: 3000,
+    remoteCdpTimeoutMs: 5000,
+    remoteCdpHandshakeTimeoutMs: 10_000,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath: undefined,
     headless: params.headless,
@@ -335,7 +346,7 @@ export async function ensureSandboxBrowser(params: {
     }
 
     const onEnsureAttachTarget = params.cfg.browser.autoStart
-      ? async () => {
+      ? async (_profile: ResolvedBrowserProfile, signal?: AbortSignal) => {
           const currentState = await dockerContainerState(containerName);
           if (currentState.exists && !currentState.running) {
             await execDocker(["start", containerName]);
@@ -343,6 +354,7 @@ export async function ensureSandboxBrowser(params: {
           const ok = await waitForSandboxCdp({
             cdpPort: mappedCdp,
             timeoutMs: params.cfg.browser.autoStartTimeoutMs,
+            signal,
           });
           if (!ok) {
             throw new Error(

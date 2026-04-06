@@ -22,6 +22,8 @@ import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
+import { loadClawDashboard } from "./controllers/claw.ts";
+import { loadConfig } from "./controllers/config.ts";
 import { loadDevices } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
@@ -251,7 +253,10 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       void loadHealthState(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
-      void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      void (async () => {
+        await loadConfig(host as unknown as OpenClawApp);
+        await refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      })();
     },
     onClose: ({ code, reason, error }) => {
       if (host.client !== client) {
@@ -411,6 +416,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "sessions.changed") {
     void loadSessions(host as unknown as OpenClawApp);
+    return;
+  }
+
+  if (evt.event.startsWith("claw.")) {
+    void loadClawDashboard(host as unknown as OpenClawApp);
     return;
   }
 

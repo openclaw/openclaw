@@ -4,7 +4,11 @@ import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
-import { buildAgentSystemPrompt, type PromptMode } from "../system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  type ClawPromptRole,
+  type PromptMode,
+} from "../system-prompt.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 
@@ -30,6 +34,7 @@ export function buildEmbeddedSystemPrompt(params: {
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  clawRole?: ClawPromptRole;
   runtimeInfo: {
     agentId?: string;
     host: string;
@@ -71,6 +76,7 @@ export function buildEmbeddedSystemPrompt(params: {
     reactionGuidance: params.reactionGuidance,
     promptMode: params.promptMode,
     acpEnabled: params.acpEnabled,
+    clawRole: params.clawRole,
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
     sandboxInfo: params.sandboxInfo,

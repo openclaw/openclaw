@@ -168,7 +168,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
       if (capabilities.usesChromeMcp) {
         try {
-          running = await profileCtx.isReachable(300);
+          running = await profileCtx.isReachable(5000);
           if (running) {
             const tabs = await profileCtx.listTabs();
             tabCount = tabs.filter((t) => t.type === "page").length;
@@ -189,7 +189,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         try {
           const reachable = await isChromeReachable(
             profile.cdpUrl,
-            200,
+            5000,
             current.resolved.ssrfPolicy,
           );
           if (reachable) {
@@ -243,7 +243,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     forProfile,
     listProfiles,
     // Legacy methods delegate to default profile
-    ensureBrowserAvailable: () => getDefaultContext().ensureBrowserAvailable(),
+    ensureBrowserAvailable: (signal) => getDefaultContext().ensureBrowserAvailable(signal),
     ensureTabAvailable: (targetId) => getDefaultContext().ensureTabAvailable(targetId),
     isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
     isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),

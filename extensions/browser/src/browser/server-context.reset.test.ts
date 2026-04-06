@@ -92,7 +92,7 @@ describe("createProfileResetOps", () => {
       from: profileDir,
       to: `${profileDir}.trashed`,
     });
-    expect(isHttpReachable).toHaveBeenCalledWith(300);
+    expect(isHttpReachable).toHaveBeenCalledWith(5000);
     expect(stopRunningBrowser).toHaveBeenCalledTimes(1);
     expect(pwAiMocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",

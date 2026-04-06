@@ -1504,6 +1504,19 @@
                 "pages": ["reference/rpc", "reference/device-models"]
               },
               {
+                "group": "Claw specs",
+                "pages": [
+                  "claw/00-master-spec",
+                  "claw/01-full-access-semantics-spec",
+                  "claw/02-mission-engine-spec",
+                  "claw/03-prompt-and-role-spec",
+                  "claw/04-browser-and-runtime-hardening-spec",
+                  "claw/05-ui-and-gateway-spec",
+                  "claw/06-governance-and-audit-spec",
+                  "claw/07-test-and-acceptance-spec"
+                ]
+              },
+              {
                 "group": "Templates",
                 "pages": [
                   "reference/AGENTS.default",

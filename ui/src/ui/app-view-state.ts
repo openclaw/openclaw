@@ -1,3 +1,11 @@
+import type {
+  ClawArtifactEntry,
+  ClawAuditEntry,
+  ClawControlState,
+  ClawInboxItem,
+  ClawMissionDetail,
+  ClawMissionSummary,
+} from "../../../src/shared/claw-types.js";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
@@ -104,6 +112,26 @@ export type AppViewState = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
   execApprovalError: string | null;
+  clawLoading: boolean;
+  clawError: string | null;
+  clawMissions: ClawMissionSummary[];
+  clawSelectedMissionId: string | null;
+  clawMission: ClawMissionDetail | null;
+  clawGoalDraft: string;
+  clawCreateBusy: boolean;
+  clawActionBusy: boolean;
+  clawControl: ClawControlState | null;
+  clawInbox: ClawInboxItem[];
+  clawAuditLoading: boolean;
+  clawAuditEntries: ClawAuditEntry[];
+  clawAuditFilters: {
+    role: string;
+    toolName: string;
+    sideEffectClass: string;
+    outcome: string;
+  };
+  clawArtifactsLoading: boolean;
+  clawArtifacts: ClawArtifactEntry[];
   pendingGatewayUrl: string | null;
   configLoading: boolean;
   configRaw: string;

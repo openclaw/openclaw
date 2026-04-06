@@ -27,6 +27,7 @@ import type {
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
+export type ClawPromptRole = "runner" | "verifier" | "helper";
 type OwnerIdDisplay = "raw" | "hash";
 
 const CONTEXT_FILE_ORDER = new Map<string, number>([
@@ -309,6 +310,22 @@ function buildExecApprovalPromptGuidance(params: {
   return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
 }
 
+function buildClawRoleSection(params: {
+  clawRole?: ClawPromptRole;
+  isMinimal: boolean;
+}) {
+  if (!params.clawRole) {
+    return [];
+  }
+  const roleLine =
+    params.clawRole === "runner"
+      ? "Role: runner. Own the mission and keep making durable progress until a terminal state."
+      : params.clawRole === "verifier"
+        ? "Role: verifier. Use fresh context, inspect the current state directly, and decide only against explicit done criteria."
+        : "Role: helper. Produce one bounded recovery, research, or replanning result for the current mission issue.";
+  return ["## Claw Mission Role", roleLine, ""];
+}
+
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -333,6 +350,8 @@ export function buildAgentSystemPrompt(params: {
   promptMode?: PromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Optional Claw mission role overlay for mission-owned sessions. */
+  clawRole?: ClawPromptRole;
   runtimeInfo?: {
     agentId?: string;
     host?: string;
@@ -594,6 +613,10 @@ export function buildAgentSystemPrompt(params: {
     ...workspaceNotes,
     "",
     ...docsSection,
+    ...buildClawRoleSection({
+      clawRole: params.clawRole,
+      isMinimal,
+    }),
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
     params.sandboxInfo?.enabled
       ? [

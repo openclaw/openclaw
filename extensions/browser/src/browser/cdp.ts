@@ -7,6 +7,7 @@ import {
   isWebSocketUrl,
   withCdpSocket,
 } from "./cdp.helpers.js";
+import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 
 export {
@@ -190,7 +191,7 @@ export async function createTargetViaCdp(opts: {
     await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
       appendCdpPath(opts.cdpUrl, "/json/version"),
-      1500,
+      CDP_JSON_NEW_TIMEOUT_MS,
     );
     const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
     wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";

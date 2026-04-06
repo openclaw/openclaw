@@ -1014,6 +1014,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Display name shown for the assistant in UI views, chat chrome, and status contexts. Keep this stable so operators can reliably identify which assistant persona is active.",
   "ui.assistant.avatar":
     "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",
+  claw:
+    "Experimental Claw mission-runtime settings controlling whether the UI mission runner is active and how aggressively it processes approved missions. Keep this disabled outside focused Claw development and acceptance testing until the feature is ready to ship.",
+  "claw.enabled":
+    "Master switch for the experimental Claw mission runtime. Keep disabled by default until the Claw acceptance matrix is green and the operator surface is ready for general use.",
+  "claw.maxActiveMissions":
+    "Maximum number of concurrently active Claw missions allowed to execute at once. Keep this at 1 for the current single-runner delivery unless you intentionally validate parallel mission behavior.",
+  "claw.loopMs":
+    "Wake-loop interval in milliseconds for the Claw mission runtime when it polls for queued or recovering work. Use shorter intervals for faster pickup or longer intervals to reduce idle churn.",
+  "claw.autonomyDefault":
+    "Default global autonomy state for newly created Claw control state. Keep enabled for the approved-mission workflow unless you intentionally want all missions to queue until an operator explicitly resumes autonomy.",
   plugins:
     "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
   "plugins.enabled":

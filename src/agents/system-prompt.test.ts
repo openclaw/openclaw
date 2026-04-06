@@ -287,6 +287,19 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Voice (TTS) is enabled.");
   });
 
+  it("adds a first-class Claw role section when requested", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      clawRole: "verifier",
+      extraSystemPrompt: "Verifier mission context",
+    });
+
+    expect(prompt).toContain("## Claw Mission Role");
+    expect(prompt).toContain("Role: verifier.");
+    expect(prompt).toContain("## Group Chat Context");
+    expect(prompt).toContain("Verifier mission context");
+  });
+
   it("adds reasoning tag hint when enabled", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

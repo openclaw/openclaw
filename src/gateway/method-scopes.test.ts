@@ -27,12 +27,15 @@ describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
+    ["claw.missions.list", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
+    ["claw.missions.create", ["operator.admin"]],
+    ["claw.decisions.reply", ["operator.admin"]],
     ["poll", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
@@ -75,7 +78,9 @@ describe("operator scope authorization", () => {
     ["health", ["operator.read"], { allowed: true }],
     ["health", ["operator.write"], { allowed: true }],
     ["config.schema.lookup", ["operator.read"], { allowed: true }],
+    ["claw.missions.list", ["operator.read"], { allowed: true }],
     ["config.patch", ["operator.admin"], { allowed: true }],
+    ["claw.missions.create", ["operator.admin"], { allowed: true }],
   ])("authorizes %s for scopes %j", (method, scopes, expected) => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
   });
@@ -109,6 +114,17 @@ describe("operator scope authorization", () => {
       });
     },
   );
+
+  it("requires admin for Claw mutations", () => {
+    expect(authorizeOperatorScopesForMethod("claw.missions.create", ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod("claw.decisions.reply", ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+  });
 
   it.each(["plugin.approval.request", "plugin.approval.waitDecision", "plugin.approval.resolve"])(
     "requires approvals scope for %s",

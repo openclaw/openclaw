@@ -121,6 +121,11 @@ export function emitGatewayRestart(): boolean {
   try {
     if (process.listenerCount("SIGUSR1") > 0) {
       process.emit("SIGUSR1");
+    } else if (process.platform === "win32") {
+      const restart = triggerOpenClawRestart();
+      if (!restart.ok) {
+        throw new Error(restart.detail ?? `${restart.method} restart failed`);
+      }
     } else {
       process.kill(process.pid, "SIGUSR1");
     }

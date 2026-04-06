@@ -1,5 +1,13 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
+import type {
+  ClawArtifactEntry,
+  ClawAuditEntry,
+  ClawControlState,
+  ClawInboxItem,
+  ClawMissionDetail,
+  ClawMissionSummary,
+} from "../../../src/shared/claw-types.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -202,6 +210,26 @@ export class OpenClawApp extends LitElement {
   @state() execApprovalQueue: ExecApprovalRequest[] = [];
   @state() execApprovalBusy = false;
   @state() execApprovalError: string | null = null;
+  @state() clawLoading = false;
+  @state() clawError: string | null = null;
+  @state() clawMissions: ClawMissionSummary[] = [];
+  @state() clawSelectedMissionId: string | null = null;
+  @state() clawMission: ClawMissionDetail | null = null;
+  @state() clawGoalDraft = "";
+  @state() clawCreateBusy = false;
+  @state() clawActionBusy = false;
+  @state() clawControl: ClawControlState | null = null;
+  @state() clawInbox: ClawInboxItem[] = [];
+  @state() clawAuditLoading = false;
+  @state() clawAuditEntries: ClawAuditEntry[] = [];
+  @state() clawAuditFilters = {
+    role: "",
+    toolName: "",
+    sideEffectClass: "",
+    outcome: "",
+  };
+  @state() clawArtifactsLoading = false;
+  @state() clawArtifacts: ClawArtifactEntry[] = [];
   @state() pendingGatewayUrl: string | null = null;
   pendingGatewayToken: string | null = null;
 
