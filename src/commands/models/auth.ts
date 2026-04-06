@@ -420,7 +420,8 @@ export async function modelsAuthPasteTokenCommand(
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
   if (provider === "anthropic") {
-    runtime.log("Anthropic setup-token auth is a legacy/manual path in OpenClaw.");
+    runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
+    runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
     runtime.log("Anthropic staff told us this OpenClaw path is allowed again.");
   }
 }
