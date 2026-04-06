@@ -643,7 +643,7 @@ function renderAppearanceSection(props: ConfigProps) {
               <span
                 class="settings-status-dot ${props.connected ? "settings-status-dot--ok" : ""}"
               ></span>
-              ${props.connected ? "Connected" : "Offline"}
+              ${props.connected ? t("common.connected") : t("common.offline")}
             </span>
           </div>
           ${props.assistantName

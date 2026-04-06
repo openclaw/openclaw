@@ -15,7 +15,7 @@ import type { ChannelsProps } from "./channels.types.ts";
  */
 function truncatePubkey(pubkey: string | null | undefined): string {
   if (!pubkey) {
-    return "n/a";
+    return t("common.na");
   }
   if (pubkey.length <= 20) {
     return pubkey;
@@ -67,23 +67,23 @@ export function renderNostrCard(params: {
         </div>
         <div class="status-list account-card-status">
           <div>
-            <span class="label">Running</span>
-            <span>${account.running ? "Yes" : "No"}</span>
+            <span class="label">${t("common.running")}</span>
+            <span>${account.running ? t("common.yes") : t("common.no")}</span>
           </div>
           <div>
-            <span class="label">Configured</span>
-            <span>${account.configured ? "Yes" : "No"}</span>
+            <span class="label">${t("common.configured")}</span>
+            <span>${account.configured ? t("common.yes") : t("common.no")}</span>
           </div>
           <div>
-            <span class="label">Public Key</span>
+            <span class="label">${t("common.publicKey")}</span>
             <span class="monospace" title="${publicKey ?? ""}">${truncatePubkey(publicKey)}</span>
           </div>
           <div>
-            <span class="label">Last inbound</span>
+            <span class="label">${t("common.lastInbound")}</span>
             <span
               >${account.lastInboundAt
                 ? formatRelativeTimestamp(account.lastInboundAt)
-                : "n/a"}</span
+                : t("common.na")}</span
             >
           </div>
           ${account.lastError
@@ -128,7 +128,7 @@ export function renderNostrCard(params: {
         <div
           style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;"
         >
-          <div style="font-weight: 500;">Profile</div>
+          <div style="font-weight: 500;">${t("channels.nostr.profile")}</div>
           ${summaryConfigured
             ? html`
                 <button
@@ -136,7 +136,7 @@ export function renderNostrCard(params: {
                   @click=${onEditProfile}
                   style="font-size: 12px; padding: 4px 8px;"
                 >
-                  Edit Profile
+                  ${t("channels.nostr.editProfile")}
                 </button>
               `
             : nothing}
@@ -149,7 +149,7 @@ export function renderNostrCard(params: {
                       <div style="margin-bottom: 8px;">
                         <img
                           src=${picture}
-                          alt="Profile picture"
+                          alt=${t("channels.nostr.profilePicture")}
                           style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid var(--border-color);"
                           @error=${(e: Event) => {
                             (e.target as HTMLImageElement).style.display = "none";
@@ -159,16 +159,19 @@ export function renderNostrCard(params: {
                     `
                   : nothing}
                 ${name
-                  ? html`<div><span class="label">Name</span><span>${name}</span></div>`
+                  ? html`<div>
+                      <span class="label">${t("channels.nostr.name")}</span><span>${name}</span>
+                    </div>`
                   : nothing}
                 ${displayName
                   ? html`<div>
-                      <span class="label">Display Name</span><span>${displayName}</span>
+                      <span class="label">${t("channels.nostr.displayName")}</span
+                      ><span>${displayName}</span>
                     </div>`
                   : nothing}
                 ${about
                   ? html`<div>
-                      <span class="label">About</span
+                      <span class="label">${t("channels.nostr.about")}</span
                       ><span style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;"
                         >${about}</span
                       >
@@ -181,7 +184,7 @@ export function renderNostrCard(params: {
             `
           : html`
               <div style="color: var(--text-muted); font-size: 13px">
-                No profile set. Click "Edit Profile" to add your name, bio, and avatar.
+                ${t("channels.nostr.noProfile")} ${t("channels.nostr.noProfileHint")}
               </div>
             `}
       </div>
@@ -202,12 +205,12 @@ export function renderNostrCard(params: {
         : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">Configured</span>
-                <span>${summaryConfigured ? "Yes" : "No"}</span>
+                <span class="label">${t("common.configured")}</span>
+                <span>${summaryConfigured ? t("common.yes") : t("common.no")}</span>
               </div>
               <div>
-                <span class="label">Running</span>
-                <span>${summaryRunning ? "Yes" : "No"}</span>
+                <span class="label">${t("common.running")}</span>
+                <span>${summaryRunning ? t("common.yes") : t("common.no")}</span>
               </div>
               <div>
                 <span class="label">${t("common.publicKey")}</span>

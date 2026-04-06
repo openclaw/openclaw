@@ -53,12 +53,16 @@ function renderEffectiveToolBadge(tool: {
   channelId?: string;
 }) {
   if (tool.source === "plugin") {
-    return tool.pluginId ? `Connected: ${tool.pluginId}` : "Connected";
+    return tool.pluginId
+      ? t("agentTools.connectedSource", { id: tool.pluginId })
+      : t("agentTools.connected");
   }
   if (tool.source === "channel") {
-    return tool.channelId ? `Channel: ${tool.channelId}` : "Channel";
+    return tool.channelId
+      ? t("agentTools.channelSource", { id: tool.channelId })
+      : t("agentTools.channel");
   }
-  return "Built-in";
+  return t("agentTools.builtIn");
 }
 
 export function renderAgentTools(params: {

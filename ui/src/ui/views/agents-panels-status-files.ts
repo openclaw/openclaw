@@ -276,14 +276,18 @@ export function renderAgentCron(params: {
         </div>
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
-            <div class="stat-label">Enabled</div>
+            <div class="stat-label">${t("common.enabled")}</div>
             <div class="stat-value">
-              ${params.status ? (params.status.enabled ? "Yes" : "No") : "n/a"}
+              ${params.status
+                ? params.status.enabled
+                  ? t("common.yes")
+                  : t("common.no")
+                : t("common.na")}
             </div>
           </div>
           <div class="stat">
             <div class="stat-label">Jobs</div>
-            <div class="stat-value">${params.status?.jobs ?? "n/a"}</div>
+            <div class="stat-value">${params.status?.jobs ?? t("common.na")}</div>
           </div>
           <div class="stat">
             <div class="stat-label">Next wake</div>
