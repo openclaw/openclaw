@@ -190,6 +190,8 @@ export async function dispatchReplyFromConfig(params: {
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./get-reply-from-config.runtime.js").getReplyFromConfig;
+  fastAbortResolver?: typeof import("./abort.runtime.js").tryFastAbortFromMessage;
+  formatAbortReplyTextResolver?: typeof import("./abort.runtime.js").formatAbortReplyText;
   /** Optional config override passed to getReplyFromConfig (e.g. per-sender timezone). */
   configOverride?: OpenClawConfig;
 }): Promise<DispatchFromConfigResult> {
@@ -498,11 +500,17 @@ export async function dispatchReplyFromConfig(params: {
   markProcessing();
 
   try {
-    const abortRuntime = await loadAbortRuntime();
-    const fastAbort = await abortRuntime.tryFastAbortFromMessage({ ctx, cfg });
+    const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
+    const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
+    const formatAbortReplyTextResolver =
+      params.formatAbortReplyTextResolver ?? abortRuntime?.formatAbortReplyText;
+    if (!fastAbortResolver || !formatAbortReplyTextResolver) {
+      throw new Error("abort runtime unavailable");
+    }
+    const fastAbort = await fastAbortResolver({ ctx, cfg });
     if (fastAbort.handled) {
       const payload = {
-        text: abortRuntime.formatAbortReplyText(fastAbort.stoppedSubagents),
+        text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
