@@ -126,25 +126,11 @@ describe("preemptive-compaction", () => {
       makeToolResultMessage(medium),
     ];
     const reserveTokens = 500;
-    const baseContextTokenBudget = 3_500;
-    const estimatedPromptTokens = estimatePrePromptTokens({
-      messages,
-      systemPrompt: verboseSystem,
-      prompt: verbosePrompt,
-    });
-    const toolResultPotential = estimateToolResultReductionPotential({
-      messages,
-      contextWindowTokens: baseContextTokenBudget,
-    });
-    const desiredOverflowTokens = Math.ceil((toolResultPotential.maxReducibleChars + 4_096) / 4);
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages,
       systemPrompt: verboseSystem,
       prompt: verbosePrompt,
-      contextTokenBudget: Math.max(
-        baseContextTokenBudget,
-        estimatedPromptTokens - desiredOverflowTokens + reserveTokens,
-      ),
+      contextTokenBudget: 12_000,
       reserveTokens,
     });
 
