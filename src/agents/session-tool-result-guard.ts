@@ -18,6 +18,10 @@ import {
 import { createPendingToolCallState } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import {
+  applyToolResultReplayMetadata,
+  consumePendingToolResultReplayMetadata,
+} from "./tool-result-replay-metadata.js";
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -149,12 +153,22 @@ export function installSessionToolResultGuard(
     if (allowSyntheticToolResults) {
       for (const [id, name] of pendingState.entries()) {
         const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
+        const replayMeta = consumePendingToolResultReplayMetadata({
+          sessionKey: opts?.sessionKey,
+          toolCallId: id,
+        });
         const flushed = applyBeforeWriteHook(
-          persistToolResult(persistMessage(synthetic), {
-            toolCallId: id,
-            toolName: name,
-            isSynthetic: true,
-          }),
+          applyToolResultReplayMetadata(
+            persistToolResult(
+              applyToolResultReplayMetadata(persistMessage(synthetic), replayMeta),
+              {
+                toolCallId: id,
+                toolName: name,
+                isSynthetic: true,
+              },
+            ),
+            replayMeta,
+          ),
         );
         if (flushed) {
           originalAppend(flushed as never);
@@ -188,20 +202,27 @@ export function installSessionToolResultGuard(
     if (nextRole === "toolResult") {
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pendingState.getToolName(id) : undefined;
+      const replayMeta = consumePendingToolResultReplayMetadata({
+        sessionKey: opts?.sessionKey,
+        toolCallId: id ?? undefined,
+      });
       if (id) {
         pendingState.delete(id);
       }
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
+      const taggedToolResult = applyToolResultReplayMetadata(normalizedToolResult, replayMeta);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const capped = capToolResultSize(persistMessage(normalizedToolResult));
-      const persisted = applyBeforeWriteHook(
+      const capped = capToolResultSize(persistMessage(taggedToolResult));
+      const persistedToolResult = applyToolResultReplayMetadata(
         persistToolResult(capped, {
           toolCallId: id ?? undefined,
           toolName,
           isSynthetic: false,
         }),
+        replayMeta,
       );
+      const persisted = applyBeforeWriteHook(persistedToolResult);
       if (!persisted) {
         return undefined;
       }

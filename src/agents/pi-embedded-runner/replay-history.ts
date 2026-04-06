@@ -28,6 +28,11 @@ import {
   sanitizeToolUseResultPairing,
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
+import {
+  getToolResultReplayMetadata,
+  replaceToolResultReplayContent,
+  STALE_TOOL_RESULT_REPLAY_THRESHOLD_MS,
+} from "../tool-result-replay-metadata.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
@@ -297,6 +302,48 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
+function omitStaleTransientDiagnosticToolResults(messages: AgentMessage[]): AgentMessage[] {
+  const latestByDiagnosticType = new Map<string, number>();
+  for (let i = 0; i < messages.length; i += 1) {
+    const meta = getToolResultReplayMetadata(messages[i]);
+    if (!meta) {
+      continue;
+    }
+    latestByDiagnosticType.set(meta.diagnosticType, i);
+  }
+
+  if (latestByDiagnosticType.size === 0) {
+    return messages;
+  }
+
+  const now = Date.now();
+  let touched = false;
+  const out = [...messages];
+  for (let i = 0; i < out.length; i += 1) {
+    const message = out[i];
+    const meta = getToolResultReplayMetadata(message);
+    if (!meta) {
+      continue;
+    }
+    const latestIndex = latestByDiagnosticType.get(meta.diagnosticType) ?? i;
+    const timestamp = parseMessageTimestamp(
+      (message as { timestamp?: unknown }).timestamp ?? meta.taggedAt ?? null,
+    );
+    const staleByNewerResult = latestIndex > i;
+    const staleByAge =
+      timestamp !== null && now - timestamp > STALE_TOOL_RESULT_REPLAY_THRESHOLD_MS;
+    if (!staleByNewerResult && !staleByAge) {
+      continue;
+    }
+    out[i] = replaceToolResultReplayContent(
+      message,
+      "[Previous environment diagnostic output omitted from replay for accuracy.]",
+    );
+    touched = true;
+  }
+  return touched ? out : messages;
+}
+
 function createProviderReplaySessionState(
   sessionManager: SessionManager,
 ): ProviderReplaySessionState {
@@ -425,8 +472,10 @@ export async function sanitizeSessionHistory(params: {
       })
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
+  const sanitizedTransientDiagnostics =
+    omitStaleTransientDiagnosticToolResults(sanitizedToolResults);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
-    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedTransientDiagnostics),
   );
 
   const isOpenAIResponsesApi =
