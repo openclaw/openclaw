@@ -31,9 +31,16 @@ export async function seedSessionStore(
   sessionKey: string,
   session: HeartbeatSessionSeed,
 ): Promise<void> {
+  let existingStore: Record<string, unknown> = {};
+  try {
+    existingStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+  } catch {
+    existingStore = {};
+  }
   await fs.writeFile(
     storePath,
     JSON.stringify({
+      ...existingStore,
       [sessionKey]: {
         sessionId: session.sessionId ?? "sid",
         updatedAt: session.updatedAt ?? Date.now(),

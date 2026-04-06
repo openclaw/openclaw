@@ -568,8 +568,15 @@ export async function startGatewayServer(
     const startupSnapshot = await readConfigFileSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
   }
+  const startupMaintenanceConfig =
+    cfgAtStart.channels === undefined && startupRuntimeConfig.channels !== undefined
+      ? {
+          ...cfgAtStart,
+          channels: startupRuntimeConfig.channels,
+        }
+      : cfgAtStart;
   await runChannelPluginStartupMaintenance({
-    cfg: cfgAtStart,
+    cfg: startupMaintenanceConfig,
     env: process.env,
     log,
   });

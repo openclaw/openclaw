@@ -16,7 +16,6 @@ import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
 const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
-const CLI_IMAGE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE);
 const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
@@ -132,6 +131,14 @@ function parseImageMode(raw?: string): "list" | "repeat" | undefined {
     return trimmed;
   }
   throw new Error("OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.");
+}
+
+function shouldRunCliImageProbe(providerId: string): boolean {
+  const raw = process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE?.trim();
+  if (raw) {
+    return isTruthyEnvValue(raw);
+  }
+  return providerId === "claude-cli";
 }
 
 function matchesCliBackendReply(text: string, expected: string): boolean {
@@ -321,12 +328,21 @@ describeLive("gateway live (cli backend)", () => {
       }
       const providerId = parsed.provider;
       const modelKey = `${providerId}/${parsed.model}`;
+      const enableCliImageProbe = shouldRunCliImageProbe(providerId);
 
       const providerDefaults =
         providerId === "claude-cli"
-          ? { command: "claude", args: DEFAULT_CLAUDE_ARGS }
+          ? {
+              command: "claude",
+              args: DEFAULT_CLAUDE_ARGS,
+            }
           : providerId === "codex-cli"
-            ? { command: "codex", args: DEFAULT_CODEX_ARGS }
+            ? {
+                command: "codex",
+                args: DEFAULT_CODEX_ARGS,
+                imageArg: "--image",
+                imageMode: "repeat" as const,
+              }
             : null;
 
       const cliCommand = process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ?? providerDefaults?.command;
@@ -354,8 +370,11 @@ describeLive("gateway live (cli backend)", () => {
           .map((name) => [name, process.env[name]])
           .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
       );
-      const cliImageArg = process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
-      const cliImageMode = parseImageMode(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE);
+      const cliImageArg =
+        process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || providerDefaults?.imageArg;
+      const cliImageMode =
+        parseImageMode(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE) ??
+        providerDefaults?.imageMode;
 
       if (cliImageMode && !cliImageArg) {
         throw new Error(
@@ -491,7 +510,7 @@ describeLive("gateway live (cli backend)", () => {
           }
         }
 
-        if (CLI_IMAGE) {
+        if (enableCliImageProbe) {
           // Shorter code => less OCR flake across providers, still tests image attachments end-to-end.
           const imageCode = randomImageProbeCode();
           const imageBase64 = renderCatNoncePngBase64(imageCode);

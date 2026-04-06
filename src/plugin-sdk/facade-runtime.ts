@@ -310,40 +310,81 @@ function resolveBundledMetadataManifestRecord(params: {
   dirName: string;
   artifactBasename: string;
 }): FacadePluginManifestLike | null {
-  if (resolveBundledPluginsDir()) {
-    return null;
-  }
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
     return null;
   }
-  if (!location.modulePath.startsWith(`${OPENCLAW_SOURCE_EXTENSIONS_ROOT}${path.sep}`)) {
+  if (location.modulePath.startsWith(`${OPENCLAW_SOURCE_EXTENSIONS_ROOT}${path.sep}`)) {
+    const relativeToExtensions = path.relative(
+      OPENCLAW_SOURCE_EXTENSIONS_ROOT,
+      location.modulePath,
+    );
+    const resolvedDirName = relativeToExtensions.split(path.sep)[0];
+    if (!resolvedDirName) {
+      return null;
+    }
+    const metadata = listBundledPluginMetadata({
+      includeChannelConfigs: false,
+      includeSyntheticChannelConfigs: false,
+    }).find(
+      (entry) =>
+        entry.dirName === resolvedDirName ||
+        entry.manifest.id === params.dirName ||
+        entry.manifest.channels?.includes(params.dirName),
+    );
+    if (!metadata) {
+      return null;
+    }
+    return {
+      id: metadata.manifest.id,
+      origin: "bundled",
+      enabledByDefault: metadata.manifest.enabledByDefault,
+      rootDir: path.resolve(OPENCLAW_SOURCE_EXTENSIONS_ROOT, metadata.dirName),
+      channels: [...(metadata.manifest.channels ?? [])],
+    };
+  }
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  if (!bundledPluginsDir) {
     return null;
   }
-  const relativeToExtensions = path.relative(OPENCLAW_SOURCE_EXTENSIONS_ROOT, location.modulePath);
-  const resolvedDirName = relativeToExtensions.split(path.sep)[0];
+  const normalizedBundledPluginsDir = path.resolve(bundledPluginsDir);
+  if (!location.modulePath.startsWith(`${normalizedBundledPluginsDir}${path.sep}`)) {
+    return null;
+  }
+  const relativeToBundledDir = path.relative(normalizedBundledPluginsDir, location.modulePath);
+  const resolvedDirName = relativeToBundledDir.split(path.sep)[0];
   if (!resolvedDirName) {
     return null;
   }
-  const metadata = listBundledPluginMetadata({
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  }).find(
-    (entry) =>
-      entry.dirName === resolvedDirName ||
-      entry.manifest.id === params.dirName ||
-      entry.manifest.channels?.includes(params.dirName),
+  const manifestPath = path.join(
+    normalizedBundledPluginsDir,
+    resolvedDirName,
+    "openclaw.plugin.json",
   );
-  if (!metadata) {
+  if (!fs.existsSync(manifestPath)) {
     return null;
   }
-  return {
-    id: metadata.manifest.id,
-    origin: "bundled",
-    enabledByDefault: metadata.manifest.enabledByDefault,
-    rootDir: path.resolve(OPENCLAW_SOURCE_EXTENSIONS_ROOT, metadata.dirName),
-    channels: [...(metadata.manifest.channels ?? [])],
-  };
+  try {
+    const raw = JSON5.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      id?: unknown;
+      enabledByDefault?: unknown;
+      channels?: unknown;
+    };
+    if (typeof raw.id !== "string" || raw.id.trim().length === 0) {
+      return null;
+    }
+    return {
+      id: raw.id,
+      origin: "bundled",
+      enabledByDefault: raw.enabledByDefault === true,
+      rootDir: path.join(normalizedBundledPluginsDir, resolvedDirName),
+      channels: Array.isArray(raw.channels)
+        ? raw.channels.filter((entry): entry is string => typeof entry === "string")
+        : [],
+    };
+  } catch {
+    return null;
+  }
 }
 
 function resolveBundledPluginManifestRecord(params: {
@@ -615,6 +656,7 @@ export function resetFacadeRuntimeStateForTest(): void {
   loadedFacadeModules.clear();
   loadedFacadePluginIds.clear();
   jitiLoaders.clear();
+  cachedManifestRegistry = undefined;
   cachedBoundaryRawConfig = undefined;
   cachedBoundaryResolvedConfigKey = undefined;
   cachedBoundaryConfigFileState = undefined;

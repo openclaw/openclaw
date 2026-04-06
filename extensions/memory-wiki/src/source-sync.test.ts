@@ -1,20 +1,40 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const { createTempDir, createVault } = createMemoryWikiTestHarness();
+const { createVault } = createMemoryWikiTestHarness();
 
 describe("syncMemoryWikiImportedSources", () => {
+  let suiteRoot = "";
+  let caseId = 0;
+
+  beforeAll(async () => {
+    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-sync-suite-"));
+  });
+
+  afterAll(async () => {
+    if (suiteRoot) {
+      await fs.rm(suiteRoot, { recursive: true, force: true });
+    }
+  });
+
+  function nextCaseRoot() {
+    return path.join(suiteRoot, `case-${caseId++}`);
+  }
+
   it("refreshes indexes when imported sources change and skips when they do not", async () => {
-    const privateDir = await createTempDir("memory-wiki-sync-private-");
+    const caseRoot = nextCaseRoot();
+    const privateDir = path.join(caseRoot, "private");
 
     const sourcePath = path.join(privateDir, "alpha.md");
+    await fs.mkdir(privateDir, { recursive: true });
     await fs.writeFile(sourcePath, "# Alpha\n", "utf8");
 
     const { rootDir: vaultDir, config } = await createVault({
-      prefix: "memory-wiki-sync-vault-",
+      rootDir: path.join(caseRoot, "vault"),
       config: {
         vaultMode: "unsafe-local",
         unsafeLocal: {
@@ -48,13 +68,15 @@ describe("syncMemoryWikiImportedSources", () => {
   });
 
   it("respects ingest.autoCompile=false", async () => {
-    const privateDir = await createTempDir("memory-wiki-sync-private-");
+    const caseRoot = nextCaseRoot();
+    const privateDir = path.join(caseRoot, "private");
 
     const sourcePath = path.join(privateDir, "alpha.md");
+    await fs.mkdir(privateDir, { recursive: true });
     await fs.writeFile(sourcePath, "# Alpha\n", "utf8");
 
     const { config } = await createVault({
-      prefix: "memory-wiki-sync-vault-",
+      rootDir: path.join(caseRoot, "vault"),
       config: {
         vaultMode: "unsafe-local",
         unsafeLocal: {

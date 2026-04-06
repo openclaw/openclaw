@@ -124,6 +124,10 @@ export function buildQaGatewayConfig(params: {
     providerMode === "live-openai"
       ? Object.fromEntries(selectedProviderIds.map((providerId) => [providerId, { enabled: true }]))
       : {};
+  const allowedPlugins =
+    providerMode === "live-openai"
+      ? ["memory-core", ...selectedProviderIds, "qa-channel"]
+      : ["memory-core", "qa-channel"];
   const liveModelParams =
     providerMode === "live-openai"
       ? {

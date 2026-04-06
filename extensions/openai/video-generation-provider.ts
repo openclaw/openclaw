@@ -190,6 +190,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         maxDurationSeconds: 12,
         supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
         supportsSize: true,
+        sizes: OPENAI_VIDEO_SIZES,
       },
       imageToVideo: {
         enabled: true,
@@ -198,6 +199,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         maxDurationSeconds: 12,
         supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
         supportsSize: true,
+        sizes: OPENAI_VIDEO_SIZES,
       },
       videoToVideo: {
         enabled: true,
@@ -206,6 +208,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         maxDurationSeconds: 12,
         supportedDurationSeconds: OPENAI_VIDEO_SECONDS,
         supportsSize: true,
+        sizes: OPENAI_VIDEO_SIZES,
       },
     },
     async generateVideo(req) {

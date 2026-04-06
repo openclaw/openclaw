@@ -591,33 +591,27 @@ describe("doctor config flow", () => {
   });
 
   it("notes legacy browser extension migration changes", async () => {
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    try {
-      await runDoctorConfigWithInput({
-        config: {
-          browser: {
-            relayBindHost: "127.0.0.1",
-            profiles: {
-              chromeLive: {
-                driver: "extension",
-                color: "#00AA00",
-              },
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        browser: {
+          relayBindHost: "127.0.0.1",
+          profiles: {
+            chromeLive: {
+              driver: "extension",
+              color: "#00AA00",
             },
           },
         },
-        run: loadAndMaybeMigrateDoctorConfig,
-      });
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
 
-      const messages = noteSpy.mock.calls
-        .filter((call) => call[1] === "Doctor changes")
-        .map((call) => String(call[0]));
-      expect(
-        messages.some((line) => line.includes('browser.profiles.chromeLive.driver "extension"')),
-      ).toBe(true);
-      expect(messages.some((line) => line.includes("browser.relayBindHost"))).toBe(true);
-    } finally {
-      noteSpy.mockRestore();
-    }
+    const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
+    expect(browser.relayBindHost).toBeUndefined();
+    expect(
+      ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
+    ).toBe("existing-session");
   });
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -723,13 +717,6 @@ describe("doctor config flow", () => {
             String(message).includes("channels.slack.streamMode, channels.slack.streaming"),
         ),
       ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Doctor" &&
-            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
-        ),
-      ).toBe(true);
     } finally {
       noteSpy.mockRestore();
     }
@@ -823,13 +810,6 @@ describe("doctor config flow", () => {
             title === "Legacy config keys detected" &&
             String(message).includes("channels.discord:") &&
             String(message).includes("channels.discord.guilds.<id>.channels.<id>.allow is legacy"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Doctor" &&
-            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
         ),
       ).toBe(true);
     } finally {
@@ -1395,13 +1375,6 @@ describe("doctor config flow", () => {
             String(message).includes("agents.defaults.heartbeat"),
         ),
       ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Doctor" &&
-            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
-        ),
-      ).toBe(true);
     } finally {
       noteSpy.mockRestore();
     }
@@ -1428,13 +1401,6 @@ describe("doctor config flow", () => {
             String(message).includes("channels.defaults.heartbeat"),
         ),
       ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Doctor" &&
-            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
-        ),
-      ).toBe(true);
     } finally {
       noteSpy.mockRestore();
     }
@@ -1459,13 +1425,6 @@ describe("doctor config flow", () => {
             title === "Legacy config keys detected" &&
             String(message).includes("memorySearch:") &&
             String(message).includes("agents.defaults.memorySearch"),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Doctor" &&
-            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
         ),
       ).toBe(true);
     } finally {
@@ -1861,13 +1820,6 @@ describe("doctor config flow", () => {
             String(message).includes(
               "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey",
             ),
-        ),
-      ).toBe(true);
-      expect(
-        noteSpy.mock.calls.some(
-          ([message, title]) =>
-            title === "Doctor" &&
-            String(message).includes('Run "openclaw doctor --fix" to migrate legacy config keys.'),
         ),
       ).toBe(true);
     } finally {

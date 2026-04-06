@@ -41,6 +41,7 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
@@ -1759,43 +1760,41 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     const parsedUnknown: unknown = JSON.parse(result.stdout);
-    const isRecord = (value: unknown): value is Record<string, unknown> =>
-      typeof value === "object" && value !== null && !Array.isArray(value);
+    const parsedRecord = asRecord(parsedUnknown);
+    const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
+    const structured: unknown = structuredContent ?? parsedUnknown;
 
-    const structured =
-      isRecord(parsedUnknown) && isRecord(parsedUnknown.structuredContent)
-        ? parsedUnknown.structuredContent
-        : parsedUnknown;
-
+    const structuredRecord = asRecord(structured);
     const results: unknown[] =
-      isRecord(structured) && Array.isArray(structured.results)
-        ? (structured.results as unknown[])
+      structuredRecord && Array.isArray(structuredRecord.results)
+        ? (structuredRecord.results as unknown[])
         : Array.isArray(structured)
           ? structured
           : [];
 
     const out: QmdQueryResult[] = [];
     for (const item of results) {
-      if (!isRecord(item)) {
+      const itemRecord = asRecord(item);
+      if (!itemRecord) {
         continue;
       }
-      const docidRaw = item.docid;
+      const docidRaw = itemRecord.docid;
       const docid = typeof docidRaw === "string" ? docidRaw.replace(/^#/, "").trim() : "";
       if (!docid) {
         continue;
       }
-      const scoreRaw = item.score;
+      const scoreRaw = itemRecord.score;
       const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
-      const snippet = typeof item.snippet === "string" ? item.snippet : "";
+      const snippet = typeof itemRecord.snippet === "string" ? itemRecord.snippet : "";
       out.push({
         docid,
         score: Number.isFinite(score) ? score : 0,
         snippet,
-        collection: typeof item.collection === "string" ? item.collection : undefined,
-        file: typeof item.file === "string" ? item.file : undefined,
-        body: typeof item.body === "string" ? item.body : undefined,
-        startLine: this.normalizeSnippetLine(item.start_line ?? item.startLine),
-        endLine: this.normalizeSnippetLine(item.end_line ?? item.endLine),
+        collection: typeof itemRecord.collection === "string" ? itemRecord.collection : undefined,
+        file: typeof itemRecord.file === "string" ? itemRecord.file : undefined,
+        body: typeof itemRecord.body === "string" ? itemRecord.body : undefined,
+        startLine: this.normalizeSnippetLine(itemRecord.start_line ?? itemRecord.startLine),
+        endLine: this.normalizeSnippetLine(itemRecord.end_line ?? itemRecord.endLine),
       });
     }
     return out;

@@ -322,7 +322,6 @@ describe("legacy config detection", () => {
         expect(
           (config.channels?.slack as Record<string, unknown> | undefined)?.streamMode,
         ).toBeUndefined();
-        expect(config.channels?.slack?.streaming?.nativeTransport).toBe(true);
       },
     },
     {

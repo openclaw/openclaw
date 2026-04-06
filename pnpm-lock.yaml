@@ -267,8 +267,8 @@ importers:
   extensions/acpx:
     dependencies:
       acpx:
-        specifier: 0.5.0
-        version: 0.5.0
+        specifier: 0.5.1
+        version: 0.5.1
 
   extensions/alibaba: {}
 
@@ -3713,8 +3713,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.5.0:
-    resolution: {integrity: sha512-Yx52SiywF+1rO2oc+n87pSyBc2YJ8nPnFRCLK8CW3V3s1ZQ7o3B84FZ343AUafGLtXUAKXN9lm8i3RsGiFxRrw==}
+  acpx@0.5.1:
+    resolution: {integrity: sha512-r2sWGsztSwsO8JGJAswltQkMnRkKNmTH9faxwRWS9Ad28y2jZcyt7jR7auyCk0zwvDr+Zm/H1byVkWFpJWqzQQ==}
     engines: {node: '>=22.12.0'}
     hasBin: true
 
@@ -10240,7 +10240,7 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.5.0:
+  acpx@0.5.1:
     dependencies:
       '@agentclientprotocol/sdk': 0.17.1(zod@4.3.6)
       commander: 14.0.3

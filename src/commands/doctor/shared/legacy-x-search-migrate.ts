@@ -1,12 +1,10 @@
+import { isRecord } from "./legacy-config-record-shared.js";
+
 type JsonRecord = Record<string, unknown>;
 
 const XAI_PLUGIN_ID = "xai";
 const X_SEARCH_LEGACY_PATH = "tools.web.x_search";
 const XAI_WEB_SEARCH_PLUGIN_KEY_PATH = `plugins.entries.${XAI_PLUGIN_ID}.config.webSearch.apiKey`;
-
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function cloneRecord<T extends JsonRecord | undefined>(value: T): T {
   if (!value) {

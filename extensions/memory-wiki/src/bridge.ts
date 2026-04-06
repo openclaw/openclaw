@@ -10,12 +10,11 @@ import type { OpenClawConfig } from "../api.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import { writeImportedSourcePage } from "./source-page-shared.js";
 import { pathExists, resolveArtifactKey } from "./source-path-shared.js";
 import {
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
-  setImportedSourceEntry,
-  shouldSkipImportedSourceWrite,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -184,9 +183,6 @@ async function writeBridgeSourcePage(params: {
     relativePath: params.artifact.relativePath,
   });
   const title = resolveBridgeTitle(params.artifact, params.agentIds);
-  const pageAbsPath = path.join(params.config.vault.path, pagePath);
-  const created = !(await pathExists(pageAbsPath));
-  const sourceUpdatedAt = new Date(params.sourceUpdatedAtMs).toISOString();
   const renderFingerprint = createHash("sha1")
     .update(
       JSON.stringify({
@@ -197,71 +193,56 @@ async function writeBridgeSourcePage(params: {
       }),
     )
     .digest("hex");
-  const shouldSkip = await shouldSkipImportedSourceWrite({
+  return writeImportedSourcePage({
     vaultRoot: params.config.vault.path,
     syncKey: params.artifact.syncKey,
-    expectedPagePath: pagePath,
-    expectedSourcePath: params.artifact.absolutePath,
+    sourcePath: params.artifact.absolutePath,
     sourceUpdatedAtMs: params.sourceUpdatedAtMs,
     sourceSize: params.sourceSize,
     renderFingerprint,
+    pagePath,
+    group: "bridge",
     state: params.state,
-  });
-  if (shouldSkip) {
-    return { pagePath, changed: false, created };
-  }
-  const raw = await fs.readFile(params.artifact.absolutePath, "utf8");
-  const contentLanguage = params.artifact.artifactType === "memory-events" ? "json" : "markdown";
-  const rendered = renderWikiMarkdown({
-    frontmatter: {
-      pageType: "source",
-      id: pageId,
-      title,
-      sourceType:
-        params.artifact.artifactType === "memory-events" ? "memory-bridge-events" : "memory-bridge",
-      sourcePath: params.artifact.absolutePath,
-      bridgeRelativePath: params.artifact.relativePath,
-      bridgeWorkspaceDir: params.artifact.workspaceDir,
-      bridgeAgentIds: params.agentIds,
-      status: "active",
-      updatedAt: sourceUpdatedAt,
-    },
-    body: [
-      `# ${title}`,
-      "",
-      "## Bridge Source",
-      `- Workspace: \`${params.artifact.workspaceDir}\``,
-      `- Relative path: \`${params.artifact.relativePath}\``,
-      `- Kind: \`${params.artifact.artifactType}\``,
-      `- Agents: ${params.agentIds.length > 0 ? params.agentIds.join(", ") : "unknown"}`,
-      `- Updated: ${sourceUpdatedAt}`,
-      "",
-      "## Content",
-      renderMarkdownFence(raw, contentLanguage),
-      "",
-      "## Notes",
-      "<!-- openclaw:human:start -->",
-      "<!-- openclaw:human:end -->",
-      "",
-    ].join("\n"),
-  });
-  const existing = await fs.readFile(pageAbsPath, "utf8").catch(() => "");
-  if (existing !== rendered) {
-    await fs.writeFile(pageAbsPath, rendered, "utf8");
-  }
-  setImportedSourceEntry({
-    syncKey: params.artifact.syncKey,
-    state: params.state,
-    entry: {
-      group: "bridge",
-      pagePath,
-      sourcePath: params.artifact.absolutePath,
-      sourceUpdatedAtMs: params.sourceUpdatedAtMs,
-      sourceSize: params.sourceSize,
-      renderFingerprint,
+    buildRendered: (raw, updatedAt) => {
+      const contentLanguage =
+        params.artifact.artifactType === "memory-events" ? "json" : "markdown";
+      return renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: pageId,
+          title,
+          sourceType:
+            params.artifact.artifactType === "memory-events"
+              ? "memory-bridge-events"
+              : "memory-bridge",
+          sourcePath: params.artifact.absolutePath,
+          bridgeRelativePath: params.artifact.relativePath,
+          bridgeWorkspaceDir: params.artifact.workspaceDir,
+          bridgeAgentIds: params.agentIds,
+          status: "active",
+          updatedAt,
+        },
+        body: [
+          `# ${title}`,
+          "",
+          "## Bridge Source",
+          `- Workspace: \`${params.artifact.workspaceDir}\``,
+          `- Relative path: \`${params.artifact.relativePath}\``,
+          `- Kind: \`${params.artifact.artifactType}\``,
+          `- Agents: ${params.agentIds.length > 0 ? params.agentIds.join(", ") : "unknown"}`,
+          `- Updated: ${updatedAt}`,
+          "",
+          "## Content",
+          renderMarkdownFence(raw, contentLanguage),
+          "",
+          "## Notes",
+          "<!-- openclaw:human:start -->",
+          "<!-- openclaw:human:end -->",
+          "",
+        ].join("\n"),
+      });
     },
   });
-  return { pagePath, changed: existing !== rendered, created };
 }
 
 export async function syncMemoryWikiBridgeSources(params: {

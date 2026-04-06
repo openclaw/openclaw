@@ -1,5 +1,10 @@
 import { t } from "../i18n/index.ts";
-import { formatRelativeTimestamp, formatDurationHuman, formatMs } from "./format.ts";
+import {
+  formatRelativeTimestamp,
+  formatDurationHuman,
+  formatMs,
+  formatUnknownText,
+} from "./format.ts";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
 
 export function formatPresenceSummary(entry: PresenceEntry): string {
@@ -39,8 +44,7 @@ export function formatEventPayload(payload: unknown): string {
   try {
     return JSON.stringify(payload, null, 2);
   } catch {
-    // oxlint-disable typescript/no-base-to-string
-    return String(payload);
+    return formatUnknownText(payload);
   }
 }
 

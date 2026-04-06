@@ -3080,6 +3080,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              mediaGenerationAutoProviderFallback: {
+                type: "boolean",
+                title: "Media Generation Auto Provider Fallback",
+                description:
+                  "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -24993,6 +24999,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.musicGenerationModel.fallbacks": {
       label: "Music Generation Model Fallbacks",
       help: "Ordered fallback music-generation models (provider/model).",
+      tags: ["reliability"],
+    },
+    "agents.defaults.mediaGenerationAutoProviderFallback": {
+      label: "Media Generation Auto Provider Fallback",
+      help: "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
       tags: ["reliability"],
     },
     "agents.defaults.pdfModel.primary": {

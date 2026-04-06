@@ -403,12 +403,17 @@ function moveLegacyStreamingShapeForPath(params: {
     }
     delete params.entry.nativeStreaming;
     changed = true;
-  } else if (params.resolveNativeTransport && typeof legacyStreaming === "boolean") {
+  } else if (
+    params.resolveNativeTransport &&
+    (typeof legacyStreaming === "boolean" || hadLegacyStreamMode)
+  ) {
     const streaming = ensureNestedRecord(params.entry, "streaming");
     if (!hasOwnKey(streaming, "nativeTransport")) {
       streaming.nativeTransport = params.resolveNativeTransport(legacyNativeTransportInput);
       params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
+        hadLegacyStreamMode
+          ? `Filled ${params.pathPrefix}.streaming.nativeTransport from legacy ${params.pathPrefix}.streamMode semantics.`
+          : `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
       );
       changed = true;
     }

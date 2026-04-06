@@ -51,7 +51,10 @@ import {
 import { resolveSlackChannelType } from "./channel-type.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
-import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import {
+  compileSlackInteractiveReplies,
+  isSlackInteractiveRepliesEnabled,
+} from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import type { SlackProbe } from "./probe.js";
@@ -324,6 +327,10 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       parseExplicitTarget: ({ raw }) => parseSlackExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseSlackExplicitTarget(to)?.chatType,
       resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
+      transformReplyPayload: ({ payload, cfg, accountId }) =>
+        isSlackInteractiveRepliesEnabled({ cfg, accountId })
+          ? compileSlackInteractiveReplies(payload)
+          : payload,
       enableInteractiveReplies: ({ cfg, accountId }) =>
         isSlackInteractiveRepliesEnabled({ cfg, accountId }),
       hasStructuredReplyPayload: ({ payload }) => {

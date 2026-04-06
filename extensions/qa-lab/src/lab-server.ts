@@ -168,7 +168,15 @@ function resolveUiDistDir(overrideDir?: string) {
     path.resolve(process.cwd(), "extensions/qa-lab/web/dist"),
     path.resolve(process.cwd(), "dist/extensions/qa-lab/web/dist"),
   ];
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+  return (
+    candidates.find((candidate) => {
+      if (!fs.existsSync(candidate)) {
+        return false;
+      }
+      const indexPath = path.join(candidate, "index.html");
+      return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
+    }) ?? candidates[0]
+  );
 }
 
 function resolveAdvertisedBaseUrl(params: {
@@ -417,6 +425,7 @@ export async function startQaLabServer(params?: {
   controlUiUrl?: string;
   controlUiToken?: string;
   controlUiProxyTarget?: string;
+  uiDistDir?: string;
   autoKickoffTarget?: string;
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;

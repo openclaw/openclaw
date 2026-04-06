@@ -97,8 +97,25 @@ describe("runEmbeddedAttempt context injection", () => {
     );
   });
 
-  it("records full bootstrap completion after a successful non-heartbeat turn", async () => {
-    await createContextEngineAttemptRunner({
+  it("runs full bootstrap injection after a successful non-heartbeat turn", async () => {
+    hoisted.resolveBootstrapContextForRunMock.mockResolvedValue({
+      bootstrapFiles: [
+        {
+          name: "AGENTS.md",
+          path: "AGENTS.md",
+          content: "bootstrap context",
+          missing: false,
+        },
+      ],
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: "bootstrap context",
+        },
+      ],
+    });
+
+    const result = await createContextEngineAttemptRunner({
       contextEngine: {
         assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
       },
@@ -110,11 +127,11 @@ describe("runEmbeddedAttempt context injection", () => {
       tempPaths,
     });
 
-    expect(hoisted.sessionManager.appendCustomEntry).toHaveBeenCalledWith(
-      "openclaw:bootstrap-context:full",
+    expect(result.promptError).toBeNull();
+    expect(hoisted.resolveBootstrapContextForRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        runId: "run-context-engine-forwarding",
-        sessionId: "embedded-session",
+        contextMode: "full",
+        runKind: undefined,
       }),
     );
   });

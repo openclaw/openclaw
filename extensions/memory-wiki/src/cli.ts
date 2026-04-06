@@ -185,6 +185,29 @@ function formatJsonOrText<T>(
   return json ? JSON.stringify(result, null, 2) : render(result);
 }
 
+async function runWikiCommandWithSummary<T>(params: {
+  json?: boolean;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+  run: () => Promise<T>;
+  render: (result: T) => string;
+}): Promise<T> {
+  const result = await params.run();
+  writeOutput(formatJsonOrText(result, params.json, params.render), params.stdout);
+  return result;
+}
+
+async function runSyncedWikiCommandWithSummary<T>(params: {
+  config: ResolvedMemoryWikiConfig;
+  appConfig?: OpenClawConfig;
+  json?: boolean;
+  stdout?: Pick<NodeJS.WriteStream, "write">;
+  run: () => Promise<T>;
+  render: (result: T) => string;
+}): Promise<T> {
+  await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
+  return runWikiCommandWithSummary(params);
+}
+
 function addWikiSearchConfigOptions<T extends Command>(command: T): T {
   return command
     .option(
@@ -248,15 +271,13 @@ export async function runWikiInit(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  const result = await initializeMemoryWikiVault(params.config);
-  const summary = formatJsonOrText(
-    result,
-    params.json,
-    (value) =>
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () => initializeMemoryWikiVault(params.config),
+    render: (value) =>
       `Initialized wiki vault at ${value.rootDir} (${value.createdDirectories.length} dirs, ${value.createdFiles.length} files).`,
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  });
 }
 
 export async function runWikiCompile(params: {
@@ -265,16 +286,15 @@ export async function runWikiCompile(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-  const result = await compileMemoryWikiVault(params.config);
-  const summary = formatJsonOrText(
-    result,
-    params.json,
-    (value) =>
+  return runSyncedWikiCommandWithSummary({
+    config: params.config,
+    appConfig: params.appConfig,
+    json: params.json,
+    stdout: params.stdout,
+    run: () => compileMemoryWikiVault(params.config),
+    render: (value) =>
       `Compiled wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  });
 }
 
 export async function runWikiLint(params: {
@@ -283,16 +303,15 @@ export async function runWikiLint(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-  const result = await lintMemoryWikiVault(params.config);
-  const summary = formatJsonOrText(
-    result,
-    params.json,
-    (value) =>
+  return runSyncedWikiCommandWithSummary({
+    config: params.config,
+    appConfig: params.appConfig,
+    json: params.json,
+    stdout: params.stdout,
+    run: () => lintMemoryWikiVault(params.config),
+    render: (value) =>
       `Linted wiki vault at ${value.vaultRoot} (${value.issueCount} issues, report: ${value.reportPath}).`,
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  });
 }
 
 export async function runWikiIngest(params: {
@@ -302,19 +321,18 @@ export async function runWikiIngest(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  const result = await ingestMemoryWikiSource({
-    config: params.config,
-    inputPath: params.inputPath,
-    title: params.title,
-  });
-  const summary = formatJsonOrText(
-    result,
-    params.json,
-    (value) =>
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () =>
+      ingestMemoryWikiSource({
+        config: params.config,
+        inputPath: params.inputPath,
+        title: params.title,
+      }),
+    render: (value) =>
       `Ingested ${value.sourcePath} into ${value.pagePath}. Refreshed ${value.indexUpdatedFiles.length} index file${value.indexUpdatedFiles.length === 1 ? "" : "s"}.`,
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  });
 }
 
 export async function runWikiSearch(params: {
@@ -465,18 +483,17 @@ export async function runWikiBridgeImport(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  const result = await syncMemoryWikiImportedSources({
-    config: params.config,
-    appConfig: params.appConfig,
-  });
-  const summary = formatJsonOrText(
-    result,
-    params.json,
-    (value) =>
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () =>
+      syncMemoryWikiImportedSources({
+        config: params.config,
+        appConfig: params.appConfig,
+      }),
+    render: (value) =>
       `Bridge import synced ${value.artifactCount} artifacts across ${value.workspaces} workspaces (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`,
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  });
 }
 
 export async function runWikiUnsafeLocalImport(params: {
@@ -485,18 +502,17 @@ export async function runWikiUnsafeLocalImport(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  const result = await syncMemoryWikiImportedSources({
-    config: params.config,
-    appConfig: params.appConfig,
-  });
-  const summary = formatJsonOrText(
-    result,
-    params.json,
-    (value) =>
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () =>
+      syncMemoryWikiImportedSources({
+        config: params.config,
+        appConfig: params.appConfig,
+      }),
+    render: (value) =>
       `Unsafe-local import synced ${value.artifactCount} artifacts (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`,
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  });
 }
 
 export async function runWikiObsidianStatus(params: {
@@ -504,14 +520,15 @@ export async function runWikiObsidianStatus(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  const result = await probeObsidianCli();
-  const summary = formatJsonOrText(result, params.json, (value) =>
-    value.available
-      ? `Obsidian CLI available at ${value.command}`
-      : "Obsidian CLI is not available on PATH.",
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () => probeObsidianCli(),
+    render: (value) =>
+      value.available
+        ? `Obsidian CLI available at ${value.command}`
+        : "Obsidian CLI is not available on PATH.",
+  });
 }
 
 export async function runWikiObsidianSearch(params: {
@@ -520,10 +537,12 @@ export async function runWikiObsidianSearch(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  const result = await runObsidianSearch({ config: params.config, query: params.query });
-  const summary = formatJsonOrText(result, params.json, (value) => value.stdout.trim());
-  writeOutput(summary, params.stdout);
-  return result;
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () => runObsidianSearch({ config: params.config, query: params.query }),
+    render: (value) => value.stdout.trim(),
+  });
 }
 
 export async function runWikiObsidianOpenCli(params: {
@@ -532,14 +551,12 @@ export async function runWikiObsidianOpenCli(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  const result = await runObsidianOpen({ config: params.config, vaultPath: params.vaultPath });
-  const summary = formatJsonOrText(
-    result,
-    params.json,
-    (value) => value.stdout.trim() || "Opened in Obsidian.",
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () => runObsidianOpen({ config: params.config, vaultPath: params.vaultPath }),
+    render: (value) => value.stdout.trim() || "Opened in Obsidian.",
+  });
 }
 
 export async function runWikiObsidianCommandCli(params: {
@@ -548,14 +565,12 @@ export async function runWikiObsidianCommandCli(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  const result = await runObsidianCommand({ config: params.config, id: params.id });
-  const summary = formatJsonOrText(
-    result,
-    params.json,
-    (value) => value.stdout.trim() || "Command sent to Obsidian.",
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () => runObsidianCommand({ config: params.config, id: params.id }),
+    render: (value) => value.stdout.trim() || "Command sent to Obsidian.",
+  });
 }
 
 export async function runWikiObsidianDailyCli(params: {
@@ -563,14 +578,12 @@ export async function runWikiObsidianDailyCli(params: {
   json?: boolean;
   stdout?: Pick<NodeJS.WriteStream, "write">;
 }) {
-  const result = await runObsidianDaily({ config: params.config });
-  const summary = formatJsonOrText(
-    result,
-    params.json,
-    (value) => value.stdout.trim() || "Opened today's daily note.",
-  );
-  writeOutput(summary, params.stdout);
-  return result;
+  return runWikiCommandWithSummary({
+    json: params.json,
+    stdout: params.stdout,
+    run: () => runObsidianDaily({ config: params.config }),
+    render: (value) => value.stdout.trim() || "Opened today's daily note.",
+  });
 }
 
 export function registerWikiCli(

@@ -5,6 +5,31 @@ import { startQaLabServer } from "./lab-server.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { runQaSuite } from "./suite.js";
 
+type InterruptibleServer = {
+  baseUrl: string;
+  stop(): Promise<void>;
+};
+
+async function runInterruptibleServer(label: string, server: InterruptibleServer) {
+  process.stdout.write(`${label}: ${server.baseUrl}\n`);
+  process.stdout.write("Press Ctrl+C to stop.\n");
+
+  const shutdown = async () => {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    await server.stop();
+    process.exit(0);
+  };
+
+  const onSignal = () => {
+    void shutdown();
+  };
+
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  await new Promise(() => undefined);
+}
+
 export async function runQaLabSelfCheckCommand(opts: { output?: string }) {
   const server = await startQaLabServer({
     outputPath: opts.output,
@@ -60,23 +85,7 @@ export async function runQaLabUiCommand(opts: {
     embeddedGateway: opts.embeddedGateway,
     sendKickoffOnStart: opts.sendKickoffOnStart,
   });
-  process.stdout.write(`QA Lab UI: ${server.baseUrl}\n`);
-  process.stdout.write("Press Ctrl+C to stop.\n");
-
-  const shutdown = async () => {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await server.stop();
-    process.exit(0);
-  };
-
-  const onSignal = () => {
-    void shutdown();
-  };
-
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  await new Promise(() => undefined);
+  await runInterruptibleServer("QA Lab UI", server);
 }
 
 export async function runQaDockerScaffoldCommand(opts: {
@@ -138,21 +147,5 @@ export async function runQaMockOpenAiCommand(opts: { host?: string; port?: numbe
     host: opts.host,
     port: Number.isFinite(opts.port) ? opts.port : undefined,
   });
-  process.stdout.write(`QA mock OpenAI: ${server.baseUrl}\n`);
-  process.stdout.write("Press Ctrl+C to stop.\n");
-
-  const shutdown = async () => {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await server.stop();
-    process.exit(0);
-  };
-
-  const onSignal = () => {
-    void shutdown();
-  };
-
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  await new Promise(() => undefined);
+  await runInterruptibleServer("QA mock OpenAI", server);
 }

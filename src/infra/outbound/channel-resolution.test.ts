@@ -6,6 +6,7 @@ const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const resolveRuntimePluginRegistryMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
+const getActivePluginChannelRegistryMock = vi.hoisted(() => vi.fn());
 const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
@@ -29,6 +30,8 @@ vi.mock("../../plugins/loader.js", () => ({
 
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
+  getActivePluginChannelRegistry: (...args: unknown[]) =>
+    getActivePluginChannelRegistryMock(...args),
   getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
     getActivePluginChannelRegistryVersionMock(...args),
 }));
@@ -68,6 +71,7 @@ describe("outbound channel resolution", () => {
     applyPluginAutoEnableMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReset();
     getActivePluginRegistryMock.mockReset();
+    getActivePluginChannelRegistryMock.mockReset();
     getActivePluginChannelRegistryVersionMock.mockReset();
     normalizeMessageChannelMock.mockReset();
     isDeliverableMessageChannelMock.mockReset();
@@ -79,6 +83,7 @@ describe("outbound channel resolution", () => {
       ["telegram", "discord", "slack"].includes(String(value)),
     );
     getActivePluginRegistryMock.mockReturnValue({ channels: [] });
+    getActivePluginChannelRegistryMock.mockReturnValue({ channels: [] });
     getActivePluginChannelRegistryVersionMock.mockReturnValue(1);
     applyPluginAutoEnableMock.mockReturnValue({
       config: { autoEnabled: true },
@@ -156,6 +161,9 @@ describe("outbound channel resolution", () => {
     const plugin = { id: "telegram" };
     getChannelPluginMock.mockReturnValueOnce(undefined).mockReturnValueOnce(plugin);
     getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin: { id: "discord" } }],
+    });
+    getActivePluginChannelRegistryMock.mockReturnValue({
       channels: [{ plugin: { id: "discord" } }],
     });
     const channelResolution = await importChannelResolution("bootstrap-missing-target");

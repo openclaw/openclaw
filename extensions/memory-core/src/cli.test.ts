@@ -191,9 +191,7 @@ describe("memory cli", () => {
   }
 
   async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
-    const tmpDir = path.join(qmdFixtureRoot, `case-${qmdCaseId++}`);
-    await fs.mkdir(tmpDir, { recursive: true });
-    const dbPath = path.join(tmpDir, "index.sqlite");
+    const dbPath = path.join(qmdFixtureRoot, `case-${qmdCaseId++}.sqlite`);
     await fs.writeFile(dbPath, content, "utf-8");
     await run(dbPath);
   }
@@ -201,6 +199,7 @@ describe("memory cli", () => {
   async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
     const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
     await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
     await run(workspaceDir);
   }
 
@@ -210,7 +209,6 @@ describe("memory cli", () => {
     lines: string[],
   ): Promise<void> {
     const notePath = path.join(workspaceDir, "memory", `${date}.md`);
-    await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, `${lines.join("\n")}\n`, "utf-8");
   }
 
@@ -409,7 +407,6 @@ describe("memory cli", () => {
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
       await fs.writeFile(
         storePath,
         JSON.stringify(
@@ -469,7 +466,6 @@ describe("memory cli", () => {
   it("shows the fix hint only before --fix has been run", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
       await fs.writeFile(storePath, " \n", "utf-8");
 
       const close = vi.fn(async () => {});

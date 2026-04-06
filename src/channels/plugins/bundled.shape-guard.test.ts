@@ -38,6 +38,27 @@ describe("bundled channel entry shape guards", () => {
     expect(bundled.listBundledChannelPlugins()).toEqual([]);
     expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);
   });
+
+  it("loads real bundled channel entries from the source tree", async () => {
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=real-bundled-source-tree",
+    );
+
+    expect(bundled.requireBundledChannelPlugin("slack").id).toBe("slack");
+    expect(() =>
+      bundled.setBundledChannelRuntime("line", {
+        channel: {
+          line: {
+            listLineAccountIds: () => [],
+            resolveDefaultLineAccountId: () => undefined,
+            resolveLineAccount: () => null,
+          },
+        },
+      } as never),
+    ).not.toThrow();
+  });
+
   it("keeps channel entrypoints on the dedicated entry-contract SDK surface", () => {
     const offenders: string[] = [];
 

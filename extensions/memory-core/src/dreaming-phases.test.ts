@@ -91,12 +91,17 @@ async function withDreamingTestClock(run: () => Promise<void>) {
 }
 
 async function writeDailyNote(workspaceDir: string, lines: string[]): Promise<void> {
-  await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
   await fs.writeFile(
     path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
     lines.join("\n"),
     "utf-8",
   );
+}
+
+async function createDreamingWorkspace(): Promise<string> {
+  const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+  await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+  return workspaceDir;
 }
 
 function createLightDreamingHarness(workspaceDir: string) {
@@ -128,7 +133,7 @@ async function readCandidateSnippets(workspaceDir: string, nowIso: string): Prom
 
 describe("memory-core dreaming phases", () => {
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+    const workspaceDir = await createDreamingWorkspace();
     await withDreamingTestClock(async () => {
       await writeDailyNote(workspaceDir, [
         `# ${DREAMING_TEST_DAY}`,
@@ -166,7 +171,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("stops stripping a malformed managed block at the next section boundary", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
+    const workspaceDir = await createDreamingWorkspace();
     await withDreamingTestClock(async () => {
       await writeDailyNote(workspaceDir, [
         `# ${DREAMING_TEST_DAY}`,
@@ -196,8 +201,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("checkpoints daily ingestion and skips unchanged daily files", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const workspaceDir = await createDreamingWorkspace();
     const dailyPath = path.join(workspaceDir, "memory", "2026-04-05.md");
     await fs.writeFile(
       dailyPath,
@@ -253,8 +257,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("ingests recent daily memory files even before recall traffic exists", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const workspaceDir = await createDreamingWorkspace();
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
       ["# 2026-04-05", "", "- Move backups to S3 Glacier.", "- Keep retention at 365 days."].join(
@@ -317,8 +320,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("keeps section context when chunking durable daily notes", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const workspaceDir = await createDreamingWorkspace();
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
       [
@@ -377,8 +379,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("drops generic day headings but keeps meaningful section labels", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const workspaceDir = await createDreamingWorkspace();
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
       [
@@ -444,8 +445,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("splits noisy daily notes into a few coherent chunks instead of one line per item", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    const workspaceDir = await createDreamingWorkspace();
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
       [

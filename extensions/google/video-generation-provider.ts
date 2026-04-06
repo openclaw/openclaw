@@ -25,19 +25,12 @@ function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): strin
   return configured ? normalizeGoogleApiBaseUrl(configured) : undefined;
 }
 
-function resolveAspectRatio(params: {
-  aspectRatio?: string;
-  size?: string;
-}): "16:9" | "9:16" | undefined {
-  const direct = params.aspectRatio?.trim();
-  if (direct === "16:9" || direct === "9:16") {
-    return direct;
-  }
-  const size = params.size?.trim();
-  if (!size) {
+function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
+  const trimmed = size?.trim();
+  if (!trimmed) {
     return undefined;
   }
-  const match = /^(\d+)x(\d+)$/u.exec(size);
+  const match = /^(\d+)x(\d+)$/u.exec(trimmed);
   if (!match) {
     return undefined;
   }
@@ -46,7 +39,22 @@ function resolveAspectRatio(params: {
   if (!Number.isFinite(width) || !Number.isFinite(height)) {
     return undefined;
   }
-  return width >= height ? "16:9" : "9:16";
+  return { width, height };
+}
+
+function resolveAspectRatio(params: {
+  aspectRatio?: string;
+  size?: string;
+}): "16:9" | "9:16" | undefined {
+  const direct = params.aspectRatio?.trim();
+  if (direct === "16:9" || direct === "9:16") {
+    return direct;
+  }
+  const parsedSize = parseVideoSize(params.size);
+  if (!parsedSize) {
+    return undefined;
+  }
+  return parsedSize.width >= parsedSize.height ? "16:9" : "9:16";
 }
 
 function resolveResolution(params: {
@@ -59,17 +67,11 @@ function resolveResolution(params: {
   if (params.resolution === "1080P") {
     return "1080p";
   }
-  const size = params.size?.trim();
-  if (!size) {
+  const parsedSize = parseVideoSize(params.size);
+  if (!parsedSize) {
     return undefined;
   }
-  const match = /^(\d+)x(\d+)$/u.exec(size);
-  if (!match) {
-    return undefined;
-  }
-  const width = Number.parseInt(match[1] ?? "", 10);
-  const height = Number.parseInt(match[2] ?? "", 10);
-  const maxEdge = Math.max(width, height);
+  const maxEdge = Math.max(parsedSize.width, parsedSize.height);
   return maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined;
 }
 
@@ -162,6 +164,8 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         maxVideos: 1,
         maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
         supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
+        aspectRatios: ["16:9", "9:16"],
+        resolutions: ["720P", "1080P"],
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
@@ -173,6 +177,8 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         maxInputImages: 1,
         maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
         supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
+        aspectRatios: ["16:9", "9:16"],
+        resolutions: ["720P", "1080P"],
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
@@ -184,6 +190,8 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
         maxInputVideos: 1,
         maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
         supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
+        aspectRatios: ["16:9", "9:16"],
+        resolutions: ["720P", "1080P"],
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,

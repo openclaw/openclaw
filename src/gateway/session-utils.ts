@@ -1061,17 +1061,17 @@ export async function resolveGatewayModelSupportsImages(params: {
       (entry) =>
         entry.id === params.model && (!params.provider || entry.provider === params.provider),
     );
+    const normalizedProvider = params.provider?.trim().toLowerCase();
+    const normalizedCandidates = [
+      params.model.trim().toLowerCase(),
+      typeof modelEntry?.name === "string" ? modelEntry.name.trim().toLowerCase() : "",
+    ].filter(Boolean);
     if (modelEntry) {
       if (modelEntry.input?.includes("image")) {
         return true;
       }
       // Legacy safety shim for stale persisted Foundry rows that predate
       // provider-owned capability normalization.
-      const normalizedProvider = params.provider?.trim().toLowerCase();
-      const normalizedCandidates = [
-        params.model.trim().toLowerCase(),
-        typeof modelEntry.name === "string" ? modelEntry.name.trim().toLowerCase() : "",
-      ].filter(Boolean);
       if (
         normalizedProvider === "microsoft-foundry" &&
         normalizedCandidates.some(
@@ -1085,7 +1085,31 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
+      if (
+        normalizedProvider === "claude-cli" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate === "opus" ||
+            candidate === "sonnet" ||
+            candidate === "haiku" ||
+            candidate.startsWith("claude-"),
+        )
+      ) {
+        return true;
+      }
       return false;
+    }
+    if (
+      normalizedProvider === "claude-cli" &&
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate === "opus" ||
+          candidate === "sonnet" ||
+          candidate === "haiku" ||
+          candidate.startsWith("claude-"),
+      )
+    ) {
+      return true;
     }
     return false;
   } catch {

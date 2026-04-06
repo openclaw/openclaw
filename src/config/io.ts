@@ -19,6 +19,7 @@ import {
   listPluginDoctorLegacyConfigRules,
 } from "../plugins/doctor-contract-registry.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
@@ -430,24 +431,20 @@ function coerceConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function hasConfigMeta(value: unknown): boolean {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const meta = value.meta;
-  return isPlainObject(meta);
+  return isRecord(meta);
 }
 
 function resolveGatewayMode(value: unknown): string | null {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return null;
   }
   const gateway = value.gateway;
-  if (!isPlainObject(gateway) || typeof gateway.mode !== "string") {
+  if (!isRecord(gateway) || typeof gateway.mode !== "string") {
     return null;
   }
   const trimmed = gateway.mode.trim();
@@ -459,7 +456,7 @@ function cloneUnknown<T>(value: T): T {
 }
 
 function createMergePatch(base: unknown, target: unknown): unknown {
-  if (!isPlainObject(base) || !isPlainObject(target)) {
+  if (!isRecord(base) || !isRecord(target)) {
     return cloneUnknown(target);
   }
 
@@ -478,9 +475,9 @@ function createMergePatch(base: unknown, target: unknown): unknown {
       continue;
     }
     const baseValue = base[key];
-    if (isPlainObject(baseValue) && isPlainObject(targetValue)) {
+    if (isRecord(baseValue) && isRecord(targetValue)) {
       const childPatch = createMergePatch(baseValue, targetValue);
-      if (isPlainObject(childPatch) && Object.keys(childPatch).length === 0) {
+      if (isRecord(childPatch) && Object.keys(childPatch).length === 0) {
         continue;
       }
       patch[key] = childPatch;
@@ -494,7 +491,7 @@ function createMergePatch(base: unknown, target: unknown): unknown {
 }
 
 function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown): unknown {
-  if (!isPlainObject(source) || !isPlainObject(runtime)) {
+  if (!isRecord(source) || !isRecord(runtime)) {
     return cloneUnknown(source);
   }
 
@@ -521,7 +518,7 @@ function collectEnvRefPaths(value: unknown, path: string, output: Map<string, st
     });
     return;
   }
-  if (isPlainObject(value)) {
+  if (isRecord(value)) {
     for (const [key, child] of Object.entries(value)) {
       const childPath = path ? `${path}.${key}` : key;
       collectEnvRefPaths(child, childPath, output);
@@ -547,7 +544,7 @@ function collectChangedPaths(
     }
     return;
   }
-  if (isPlainObject(base) && isPlainObject(target)) {
+  if (isRecord(base) && isRecord(target)) {
     const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
     for (const key of keys) {
       const childPath = path ? `${path}.${key}` : key;
@@ -618,7 +615,7 @@ function restoreEnvRefsFromMap(
     });
     return changed ? next : value;
   }
-  if (isPlainObject(value)) {
+  if (isRecord(value)) {
     let changed = false;
     const next: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value)) {
@@ -735,7 +732,7 @@ async function readConfigHealthState(deps: Required<ConfigIoDeps>): Promise<Conf
     const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     const raw = await deps.fs.promises.readFile(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
-    return isPlainObject(parsed) ? (parsed as ConfigHealthState) : {};
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
   } catch {
     return {};
   }
@@ -746,7 +743,7 @@ function readConfigHealthStateSync(deps: Required<ConfigIoDeps>): ConfigHealthSt
     const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     const raw = deps.fs.readFileSync(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
-    return isPlainObject(parsed) ? (parsed as ConfigHealthState) : {};
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
   } catch {
     return {};
   }
@@ -783,11 +780,11 @@ function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigH
 
 function getConfigHealthEntry(state: ConfigHealthState, configPath: string): ConfigHealthEntry {
   const entries = state.entries;
-  if (!entries || !isPlainObject(entries)) {
+  if (!entries || !isRecord(entries)) {
     return {};
   }
   const entry = entries[configPath];
-  return entry && isPlainObject(entry) ? entry : {};
+  return entry && isRecord(entry) ? entry : {};
 }
 
 function setConfigHealthEntry(
@@ -805,7 +802,7 @@ function setConfigHealthEntry(
 }
 
 function isUpdateChannelOnlyRoot(value: unknown): boolean {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const keys = Object.keys(value);
@@ -813,7 +810,7 @@ function isUpdateChannelOnlyRoot(value: unknown): boolean {
     return false;
   }
   const update = value.update;
-  if (!isPlainObject(update)) {
+  if (!isRecord(update)) {
     return false;
   }
   const updateKeys = Object.keys(update);
@@ -1984,7 +1981,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
       const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
-
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {

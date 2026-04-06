@@ -656,7 +656,7 @@ describe("runCliAgent spawn path", () => {
     expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
   });
 
-  it("appends hydrated prompt media refs to generic backend prompts", async () => {
+  it("appends hydrated prompt media refs for stdin backends", async () => {
     const runCliAgent = await setupCliRunnerTestModule();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

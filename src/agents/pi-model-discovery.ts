@@ -15,6 +15,7 @@ import {
   resolveProviderSyntheticAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
+import { isRecord } from "../utils.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
@@ -52,10 +53,6 @@ function createInMemoryAuthStorageBackend(
       return result;
     },
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeRegistryModel<T>(value: T, agentDir: string): T {

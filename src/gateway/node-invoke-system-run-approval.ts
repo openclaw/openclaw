@@ -1,5 +1,6 @@
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import {
   systemRunApprovalGuardError,
@@ -38,13 +39,6 @@ type ApprovalClient = {
     device?: { id?: string | null } | null;
   } | null;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 function normalizeString(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -102,7 +96,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
 }):
   | { ok: true; params: unknown }
   | { ok: false; message: string; details?: Record<string, unknown> } {
-  const obj = asRecord(opts.rawParams);
+  const obj = asNullableRecord(opts.rawParams);
   if (!obj) {
     return { ok: true, params: opts.rawParams };
   }

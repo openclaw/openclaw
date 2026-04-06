@@ -1,3 +1,4 @@
+import { isRecord } from "../utils.js";
 import type {
   ResolvedTalkConfig,
   TalkConfig,
@@ -6,10 +7,6 @@ import type {
 } from "./types.gateway.js";
 import type { OpenClawConfig } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function normalizeString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -35,7 +32,7 @@ function normalizeSilenceTimeoutMs(value: unknown): number | undefined {
 }
 
 function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undefined {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
 
@@ -58,7 +55,7 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
 }
 
 function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConfig> | undefined {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
   const providers: Record<string, TalkProviderConfig> = {};
@@ -71,7 +68,10 @@ function normalizeTalkProviders(value: unknown): Record<string, TalkProviderConf
     if (!normalizedProvider) {
       continue;
     }
-    providers[providerId] = normalizedProvider;
+    providers[providerId] = {
+      ...providers[providerId],
+      ...normalizedProvider,
+    };
   }
   return Object.keys(providers).length > 0 ? providers : undefined;
 }
@@ -90,7 +90,7 @@ function activeProviderFromTalk(talk: TalkConfig): string | undefined {
 }
 
 export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig | undefined {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
 

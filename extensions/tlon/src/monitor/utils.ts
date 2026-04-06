@@ -181,12 +181,19 @@ export async function resolveAuthorizedMessageText(params: {
   return citedContent + rawText;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
-function readString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
+export function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function readString(
+  record: Record<string, unknown> | null,
+  key: string,
+): string | undefined {
+  const value = record?.[key];
   return typeof value === "string" ? value : undefined;
 }
 

@@ -462,6 +462,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
             : "channel",
         ),
     },
+    resolveReplyTransport: ({ threadId, replyToId }) => ({
+      replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+      threadId,
+    }),
   },
   security: mattermostSecurityAdapter,
   outbound: {

@@ -1,9 +1,14 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import * as discordSecrets from "../../extensions/discord/src/secret-config-contract.ts";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+
+const discordSecrets = loadBundledChannelSecretContractApi("discord");
+if (!discordSecrets?.collectRuntimeConfigAssignments) {
+  throw new Error("Missing Discord secret contract api");
+}
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {

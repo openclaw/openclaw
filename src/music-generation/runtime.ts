@@ -8,12 +8,13 @@ import {
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
-import { resolveMusicGenerationModeCapabilities } from "./capabilities.js";
 import { parseMusicGenerationModelRef } from "./model-ref.js";
+import { resolveMusicGenerationOverrides } from "./normalization.js";
 import { getMusicGenerationProvider, listMusicGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedMusicAsset,
   MusicGenerationIgnoredOverride,
+  MusicGenerationNormalization,
   MusicGenerationOutputFormat,
   MusicGenerationResult,
   MusicGenerationSourceImage,
@@ -40,77 +41,13 @@ export type GenerateMusicRuntimeResult = {
   model: string;
   attempts: FallbackAttempt[];
   lyrics?: string[];
+  normalization?: MusicGenerationNormalization;
   metadata?: Record<string, unknown>;
   ignoredOverrides: MusicGenerationIgnoredOverride[];
 };
 
 export function listRuntimeMusicGenerationProviders(params?: { config?: OpenClawConfig }) {
   return listMusicGenerationProviders(params?.config);
-}
-
-function resolveProviderMusicGenerationOverrides(params: {
-  provider: NonNullable<ReturnType<typeof getMusicGenerationProvider>>;
-  model: string;
-  lyrics?: string;
-  instrumental?: boolean;
-  durationSeconds?: number;
-  format?: MusicGenerationOutputFormat;
-  inputImages?: MusicGenerationSourceImage[];
-}) {
-  const { capabilities: caps } = resolveMusicGenerationModeCapabilities({
-    provider: params.provider,
-    inputImageCount: params.inputImages?.length ?? 0,
-  });
-  const ignoredOverrides: MusicGenerationIgnoredOverride[] = [];
-  let lyrics = params.lyrics;
-  let instrumental = params.instrumental;
-  let durationSeconds = params.durationSeconds;
-  let format = params.format;
-
-  if (!caps) {
-    return {
-      lyrics,
-      instrumental,
-      durationSeconds,
-      format,
-      ignoredOverrides,
-    };
-  }
-
-  if (lyrics?.trim() && !caps.supportsLyrics) {
-    ignoredOverrides.push({ key: "lyrics", value: lyrics });
-    lyrics = undefined;
-  }
-
-  if (typeof instrumental === "boolean" && !caps.supportsInstrumental) {
-    ignoredOverrides.push({ key: "instrumental", value: instrumental });
-    instrumental = undefined;
-  }
-
-  if (typeof durationSeconds === "number" && !caps.supportsDuration) {
-    ignoredOverrides.push({ key: "durationSeconds", value: durationSeconds });
-    durationSeconds = undefined;
-  }
-
-  if (format) {
-    const supportedFormats =
-      caps.supportedFormatsByModel?.[params.model] ?? caps.supportedFormats ?? [];
-    if (
-      !caps.supportsFormat ||
-      (supportedFormats.length > 0 && !supportedFormats.includes(format))
-    ) {
-      ignoredOverrides.push({ key: "format", value: format });
-      format = undefined;
-    }
-  }
-
-  return {
-    lyrics,
-    instrumental,
-    durationSeconds,
-    format,
-    ignoredOverrides,
-  };
 }
 
 export async function generateMusic(
@@ -121,6 +58,8 @@ export async function generateMusic(
     modelConfig: params.cfg.agents?.defaults?.musicGenerationModel,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
+    agentDir: params.agentDir,
+    listProviders: listMusicGenerationProviders,
   });
   if (candidates.length === 0) {
     throw new Error(
@@ -150,7 +89,7 @@ export async function generateMusic(
     }
 
     try {
-      const sanitized = resolveProviderMusicGenerationOverrides({
+      const sanitized = resolveMusicGenerationOverrides({
         provider,
         model: candidate.model,
         lyrics: params.lyrics,
@@ -181,7 +120,17 @@ export async function generateMusic(
         model: result.model ?? candidate.model,
         attempts,
         lyrics: result.lyrics,
-        metadata: result.metadata,
+        normalization: sanitized.normalization,
+        metadata: {
+          ...result.metadata,
+          ...(sanitized.normalization?.durationSeconds?.requested !== undefined &&
+          sanitized.normalization.durationSeconds.applied !== undefined
+            ? {
+                requestedDurationSeconds: sanitized.normalization.durationSeconds.requested,
+                normalizedDurationSeconds: sanitized.normalization.durationSeconds.applied,
+              }
+            : {}),
+        },
         ignoredOverrides: sanitized.ignoredOverrides,
       };
     } catch (err) {

@@ -6,14 +6,15 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   isSameMemoryDreamingDay,
   resolveMemoryCorePluginConfig,
+  resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryLightDreamingConfig,
-  resolveMemoryRemDreamingConfig,
-  resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspaces,
+  resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { formatError } from "../server-utils.js";
+import { asRecord, normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
@@ -94,21 +95,6 @@ export type DoctorMemoryDreamDiaryPayload = {
   content?: string;
   updatedAtMs?: number;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function resolveDreamingConfig(
   cfg: OpenClawConfig,

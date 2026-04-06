@@ -575,6 +575,7 @@ function validateConfigObjectWithPluginsBase(
   type RegistryInfo = {
     registry: ReturnType<typeof loadPluginManifestRegistry>;
     knownIds?: Set<string>;
+    overriddenPluginIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
     channelSchemas?: Map<
       string,
@@ -600,6 +601,16 @@ function validateConfigObjectWithPluginsBase(
       return compatPluginIds;
     }
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const overriddenBundledPluginIds = new Set(
+      loadPluginManifestRegistry({
+        config,
+        workspaceDir: workspaceDir ?? undefined,
+        env: opts.env,
+      })
+        .diagnostics.filter((diag) => diag.message.includes("duplicate plugin id detected"))
+        .map((diag) => diag.pluginId)
+        .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
+    );
     compatPluginIds = new Set(
       resolveManifestContractPluginIds({
         contract: "webSearchProviders",
@@ -607,7 +618,7 @@ function validateConfigObjectWithPluginsBase(
         config,
         workspaceDir: workspaceDir ?? undefined,
         env: opts.env,
-      }),
+      }).filter((pluginId) => !overriddenBundledPluginIds.has(pluginId)),
     );
     return compatPluginIds;
   };
@@ -672,6 +683,21 @@ function validateConfigObjectWithPluginsBase(
     return info.knownIds;
   };
 
+  const ensureOverriddenPluginIds = (): Set<string> => {
+    const info = ensureRegistry();
+    if (!info.overriddenPluginIds) {
+      info.overriddenPluginIds = new Set(
+        info.registry.diagnostics
+          .filter((diag) => diag.message.includes("duplicate plugin id detected"))
+          .map((diag) => diag.pluginId)
+          .filter(
+            (pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== "",
+          ),
+      );
+    }
+    return info.overriddenPluginIds;
+  };
+
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
     const info = ensureRegistry();
     if (!info.normalizedPlugins) {
@@ -689,10 +715,20 @@ function validateConfigObjectWithPluginsBase(
     const info = ensureRegistry();
     if (!info.channelSchemas) {
       info.channelSchemas = new Map(
-        collectChannelSchemaMetadata(info.registry).map(
-          (entry) => [entry.id, { schema: entry.configSchema }] as const,
+        GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
+          (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
+      for (const entry of collectChannelSchemaMetadata(info.registry)) {
+        const current = info.channelSchemas.get(entry.id);
+        if (entry.configSchema) {
+          info.channelSchemas.set(entry.id, { schema: entry.configSchema });
+          continue;
+        }
+        if (!current) {
+          info.channelSchemas.set(entry.id, {});
+        }
+      }
     }
     return info.channelSchemas;
   };
@@ -931,6 +967,7 @@ function validateConfigObjectWithPluginsBase(
     }
     seenPlugins.add(pluginId);
     const entry = normalizedPlugins.entries[pluginId];
+    const entryExists = entry !== undefined;
     const entryHasConfig = Boolean(entry?.config);
 
     const activationState = resolveEffectivePluginActivationState({
@@ -958,7 +995,7 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    const shouldValidate = enabled || entryHasConfig;
+    const shouldValidate = enabled || entryExists || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
         const res = validateJsonSchemaValue({
@@ -977,7 +1014,7 @@ function validateConfigObjectWithPluginsBase(
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
-        } else if (entry || entryHasConfig) {
+        } else if (entryExists || entryHasConfig) {
           replacePluginEntryConfig(pluginId, res.value as Record<string, unknown>);
         }
       } else if (record.format === "bundle") {
@@ -991,7 +1028,9 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    if (!enabled && entryHasConfig && !ensureCompatPluginIds().has(pluginId)) {
+    const suppressDisabledConfigWarning =
+      ensureCompatPluginIds().has(pluginId) && !ensureOverriddenPluginIds().has(pluginId);
+    if (!enabled && entryHasConfig && !suppressDisabledConfigWarning) {
       warnings.push({
         path: `plugins.entries.${pluginId}`,
         message: `plugin disabled (${reason ?? "disabled"}) but config is present`,

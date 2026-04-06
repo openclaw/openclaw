@@ -2,7 +2,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
-import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
+import {
+  asRecord,
+  normalizeWebhookMessage,
+  normalizeWebhookReaction,
+} from "./monitor-normalize.js";
 import { logVerbose, processMessage, processReaction } from "./monitor-processing.js";
 import {
   _resetBlueBubblesShortIdState,
@@ -91,12 +95,6 @@ function parseBlueBubblesWebhookPayload(
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function maskSecret(value: string): string {

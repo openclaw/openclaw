@@ -328,6 +328,22 @@ describe("plugin-sdk subpath exports", () => {
         "safeMatchRegex",
       ],
     });
+    expectSourceContract("provider-web-search-contract", {
+      mentions: [
+        "enablePluginInConfig",
+        "getScopedCredentialValue",
+        "resolveProviderWebSearchPluginConfig",
+        "setScopedCredentialValue",
+        "setProviderWebSearchPluginConfigValue",
+        "WebSearchProviderPlugin",
+      ],
+      omits: [
+        "buildSearchCacheKey",
+        "withTrustedWebSearchEndpoint",
+        "writeCachedSearchPayload",
+        "resolveCitationRedirectUrl",
+      ],
+    });
     expectSourceMentions("compat", [
       "createPluginRuntimeStore",
       "createScopedChannelConfigAdapter",

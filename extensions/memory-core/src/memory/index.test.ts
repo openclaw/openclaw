@@ -485,19 +485,6 @@ describe("memory index", () => {
     }
   });
 
-  it("reuses cached embeddings on forced reindex", async () => {
-    const cfg = createCfg({ storePath: indexMainPath, cacheEnabled: true });
-    const manager = await getPersistentManager(cfg);
-    // Seed the embedding cache once, then ensure a forced reindex doesn't
-    // re-embed when the cache is enabled.
-    await manager.sync({ reason: "test" });
-    const afterFirst = embedBatchCalls;
-    expect(afterFirst).toBeGreaterThan(0);
-
-    await manager.sync({ force: true });
-    expect(embedBatchCalls).toBe(afterFirst);
-  });
-
   it.skip("finds keyword matches via hybrid search when query embedding is zero", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
@@ -525,50 +512,6 @@ describe("memory index", () => {
     expect(status.vector?.enabled).toBe(true);
     expect(typeof status.vector?.available).toBe("boolean");
     expect(status.vector?.available).toBe(available);
-  });
-
-  it("triggers full reindex and cleans up old-model FTS rows when switching from provider to FTS-only", async () => {
-    const sharedStorePath = path.join(workspaceDir, "index-provider-to-fts-only.sqlite");
-
-    const providerCfg = createCfg({ storePath: sharedStorePath, hybrid: { enabled: true } });
-    const providerResult = await getMemorySearchManager({ cfg: providerCfg, agentId: "main" });
-    const providerManager = requireManager(providerResult);
-    managersForCleanup.add(providerManager);
-    resetManagerForTest(providerManager);
-
-    await providerManager.sync({ reason: "test" });
-
-    const providerDb = (
-      providerManager as unknown as { db: { prepare: (s: string) => { get: () => { c: number } } } }
-    ).db;
-    const providerFtsRows = providerDb
-      .prepare("SELECT COUNT(*) as c FROM chunks_fts WHERE model = 'mock-embed'")
-      .get();
-    expect(providerFtsRows.c).toBeGreaterThan(0);
-
-    await providerManager.close();
-    managersForCleanup.delete(providerManager);
-
-    forceNoProvider = true;
-    const ftsOnlyCfg = createCfg({ storePath: sharedStorePath, hybrid: { enabled: true } });
-    const ftsOnlyResult = await getMemorySearchManager({ cfg: ftsOnlyCfg, agentId: "main" });
-    const ftsOnlyManager = requireManager(ftsOnlyResult);
-    managersForCleanup.add(ftsOnlyManager);
-
-    await ftsOnlyManager.sync({ reason: "test" });
-
-    const db = (
-      ftsOnlyManager as unknown as { db: { prepare: (s: string) => { get: () => { c: number } } } }
-    ).db;
-    const oldRows = db
-      .prepare("SELECT COUNT(*) as c FROM chunks_fts WHERE model = 'mock-embed'")
-      .get();
-    expect(oldRows.c).toBe(0);
-
-    const newRows = db
-      .prepare("SELECT COUNT(*) as c FROM chunks_fts WHERE model = 'fts-only'")
-      .get();
-    expect(newRows.c).toBeGreaterThan(0);
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {

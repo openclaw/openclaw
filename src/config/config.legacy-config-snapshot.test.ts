@@ -50,13 +50,14 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
-      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toMatchObject({
+      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toMatchObject({
         provider: "local",
         fallback: "none",
         query: { maxResults: 7 },
       });
+      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toBeUndefined();
     });
   });
 
@@ -71,12 +72,13 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
+      expect(snap.sourceConfig.agents?.defaults?.heartbeat).toMatchObject({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
       });
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
     });
   });
 
@@ -92,13 +94,14 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
+      expect(snap.sourceConfig.channels?.defaults?.heartbeat).toMatchObject({
         showOk: true,
         showAlerts: false,
         useIndicator: true,
       });
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
     });
   });
 
@@ -124,13 +127,13 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(
         true,
       );
       expect(snap.legacyIssues.some((issue) => issue.path === "agents.list")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
-      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
+      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ scope: "session" });
+      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ scope: "shared" });
     });
   });
 
@@ -148,13 +151,16 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
         true,
       );
+      expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
+        apiKey: "test-key",
+      });
       expect(
         (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,
-      ).toBe("test-key");
+      ).toBeUndefined();
     });
   });
 
@@ -184,14 +190,18 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "session.threadBindings")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels")).toBe(true);
-      expect(snap.sourceConfig.session?.threadBindings).toMatchObject({ ttlHours: 24 });
-      expect(snap.sourceConfig.channels?.discord?.threadBindings).toMatchObject({ ttlHours: 12 });
+      expect(snap.sourceConfig.session?.threadBindings).toMatchObject({ idleHours: 24 });
+      expect(snap.sourceConfig.channels?.discord?.threadBindings).toMatchObject({ idleHours: 12 });
       expect(snap.sourceConfig.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-        ttlHours: 6,
+        idleHours: 6,
       });
+      expect(
+        (snap.sourceConfig.session?.threadBindings as Record<string, unknown> | undefined)
+          ?.ttlHours,
+      ).toBeUndefined();
     });
   });
 
@@ -226,7 +236,7 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.telegram")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
@@ -237,16 +247,39 @@ describe("config strict validation", () => {
         true,
       );
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
-      expect(snap.sourceConfig.channels?.telegram).toMatchObject({ streamMode: "block" });
-      expect(snap.sourceConfig.channels?.discord).toMatchObject({ streaming: false });
+      expect(snap.sourceConfig.channels?.telegram).toMatchObject({
+        streaming: {
+          mode: "block",
+        },
+      });
+      expect(
+        (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+      ).toBeUndefined();
+      expect(snap.sourceConfig.channels?.discord).toMatchObject({
+        streaming: {
+          mode: "off",
+        },
+      });
       expect(snap.sourceConfig.channels?.discord?.accounts?.work).toMatchObject({
-        streamMode: "block",
+        streaming: {
+          mode: "block",
+        },
       });
-      expect(snap.sourceConfig.channels?.googlechat).toMatchObject({ streamMode: "append" });
-      expect(snap.sourceConfig.channels?.googlechat?.accounts?.work).toMatchObject({
-        streamMode: "replace",
+      expect(
+        (snap.sourceConfig.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+      ).toBeUndefined();
+      expect(
+        (
+          snap.sourceConfig.channels?.googlechat?.accounts?.work as
+            | Record<string, unknown>
+            | undefined
+        )?.streamMode,
+      ).toBeUndefined();
+      expect(snap.sourceConfig.channels?.slack).toMatchObject({
+        streaming: {
+          mode: "partial",
+        },
       });
-      expect(snap.sourceConfig.channels?.slack).toMatchObject({ streaming: true });
     });
   });
 
@@ -315,7 +348,7 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack.accounts")).toBe(
         true,
@@ -328,12 +361,12 @@ describe("config strict validation", () => {
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
         true,
       );
-      expect(snap.sourceConfig.channels?.slack?.channels?.ops).toMatchObject({ allow: false });
+      expect(snap.sourceConfig.channels?.slack?.channels?.ops).toMatchObject({ enabled: false });
       expect(snap.sourceConfig.channels?.googlechat?.groups?.["spaces/aaa"]).toMatchObject({
-        allow: false,
+        enabled: false,
       });
       expect(snap.sourceConfig.channels?.discord?.guilds?.["100"]?.channels?.general).toMatchObject(
-        { allow: false },
+        { enabled: false },
       );
     });
   });
@@ -350,11 +383,17 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(
         snap.legacyIssues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly"),
       ).toBe(true);
-      expect(snap.sourceConfig.channels?.telegram).toMatchObject({ groupMentionsOnly: true });
+      expect(snap.sourceConfig.channels?.telegram?.groups?.["*"]).toMatchObject({
+        requireMention: true,
+      });
+      expect(
+        (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)
+          ?.groupMentionsOnly,
+      ).toBeUndefined();
     });
   });
 

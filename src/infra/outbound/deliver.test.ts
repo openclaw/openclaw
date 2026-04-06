@@ -567,7 +567,7 @@ describe("deliverOutboundPayloads", () => {
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
-  it("uses iMessage media maxBytes from agent fallback", async () => {
+  it("does not pass iMessage media maxBytes on plain text sends", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
     setActivePluginRegistry(
       createTestRegistry([
@@ -590,11 +590,7 @@ describe("deliverOutboundPayloads", () => {
       deps: { imessage: sendIMessage },
     });
 
-    expect(sendIMessage).toHaveBeenCalledWith(
-      "chat_id:42",
-      "hello",
-      expect.objectContaining({ maxBytes: 3 * 1024 * 1024 }),
-    );
+    expect(sendIMessage).toHaveBeenCalledWith("chat_id:42", "hello", { accountId: undefined });
   });
 
   it("normalizes payloads and drops empty entries", () => {

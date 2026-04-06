@@ -28,6 +28,7 @@ import {
 } from "./embeddings.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
+import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import {
   closeManagedCacheEntries,
   getOrCreateManagedCacheEntry,
@@ -56,8 +57,6 @@ const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
-const BATCH_FAILURE_LIMIT = 2;
-
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 const log = createSubsystemLogger("memory");
 
@@ -731,7 +730,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       batch: {
         enabled: this.batch.enabled,
         failures: this.batchFailureCount,
-        limit: BATCH_FAILURE_LIMIT,
+        limit: MEMORY_BATCH_FAILURE_LIMIT,
         wait: this.batch.wait,
         concurrency: this.batch.concurrency,
         pollIntervalMs: this.batch.pollIntervalMs,

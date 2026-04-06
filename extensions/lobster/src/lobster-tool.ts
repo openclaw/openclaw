@@ -6,7 +6,11 @@ import {
   type LobsterRunner,
   type LobsterRunnerParams,
 } from "./lobster-runner.js";
-import { resumeManagedLobsterFlow, runManagedLobsterFlow } from "./lobster-taskflow.js";
+import {
+  type ManagedLobsterFlowResult,
+  resumeManagedLobsterFlow,
+  runManagedLobsterFlow,
+} from "./lobster-taskflow.js";
 
 type BoundTaskFlow = ReturnType<
   NonNullable<OpenClawPluginApi["runtime"]>["taskFlow"]["bindSession"]
@@ -190,6 +194,20 @@ function formatManagedFlowResult(result: ManagedFlowSuccessResult) {
   };
 }
 
+function requireTaskFlowRuntime(taskFlow: BoundTaskFlow | undefined, action: "run" | "resume") {
+  if (!taskFlow) {
+    throw new Error(`Managed TaskFlow ${action} mode requires a bound taskFlow runtime`);
+  }
+  return taskFlow;
+}
+
+function resolveManagedFlowToolResult(result: ManagedLobsterFlowResult) {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return formatManagedFlowResult(result);
+}
+
 export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolOptions) {
   const runner = options?.runner ?? createEmbeddedLobsterRunner();
   return {
@@ -253,47 +271,37 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       if (action === "run") {
         const flowParams = parseRunFlowParams(params);
         if (flowParams) {
-          if (!taskFlow) {
-            throw new Error("Managed TaskFlow run mode requires a bound taskFlow runtime");
-          }
-          const result = await runManagedLobsterFlow({
-            taskFlow,
-            runner,
-            runnerParams,
-            controllerId: flowParams.controllerId,
-            goal: flowParams.goal,
-            ...(flowParams.stateJson !== undefined ? { stateJson: flowParams.stateJson } : {}),
-            ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
-            ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
-          });
-          if (!result.ok) {
-            throw result.error;
-          }
-          return formatManagedFlowResult(result);
+          return resolveManagedFlowToolResult(
+            await runManagedLobsterFlow({
+              taskFlow: requireTaskFlowRuntime(taskFlow, "run"),
+              runner,
+              runnerParams,
+              controllerId: flowParams.controllerId,
+              goal: flowParams.goal,
+              ...(flowParams.stateJson !== undefined ? { stateJson: flowParams.stateJson } : {}),
+              ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
+              ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
+            }),
+          );
         }
       } else {
         const flowParams = parseResumeFlowParams(params);
         if (flowParams) {
-          if (!taskFlow) {
-            throw new Error("Managed TaskFlow resume mode requires a bound taskFlow runtime");
-          }
-          const result = await resumeManagedLobsterFlow({
-            taskFlow,
-            runner,
-            runnerParams: runnerParams as LobsterRunnerParams & {
-              action: "resume";
-              token: string;
-              approve: boolean;
-            },
-            flowId: flowParams.flowId,
-            expectedRevision: flowParams.expectedRevision,
-            ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
-            ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
-          });
-          if (!result.ok) {
-            throw result.error;
-          }
-          return formatManagedFlowResult(result);
+          return resolveManagedFlowToolResult(
+            await resumeManagedLobsterFlow({
+              taskFlow: requireTaskFlowRuntime(taskFlow, "resume"),
+              runner,
+              runnerParams: runnerParams as LobsterRunnerParams & {
+                action: "resume";
+                token: string;
+                approve: boolean;
+              },
+              flowId: flowParams.flowId,
+              expectedRevision: flowParams.expectedRevision,
+              ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
+              ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
+            }),
+          );
         }
       }
 

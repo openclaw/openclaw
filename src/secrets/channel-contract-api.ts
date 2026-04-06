@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
@@ -39,7 +39,7 @@ function loadBundledChannelPublicArtifact(
       continue;
     }
     try {
-      return loadBundledPluginPublicSurfaceModuleSync<BundledChannelContractApi>({
+      return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
         dirName: metadata.dirName,
         artifactBasename,
       });

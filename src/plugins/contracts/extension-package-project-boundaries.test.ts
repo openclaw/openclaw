@@ -38,15 +38,10 @@ describe("opt-in extension package boundaries", () => {
     expect(pathsConfig.compilerOptions?.paths).toEqual({
       "openclaw/extension-api": ["../src/extensionAPI.ts"],
       "openclaw/plugin-sdk": ["../packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts"],
-      "openclaw/plugin-sdk/*": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts",
-        "../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts",
-      ],
+      "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
       "openclaw/plugin-sdk/account-id": ["../src/plugin-sdk/account-id.ts"],
-      "@openclaw/*": ["../packages/plugin-sdk/dist/packages/plugin-sdk/src/extensions/*"],
-      "@openclaw/plugin-sdk/*": [
-        "../packages/plugin-sdk/dist/packages/plugin-sdk/src/src/plugin-sdk/*",
-      ],
+      "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
+      "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
     });
 
     const baseConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG);
@@ -120,13 +115,13 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.name).toBe("@openclaw/plugin-sdk");
     expect(packageJson.exports?.["./core"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-entry"]?.types).toBe(
-      "./dist/packages/plugin-sdk/src/src/plugin-sdk/plugin-entry.d.ts",
+      "./dist/src/plugin-sdk/plugin-entry.d.ts",
     );
     expect(packageJson.exports?.["./provider-http"]?.types).toBe(
-      "./dist/packages/plugin-sdk/src/src/plugin-sdk/provider-http.d.ts",
+      "./dist/src/plugin-sdk/provider-http.d.ts",
     );
     expect(packageJson.exports?.["./video-generation"]?.types).toBe(
-      "./dist/packages/plugin-sdk/src/src/plugin-sdk/video-generation.d.ts",
+      "./dist/src/plugin-sdk/video-generation.d.ts",
     );
     expect(existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,

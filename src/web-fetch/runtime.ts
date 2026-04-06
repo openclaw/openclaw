@@ -30,10 +30,6 @@ export type ResolveWebFetchDefinitionParams = {
   preferRuntimeProviders?: boolean;
 };
 
-function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
-  return resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(cfg, "fetch");
-}
-
 export function resolveWebFetchEnabled(params: {
   fetch?: WebFetchConfig;
   sandboxed?: boolean;
@@ -130,7 +126,10 @@ export function resolveWebFetchProviderId(params: {
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): { provider: PluginWebFetchProviderEntry; definition: WebFetchProviderToolDefinition } | null {
-  const fetch = resolveFetchConfig(options?.config);
+  const fetch = resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(
+    options?.config,
+    "fetch",
+  );
   const runtimeWebFetch = options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadata()?.fetch;
   const providers = sortWebFetchProvidersForAutoDetect(
     resolvePluginWebFetchProviders({

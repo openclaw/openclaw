@@ -10,6 +10,7 @@ import {
   summarizeConceptTagScriptCoverage,
   type ConceptTagScriptCoverage,
 } from "./concept-vocabulary.js";
+import { asRecord } from "./dreaming-shared.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
@@ -31,6 +32,7 @@ const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.05;
 const PHASE_SIGNAL_REM_BOOST_MAX = 0.08;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const inProcessShortTermLocks = new Map<string, Promise<void>>();
+const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
 export type PromotionWeights = {
   frequency: number;
@@ -519,6 +521,28 @@ function resolveLockPath(workspaceDir: string): string {
   return path.join(workspaceDir, SHORT_TERM_LOCK_RELATIVE_PATH);
 }
 
+function resolveShortTermArtifactsDir(workspaceDir: string): string {
+  return path.dirname(resolveLockPath(workspaceDir));
+}
+
+async function ensureShortTermArtifactsDir(workspaceDir: string): Promise<void> {
+  const artifactsDir = resolveShortTermArtifactsDir(workspaceDir);
+  const existing = ensuredShortTermDirs.get(artifactsDir);
+  if (existing) {
+    await existing;
+    return;
+  }
+  const ensuring = fs
+    .mkdir(artifactsDir, { recursive: true })
+    .then(() => undefined)
+    .catch((err) => {
+      ensuredShortTermDirs.delete(artifactsDir);
+      throw err;
+    });
+  ensuredShortTermDirs.set(artifactsDir, ensuring);
+  await ensuring;
+}
+
 function parseLockOwnerPid(raw: string): number | null {
   const match = raw.trim().match(/^(\d+):/);
   if (!match) {
@@ -585,7 +609,7 @@ async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promi
 async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
   const lockPath = resolveLockPath(workspaceDir);
   return withInProcessShortTermLock(lockPath, async () => {
-    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    await ensureShortTermArtifactsDir(workspaceDir);
     const startedAt = Date.now();
 
     while (true) {
@@ -720,7 +744,7 @@ async function writePhaseSignalStore(
   store: ShortTermPhaseSignalStore,
 ): Promise<void> {
   const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
-  await fs.mkdir(path.dirname(phaseSignalPath), { recursive: true });
+  await ensureShortTermArtifactsDir(workspaceDir);
   const tmpPath = `${phaseSignalPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
   await fs.rename(tmpPath, phaseSignalPath);
@@ -728,7 +752,7 @@ async function writePhaseSignalStore(
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   const storePath = resolveStorePath(workspaceDir);
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await ensureShortTermArtifactsDir(workspaceDir);
   const tmpPath = `${storePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
   await fs.rename(tmpPath, storePath);
@@ -1526,13 +1550,6 @@ export async function auditShortTermPromotionArtifacts(params: {
     issues,
     ...(qmd ? { qmd } : {}),
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }
 
 export async function repairShortTermPromotionArtifacts(params: {

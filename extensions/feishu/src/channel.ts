@@ -49,6 +49,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "./channel-runtime-api.js";
 import { createFeishuClient } from "./client.js";
+import { isRecord } from "./comment-shared.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
   buildFeishuConversationId,
@@ -75,10 +76,6 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
     return undefined;
   }
   return media.trim() ? media : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
