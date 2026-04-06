@@ -944,6 +944,9 @@ async function writeDoc(
   maxBytes: number,
   logger?: Logger,
 ) {
+  if (markdown == null) {
+    throw new Error("feishu_doc write: content is required");
+  }
   const deleted = await clearDocumentContent(client, docToken);
   logger?.info?.("feishu_doc: Converting markdown...");
   const { blocks, firstLevelBlockIds } = await chunkedConvertMarkdown(client, markdown);
@@ -975,6 +978,9 @@ async function appendDoc(
   maxBytes: number,
   logger?: Logger,
 ) {
+  if (markdown == null) {
+    throw new Error("feishu_doc append: content is required");
+  }
   logger?.info?.("feishu_doc: Converting markdown...");
   const { blocks, firstLevelBlockIds } = await chunkedConvertMarkdown(client, markdown);
   if (blocks.length === 0) {
@@ -1006,6 +1012,9 @@ async function insertDoc(
   maxBytes: number,
   logger?: Logger,
 ) {
+  if (markdown == null) {
+    throw new Error("feishu_doc insert: content is required");
+  }
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: afterBlockId },
   });
