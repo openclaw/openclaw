@@ -23,7 +23,7 @@ export const fr: TranslationMap = {
     unselect: "Désélectionner",
     enabled: "Activé",
     disabled: "Désactivé",
-    na: "n/a",
+    na: "n/d",
     configured: "Configuré",
     running: "En cours d’exécution",
     linked: "Lié",
