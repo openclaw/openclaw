@@ -5,10 +5,17 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { replyComment } from "./drive.js";
+import { resolveMediaContentType } from "./media-types.js";
 import { sendMediaFeishu } from "./media.js";
+import { normalizeMentionTagsForCard } from "./mention.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
+import {
+  sendMarkdownCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+  shouldUseFeishuMarkdownCard,
+} from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -41,10 +48,6 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   }
 
   return raw;
-}
-
-function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
 function resolveReplyToMessageId(params: {
@@ -108,11 +111,25 @@ async function sendOutboundText(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
+  if (renderMode === "card" || (renderMode === "auto" && shouldUseFeishuMarkdownCard(text))) {
     return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
   }
 
   return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
+}
+
+function attachFeishuMediaMetadata<
+  T extends { rawContent?: string; meta?: Record<string, unknown> },
+>(sent: T, mediaUrl: string) {
+  const contentType = resolveMediaContentType(mediaUrl);
+  return {
+    ...sent,
+    meta: {
+      ...(sent.meta ?? {}),
+      contentType,
+      rawContent: sent.rawContent ?? `[${contentType}: ${mediaUrl}]`,
+    },
+  };
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
@@ -139,7 +156,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       const localImagePath = normalizePossibleLocalImagePath(text);
       if (localImagePath) {
         try {
-          return await sendMediaFeishu({
+          const sent = await sendMediaFeishu({
             cfg,
             to,
             mediaUrl: localImagePath,
@@ -147,6 +164,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             replyToMessageId,
             mediaLocalRoots,
           });
+          return attachFeishuMediaMetadata(sent, localImagePath);
         } catch (err) {
           console.error(`[feishu] local image path auto-send failed:`, err);
           // fall through to plain text as last resort
@@ -165,7 +183,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
 
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
-      const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+      const useCard =
+        renderMode === "card" || (renderMode === "auto" && shouldUseFeishuMarkdownCard(text));
       if (useCard) {
         const header = identity
           ? {
@@ -175,7 +194,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
               template: "blue" as const,
             }
           : undefined;
-        return await sendStructuredCardFeishu({
+        const sent = await sendStructuredCardFeishu({
           cfg,
           to,
           text,
@@ -184,14 +203,30 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           accountId: accountId ?? undefined,
           header: header?.title ? header : undefined,
         });
+        return {
+          ...sent,
+          meta: {
+            ...(sent.meta ?? {}),
+            contentType: "interactive",
+            finalContent: normalizeMentionTagsForCard(text),
+          },
+        };
       }
-      return await sendOutboundText({
+      const sent = await sendOutboundText({
         cfg,
         to,
         text,
         accountId: accountId ?? undefined,
         replyToMessageId,
       });
+      return {
+        ...sent,
+        meta: {
+          ...("meta" in sent ? (sent.meta ?? {}) : {}),
+          contentType: "post",
+          finalContent: text,
+        },
+      };
     },
     sendMedia: async ({
       cfg,
@@ -230,7 +265,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       // Upload and send media if URL or local path provided
       if (mediaUrl) {
         try {
-          return await sendMediaFeishu({
+          const sent = await sendMediaFeishu({
             cfg,
             to,
             mediaUrl,
@@ -238,14 +273,17 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             mediaLocalRoots,
             replyToMessageId,
           });
+          return attachFeishuMediaMetadata(sent, mediaUrl);
         } catch (err) {
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
-          // Fallback to URL link if upload fails
+          // Fallback: send user-friendly error instead of exposing internal paths
+          const isLocalPath = !mediaUrl.startsWith("http://") && !mediaUrl.startsWith("https://");
+          const fallbackText = isLocalPath ? "📎 [Media upload failed]" : `📎 ${mediaUrl}`;
           return await sendOutboundText({
             cfg,
             to,
-            text: `📎 ${mediaUrl}`,
+            text: fallbackText,
             accountId: accountId ?? undefined,
             replyToMessageId,
           });

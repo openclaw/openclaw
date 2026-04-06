@@ -311,6 +311,8 @@ export type UploadFileResult = {
 export type SendMediaResult = {
   messageId: string;
   chatId: string;
+  /** Raw Feishu message content JSON (e.g. {"image_key":"..."} or {"file_key":"..."}) */
+  rawContent?: string;
 };
 
 /**
@@ -418,7 +420,7 @@ export async function sendImageFeishu(params: {
   });
   const content = JSON.stringify({ image_key: imageKey });
 
-  if (replyToMessageId) {
+  if (replyToMessageId && replyInThread) {
     const response = await client.im.message.reply({
       path: { message_id: replyToMessageId },
       data: {
@@ -428,7 +430,7 @@ export async function sendImageFeishu(params: {
       },
     });
     assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
-    return toFeishuSendResult(response, receiveId);
+    return { ...toFeishuSendResult(response, receiveId), rawContent: content };
   }
 
   const response = await client.im.message.create({
@@ -440,7 +442,7 @@ export async function sendImageFeishu(params: {
     },
   });
   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
-  return toFeishuSendResult(response, receiveId);
+  return { ...toFeishuSendResult(response, receiveId), rawContent: content };
 }
 
 /**
@@ -465,7 +467,7 @@ export async function sendFileFeishu(params: {
   });
   const content = JSON.stringify({ file_key: fileKey });
 
-  if (replyToMessageId) {
+  if (replyToMessageId && replyInThread) {
     const response = await client.im.message.reply({
       path: { message_id: replyToMessageId },
       data: {
@@ -475,7 +477,7 @@ export async function sendFileFeishu(params: {
       },
     });
     assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
-    return toFeishuSendResult(response, receiveId);
+    return { ...toFeishuSendResult(response, receiveId), rawContent: content };
   }
 
   const response = await client.im.message.create({
@@ -487,7 +489,7 @@ export async function sendFileFeishu(params: {
     },
   });
   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
-  return toFeishuSendResult(response, receiveId);
+  return { ...toFeishuSendResult(response, receiveId), rawContent: content };
 }
 
 /**

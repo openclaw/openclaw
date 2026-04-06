@@ -118,6 +118,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         to: "user:ou_target",
         text: "hello",
         replyToMessageId: "om_parent",
+        replyInThread: true,
       }),
     ).rejects.toThrow("Feishu reply failed");
 
