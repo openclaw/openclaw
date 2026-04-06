@@ -68,18 +68,15 @@ export type SessionRuntimeStateSnapshot = {
   planState?: SessionPlanState;
 };
 
-export function readSessionRuntimeState(params: {
+export function readSessionRuntimeStateFromStorePath(params: {
   sessionKey: string;
-  cfg?: OpenClawConfig;
+  storePath: string;
 }): SessionRuntimeStateSnapshot | null {
   const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
+  const storePath = params.storePath.trim();
+  if (!sessionKey || !storePath) {
     return null;
   }
-  const { storePath } = resolveSessionStorePathForSessionKey({
-    sessionKey,
-    cfg: params.cfg,
-  });
   const store = loadSessionStore(storePath);
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
   const entry = resolved.existing;
@@ -95,6 +92,21 @@ export function readSessionRuntimeState(params: {
     runtimeMode,
     planState: resolveNormalizedPlanState(entry?.planState),
   };
+}
+
+export function readSessionRuntimeState(params: {
+  sessionKey: string;
+  cfg?: OpenClawConfig;
+}): SessionRuntimeStateSnapshot | null {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  const { storePath } = resolveSessionStorePathForSessionKey({
+    sessionKey,
+    cfg: params.cfg,
+  });
+  return readSessionRuntimeStateFromStorePath({ sessionKey, storePath });
 }
 
 export function getSessionRuntimeMode(
