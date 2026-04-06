@@ -8,6 +8,7 @@
  * Inbound:  User SMS messages arrive via Kudosity webhooks
  */
 
+import { sendSMS, type KudosityConfig } from "./kudosity-api.js";
 import type {
   ChannelCapabilities,
   ChannelConfigAdapter,
@@ -15,9 +16,9 @@ import type {
   ChannelOutboundAdapter,
   ChannelPlugin,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/kudosity-sms";
-import { sendSMS, type KudosityConfig } from "./kudosity-api.js";
+} from "./runtime-api.js";
 import { getKudositySmsRuntime } from "./runtime.js";
+import { kudositySmsSetupWizard } from "./setup-surface.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -284,12 +285,7 @@ export const kudositySmsPlugin: ChannelPlugin<KudositySmsAccount> = {
   capabilities,
   configSchema,
   config: configAdapter,
-  // TODO: Convert onboarding.ts ChannelSetupWizardAdapter to declarative
-  // ChannelSetupWizard format and wire it here as `setupWizard`. The imperative
-  // adapter exists in onboarding.ts but the plugin type requires the declarative
-  // shape (status, credentials, textInputs, etc.). See BlueBubbles/Telegram
-  // setup-surface.ts for reference. Until then, `openclaw setup` will not
-  // list this channel in guided setup — outbound SMS still works.
+  setupWizard: kudositySmsSetupWizard,
   outbound,
 
   defaults: {

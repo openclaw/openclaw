@@ -5,7 +5,7 @@
  * access to config, logging, and other platform services.
  */
 
-import type { PluginRuntime } from "openclaw/plugin-sdk/kudosity-sms";
+import type { PluginRuntime } from "./runtime-api.js";
 
 let runtime: PluginRuntime | undefined;
 

@@ -5,7 +5,7 @@
  * and target resolution.
  */
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { kudositySmsPlugin } from "./channel.js";
 
 // ─── Mock Setup ──────────────────────────────────────────────────────────────
@@ -195,10 +195,56 @@ describe("kudositySmsPlugin", () => {
   });
 
   describe("setup", () => {
-    it("should not yet expose setupWizard (declarative conversion pending)", () => {
-      // TODO: Once onboarding.ts is converted to a declarative ChannelSetupWizard,
-      // update this test to assert setupWizard is defined.
-      expect(kudositySmsPlugin.setupWizard).toBeUndefined();
+    it("should expose a declarative setupWizard", () => {
+      expect(kudositySmsPlugin.setupWizard).toBeDefined();
+      expect(kudositySmsPlugin.setupWizard?.channel).toBe("kudosity-sms");
+    });
+
+    it("should report not configured when apiKey and sender are both missing", async () => {
+      const originalApiKey = process.env.KUDOSITY_API_KEY;
+      const originalSender = process.env.KUDOSITY_SENDER;
+      delete process.env.KUDOSITY_API_KEY;
+      delete process.env.KUDOSITY_SENDER;
+
+      try {
+        const configured = await kudositySmsPlugin.setupWizard!.status.resolveConfigured({
+          cfg: { channels: {} } as any,
+        });
+        expect(configured).toBe(false);
+      } finally {
+        process.env.KUDOSITY_API_KEY = originalApiKey;
+        process.env.KUDOSITY_SENDER = originalSender;
+      }
+    });
+
+    it("should report configured when apiKey and sender are both set", async () => {
+      const configured = await kudositySmsPlugin.setupWizard!.status.resolveConfigured({
+        cfg: {
+          channels: {
+            "kudosity-sms": {
+              apiKey: "abc", // pragma: allowlist secret
+              sender: "+61400000000",
+            },
+          },
+        } as any,
+      });
+      expect(configured).toBe(true);
+    });
+
+    it("should clear credentials and disable channel via disable()", () => {
+      const next = kudositySmsPlugin.setupWizard!.disable!({
+        channels: {
+          "kudosity-sms": {
+            apiKey: "abc", // pragma: allowlist secret
+            sender: "+61400000000",
+            enabled: true,
+          },
+        },
+      } as any) as any;
+      const section = next.channels["kudosity-sms"];
+      expect(section.apiKey).toBeUndefined();
+      expect(section.sender).toBeUndefined();
+      expect(section.enabled).toBe(false);
     });
   });
 
