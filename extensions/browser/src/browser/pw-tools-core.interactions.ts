@@ -51,6 +51,10 @@ function resolveInteractionTimeoutMs(timeoutMs?: number): number {
   return Math.max(500, Math.min(60_000, Math.floor(timeoutMs ?? 8000)));
 }
 
+function didPageUrlChange(page: { url(): string }, previousUrl: string): boolean {
+  return page.url() !== previousUrl;
+}
+
 async function awaitEvalWithAbort<T>(
   evalPromise: Promise<T>,
   abortPromise?: Promise<never>,
@@ -118,6 +122,7 @@ export async function clickViaPlaywright(opts: {
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
+  const previousUrl = page.url();
   try {
     const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
     if (delayMs > 0) {
@@ -137,12 +142,14 @@ export async function clickViaPlaywright(opts: {
         modifiers: opts.modifiers,
       });
     }
-    await assertPostInteractionNavigationSafe({
-      cdpUrl: opts.cdpUrl,
-      page,
-      ssrfPolicy: opts.ssrfPolicy,
-      targetId: opts.targetId,
-    });
+    if (didPageUrlChange(page, previousUrl)) {
+      await assertPostInteractionNavigationSafe({
+        cdpUrl: opts.cdpUrl,
+        page,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
+    }
   } catch (err) {
     throw toAIFriendlyError(err, label);
   }
@@ -394,6 +401,7 @@ export async function evaluateViaPlaywright(opts: {
   try {
     if (opts.ref) {
       const locator = refLocator(page, opts.ref);
+      const previousUrl = page.url();
       // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
       const elementEvaluator = new Function(
         "el",
@@ -423,16 +431,19 @@ export async function evaluateViaPlaywright(opts: {
         timeoutMs: evaluateTimeout,
       });
       const result = await awaitEvalWithAbort(evalPromise, abortPromise);
-      await assertPageNavigationCompletedSafely({
-        cdpUrl: opts.cdpUrl,
-        page,
-        response: null,
-        ssrfPolicy: opts.ssrfPolicy,
-        targetId: opts.targetId,
-      });
+      if (didPageUrlChange(page, previousUrl)) {
+        await assertPageNavigationCompletedSafely({
+          cdpUrl: opts.cdpUrl,
+          page,
+          response: null,
+          ssrfPolicy: opts.ssrfPolicy,
+          targetId: opts.targetId,
+        });
+      }
       return result;
     }
 
+    const previousUrl = page.url();
     // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
     const browserEvaluator = new Function(
       "args",
@@ -461,13 +472,15 @@ export async function evaluateViaPlaywright(opts: {
       timeoutMs: evaluateTimeout,
     });
     const result = await awaitEvalWithAbort(evalPromise, abortPromise);
-    await assertPageNavigationCompletedSafely({
-      cdpUrl: opts.cdpUrl,
-      page,
-      response: null,
-      ssrfPolicy: opts.ssrfPolicy,
-      targetId: opts.targetId,
-    });
+    if (didPageUrlChange(page, previousUrl)) {
+      await assertPageNavigationCompletedSafely({
+        cdpUrl: opts.cdpUrl,
+        page,
+        response: null,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
+    }
     return result;
   } finally {
     if (signal && abortListener) {
