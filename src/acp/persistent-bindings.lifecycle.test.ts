@@ -85,12 +85,7 @@ describe("resetAcpSessionInPlace", () => {
         clearMeta: false,
       }),
     );
-    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        agent: "claude",
-        backendId: "acpx",
-      }),
-    );
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+    expect(managerMocks.updateSessionRuntimeOptions).not.toHaveBeenCalled();
   });
 });
