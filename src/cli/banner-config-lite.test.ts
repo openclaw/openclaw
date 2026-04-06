@@ -163,4 +163,49 @@ describe("readCliBannerTaglineMode", () => {
 
     expect(readCliBannerTaglineMode({ OPENCLAW_CONFIG_PATH: configPath })).toBe("off");
   });
+
+  it("hydrates dotenv before resolving banner env substitutions for process.env", () => {
+    const root = makeTempDir("openclaw-banner-dotenv-");
+    const configPath = path.join(root, "openclaw.json");
+    const envPath = path.join(root, ".env");
+    fs.writeFileSync(
+      configPath,
+      `{
+        cli: {
+          banner: {
+            taglineMode: "\${TAGLINE_MODE}",
+          },
+        },
+      }
+      `,
+      "utf-8",
+    );
+    fs.writeFileSync(envPath, "TAGLINE_MODE=off\n", "utf-8");
+
+    const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousTaglineMode = process.env.TAGLINE_MODE;
+    delete process.env.TAGLINE_MODE;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    process.env.OPENCLAW_STATE_DIR = root;
+    try {
+      expect(readCliBannerTaglineMode()).toBe("off");
+    } finally {
+      if (previousConfigPath === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousTaglineMode === undefined) {
+        delete process.env.TAGLINE_MODE;
+      } else {
+        process.env.TAGLINE_MODE = previousTaglineMode;
+      }
+    }
+  });
 });

@@ -5,6 +5,7 @@ import { applyConfigEnvVars } from "../config/env-vars.js";
 import { resolveConfigIncludes } from "../config/includes.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { loadDotEnv } from "../infra/dotenv.js";
 import type { TaglineMode } from "./tagline.js";
 
 function parseTaglineMode(value: unknown): TaglineMode | undefined {
@@ -34,6 +35,9 @@ export function readCliBannerTaglineMode(
     // Keep banner startup cheap, but still honor config.env and ${VAR} substitution.
     if (parsed && typeof parsed === "object" && "env" in parsed) {
       applyConfigEnvVars(parsed as OpenClawConfig, env);
+    }
+    if (env === process.env) {
+      loadDotEnv({ quiet: true });
     }
     const resolved = resolveConfigEnvVars(parsed, env, {
       onMissing: () => {
