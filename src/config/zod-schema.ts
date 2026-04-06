@@ -733,7 +733,7 @@ export const OpenClawSchema = z
         connectChallengeTimeoutMs: z
           .number()
           .int()
-          .min(1)
+          .min(250)
           .max(300_000)
           .describe(
             "WebSocket pre-auth/connect handshake timeout in milliseconds for gateway clients and server-side handshake enforcement (default: 10000). Raise this when local control-plane stalls can delay connect challenge completion.",
