@@ -46,6 +46,9 @@ enum WsCommand {
         id: String,
         reply: oneshot::Sender<Result<ResponseFrame, ClientError>>,
     },
+    /// Remove a timed-out request from the pending map so it doesn't
+    /// leak memory on long-lived degraded connections.
+    Cancel(String),
 }
 
 pub struct GatewayClient {
@@ -91,7 +94,6 @@ impl GatewayClient {
     }
 
     /// Send an RPC request with a custom timeout.
-    /// This method is runtime-agnostic: works from tokio, GLib, or any async executor.
     pub async fn request_with_timeout(
         &self,
         method: &str,
@@ -104,35 +106,24 @@ impl GatewayClient {
 
         let (reply_tx, reply_rx) = oneshot::channel();
 
-        // Use try_send (non-async) so we don't need a tokio runtime context
         self.cmd_tx
             .try_send(WsCommand::Request {
                 frame: json,
-                id,
+                id: id.clone(),
                 reply: reply_tx,
             })
             .map_err(|_| ClientError::SendFailed)?;
 
-        // Spawn a background task to send a timeout signal
-        let (timeout_tx, timeout_rx) = oneshot::channel::<()>();
-        std::thread::spawn(move || {
-            std::thread::sleep(timeout);
-            let _ = timeout_tx.send(());
-        });
+        // Use tokio::time::sleep + futures select instead of spawning an OS
+        // thread per request. On timeout, send a Cancel command so the
+        // pending-map entry gets cleaned up (prevents unbounded leak on
+        // long-lived degraded connections).
+        let sleep = tokio::time::sleep(timeout);
+        tokio::pin!(sleep);
 
-        // Race the reply against the timeout using futures_util::select
-        use futures_util::future::Either;
-        let mut reply_fut = reply_rx;
-        let mut timeout_fut = timeout_rx;
-        let result = futures_util::future::select(
-            std::pin::Pin::new(&mut reply_fut),
-            std::pin::Pin::new(&mut timeout_fut),
-        )
-        .await;
-
-        match result {
-            Either::Left((reply_result, _)) => {
-                let result = reply_result.map_err(|_| ClientError::SendFailed)?;
+        tokio::select! {
+            result = reply_rx => {
+                let result = result.map_err(|_| ClientError::SendFailed)?;
                 match result {
                     Ok(resp) if resp.ok => Ok(resp.payload),
                     Ok(resp) => {
@@ -146,7 +137,10 @@ impl GatewayClient {
                     Err(e) => Err(e),
                 }
             }
-            Either::Right(_) => Err(ClientError::Timeout),
+            _ = &mut sleep => {
+                let _ = self.cmd_tx.try_send(WsCommand::Cancel(id));
+                Err(ClientError::Timeout)
+            }
         }
     }
 
@@ -419,6 +413,9 @@ async fn try_connect(
                         } else {
                             pending.lock().await.insert(id, reply);
                         }
+                    }
+                    Some(WsCommand::Cancel(id)) => {
+                        pending.lock().await.remove(&id);
                     }
                     None => {
                         info!("command channel closed, shutting down");
