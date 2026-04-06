@@ -116,33 +116,39 @@ export async function emitResetCommandHooks(params: {
   action: ResetCommandAction;
   ctx: HandleCommandsParams["ctx"];
   cfg: HandleCommandsParams["cfg"];
-  command: Pick<
+  command?: Pick<
     HandleCommandsParams["command"],
     "surface" | "senderId" | "channel" | "from" | "to" | "resetHookTriggered"
   >;
+  commandSource?: string;
+  senderId?: string;
   sessionKey?: string;
   sessionEntry?: HandleCommandsParams["sessionEntry"];
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
   workspaceDir: string;
+  routeHookMessages?: boolean;
 }): Promise<void> {
+  const commandSource = params.command?.surface ?? params.commandSource;
+  const senderId = params.command?.senderId ?? params.senderId;
   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
     sessionEntry: params.sessionEntry,
     previousSessionEntry: params.previousSessionEntry,
-    commandSource: params.command.surface,
-    senderId: params.command.senderId,
-    workspaceDir: params.workspaceDir,
+    commandSource,
+    senderId,
     cfg: params.cfg, // Pass config for LLM slug generation
   });
   await triggerInternalHook(hookEvent);
-  params.command.resetHookTriggered = true;
+  if (params.command) {
+    params.command.resetHookTriggered = true;
+  }
 
   // Send hook messages immediately if present
-  if (hookEvent.messages.length > 0) {
+  if (params.routeHookMessages !== false && hookEvent.messages.length > 0) {
     // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
     // oxlint-disable-next-line typescript/no-explicit-any
-    const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
+    const channel = params.ctx.OriginatingChannel || (params.command?.channel as any);
     // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
-    const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
+    const to = params.ctx.OriginatingTo || params.command?.from || params.command?.to;
 
     if (channel && to) {
       const { routeReply } = await loadRouteReplyRuntime();

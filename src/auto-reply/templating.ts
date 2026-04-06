@@ -181,6 +181,8 @@ export type MsgContext = {
    * The chat/channel/user ID where the reply should be sent.
    */
   OriginatingTo?: string;
+  /** Provider-specific inbound payload (structured raw event data). */
+  ChannelData?: Record<string, unknown>;
   /**
    * True when the current turn intentionally requested external delivery to
    * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.

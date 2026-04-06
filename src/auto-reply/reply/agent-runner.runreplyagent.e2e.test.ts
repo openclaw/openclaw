@@ -1634,6 +1634,19 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("suppresses plain AbortError failures before reply", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      const err = new Error("aborted");
+      err.name = "AbortError";
+      throw err;
+    });
+
+    const { run } = createMinimalRun();
+    const res = await run();
+
+    expect(res).toBeUndefined();
+  });
+
   it("still replies even if session reset fails to persist", async () => {
     await withTempStateDir(async (stateDir) => {
       const saveSpy = vi

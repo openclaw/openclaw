@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../agents/failover-error.js";
 import {
   abortEmbeddedPiRun,
   getActiveEmbeddedRunCount,
@@ -10,6 +12,7 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   clearMemoryPluginState,
@@ -24,12 +27,18 @@ import { createMockTypingController } from "./test-helpers.js";
 function createCliBackendTestConfig() {
   return {
     agents: {
-      defaults: {},
+      defaults: {
+        cliBackends: {
+          "claude-cli": {},
+          "google-gemini-cli": {},
+        },
+      },
     },
   };
 }
 
 const runEmbeddedPiAgentMock = vi.fn();
+const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
 const abortEmbeddedPiRunMock = vi.fn();
@@ -68,6 +77,12 @@ vi.mock("../../agents/pi-embedded.js", () => {
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
     abortEmbeddedPiRun: (...args: unknown[]) => abortEmbeddedPiRunMock(...args),
+  };
+});
+
+vi.mock("../../agents/cli-runner.js", () => {
+  return {
+    runCliAgent: (params: unknown) => runCliAgentMock(params),
   };
 });
 
@@ -121,6 +136,7 @@ type RunWithModelFallbackParams = {
 
 beforeEach(() => {
   runEmbeddedPiAgentMock.mockClear();
+  runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
   abortEmbeddedPiRunMock.mockClear();
@@ -1507,6 +1523,287 @@ describe("runReplyAgent block streaming", () => {
   });
 });
 
+describe("runReplyAgent claude-cli routing", () => {
+  function createRun(params?: {
+    typingMode?: "instant" | "thinking";
+    opts?: {
+      onAssistantMessageStart?: () => Promise<void> | void;
+      onReasoningStream?: (payload: {
+        text?: string;
+        isReasoning?: boolean;
+      }) => Promise<void> | void;
+      onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+      onReasoningEnd?: () => Promise<void> | void;
+      onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+    };
+  }) {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
+        skillsSnapshot: {},
+        provider: "claude-cli",
+        model: "opus-4.5",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "claude-cli/opus-4.5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: params?.typingMode ?? "instant",
+      opts: params?.opts,
+    });
+  }
+
+  it("uses claude-cli runner for claude-cli provider", async () => {
+    const runId = "00000000-0000-0000-0000-000000000001";
+    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
+    const lifecyclePhases: string[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId !== runId) {
+        return;
+      }
+      if (evt.stream !== "lifecycle") {
+        return;
+      }
+      const phase = evt.data?.phase;
+      if (typeof phase === "string") {
+        lifecyclePhases.push(phase);
+      }
+    });
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+
+    const result = await createRun();
+    unsubscribe();
+    randomSpy.mockRestore();
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(lifecyclePhases).toEqual(["start", "end"]);
+    expect(result).toMatchObject({ text: "ok" });
+  });
+
+  it("forwards cli thinking/tool stream events to reply callbacks", async () => {
+    const runId = "00000000-0000-0000-0000-000000000002";
+    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
+    const onReasoningStream = vi.fn();
+    const onToolStart = vi.fn();
+    const toolPhases: string[] = [];
+    const thinkingEvents: string[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId !== runId) {
+        return;
+      }
+      if (evt.stream === "tool" && typeof evt.data?.phase === "string") {
+        toolPhases.push(evt.data.phase);
+      }
+      if (evt.stream === "thinking" && typeof evt.data?.text === "string") {
+        thinkingEvents.push(evt.data.text);
+      }
+    });
+    runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
+        onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
+        onToolResult?: (payload: { toolUseId?: string; text?: string; isError?: boolean }) => void;
+        onAssistantTurn?: (text: string) => void;
+      }) => {
+        params.onThinkingTurn?.({
+          text: "Check_*files*\n\nThen_more",
+          delta: "Check_*files*\n\nThen_more",
+        });
+        params.onToolUseEvent?.({ name: "Read", toolUseId: "toolu_1" });
+        params.onToolResult?.({ toolUseId: "toolu_1", text: "README contents" });
+        params.onAssistantTurn?.("Final answer");
+        return {
+          payloads: [{ text: "Final answer" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "opus-4.5",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await createRun({
+      typingMode: "thinking",
+      opts: {
+        onReasoningStream,
+        onToolStart,
+      },
+    });
+    unsubscribe();
+    randomSpy.mockRestore();
+
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "Reasoning:\n_Check\\_\\*files\\*_\n\n_Then\\_more_",
+      isReasoning: true,
+    });
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "Read",
+      phase: "start",
+    });
+    expect(thinkingEvents).toEqual(["Check_*files*\n\nThen_more"]);
+    expect(toolPhases).toEqual(expect.arrayContaining(["start", "result"]));
+    expect(result).toMatchObject({ text: "Final answer" });
+  });
+
+  it("bridges cli system init to assistant message start once", async () => {
+    const callbackOrder: string[] = [];
+    const onAssistantMessageStart = vi.fn(() => {
+      callbackOrder.push("start");
+    });
+    const onReasoningStream = vi.fn(() => {
+      callbackOrder.push("reasoning");
+    });
+    const onToolStart = vi.fn(() => {
+      callbackOrder.push("tool");
+    });
+
+    runCliAgentMock.mockImplementationOnce(
+      async (params: {
+        onSystemInit?: (payload: { subtype: string; sessionId?: string }) => void;
+        onThinkingTurn?: (payload: { text: string; delta?: string }) => void;
+        onToolUseEvent?: (payload: { name: string; toolUseId?: string; input?: unknown }) => void;
+        onAssistantTurn?: (text: string) => void;
+      }) => {
+        params.onSystemInit?.({ subtype: "init", sessionId: "cli-session-1" });
+        params.onThinkingTurn?.({ text: "step", delta: "step" });
+        params.onToolUseEvent?.({ name: "Read", toolUseId: "toolu_1" });
+        params.onAssistantTurn?.("Answer");
+        return {
+          payloads: [{ text: "Answer" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "opus-4.5",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await createRun({
+      typingMode: "thinking",
+      opts: {
+        onAssistantMessageStart,
+        onReasoningStream,
+        onToolStart,
+      },
+    });
+
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(callbackOrder[0]).toBe("start");
+    expect(callbackOrder).toEqual(expect.arrayContaining(["reasoning", "tool"]));
+    expect(result).toMatchObject({ text: "Answer" });
+  });
+
+  it("strips reply directive tags from cli partial replies (including split tags)", async () => {
+    const onPartialReply = vi.fn();
+    runCliAgentMock.mockImplementationOnce(
+      async (params: { onAssistantTurn?: (text: string) => void }) => {
+        params.onAssistantTurn?.("[[reply_to_cur");
+        params.onAssistantTurn?.("rent]]7452136093975117843 请确认一下");
+        return {
+          payloads: [{ text: "[[reply_to_current]]7452136093975117843 请确认一下" }],
+          meta: {
+            agentMeta: {
+              provider: "claude-cli",
+              model: "opus-4.5",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await createRun({
+      opts: {
+        onPartialReply,
+      },
+    });
+
+    const partialTexts = onPartialReply.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(partialTexts).toEqual(["7452136093975117843 请确认一下"]);
+    expect(partialTexts.some((value) => value.includes("[[reply_to"))).toBe(false);
+    expect(result).toMatchObject({
+      text: "7452136093975117843 请确认一下",
+    });
+  });
+
+  it("closes reasoning stream when cli runner throws after thinking", async () => {
+    const onReasoningEnd = vi.fn();
+    runCliAgentMock.mockImplementationOnce(
+      async (params: { onThinkingTurn?: (payload: { text: string; delta?: string }) => void }) => {
+        params.onThinkingTurn?.({ text: "debug path", delta: "debug path" });
+        throw new Error("cli boom");
+      },
+    );
+
+    const result = await createRun({
+      typingMode: "thinking",
+      opts: {
+        onReasoningEnd,
+      },
+    });
+
+    expect(result).toMatchObject({
+      text: expect.stringContaining("cli boom"),
+    });
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("runReplyAgent messaging tool suppression", () => {
   function createRun(
     messageProvider = "slack",
@@ -2328,6 +2625,78 @@ describe("runReplyAgent billing error classification", () => {
 
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("billing error");
+    expect(payload?.text).not.toContain("Context overflow");
+  });
+
+  it("does not relabel format FailoverErrors as context overflow when the message is a CLI transcript", async () => {
+    const transcriptMessage = [
+      '{"type":"system","subtype":"init","session_id":"480007d1-b916-417c-b504-71d76bf35f7e"}',
+      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."}]}}',
+    ].join("\n");
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new FailoverError(transcriptMessage, {
+        reason: "format",
+        provider: "claude-cli",
+        model: "opus[1m]",
+        status: 400,
+      }),
+    );
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const payload = Array.isArray(result) ? result[0] : result;
+    expect(payload?.text).toContain("malformed output");
     expect(payload?.text).not.toContain("Context overflow");
   });
 });

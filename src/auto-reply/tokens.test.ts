@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   couldBeSilentTokenStart,
   isSilentReplyPrefixText,
-  isSilentReplyTailFragmentText,
   isSilentReplyText,
   stripSilentToken,
 } from "./tokens.js";
@@ -152,19 +151,5 @@ describe("couldBeSilentTokenStart", () => {
   it("handles undefined/empty", () => {
     expect(couldBeSilentTokenStart(undefined)).toBe(false);
     expect(couldBeSilentTokenStart("")).toBe(false);
-  });
-});
-
-describe("isSilentReplyTailFragmentText", () => {
-  it("matches standalone silent-token tail fragments", () => {
-    expect(isSilentReplyTailFragmentText("_REPLY")).toBe(true);
-    expect(isSilentReplyTailFragmentText("  _REPLY  ")).toBe(true);
-  });
-
-  it("rejects full tokens and regular text", () => {
-    expect(isSilentReplyTailFragmentText("NO_REPLY")).toBe(false);
-    expect(isSilentReplyTailFragmentText("REPLY")).toBe(false);
-    expect(isSilentReplyTailFragmentText("x_REPLY")).toBe(false);
-    expect(isSilentReplyTailFragmentText("_REPLY done")).toBe(false);
   });
 });

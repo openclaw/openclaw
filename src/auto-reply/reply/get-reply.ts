@@ -4,7 +4,7 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { isCliProvider, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -22,22 +22,15 @@ import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
+import { applyResetModelOverride } from "./session-reset-model.runtime.js";
 import { initSessionState } from "./session.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
 
-let sessionResetModelRuntimePromise: Promise<
-  typeof import("./session-reset-model.runtime.js")
-> | null = null;
 let stageSandboxMediaRuntimePromise: Promise<
   typeof import("./stage-sandbox-media.runtime.js")
 > | null = null;
-
-function loadSessionResetModelRuntime() {
-  sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
-  return sessionResetModelRuntimePromise;
-}
 
 function loadStageSandboxMediaRuntime() {
   stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
@@ -251,24 +244,51 @@ export async function getReplyFromConfig(
     bodyStripped,
   } = sessionState;
 
-  if (resetTriggered && bodyStripped?.trim()) {
-    const { applyResetModelOverride } = await loadSessionResetModelRuntime();
-    await applyResetModelOverride({
-      cfg,
-      agentId,
-      resetTriggered,
-      bodyStripped,
-      sessionCtx,
+  const previousProviderCandidate =
+    previousSessionEntry?.modelProvider ?? previousSessionEntry?.providerOverride ?? "";
+  const previousHasCliSessionMarker = Boolean(
+    previousSessionEntry?.claudeCliSessionId?.trim() ||
+    Object.keys(previousSessionEntry?.cliSessionIds ?? {}).length > 0,
+  );
+  const shouldEmitAutoRotationResetHooks =
+    isNewSession &&
+    !resetTriggered &&
+    previousSessionEntry?.sessionId &&
+    (isCliProvider(provider, cfg) ||
+      isCliProvider(previousProviderCandidate, cfg) ||
+      previousHasCliSessionMarker);
+
+  if (shouldEmitAutoRotationResetHooks) {
+    const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
+    await emitResetCommandHooks({
+      action: "reset",
       ctx: finalized,
-      sessionEntry,
-      sessionStore,
+      cfg,
       sessionKey,
-      storePath,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
+      sessionEntry,
+      previousSessionEntry,
+      workspaceDir,
+      routeHookMessages: false,
+      commandSource: "auto-rotation",
+      senderId: finalized.SenderId,
     });
   }
+
+  await applyResetModelOverride({
+    cfg,
+    agentId,
+    resetTriggered,
+    bodyStripped,
+    sessionCtx,
+    ctx: finalized,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    defaultProvider,
+    defaultModel,
+    aliasIndex,
+  });
 
   const channelModelOverride = resolveChannelModelOverride({
     cfg,

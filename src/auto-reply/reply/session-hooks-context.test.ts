@@ -287,4 +287,34 @@ describe("session hook context wiring", () => {
       vi.useRealTimers();
     }
   });
+
+  it("fires session_end/session_start when session rolls automatically by reset policy", async () => {
+    const sessionKey = "agent:main:telegram:direct:auto";
+    const storePath = await createStorePath("openclaw-session-hook-auto-rollover");
+    await writeStore(storePath, {
+      [sessionKey]: {
+        sessionId: "old-auto-session",
+        updatedAt: Date.now() - 5 * 60_000,
+      },
+    });
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "idle", idleMinutes: 1 },
+      },
+    } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    await vi.waitFor(() => expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1));
+    const [endEvent] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+    const [startEvent] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
+    expect(endEvent).toMatchObject({ sessionKey, sessionId: "old-auto-session" });
+    expect(startEvent).toMatchObject({ sessionKey, resumedFrom: "old-auto-session" });
+  });
 });

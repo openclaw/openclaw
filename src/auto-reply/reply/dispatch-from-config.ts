@@ -952,18 +952,63 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
-
     let queuedFinal = false;
     let routedFinalCount = 0;
+    /** Dedup equivalent finals — normalizes mention tag formats before comparison. */
+    const deliveredFinalTexts = new Set<string>();
+    const normalizeMentionsForDedup = (t: string): string =>
+      t
+        .replace(/<at\s+user_id="([^"]+)">[^<]*<\/at>/g, "<at:$1>")
+        .replace(/<at\s+id=(?:"([^"]+)"|'([^']+)'|([^>\s]+))><\/at>/g, "<at:$1$2$3>")
+        .trim();
     for (const reply of replies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (reply.isReasoning === true) {
         continue;
       }
-      const finalReply = await sendFinalPayload(reply);
-      queuedFinal = finalReply.queuedFinal || queuedFinal;
-      routedFinalCount += finalReply.routedFinalCount;
+      // Dedup equivalent final replies (e.g. same text with different mention tag formats).
+      if (reply.text) {
+        const normalizedText = normalizeMentionsForDedup(reply.text);
+        if (deliveredFinalTexts.has(normalizedText)) {
+          continue;
+        }
+        deliveredFinalTexts.add(normalizedText);
+      }
+      const ttsReply = await maybeApplyTtsToReplyPayload({
+        payload: reply,
+        cfg,
+        channel: ttsChannel,
+        kind: "final",
+        inboundAudio,
+        ttsAuto: sessionTtsAuto,
+      });
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        // Route final reply to originating channel.
+        const result = await routeReplyRuntime.routeReply({
+          payload: ttsReply,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: routeThreadId,
+          cfg,
+          isGroup,
+          groupId,
+        });
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+        queuedFinal = result.ok || queuedFinal;
+        if (result.ok) {
+          routedFinalCount += 1;
+        }
+      } else {
+        const didQueue = dispatcher.sendFinalReply(ttsReply);
+        queuedFinal = didQueue || queuedFinal;
+      }
     }
 
     const ttsMode = resolveConfiguredTtsMode(cfg);

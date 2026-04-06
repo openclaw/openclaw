@@ -48,6 +48,22 @@ function buildNativeResetContext(): MsgContext {
   };
 }
 
+function buildRegularContext(): MsgContext {
+  return {
+    Provider: "telegram",
+    Surface: "telegram",
+    ChatType: "direct",
+    Body: "hello",
+    RawBody: "hello",
+    CommandBody: "hello",
+    CommandSource: "text",
+    CommandAuthorized: true,
+    SessionKey: "agent:main:telegram:direct:123",
+    From: "telegram:123",
+    To: "telegram:bot",
+  };
+}
+
 function createContinueDirectivesResult(resetHookTriggered: boolean) {
   return {
     kind: "continue" as const,
@@ -147,6 +163,67 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
 
     await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
+  it("emits auto-rotation hooks when session rolls without explicit /new command", async () => {
+    mocks.initSessionState.mockResolvedValue({
+      sessionCtx: buildRegularContext(),
+      sessionEntry: { sessionId: "session-2" },
+      previousSessionEntry: { sessionId: "old-session-1", claudeCliSessionId: "cli-old-session" },
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:direct:123",
+      sessionId: "session-2",
+      isNewSession: true,
+      resetTriggered: false,
+      systemSent: false,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "hello",
+      bodyStripped: "hello",
+    });
+    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+
+    await getReplyFromConfig(buildRegularContext(), undefined, {});
+
+    expect(mocks.emitResetCommandHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "reset",
+        sessionKey: "agent:main:telegram:direct:123",
+        routeHookMessages: false,
+        commandSource: "auto-rotation",
+      }),
+    );
+  });
+
+  it("keeps API auto-rotation behavior unchanged (no reset hook emission)", async () => {
+    mocks.initSessionState.mockResolvedValue({
+      sessionCtx: buildRegularContext(),
+      sessionEntry: { sessionId: "session-2" },
+      previousSessionEntry: { sessionId: "old-session-1" },
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:direct:123",
+      sessionId: "session-2",
+      isNewSession: true,
+      resetTriggered: false,
+      systemSent: false,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-sender",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "hello",
+      bodyStripped: "hello",
+    });
+    mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(true));
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+
+    await getReplyFromConfig(buildRegularContext(), undefined, {});
 
     expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
   });

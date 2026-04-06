@@ -415,6 +415,7 @@ export async function initSessionState(params: {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
   const entry = sessionStore[sessionKey];
+  let previousSessionEntry: SessionEntry | undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -453,7 +454,7 @@ export async function initSessionState(params: {
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
-  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
     : resolveStaleSessionEndReason({
@@ -510,6 +511,9 @@ export async function initSessionState(params: {
       persistedSubagentControlScope = entry.subagentControlScope;
       persistedDisplayName = entry.displayName;
     }
+  }
+  if (isNewSession && entry?.sessionId) {
+    previousSessionEntry = { ...entry };
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;

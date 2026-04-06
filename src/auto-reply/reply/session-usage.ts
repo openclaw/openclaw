@@ -1,3 +1,4 @@
+import { setCliSessionBinding, setCliSessionId } from "../../agents/cli-session.js";
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
@@ -6,12 +7,56 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  type CliPromptLoadStatus,
+  type CliSessionBinding,
   type SessionSystemPromptReport,
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+
+function applyCliSessionStateToSessionPatch(
+  params: {
+    providerUsed?: string;
+    cliSessionId?: string;
+    cliSessionBinding?: CliSessionBinding;
+    cliPromptLoad?: CliPromptLoadStatus;
+  },
+  entry: SessionEntry,
+  patch: Partial<SessionEntry>,
+): Partial<SessionEntry> {
+  const cliProvider = params.providerUsed ?? entry.modelProvider;
+  const nextPatch = { ...patch };
+  if (params.cliPromptLoad) {
+    nextPatch.cliPromptLoad = params.cliPromptLoad;
+  }
+  if (!cliProvider) {
+    return nextPatch;
+  }
+
+  if (params.cliSessionBinding?.sessionId?.trim()) {
+    const nextEntry = { ...entry, ...patch };
+    setCliSessionBinding(nextEntry, cliProvider, params.cliSessionBinding);
+    return {
+      ...nextPatch,
+      cliSessionBindings: nextEntry.cliSessionBindings,
+      cliSessionIds: nextEntry.cliSessionIds,
+      claudeCliSessionId: nextEntry.claudeCliSessionId,
+    };
+  }
+
+  if (params.cliSessionId) {
+    const nextEntry = { ...entry, ...patch };
+    setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
+    return {
+      ...nextPatch,
+      cliSessionIds: nextEntry.cliSessionIds,
+      claudeCliSessionId: nextEntry.claudeCliSessionId,
+    };
+  }
+  return nextPatch;
+}
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -52,6 +97,9 @@ export async function persistSessionUsageUpdate(params: {
   promptTokens?: number;
   usageIsContextSnapshot?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
+  cliSessionId?: string;
+  cliSessionBinding?: CliSessionBinding;
+  cliPromptLoad?: CliPromptLoadStatus;
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -122,7 +170,7 @@ export async function persistSessionUsageUpdate(params: {
           // context utilization is stale/unknown.
           patch.totalTokens = totalTokens;
           patch.totalTokensFresh = typeof totalTokens === "number";
-          return patch;
+          return applyCliSessionStateToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {
@@ -144,7 +192,7 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
           };
-          return patch;
+          return applyCliSessionStateToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {

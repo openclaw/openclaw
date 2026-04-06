@@ -7,8 +7,9 @@ import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { runModelAwareAgent } from "../../agents/model-aware-runner.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { isCliProvider } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -158,7 +159,7 @@ export function createFollowupRunner(params: {
         });
       }
       let autoCompactionCount = 0;
-      let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      let runResult: Awaited<ReturnType<typeof runModelAwareAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
       let activeSessionEntry =
@@ -196,7 +197,7 @@ export function createFollowupRunner(params: {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
             let attemptCompactionCount = 0;
             try {
-              const result = await runEmbeddedPiAgent({
+              const result = await runModelAwareAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
                 sessionId: queued.run.sessionId,
@@ -286,6 +287,11 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const providerUsed =
+        runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
+      const cliSessionId = isCliProvider(providerUsed, queued.run.config)
+        ? runResult.meta?.agentMeta?.sessionId?.trim()
+        : undefined;
       const contextTokensUsed =
         agentCfgContextTokens ??
         lookupContextTokens(modelUsed) ??
@@ -301,10 +307,16 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
           modelUsed,
-          providerUsed: fallbackProvider,
+          providerUsed,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
-          usageIsContextSnapshot: false,
+          cliSessionId,
+          cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
+          cliPromptLoad: runResult.meta?.agentMeta?.cliPromptLoad,
+          usageIsContextSnapshot: isCliProvider(
+            fallbackProvider ?? queued.run.provider,
+            queued.run.config,
+          ),
           logLabel: "followup",
         });
       }

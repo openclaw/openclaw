@@ -3,8 +3,9 @@ import fs from "node:fs";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
+import { runModelAwareAgent } from "../../agents/model-aware-runner.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { compactEmbeddedPiSession, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -694,7 +695,7 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
         });
-        const result = await runEmbeddedPiAgent({
+        const result = await runModelAwareAgent({
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,

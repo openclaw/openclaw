@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
+import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
@@ -473,6 +474,10 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
+    if (runOutcome.kind === "aborted") {
+      return undefined;
+    }
+
     const {
       runId,
       runResult,
@@ -521,6 +526,12 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    const cliSessionId = isCliProvider(providerUsed, cfg)
+      ? runResult.meta?.agentMeta?.sessionId?.trim()
+      : undefined;
+    const cliSessionBinding = isCliProvider(providerUsed, cfg)
+      ? runResult.meta?.agentMeta?.cliSessionBinding
+      : undefined;
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const selectedProvider = followupRun.run.provider;
     const selectedModel = followupRun.run.model;
@@ -574,7 +585,10 @@ export async function runReplyAgent(params: {
       providerUsed,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
-      usageIsContextSnapshot: false,
+      cliSessionId,
+      cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding ?? cliSessionBinding,
+      cliPromptLoad: runResult.meta?.agentMeta?.cliPromptLoad,
+      usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".

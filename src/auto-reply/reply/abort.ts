@@ -20,6 +20,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
@@ -54,6 +55,7 @@ const defaultAbortDeps = {
   getAcpSessionManager,
   abortEmbeddedPiRun,
   getLatestSubagentRunByChildSessionKey,
+  getProcessSupervisor,
   listSubagentRunsForController,
   markSubagentRunTerminated,
 };
@@ -70,6 +72,8 @@ export const __testing = {
     abortDeps.getLatestSubagentRunByChildSessionKey =
       deps?.getLatestSubagentRunByChildSessionKey ??
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
+    abortDeps.getProcessSupervisor =
+      deps?.getProcessSupervisor ?? defaultAbortDeps.getProcessSupervisor;
     abortDeps.listSubagentRunsForController =
       deps?.listSubagentRunsForController ?? defaultAbortDeps.listSubagentRunsForController;
     abortDeps.markSubagentRunTerminated =
@@ -80,10 +84,38 @@ export const __testing = {
     abortDeps.abortEmbeddedPiRun = defaultAbortDeps.abortEmbeddedPiRun;
     abortDeps.getLatestSubagentRunByChildSessionKey =
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
+    abortDeps.getProcessSupervisor = defaultAbortDeps.getProcessSupervisor;
     abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
     abortDeps.markSubagentRunTerminated = defaultAbortDeps.markSubagentRunTerminated;
   },
 };
+
+export function abortSessionExecutions(sessionId: string | undefined): {
+  embeddedAborted: boolean;
+  cliCancelled: number;
+} {
+  const normalizedSessionId = sessionId?.trim();
+  if (!normalizedSessionId) {
+    return { embeddedAborted: false, cliCancelled: 0 };
+  }
+  const embeddedAborted = abortDeps.abortEmbeddedPiRun(normalizedSessionId);
+  let cliCancelled = 0;
+  try {
+    cliCancelled = abortDeps
+      .getProcessSupervisor()
+      .cancelSession(normalizedSessionId, "manual-cancel");
+  } catch (error) {
+    logVerbose(
+      `abort: process supervisor cancel failed for ${normalizedSessionId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (cliCancelled > 0) {
+    logVerbose(`abort: cancelled ${cliCancelled} cli run(s) for session ${normalizedSessionId}`);
+  }
+  return { embeddedAborted, cliCancelled };
+}
 
 export function formatAbortReplyText(stoppedSubagents?: number): string {
   if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
@@ -199,6 +231,7 @@ export function stopSubagentsForRequester(params: {
       const aborted =
         (childKey ? replyRunRegistry.abort(childKey) : false) ||
         (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
+      const { embeddedAborted, cliCancelled } = abortSessionExecutions(sessionId);
       const markedTerminated =
         abortDeps.markSubagentRunTerminated({
           runId: run.runId,
@@ -206,7 +239,14 @@ export function stopSubagentsForRequester(params: {
           reason: "killed",
         }) > 0;
 
-      if (markedTerminated || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      if (
+        markedTerminated ||
+        aborted ||
+        embeddedAborted ||
+        cliCancelled > 0 ||
+        cleared.followupCleared > 0 ||
+        cleared.laneCleared > 0
+      ) {
         stopped += 1;
       }
     }
@@ -291,9 +331,11 @@ export async function tryFastAbortFromMessage(params: {
       }
     }
     const sessionId = replyRunRegistry.resolveSessionId(resolvedTargetKey) ?? entry?.sessionId;
-    const aborted =
+    const registryAborted =
       replyRunRegistry.abort(resolvedTargetKey) ||
       (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
+    const { embeddedAborted, cliCancelled } = abortSessionExecutions(sessionId);
+    const aborted = registryAborted || embeddedAborted || cliCancelled > 0;
     const cleared = clearSessionQueues([resolvedTargetKey, sessionId]);
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(

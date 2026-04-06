@@ -1,7 +1,12 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
-import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  couldBeSilentTokenStart,
+  isSilentReplyPrefixText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
 type PendingReplyState = {
@@ -72,17 +77,37 @@ const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
 
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
+  let pendingSilent = "";
   let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
   let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
 
   const reset = () => {
     pendingTail = "";
+    pendingSilent = "";
     pendingReply = { sawCurrent: false, hasTag: false };
     activeReply = { sawCurrent: false, hasTag: false };
   };
 
   const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
-    let combined = `${pendingTail}${raw ?? ""}`;
+    const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
+    let normalizedRaw = raw ?? "";
+    if (pendingSilent) {
+      const resumed = `${pendingSilent}${normalizedRaw}`;
+      pendingSilent = "";
+      if (!options.final && couldBeSilentTokenStart(resumed, silentToken)) {
+        pendingSilent = resumed;
+        return null;
+      }
+      if (
+        isSilentReplyText(resumed, silentToken) ||
+        (!options.final && isSilentReplyPrefixText(resumed, silentToken))
+      ) {
+        return null;
+      }
+      normalizedRaw = resumed;
+    }
+
+    let combined = `${pendingTail}${normalizedRaw}`;
     pendingTail = "";
 
     if (!options.final) {
@@ -95,7 +120,34 @@ export function createStreamingDirectiveAccumulator() {
       return null;
     }
 
-    const parsed = parseChunk(combined, { silentToken: options.silentToken });
+    if (!options.final && couldBeSilentTokenStart(combined, silentToken)) {
+      pendingSilent = combined;
+      return null;
+    }
+
+    const parsed =
+      options.final &&
+      isSilentReplyPrefixText(combined, silentToken) &&
+      !isSilentReplyText(combined, silentToken)
+        ? parseChunk(combined, { silentToken: "__OPENCLAW_NO_SILENT_PREFIX__" })
+        : parseChunk(combined, { silentToken: options.silentToken });
+
+    // Buffer potential silent-token prefixes (e.g. "NO" from split "NO_REPLY").
+    // Wait for the next chunk to decide: if it completes to "NO_REPLY" → swallow;
+    // if it doesn't (e.g. "NOT really") → flush as normal text.
+    if (
+      !options.final &&
+      !parsed.isSilent &&
+      parsed.text &&
+      couldBeSilentTokenStart(parsed.text, silentToken) &&
+      !parsed.mediaUrl &&
+      (parsed.mediaUrls?.length ?? 0) === 0 &&
+      !parsed.audioAsVoice
+    ) {
+      pendingSilent = combined;
+      return null;
+    }
+
     const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
     const sawCurrent = activeReply.sawCurrent || pendingReply.sawCurrent || parsed.replyToCurrent;
     const explicitId =
