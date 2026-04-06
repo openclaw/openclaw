@@ -14,6 +14,12 @@ import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type ChannelId = ChatChannelId | (string & {});
 
+export type ChannelExposure = {
+  configured?: boolean;
+  setup?: boolean;
+  docs?: boolean;
+};
+
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
 /** Agent tool registered by a channel plugin. */
@@ -147,7 +153,9 @@ export type ChannelMeta = {
   detailLabel?: string;
   systemImage?: string;
   markdownCapable?: boolean;
+  exposure?: ChannelExposure;
   showConfigured?: boolean;
+  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;

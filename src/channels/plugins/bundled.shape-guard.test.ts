@@ -6,6 +6,7 @@ import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 
 afterEach(() => {
+  vi.resetModules();
   vi.doUnmock("../../plugins/discovery.js");
   vi.doUnmock("../../plugins/manifest-registry.js");
   vi.doUnmock("../../infra/boundary-file-read.js");
@@ -251,5 +252,32 @@ describe("bundled channel entry shape guards", () => {
 
     expect(bundled.listBundledChannelPlugins()).toHaveLength(1);
     expect(reentered).toBe(true);
+  });
+
+  it("keeps private src runtime barrels from forwarding to parent runtime barrels that export local plugins", () => {
+    const offenders: string[] = [];
+
+    for (const extensionDir of bundledPluginRoots) {
+      const privateRuntimePath = path.join(extensionDir, "src", "runtime-api.ts");
+      const publicRuntimePath = path.join(extensionDir, "runtime-api.ts");
+      if (!fs.existsSync(privateRuntimePath) || !fs.existsSync(publicRuntimePath)) {
+        continue;
+      }
+      const privateRuntimeSource = fs.readFileSync(privateRuntimePath, "utf8");
+      const publicRuntimeSource = fs.readFileSync(publicRuntimePath, "utf8");
+      const forwardsParentRuntime =
+        privateRuntimeSource.includes('export * from "../runtime-api.js"') ||
+        privateRuntimeSource.includes("export * from '../runtime-api.js'");
+      const exportsLocalPlugin =
+        publicRuntimeSource.includes('from "./src/channel.js"') &&
+        /export\s+\{\s*[\w$]+Plugin\s*\}\s+from\s+["']\.\/src\/channel\.js["']/u.test(
+          publicRuntimeSource,
+        );
+      if (forwardsParentRuntime && exportsLocalPlugin) {
+        offenders.push(path.relative(process.cwd(), publicRuntimePath));
+      }
+    }
+
+    expect(offenders).toEqual([]);
   });
 });

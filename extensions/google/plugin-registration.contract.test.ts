@@ -1,10 +1,8 @@
+import { pluginRegistrationContractCases } from "../../test/helpers/plugins/plugin-registration-contract-cases.js";
 import { describePluginRegistrationContract } from "../../test/helpers/plugins/plugin-registration-contract.js";
 
 describePluginRegistrationContract({
-  pluginId: "google",
-  providerIds: ["google"],
-  mediaUnderstandingProviderIds: ["google"],
-  imageGenerationProviderIds: ["google"],
+  ...pluginRegistrationContractCases.google,
   videoGenerationProviderIds: ["google"],
   webSearchProviderIds: ["gemini"],
   requireDescribeImages: true,

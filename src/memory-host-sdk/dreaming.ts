@@ -3,11 +3,12 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-export const DEFAULT_MEMORY_DREAMING_ENABLED = true;
+export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
 export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
 export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "inline";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
+export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 
 export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
 export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
@@ -109,6 +110,7 @@ export type MemoryDreamingPhaseName = "light" | "deep" | "rem";
 
 export type MemoryDreamingConfig = {
   enabled: boolean;
+  frequency: string;
   timezone?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
@@ -328,6 +330,8 @@ export function resolveMemoryDreamingConfig(params: {
   cfg?: OpenClawConfig;
 }): MemoryDreamingConfig {
   const dreaming = asRecord(params.pluginConfig?.dreaming);
+  const frequency =
+    normalizeTrimmedString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
   const timezone =
     normalizeTrimmedString(dreaming?.timezone) ??
     normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
@@ -350,6 +354,7 @@ export function resolveMemoryDreamingConfig(params: {
 
   return {
     enabled: normalizeBoolean(dreaming?.enabled, DEFAULT_MEMORY_DREAMING_ENABLED),
+    frequency,
     ...(timezone ? { timezone } : {}),
     verboseLogging: normalizeBoolean(
       dreaming?.verboseLogging,
@@ -368,7 +373,7 @@ export function resolveMemoryDreamingConfig(params: {
     phases: {
       light: {
         enabled: normalizeBoolean(light?.enabled, true),
-        cron: normalizeTrimmedString(light?.cron) ?? DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR,
+        cron: frequency,
         lookbackDays: normalizeNonNegativeInt(
           light?.lookbackDays,
           DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS,
@@ -392,7 +397,7 @@ export function resolveMemoryDreamingConfig(params: {
       },
       deep: {
         enabled: normalizeBoolean(deep?.enabled, true),
-        cron: normalizeTrimmedString(deep?.cron) ?? DEFAULT_MEMORY_DEEP_DREAMING_CRON_EXPR,
+        cron: frequency,
         limit: normalizeNonNegativeInt(deep?.limit, DEFAULT_MEMORY_DEEP_DREAMING_LIMIT),
         minScore: normalizeScore(deep?.minScore, DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE),
         minRecallCount: normalizeNonNegativeInt(
@@ -452,7 +457,7 @@ export function resolveMemoryDreamingConfig(params: {
       },
       rem: {
         enabled: normalizeBoolean(rem?.enabled, true),
-        cron: normalizeTrimmedString(rem?.cron) ?? DEFAULT_MEMORY_REM_DREAMING_CRON_EXPR,
+        cron: frequency,
         lookbackDays: normalizeNonNegativeInt(
           rem?.lookbackDays,
           DEFAULT_MEMORY_REM_DREAMING_LOOKBACK_DAYS,

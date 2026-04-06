@@ -4,6 +4,11 @@ import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
+  fetchWithRuntimeDispatcher,
+  isMockedFetch,
+  type DispatcherAwareRequestInit,
+} from "./runtime-fetch.js";
+import {
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
@@ -15,7 +20,6 @@ import {
 import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
 
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
@@ -155,13 +159,6 @@ function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
-function isMockedFetch(fetchImpl: FetchLike | undefined): boolean {
-  if (typeof fetchImpl !== "function") {
-    return false;
-  }
-  return typeof (fetchImpl as FetchLike & { mock?: unknown }).mock === "object";
-}
-
 function isAmbientGlobalFetch(params: {
   fetchImpl: FetchLike | undefined;
   globalFetch: FetchLike | undefined;
@@ -227,16 +224,7 @@ function rewriteRedirectInitForMethod(params: {
   };
 }
 
-async function fetchWithRuntimeDispatcher(
-  input: string,
-  init: DispatcherAwareRequestInit,
-): Promise<Response> {
-  const runtimeFetch = loadUndiciRuntimeDeps().fetch as unknown as (
-    input: string,
-    init?: DispatcherAwareRequestInit,
-  ) => Promise<unknown>;
-  return (await runtimeFetch(input, init)) as Response;
-}
+export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;

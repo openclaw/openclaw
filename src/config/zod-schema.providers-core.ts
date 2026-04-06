@@ -70,6 +70,30 @@ const TelegramCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
+const TextChunkModeSchema = z.enum(["length", "newline"]);
+const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
+const ChannelStreamingBlockSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    coalesce: BlockStreamingCoalesceSchema.optional(),
+  })
+  .strict();
+const ChannelStreamingPreviewSchema = z
+  .object({
+    chunk: BlockStreamingChunkSchema.optional(),
+  })
+  .strict();
+const ChannelPreviewStreamingConfigSchema = z
+  .object({
+    mode: UnifiedStreamingModeSchema.optional(),
+    chunkMode: TextChunkModeSchema.optional(),
+    preview: ChannelStreamingPreviewSchema.optional(),
+    block: ChannelStreamingBlockSchema.optional(),
+  })
+  .strict();
+const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  nativeTransport: z.boolean().optional(),
+}).strict();
 const SlackCapabilitiesSchema = z.union([
   z.array(z.string()),
   z
@@ -205,11 +229,7 @@ export const TelegramAccountSchemaBase = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    streaming: z.enum(["off", "partial", "block", "progress"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    draftChunk: BlockStreamingChunkSchema.optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: ChannelPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
@@ -499,11 +519,7 @@ export const DiscordAccountSchema = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streaming: z.enum(["off", "partial", "block", "progress"]).optional(),
-    draftChunk: BlockStreamingChunkSchema.optional(),
+    streaming: ChannelPreviewStreamingConfigSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     retry: RetryConfigSchema,
@@ -894,11 +910,7 @@ export const SlackAccountSchema = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streaming: z.enum(["off", "partial", "block", "progress"]).optional(),
-    nativeStreaming: z.boolean().optional(),
+    streaming: SlackStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),

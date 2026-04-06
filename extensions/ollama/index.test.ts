@@ -19,6 +19,9 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
 );
 const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
+const createConfiguredOllamaStreamFnMock = vi.hoisted(() =>
+  vi.fn((_params: { model: unknown; providerBaseUrl?: string }) => ({}) as never),
+);
 
 vi.mock("./api.js", () => ({
   promptAndConfigureOllama: promptAndConfigureOllamaMock,
@@ -27,10 +30,19 @@ vi.mock("./api.js", () => ({
   buildOllamaProvider: buildOllamaProviderMock,
 }));
 
+vi.mock("./src/stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./src/stream.js")>();
+  return {
+    ...actual,
+    createConfiguredOllamaStreamFn: createConfiguredOllamaStreamFnMock,
+  };
+});
+
 beforeEach(() => {
   promptAndConfigureOllamaMock.mockClear();
   ensureOllamaModelPulledMock.mockClear();
   buildOllamaProviderMock.mockReset();
+  createConfiguredOllamaStreamFnMock.mockClear();
 });
 
 function registerProvider() {
@@ -205,6 +217,60 @@ describe("ollama plugin", () => {
         modelId: "qwen3.5:9b",
       } as never),
     ).toBeUndefined();
+  });
+
+  it("routes createStreamFn to the correct provider baseUrl for ollama2", () => {
+    const provider = registerProvider();
+    const config = {
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            models: [],
+          },
+          ollama2: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11435",
+            models: [],
+          },
+        },
+      },
+    };
+    const model = { id: "llama3.2", provider: "ollama2", baseUrl: undefined };
+
+    provider.createStreamFn?.({ config, model, provider: "ollama2" } as never);
+
+    expect(createConfiguredOllamaStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerBaseUrl: "http://127.0.0.1:11435" }),
+    );
+  });
+
+  it("uses ollama provider baseUrl when provider is ollama (backward compat)", () => {
+    const provider = registerProvider();
+    const config = {
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            models: [],
+          },
+          ollama2: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11435",
+            models: [],
+          },
+        },
+      },
+    };
+    const model = { id: "llama3.2", provider: "ollama", baseUrl: undefined };
+
+    provider.createStreamFn?.({ config, model, provider: "ollama" } as never);
+
+    expect(createConfiguredOllamaStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerBaseUrl: "http://127.0.0.1:11434" }),
+    );
   });
 
   it("wraps native Ollama payloads with top-level think=false when thinking is off", () => {

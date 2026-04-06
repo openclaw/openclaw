@@ -7,6 +7,7 @@ import {
   listRuntimeImageGenerationProviders,
 } from "../../image-generation/runtime.js";
 import type {
+  ImageGenerationIgnoredOverride,
   ImageGenerationProvider,
   ImageGenerationResolution,
   ImageGenerationSourceImage,
@@ -303,6 +304,10 @@ function resolveSelectedImageGenerationProvider(params: {
   );
 }
 
+function formatIgnoredImageGenerationOverride(override: ImageGenerationIgnoredOverride): string {
+  return `${override.key}=${override.value}`;
+}
+
 function validateImageGenerationCapabilities(params: {
   provider: ImageGenerationProvider | undefined;
   count: number;
@@ -318,7 +323,6 @@ function validateImageGenerationCapabilities(params: {
   }
   const isEdit = params.inputImageCount > 0;
   const modeCaps = isEdit ? provider.capabilities.edit : provider.capabilities.generate;
-  const geometry = provider.capabilities.geometry;
   const maxCount = modeCaps.maxCount ?? MAX_COUNT;
   if (params.count > maxCount) {
     throw new ToolInputError(
@@ -334,52 +338,6 @@ function validateImageGenerationCapabilities(params: {
     if (params.inputImageCount > maxInputImages) {
       throw new ToolInputError(
         `${provider.id} edit supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
-      );
-    }
-  }
-
-  if (params.size) {
-    if (!modeCaps.supportsSize) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} does not support size overrides.`,
-      );
-    }
-    if ((geometry?.sizes?.length ?? 0) > 0 && !geometry?.sizes?.includes(params.size)) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} size must be one of ${geometry?.sizes?.join(", ")}.`,
-      );
-    }
-  }
-
-  if (params.aspectRatio) {
-    if (!modeCaps.supportsAspectRatio) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} does not support aspectRatio overrides.`,
-      );
-    }
-    if (
-      (geometry?.aspectRatios?.length ?? 0) > 0 &&
-      !geometry?.aspectRatios?.includes(params.aspectRatio)
-    ) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} aspectRatio must be one of ${geometry?.aspectRatios?.join(", ")}.`,
-      );
-    }
-  }
-
-  if (params.resolution) {
-    if (params.explicitResolution !== false && !modeCaps.supportsResolution) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} does not support resolution overrides.`,
-      );
-    }
-    if (
-      modeCaps.supportsResolution &&
-      (geometry?.resolutions?.length ?? 0) > 0 &&
-      !geometry?.resolutions?.includes(params.resolution)
-    ) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} resolution must be one of ${geometry?.resolutions?.join("/")}.`,
       );
     }
   }
@@ -652,6 +610,11 @@ export function createImageGenerateTool(options?: {
         count,
         inputImages,
       });
+      const ignoredOverrides = result.ignoredOverrides ?? [];
+      const warning =
+        ignoredOverrides.length > 0
+          ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredImageGenerationOverride).join(", ")}.`
+          : undefined;
 
       const savedImages = await Promise.all(
         result.images.map((image) =>
@@ -670,6 +633,7 @@ export function createImageGenerateTool(options?: {
         .filter((entry): entry is string => Boolean(entry));
       const lines = [
         `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+        ...(warning ? [`Warning: ${warning}`] : []),
         // Show the actual saved paths so the model does not invent a bogus
         // local path when it references the generated image in a follow-up reply.
         ...savedImages.map((image) => `MEDIA:${image.path}`),
@@ -706,6 +670,8 @@ export function createImageGenerateTool(options?: {
           ...(filename ? { filename } : {}),
           attempts: result.attempts,
           metadata: result.metadata,
+          ...(warning ? { warning } : {}),
+          ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
           ...(revisedPrompts.length > 0 ? { revisedPrompts } : {}),
         },
       };

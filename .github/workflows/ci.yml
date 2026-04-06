@@ -46,6 +46,7 @@ jobs:
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
       run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
+      run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
       checks_windows_matrix: ${{ steps.manifest.outputs.checks_windows_matrix }}
       run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
@@ -128,6 +129,7 @@ jobs:
           OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
+          OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
           OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
         run: |
@@ -165,6 +167,8 @@ jobs:
           const runAndroid = parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !docsOnly;
           const runWindows = parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) && !docsOnly;
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
+          const runControlUiI18n =
+            parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
           const hasChangedExtensions =
             parseBoolean(process.env.OPENCLAW_CI_HAS_CHANGED_EXTENSIONS) && !docsOnly;
           const changedExtensionsMatrix = hasChangedExtensions
@@ -241,6 +245,7 @@ jobs:
             run_check_additional: runNode,
             run_build_smoke: runNode,
             run_check_docs: docsChanged,
+            run_control_ui_i18n: runControlUiI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
             checks_windows_matrix: createMatrix(
@@ -745,6 +750,7 @@ jobs:
 
       - name: Check control UI locale sync
         id: control_ui_i18n
+        if: needs.preflight.outputs.run_control_ui_i18n == 'true'
         continue-on-error: true
         run: pnpm ui:i18n:check
 
@@ -780,7 +786,7 @@ jobs:
           EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
           EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME: ${{ steps.extension_relative_outside_package_boundary.outcome }}
           NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
-          CONTROL_UI_I18N_OUTCOME: ${{ steps.control_ui_i18n.outcome }}
+          CONTROL_UI_I18N_OUTCOME: ${{ steps.control_ui_i18n.outcome == 'skipped' && 'success' || steps.control_ui_i18n.outcome }}
           GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
         run: |
           failures=0

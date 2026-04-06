@@ -17,9 +17,8 @@ const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
  * Default hard cap for a single live tool result text block.
  *
  * Pi already truncates tool results aggressively when serializing old history
- * for compaction summaries. For the live request path we keep a larger slice so
- * the model can still act on recent tool output, but we still want a bounded
- * request-local ceiling that cannot dominate the next turn.
+ * for compaction summaries. For the live request path we still keep a bounded
+ * request-local ceiling so oversized tool output cannot dominate the next turn.
  */
 export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 40_000;
 

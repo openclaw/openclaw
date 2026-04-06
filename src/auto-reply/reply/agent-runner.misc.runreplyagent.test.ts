@@ -32,11 +32,11 @@ function createCliBackendTestConfig() {
 const runEmbeddedPiAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const abortEmbeddedPiRunMock = vi.fn();
+const clearSessionQueuesMock = vi.fn();
+const refreshQueuedFollowupSessionMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
-  actualCompactEmbeddedPiSession: undefined as
-    | typeof import("../../agents/pi-embedded.js").compactEmbeddedPiSession
-    | undefined,
 }));
 
 function createDeferred<T>() {
@@ -61,26 +61,19 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/pi-embedded.js")>(
-    "../../agents/pi-embedded.js",
-  );
-  compactState.actualCompactEmbeddedPiSession = actual.compactEmbeddedPiSession;
+vi.mock("../../agents/pi-embedded.js", () => {
   return {
-    ...actual,
     compactEmbeddedPiSession: (params: unknown) =>
       compactState.compactEmbeddedPiSessionMock(params),
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+    abortEmbeddedPiRun: (...args: unknown[]) => abortEmbeddedPiRunMock(...args),
   };
 });
 
-vi.mock("../../runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js");
+vi.mock("../../runtime.js", () => {
   return {
-    ...actual,
     defaultRuntime: {
-      ...actual.defaultRuntime,
       log: vi.fn(),
       error: (...args: unknown[]) => runtimeErrorMock(...args),
       exit: vi.fn(),
@@ -88,23 +81,35 @@ vi.mock("../../runtime.js", async () => {
   };
 });
 
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+vi.mock("./queue.js", () => {
   return {
-    ...actual,
     enqueueFollowupRun: vi.fn(),
     scheduleFollowupDrain: vi.fn(),
+    clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
+    refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
   };
 });
 
 const loadCronStoreMock = vi.fn();
-vi.mock("../../cron/store.js", async () => {
-  const actual = await vi.importActual<typeof import("../../cron/store.js")>("../../cron/store.js");
+vi.mock("../../cron/store.js", () => {
   return {
-    ...actual,
     loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
+    resolveCronStorePath: (storePath?: string) => storePath ?? "/tmp/openclaw-cron-store.json",
   };
 });
+
+vi.mock("../../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    resolveSession: () => ({ kind: "none" }),
+    cancelSession: async () => {},
+  }),
+}));
+
+vi.mock("../../agents/subagent-registry.js", () => ({
+  getLatestSubagentRunByChildSessionKey: () => null,
+  listSubagentRunsForController: () => [],
+  markSubagentRunTerminated: () => 0,
+}));
 
 import { runReplyAgent } from "./agent-runner.js";
 
@@ -118,6 +123,11 @@ beforeEach(() => {
   runEmbeddedPiAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  abortEmbeddedPiRunMock.mockClear();
+  clearSessionQueuesMock.mockReset();
+  clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
+  refreshQueuedFollowupSessionMock.mockReset();
+  refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });

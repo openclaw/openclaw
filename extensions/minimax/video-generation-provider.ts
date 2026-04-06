@@ -17,6 +17,10 @@ const DEFAULT_MINIMAX_VIDEO_MODEL = "MiniMax-Hailuo-2.3";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 10_000;
 const MAX_POLL_ATTEMPTS = 90;
+const MINIMAX_MODEL_ALLOWED_DURATIONS: Readonly<Record<string, readonly number[]>> = {
+  "MiniMax-Hailuo-2.3": [6, 10],
+  "MiniMax-Hailuo-02": [6, 10],
+};
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -83,6 +87,23 @@ function resolveFirstFrameImage(req: VideoGenerationRequest): string | undefined
     throw new Error("MiniMax image-to-video input is missing image data.");
   }
   return toDataUrl(input.buffer, input.mimeType?.trim() || "image/png");
+}
+
+function resolveDurationSeconds(params: {
+  model: string;
+  durationSeconds: number | undefined;
+}): number | undefined {
+  if (typeof params.durationSeconds !== "number" || !Number.isFinite(params.durationSeconds)) {
+    return undefined;
+  }
+  const rounded = Math.max(1, Math.round(params.durationSeconds));
+  const allowed = MINIMAX_MODEL_ALLOWED_DURATIONS[params.model];
+  if (!allowed || allowed.length === 0) {
+    return rounded;
+  }
+  return allowed.reduce((best, current) =>
+    Math.abs(current - rounded) < Math.abs(best - rounded) ? current : best,
+  );
 }
 
 async function pollMinimaxVideo(params: {
@@ -211,6 +232,7 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
       maxInputImages: 1,
       maxInputVideos: 0,
       maxDurationSeconds: 10,
+      supportedDurationSecondsByModel: MINIMAX_MODEL_ALLOWED_DURATIONS,
       supportsResolution: true,
       supportsWatermark: false,
     },
@@ -242,8 +264,9 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
           capability: "video",
           transport: "http",
         });
+      const model = req.model?.trim() || DEFAULT_MINIMAX_VIDEO_MODEL;
       const body: Record<string, unknown> = {
-        model: req.model?.trim() || DEFAULT_MINIMAX_VIDEO_MODEL,
+        model,
         prompt: req.prompt,
       };
       const firstFrameImage = resolveFirstFrameImage(req);
@@ -253,8 +276,12 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
       if (req.resolution) {
         body.resolution = req.resolution;
       }
-      if (typeof req.durationSeconds === "number" && Number.isFinite(req.durationSeconds)) {
-        body.duration = Math.max(1, Math.round(req.durationSeconds));
+      const durationSeconds = resolveDurationSeconds({
+        model,
+        durationSeconds: req.durationSeconds,
+      });
+      if (typeof durationSeconds === "number") {
+        body.duration = durationSeconds;
       }
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/v1/video_generation`,
@@ -303,7 +330,7 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
               })();
         return {
           videos: [video],
-          model: req.model?.trim() || DEFAULT_MINIMAX_VIDEO_MODEL,
+          model,
           metadata: {
             taskId,
             status: completed.status,

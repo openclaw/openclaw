@@ -13,13 +13,17 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../test/helpers/plugins/provider-registration.js";
+import alibabaPlugin from "./alibaba/index.js";
 import byteplusPlugin from "./byteplus/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
 import openaiPlugin from "./openai/index.js";
 import qwenPlugin from "./qwen/index.js";
+import runwayPlugin from "./runway/index.js";
 import togetherPlugin from "./together/index.js";
+import vydraPlugin from "./vydra/index.js";
+import xaiPlugin from "./xai/index.js";
 
 const LIVE = isLiveTestEnabled();
 const providerFilter = parseCsvFilter(process.env.OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS);
@@ -33,6 +37,12 @@ type LiveProviderCase = {
 };
 
 const CASES: LiveProviderCase[] = [
+  {
+    plugin: alibabaPlugin,
+    pluginId: "alibaba",
+    pluginName: "Alibaba Model Studio Plugin",
+    providerId: "alibaba",
+  },
   {
     plugin: byteplusPlugin,
     pluginId: "byteplus",
@@ -49,12 +59,15 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: openaiPlugin, pluginId: "openai", pluginName: "OpenAI Provider", providerId: "openai" },
   { plugin: qwenPlugin, pluginId: "qwen", pluginName: "Qwen Provider", providerId: "qwen" },
+  { plugin: runwayPlugin, pluginId: "runway", pluginName: "Runway Provider", providerId: "runway" },
   {
     plugin: togetherPlugin,
     pluginId: "together",
     pluginName: "Together Provider",
     providerId: "together",
   },
+  { plugin: vydraPlugin, pluginId: "vydra", pluginName: "Vydra Provider", providerId: "vydra" },
+  { plugin: xaiPlugin, pluginId: "xai", pluginName: "xAI Plugin", providerId: "xai" },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
   .toSorted((left, right) => left.providerId.localeCompare(right.providerId));

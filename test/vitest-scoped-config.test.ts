@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAcpVitestConfig } from "../vitest.acp.config.ts";
@@ -47,6 +46,7 @@ import { createUiVitestConfig } from "../vitest.ui.config.ts";
 import { createUtilsVitestConfig } from "../vitest.utils.config.ts";
 import { createWizardVitestConfig } from "../vitest.wizard.config.ts";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
+import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
 const EXTENSIONS_CHANNEL_GLOB = ["extensions", "channel", "**"].join("/");
 
@@ -195,7 +195,8 @@ describe("scoped vitest configs", () => {
   });
 
   it("loads channel include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-channels-"));
+    const tempDirs: string[] = [];
+    const tempDir = makeTempDir(tempDirs, "openclaw-vitest-channels-");
     try {
       const includeFile = path.join(tempDir, "include.json");
       fs.writeFileSync(
@@ -217,7 +218,7 @@ describe("scoped vitest configs", () => {
         bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
       ]);
     } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      cleanupTempDirs(tempDirs);
     }
   });
 

@@ -44,6 +44,9 @@ const sendMessageMatrixMock = vi.hoisted(() =>
     roomId: to.replace(/^room:/, ""),
   })),
 );
+const matrixRuntimeApiModuleId = vi.hoisted(() =>
+  resolveBundledChannelContractArtifactUrl("matrix", "runtime-api.js"),
+);
 
 const lineContractApi = await importBundledChannelContractArtifact<{
   listLineAccountIds: () => string[];
@@ -62,11 +65,7 @@ setBundledChannelRuntime("line", {
   },
 } as never);
 
-vi.mock(resolveBundledChannelContractArtifactUrl("matrix", "runtime-api"), async () => {
-  const matrixRuntimeApiModuleId = resolveBundledChannelContractArtifactUrl(
-    "matrix",
-    "runtime-api",
-  );
+vi.mock(matrixRuntimeApiModuleId, async () => {
   const actual = await vi.importActual(matrixRuntimeApiModuleId);
   return {
     ...actual,

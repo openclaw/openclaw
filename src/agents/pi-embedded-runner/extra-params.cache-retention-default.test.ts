@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
-import { applyExtraParamsToAgent } from "../pi-embedded-runner.js";
 import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { applyExtraParamsToAgent } from "./extra-params.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 function applyAndExpectWrapped(params: {

@@ -59,7 +59,10 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { CommandSecretAssignment } from "../secrets/command-config.js";
+import {
+  resolveCommandSecretsFromActiveRuntimeSnapshot,
+  type CommandSecretAssignment,
+} from "../secrets/runtime-command-secrets.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
@@ -69,7 +72,6 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
-  resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";

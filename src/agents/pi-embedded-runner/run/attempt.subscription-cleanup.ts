@@ -8,7 +8,6 @@ type ToolResultFlushManager = {
   flushPendingToolResults?: (() => void) | undefined;
   clearPendingToolResults?: (() => void) | undefined;
 };
-
 export function buildEmbeddedSubscriptionParams(
   params: SubscribeEmbeddedPiSessionParams,
 ): SubscribeEmbeddedPiSessionParams {

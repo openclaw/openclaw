@@ -6,8 +6,10 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -38,7 +40,13 @@ import {
   buildBootstrapInjectionStats,
   prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
+import {
+  FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+  hasCompletedBootstrapTurn,
+  makeBootstrapWarn,
+  resolveBootstrapContextForRun,
+  resolveContextInjectionMode,
+} from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
@@ -153,6 +161,7 @@ import {
   buildAfterTurnRuntimeContext,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
+  resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
@@ -208,6 +217,7 @@ export {
   buildAfterTurnRuntimeContext,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
+  resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
@@ -364,17 +374,40 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
     });
 
+    const sessionLock = await acquireSessionWriteLock({
+      sessionFile: params.sessionFile,
+      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
+        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
+          runTimeoutMs: params.timeoutMs,
+          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
+        }),
+      }),
+    });
+
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
-      await resolveBootstrapContextForRun({
-        workspaceDir: effectiveWorkspace,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-      });
+    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const isContinuationTurn =
+      contextInjectionMode === "continuation-skip" &&
+      params.bootstrapContextRunKind !== "heartbeat" &&
+      (await hasCompletedBootstrapTurn(params.sessionFile));
+    const shouldRecordCompletedBootstrapTurn =
+      !isContinuationTurn &&
+      params.bootstrapContextMode !== "lightweight" &&
+      params.bootstrapContextRunKind !== "heartbeat";
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isContinuationTurn
+      ? {
+          bootstrapFiles: [],
+          contextFiles: [],
+        }
+      : await resolveBootstrapContextForRun({
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          contextMode: params.bootstrapContextMode,
+          runKind: params.bootstrapContextRunKind,
+        });
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -737,16 +770,6 @@ export async function runEmbeddedAttempt(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
-
-    const sessionLock = await acquireSessionWriteLock({
-      sessionFile: params.sessionFile,
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
-          runTimeoutMs: params.timeoutMs,
-          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
-        }),
-      }),
-    });
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
@@ -1194,8 +1217,17 @@ export async function runEmbeddedAttempt(
           sessionId: params.sessionId,
           policy: transcriptPolicy,
         });
-        const truncated = limitHistoryTurns(
+        const heartbeatSummary =
+          params.config && sessionAgentId
+            ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
+            : undefined;
+        const heartbeatFiltered = filterHeartbeatPairs(
           validated,
+          heartbeatSummary?.ackMaxChars,
+          heartbeatSummary?.prompt,
+        );
+        const truncated = limitHistoryTurns(
+          heartbeatFiltered,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
         // Re-run tool_use/tool_result pairing repair after truncation, since
@@ -1358,6 +1390,7 @@ export async function runEmbeddedAttempt(
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
           agentId: sessionAgentId,
+          internalEvents: params.internalEvents,
         }),
       );
 
@@ -1489,7 +1522,7 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
-      const prePromptMessageCount = activeSession.messages.length;
+      let prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
 
@@ -1537,7 +1570,11 @@ export async function runEmbeddedAttempt(
           }
           const prependedOrAppendedSystemPrompt = composeSystemPromptWithHookContext({
             baseSystemPrompt: systemPromptText,
-            prependSystemContext: hookResult?.prependSystemContext,
+            prependSystemContext: resolveAttemptPrependSystemContext({
+              sessionKey: params.sessionKey,
+              trigger: params.trigger,
+              hookPrependSystemContext: hookResult?.prependSystemContext,
+            }),
             appendSystemContext: hookResult?.appendSystemContext,
           });
           if (prependedOrAppendedSystemPrompt) {
@@ -1629,6 +1666,10 @@ export async function runEmbeddedAttempt(
         }
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
+        const heartbeatSummary =
+          params.config && sessionAgentId
+            ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
+            : undefined;
 
         try {
           // Idempotent cleanup: prune old image blocks to limit context
@@ -1638,6 +1679,16 @@ export async function runEmbeddedAttempt(
           if (didPruneImages) {
             activeSession.agent.state.messages = activeSession.messages;
           }
+
+          const filteredMessages = filterHeartbeatPairs(
+            activeSession.messages,
+            heartbeatSummary?.ackMaxChars,
+            heartbeatSummary?.prompt,
+          );
+          if (filteredMessages.length < activeSession.messages.length) {
+            activeSession.agent.state.messages = filteredMessages;
+          }
+          prePromptMessageCount = activeSession.messages.length;
 
           // Detect and load images referenced in the prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
@@ -1902,6 +1953,25 @@ export async function runEmbeddedAttempt(
             sessionManager,
             warn: (message) => log.warn(message),
           });
+        }
+
+        if (
+          shouldRecordCompletedBootstrapTurn &&
+          !promptError &&
+          !aborted &&
+          !yieldAborted &&
+          !timedOutDuringCompaction &&
+          !compactionOccurredThisAttempt
+        ) {
+          try {
+            sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+              timestamp: Date.now(),
+              runId: params.runId,
+              sessionId: params.sessionId,
+            });
+          } catch (entryErr) {
+            log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
+          }
         }
 
         cacheTrace?.recordStage("session:after", {

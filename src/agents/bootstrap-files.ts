@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -15,6 +17,85 @@ import {
 
 export type BootstrapContextMode = "full" | "lightweight";
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
+
+const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
+const CONTINUATION_SCAN_MAX_RECORDS = 500;
+export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
+
+export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
+  return config?.agents?.defaults?.contextInjection ?? "always";
+}
+
+export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(sessionFile);
+    if (stat.isSymbolicLink()) {
+      return false;
+    }
+
+    const fh = await fs.open(sessionFile, "r");
+    try {
+      const bytesToRead = Math.min(stat.size, CONTINUATION_SCAN_MAX_TAIL_BYTES);
+      if (bytesToRead <= 0) {
+        return false;
+      }
+      const start = stat.size - bytesToRead;
+      const buffer = Buffer.allocUnsafe(bytesToRead);
+      const { bytesRead } = await fh.read(buffer, 0, bytesToRead, start);
+      let text = buffer.toString("utf-8", 0, bytesRead);
+      if (start > 0) {
+        const firstNewline = text.indexOf("\n");
+        if (firstNewline === -1) {
+          return false;
+        }
+        text = text.slice(firstNewline + 1);
+      }
+
+      const records = text
+        .split(/\r?\n/u)
+        .filter((line) => line.trim().length > 0)
+        .slice(-CONTINUATION_SCAN_MAX_RECORDS);
+      let compactedAfterLatestAssistant = false;
+
+      for (let i = records.length - 1; i >= 0; i--) {
+        const line = records[i];
+        if (!line) {
+          continue;
+        }
+        let entry: unknown;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const record = entry as
+          | {
+              type?: string;
+              customType?: string;
+              message?: { role?: string };
+            }
+          | null
+          | undefined;
+        if (record?.type === "compaction") {
+          compactedAfterLatestAssistant = true;
+          continue;
+        }
+        if (
+          record?.type === "custom" &&
+          record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE
+        ) {
+          return !compactedAfterLatestAssistant;
+        }
+      }
+
+      return false;
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
+}
 
 export function makeBootstrapWarn(params: {
   sessionLabel: string;

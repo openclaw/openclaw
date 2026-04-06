@@ -153,6 +153,49 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectNotUnauthorizedReply(interaction);
   });
 
+  it("authorizes guild slash commands from an allowlisted channel when commands.allowFrom is not configured", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          allowFrom: undefined,
+        };
+      },
+    });
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("rejects guild slash commands outside the Discord allowlist when commands.useAccessGroups is false and commands.allowFrom is not configured", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ...cfg.commands,
+          useAccessGroups: false,
+          allowFrom: undefined,
+        };
+        cfg.channels = {
+          ...cfg.channels,
+          discord: {
+            ...cfg.channels?.discord,
+            guilds: {
+              "000000000000000000": {
+                channels: {
+                  "111111111111111111": {
+                    enabled: true,
+                    requireMention: false,
+                  },
+                },
+              },
+            },
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
+  });
+
   it("rejects guild slash commands when commands.allowFrom.discord does not match the sender", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       userId: "999999999999999999",

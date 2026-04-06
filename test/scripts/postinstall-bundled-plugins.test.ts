@@ -1,24 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createNestedNpmInstallEnv,
   discoverBundledPluginRuntimeDeps,
   runBundledPluginPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const cleanupDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
+const { createTempDirAsync } = createScriptTestHarness();
 
 async function createExtensionsDir() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-postinstall-"));
-  cleanupDirs.push(root);
+  const root = await createTempDirAsync("openclaw-postinstall-");
   const extensionsDir = path.join(root, "dist", "extensions");
   await fs.mkdir(extensionsDir, { recursive: true });
   return extensionsDir;

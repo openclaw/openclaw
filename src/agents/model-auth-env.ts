@@ -16,6 +16,7 @@ export function resolveEnvApiKey(
   env: NodeJS.ProcessEnv = process.env,
 ): EnvApiKeyResult | null {
   const normalized = normalizeProviderIdForAuth(provider);
+  const candidateMap = resolveProviderEnvApiKeyCandidates();
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -26,8 +27,8 @@ export function resolveEnvApiKey(
     return { apiKey: value, source };
   };
 
-  const candidates = resolveProviderEnvApiKeyCandidates()[normalized];
-  if (candidates) {
+  const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
+  if (Array.isArray(candidates)) {
     for (const envVar of candidates) {
       const resolved = pick(envVar);
       if (resolved) {

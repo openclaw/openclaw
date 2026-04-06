@@ -6,11 +6,11 @@ export default defineBundledChannelEntry({
   description: "IRC channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "ircPlugin",
   },
   runtime: {
-    specifier: "./api.js",
+    specifier: "./runtime-api.js",
     exportName: "setIrcRuntime",
   },
 });

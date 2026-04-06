@@ -12,6 +12,7 @@ const ALLOWED_BUNDLED_CAPABILITY_METADATA_CONSUMERS = new Set([
 ]);
 
 const ALLOWED_EXTENSION_PATH_STRING_TESTS = new Set([
+  "src/plugin-sdk/browser-maintenance.test.ts",
   "src/channels/plugins/bundled.shape-guard.test.ts",
   "src/plugins/contracts/bundled-extension-config-api-guardrails.test.ts",
   "src/scripts/test-projects.test.ts",

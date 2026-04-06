@@ -88,23 +88,32 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return isRootHelpInvocation(argv);
 }
 
-export function resolveMissingBrowserCommandMessage(config?: OpenClawConfig): string | null {
+export function resolveMissingPluginCommandMessage(
+  pluginId: string,
+  config?: OpenClawConfig,
+): string | null {
+  const normalizedPluginId = pluginId.trim().toLowerCase();
+  if (!normalizedPluginId) {
+    return null;
+  }
   const allow =
     Array.isArray(config?.plugins?.allow) && config.plugins.allow.length > 0
       ? config.plugins.allow
           .filter((entry): entry is string => typeof entry === "string")
           .map((entry) => entry.trim().toLowerCase())
       : [];
-  if (allow.length > 0 && !allow.includes("browser")) {
+  if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
     return (
-      'The `openclaw browser` command is unavailable because `plugins.allow` excludes "browser". ' +
-      'Add "browser" to `plugins.allow` if you want the bundled browser CLI and tool.'
+      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
+      `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
+      `\`plugins.allow\` if you want that bundled plugin CLI surface.`
     );
   }
-  if (config?.plugins?.entries?.browser?.enabled === false) {
+  if (config?.plugins?.entries?.[normalizedPluginId]?.enabled === false) {
     return (
-      "The `openclaw browser` command is unavailable because `plugins.entries.browser.enabled=false`. " +
-      "Re-enable that entry if you want the bundled browser CLI and tool."
+      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
+      `\`plugins.entries.${normalizedPluginId}.enabled=false\`. Re-enable that entry if you want ` +
+      "the bundled plugin CLI surface."
     );
   }
   return null;
@@ -220,13 +229,10 @@ export async function runCli(argv: string[] = process.argv) {
           mode: "lazy",
           primary,
         });
-        if (
-          primary === "browser" &&
-          !program.commands.some((command) => command.name() === "browser")
-        ) {
-          const browserCommandMessage = resolveMissingBrowserCommandMessage(config);
-          if (browserCommandMessage) {
-            throw new Error(browserCommandMessage);
+        if (primary && !program.commands.some((command) => command.name() === primary)) {
+          const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
+          if (missingPluginCommandMessage) {
+            throw new Error(missingPluginCommandMessage);
           }
         }
       }
