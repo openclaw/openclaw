@@ -1,28 +1,29 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadConfigMock = vi.fn();
-const applyPluginAutoEnableMock = vi.fn<(params: { config: unknown; env?: unknown }) => unknown>();
-const resolveAgentWorkspaceDirMock = vi.fn(
-  (_config: unknown, _agentId: unknown): string => "/resolved-workspace",
-);
-const resolveDefaultAgentIdMock = vi.fn((_config: unknown): string => "default");
+const loadConfigMock = vi.fn<typeof import("../../config/config.js").loadConfig>();
+const applyPluginAutoEnableMock =
+  vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>();
+const resolveAgentWorkspaceDirMock = vi.fn<
+  typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
+>(() => "/resolved-workspace");
+const resolveDefaultAgentIdMock = vi.fn<
+  typeof import("../../agents/agent-scope.js").resolveDefaultAgentId
+>(() => "default");
 
 let resolvePluginRuntimeLoadContext: typeof import("./load-context.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => loadConfigMock(),
+  loadConfig: loadConfigMock,
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (params: { config: unknown; env?: unknown }) =>
-    applyPluginAutoEnableMock(params),
+  applyPluginAutoEnable: applyPluginAutoEnableMock,
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveAgentWorkspaceDir: (config: unknown, agentId: unknown) =>
-    resolveAgentWorkspaceDirMock(config, agentId),
-  resolveDefaultAgentId: (config: unknown) => resolveDefaultAgentIdMock(config),
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
+  resolveDefaultAgentId: resolveDefaultAgentIdMock,
 }));
 
 describe("resolvePluginRuntimeLoadContext", () => {
@@ -38,8 +39,8 @@ describe("resolvePluginRuntimeLoadContext", () => {
     resolveDefaultAgentIdMock.mockClear();
 
     loadConfigMock.mockReturnValue({ plugins: {} });
-    applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
-      config: params.config,
+    applyPluginAutoEnableMock.mockImplementation((params) => ({
+      config: params.config ?? {},
       changes: [],
       autoEnabledReasons: {},
     }));
