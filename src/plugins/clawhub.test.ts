@@ -995,6 +995,58 @@ describe("installPluginFromClawHub", () => {
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
   });
 
+  it("rejects fallback verification when the downloaded archive exceeds the ZIP size limit", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-archive-"));
+    tempDirs.push(dir);
+    const archivePath = path.join(dir, "archive.zip");
+    await fs.writeFile(archivePath, "placeholder", "utf8");
+    const realStat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (filePath, options) => {
+      if (filePath === archivePath) {
+        return {
+          size: 256 * 1024 * 1024 + 1,
+        } as Awaited<ReturnType<typeof fs.stat>>;
+      }
+      return await realStat(filePath, options);
+    });
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.3.22",
+        createdAt: 0,
+        changelog: "",
+        files: [
+          {
+            path: "openclaw.plugin.json",
+            size: 13,
+            sha256: sha256Hex('{"id":"demo"}'),
+          },
+        ],
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+      archivePath,
+      integrity: "sha256-not-used-in-fallback",
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+    });
+
+    statSpy.mockRestore();
+    expect(result).toMatchObject({
+      ok: false,
+      code: CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      error:
+        "ClawHub archive fallback verification rejected the downloaded archive because it exceeds the ZIP archive size limit.",
+    });
+    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+  });
+
   it("rejects fallback verification when a file hash drifts from files[] metadata", async () => {
     const archive = await createClawHubArchive({
       "openclaw.plugin.json": '{"id":"demo"}',

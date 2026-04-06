@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import JSZip from "jszip";
 import {
+  DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
   DEFAULT_MAX_ENTRIES,
   DEFAULT_MAX_EXTRACTED_BYTES,
   DEFAULT_MAX_ENTRY_BYTES,
@@ -500,6 +501,13 @@ async function verifyClawHubArchiveFiles(params: {
   files: ClawHubFileVerificationEntry[];
 }): Promise<ClawHubArchiveFileVerificationResult> {
   try {
+    const archiveStat = await fs.stat(params.archivePath);
+    if (archiveStat.size > DEFAULT_MAX_ARCHIVE_BYTES_ZIP) {
+      return buildClawHubInstallFailure(
+        "ClawHub archive fallback verification rejected the downloaded archive because it exceeds the ZIP archive size limit.",
+        CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+      );
+    }
     const archiveBytes = await fs.readFile(params.archivePath);
     const zip = await JSZip.loadAsync(archiveBytes);
     const actualFiles = new Map<string, string>();
