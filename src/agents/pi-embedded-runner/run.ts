@@ -39,6 +39,7 @@ import {
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
+  collectErrorChainMessages,
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
@@ -1287,8 +1288,18 @@ export async function runEmbeddedPiAgent(
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
-                  const errorText = formatErrorMessage(promptError);
-                  if (isLikelyContextOverflowError(errorText)) {
+                  const promptErrorReason = describeFailoverError(promptError).reason;
+                  const errorTexts = Array.from(
+                    new Set(
+                      [
+                        formatErrorMessage(promptError),
+                        describeUnknownError(promptError),
+                        ...collectErrorChainMessages(promptError),
+                      ].filter((value) => value.length > 0),
+                    ),
+                  );
+                  const errorText = errorTexts.find((text) => isLikelyContextOverflowError(text));
+                  if (errorText && !promptErrorReason) {
                     return { text: errorText, source: "promptError" as const };
                   }
                   // Prompt submission failed with a non-overflow error. Do not
