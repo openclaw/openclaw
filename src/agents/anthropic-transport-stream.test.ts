@@ -204,7 +204,7 @@ describe("anthropic transport stream", () => {
     expect(firstCallParams.system).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          text: "You are Claude Code, Anthropic's official CLI for Claude.",
+          text: "You are Sophie, a personal digital assistant.",
         }),
         expect.objectContaining({
           text: "Follow policy.",
