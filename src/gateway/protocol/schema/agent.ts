@@ -17,6 +17,7 @@ export const AgentInternalEventSchema = Type.Object(
     status: Type.String({ enum: [...AGENT_INTERNAL_EVENT_STATUSES] }),
     statusLabel: Type.String(),
     result: Type.String(),
+    mediaUrls: Type.Optional(Type.Array(Type.String())),
     statsLine: Type.Optional(Type.String()),
     replyInstruction: Type.String(),
   },
