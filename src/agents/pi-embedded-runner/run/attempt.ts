@@ -121,6 +121,10 @@ import {
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import {
+  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  shouldPreemptivelyCompactBeforePrompt,
+} from "./preemptive-compaction.js";
+import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
@@ -1521,7 +1525,7 @@ export async function runEmbeddedAttempt(
       const hookAgentId = sessionAgentId;
 
       let promptError: unknown = null;
-      let promptErrorSource: "prompt" | "compaction" | null = null;
+      let promptErrorSource: "prompt" | "compaction" | "precheck" | null = null;
       let prePromptMessageCount = activeSession.messages.length;
       try {
         const promptStartedAt = Date.now();
@@ -1759,6 +1763,27 @@ export async function runEmbeddedAttempt(
               .catch((err) => {
                 log.warn(`llm_input hook failed: ${String(err)}`);
               });
+          }
+
+          const reserveTokens = settingsManager.getCompactionReserveTokens();
+          const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
+            messages: activeSession.messages,
+            systemPrompt: systemPromptText,
+            prompt: effectivePrompt,
+            contextTokenBudget: params.contextTokenBudget,
+            reserveTokens,
+          });
+          if (preemptiveCompaction.shouldCompact) {
+            promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+            promptErrorSource = "precheck";
+            log.warn(
+              `[context-overflow-precheck] sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `provider=${params.provider}/${params.modelId} ` +
+                `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
+                `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
+                `reserveTokens=${reserveTokens} sessionFile=${params.sessionFile}`,
+            );
+            return;
           }
 
           const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
