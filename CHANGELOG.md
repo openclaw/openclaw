@@ -72,7 +72,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/video generation: add the built-in `video_generate` tool so agents can create videos through configured providers and return the generated media directly in the reply.
 - Agents/music generation: ignore unsupported optional hints such as `durationSeconds` with a warning instead of hard-failing requests on providers like Google Lyria.
-- Providers/Arcee AI: add a bundled Arcee AI provider plugin with `ARCEEAI_API_KEY` onboarding, Trinity model catalog (mini, large-preview, large-thinking), OpenAI-compatible API support, and OpenRouter as an alternative auth path.
+- Providers/Arcee AI: add a bundled Arcee AI provider plugin with `ARCEEAI_API_KEY` onboarding, Trinity model catalog (mini, large-preview, large-thinking), OpenAI-compatible API support, and OpenRouter as an alternative auth path. (#62068) Thanks @arthurbr11.
 - Providers/ComfyUI: add a bundled `comfy` workflow media plugin for local ComfyUI and Comfy Cloud workflows, including shared `image_generate`, `video_generate`, and workflow-backed `music_generate` support, with prompt injection, optional reference-image upload, live tests, and output download.
 - Tools/music generation: add the built-in `music_generate` tool with bundled Google (Lyria) and MiniMax providers plus workflow-backed Comfy support, including async task tracking and follow-up delivery of finished audio.
 - Providers: add bundled Qwen, Fireworks AI, and StepFun providers, plus MiniMax TTS, Ollama Web Search, and MiniMax Search integrations for chat, speech, and search workflows. (#60032, #55921, #59318, #54648)
