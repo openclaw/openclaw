@@ -84,6 +84,8 @@ const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
+const GENERIC_DAY_HEADING_RE =
+  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -339,10 +341,25 @@ function normalizeDailyHeading(line: string): string | null {
     return null;
   }
   const heading = match[1] ? normalizeDailyListMarker(match[1]) : "";
-  if (!heading || DAILY_MEMORY_FILENAME_RE.test(heading)) {
+  if (!heading || DAILY_MEMORY_FILENAME_RE.test(heading) || isGenericDailyHeading(heading)) {
     return null;
   }
   return heading.slice(0, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ");
+}
+
+function isGenericDailyHeading(heading: string): boolean {
+  const normalized = heading.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return true;
+  }
+  const lower = normalized.toLowerCase();
+  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
+    return true;
+  }
+  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
+    return true;
+  }
+  return GENERIC_DAY_HEADING_RE.test(normalized);
 }
 
 function normalizeDailySnippet(line: string): string | null {
@@ -363,6 +380,17 @@ type DailySnippetChunk = {
   snippet: string;
 };
 
+function buildDailyChunkSnippet(
+  heading: string | null,
+  chunkLines: string[],
+  chunkKind: "list" | "paragraph" | null,
+): string {
+  const joiner = chunkKind === "list" ? "; " : " ";
+  const body = chunkLines.join(joiner).trim();
+  const prefixed = heading ? `${heading}: ${body}` : body;
+  return prefixed.slice(0, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ").trim();
+}
+
 function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetChunk[] {
   const chunks: DailySnippetChunk[] = [];
   let activeHeading: string | null = null;
@@ -379,13 +407,7 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
       return;
     }
 
-    const joiner = chunkKind === "list" ? "; " : " ";
-    const body = chunkLines.join(joiner).trim();
-    const prefixed = activeHeading ? `${activeHeading}: ${body}` : body;
-    const snippet = prefixed
-      .slice(0, DAILY_INGESTION_MAX_SNIPPET_CHARS)
-      .replace(/\s+/g, " ")
-      .trim();
+    const snippet = buildDailyChunkSnippet(activeHeading, chunkLines, chunkKind);
     if (snippet.length >= DAILY_INGESTION_MIN_SNIPPET_CHARS) {
       chunks.push({
         startLine: chunkStartLine,
@@ -427,9 +449,7 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
 
     const nextKind = /^([-*+]\s+|\d+\.\s+)/.test(trimmed) ? "list" : "paragraph";
     const nextChunkLines = chunkLines.length === 0 ? [snippet] : [...chunkLines, snippet];
-    const nextJoiner = nextKind === "list" ? "; " : " ";
-    const candidateBody = nextChunkLines.join(nextJoiner).trim();
-    const candidateSnippet = activeHeading ? `${activeHeading}: ${candidateBody}` : candidateBody;
+    const candidateSnippet = buildDailyChunkSnippet(activeHeading, nextChunkLines, nextKind);
     const shouldSplit =
       chunkLines.length > 0 &&
       (chunkKind !== nextKind ||

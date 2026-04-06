@@ -247,6 +247,73 @@ describe("memory-core dreaming phases", () => {
     expect(after[0]?.snippet).toContain("messages short and low-pressure");
   });
 
+  it("drops generic day headings but keeps meaningful section labels", async () => {
+    const workspaceDir = await createTempWorkspace();
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      [
+        "# Friday, April 5, 2026",
+        "",
+        "## Morning",
+        "- Reviewed travel timing and calendar placement.",
+        "",
+        "## Emma Rees",
+        "- She prefers direct plans over open-ended maybes.",
+        "- Better to offer one concrete time window.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await beforeAgentReply(
+      { cleanedBody: "__openclaw_memory_core_light_sleep__" },
+      { trigger: "heartbeat", workspaceDir },
+    );
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after).toHaveLength(2);
+    expect(after.map((candidate) => candidate.snippet)).toEqual(
+      expect.arrayContaining([
+        "Reviewed travel timing and calendar placement.",
+        expect.stringContaining("Emma Rees:"),
+      ]),
+    );
+    for (const candidate of after) {
+      expect(candidate.snippet).not.toContain("Friday, April 5, 2026:");
+      expect(candidate.snippet).not.toContain("Morning:");
+    }
+  });
+
   it("splits noisy daily notes into a few coherent chunks instead of one line per item", async () => {
     const workspaceDir = await createTempWorkspace();
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
