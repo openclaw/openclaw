@@ -19,7 +19,7 @@ describe("plugin entry unrecognized key config hint", () => {
       const issue = result.issues.find((entry) => entry.path === "plugins.entries.openshell");
       expect(issue).toBeDefined();
       expect(issue?.message).toContain("did you mean plugins.entries.openshell.config.policy?");
-      expect(issue?.message).toContain('Plugin-specific settings belong under the "config" key');
+      expect(issue?.message).toContain("plugin-specific settings belong under the `config` key");
     }
   });
 

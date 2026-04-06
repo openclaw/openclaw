@@ -456,7 +456,7 @@ function enhancePluginEntryUnrecognizedKeyMessage(issuePath: string, message: st
   }
   const configPath = `${issuePath}.config`;
   if (keys.length === 1) {
-    return `${message} (did you mean ${configPath}.${keys[0]}? Plugin-specific settings belong under the "config" key)`;
+    return `${message} (did you mean ${configPath}.${keys[0]}? plugin-specific settings belong under the \`config\` key)`;
   }
   return `${message} (plugin-specific settings belong under ${configPath})`;
 }
