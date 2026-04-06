@@ -1,5 +1,5 @@
 ---
-summary: "Generate videos from text, images, or existing videos using 10 provider backends"
+summary: "Generate videos from text, images, or existing videos using 11 provider backends"
 read_when:
   - Generating videos via the agent
   - Configuring video generation providers and models
@@ -9,7 +9,7 @@ title: "Video Generation"
 
 # Video Generation
 
-OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Ten provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
+OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Eleven provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
 
 <Note>
 The `video_generate` tool only appears when at least one video-generation provider is available. If you do not see it in your agent tools, set a provider API key or configure `agents.defaults.videoGenerationModel`.
@@ -50,18 +50,19 @@ Outside of session-backed agent runs (for example, direct tool invocations), the
 
 ## Supported providers
 
-| Provider | Default model                   | Text | Image ref        | Video ref        | API key               |
-| -------- | ------------------------------- | ---- | ---------------- | ---------------- | --------------------- |
-| Alibaba  | `wan2.6-t2v`                    | Yes  | Yes (remote URL) | Yes (remote URL) | `MODELSTUDIO_API_KEY` |
-| BytePlus | `seedance-1-0-lite-t2v-250428`  | Yes  | 1 image          | No               | `BYTEPLUS_API_KEY`    |
-| fal      | `fal-ai/minimax/video-01-live`  | Yes  | 1 image          | No               | `FAL_KEY`             |
-| Google   | `veo-3.1-fast-generate-preview` | Yes  | 1 image          | 1 video          | `GEMINI_API_KEY`      |
-| MiniMax  | `MiniMax-Hailuo-2.3`            | Yes  | 1 image          | No               | `MINIMAX_API_KEY`     |
-| OpenAI   | `sora-2`                        | Yes  | 1 image          | 1 video          | `OPENAI_API_KEY`      |
-| Qwen     | `wan2.6-t2v`                    | Yes  | Yes (remote URL) | Yes (remote URL) | `QWEN_API_KEY`        |
-| Runway   | `gen4.5`                        | Yes  | 1 image          | 1 video          | `RUNWAYML_API_SECRET` |
-| Together | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image          | No               | `TOGETHER_API_KEY`    |
-| xAI      | `grok-imagine-video`            | Yes  | 1 image          | 1 video          | `XAI_API_KEY`         |
+| Provider | Default model                   | Text | Image ref        | Video ref        | API key                                  |
+| -------- | ------------------------------- | ---- | ---------------- | ---------------- | ---------------------------------------- |
+| Alibaba  | `wan2.6-t2v`                    | Yes  | Yes (remote URL) | Yes (remote URL) | `MODELSTUDIO_API_KEY`                    |
+| BytePlus | `seedance-1-0-lite-t2v-250428`  | Yes  | 1 image          | No               | `BYTEPLUS_API_KEY`                       |
+| ComfyUI  | `workflow`                      | Yes  | 1 image          | No               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
+| fal      | `fal-ai/minimax/video-01-live`  | Yes  | 1 image          | No               | `FAL_KEY`                                |
+| Google   | `veo-3.1-fast-generate-preview` | Yes  | 1 image          | 1 video          | `GEMINI_API_KEY`                         |
+| MiniMax  | `MiniMax-Hailuo-2.3`            | Yes  | 1 image          | No               | `MINIMAX_API_KEY`                        |
+| OpenAI   | `sora-2`                        | Yes  | 1 image          | 1 video          | `OPENAI_API_KEY`                         |
+| Qwen     | `wan2.6-t2v`                    | Yes  | Yes (remote URL) | Yes (remote URL) | `QWEN_API_KEY`                           |
+| Runway   | `gen4.5`                        | Yes  | 1 image          | 1 video          | `RUNWAYML_API_SECRET`                    |
+| Together | `Wan-AI/Wan2.2-T2V-A14B`        | Yes  | 1 image          | No               | `TOGETHER_API_KEY`                       |
+| xAI      | `grok-imagine-video`            | Yes  | 1 image          | 1 video          | `XAI_API_KEY`                            |
 
 Some providers accept additional or alternate API key env vars. See individual [provider pages](#related) for details.
 
@@ -141,6 +142,7 @@ If a provider fails, the next candidate is tried automatically. If all candidate
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Alibaba  | Uses DashScope/Model Studio async endpoint. Reference images and videos must be remote `http(s)` URLs.                                   |
 | BytePlus | Single image reference only.                                                                                                             |
+| ComfyUI  | Workflow-driven local or cloud execution. Supports text-to-video and image-to-video through the configured graph.                        |
 | fal      | Uses queue-backed flow for long-running jobs. Single image reference only.                                                               |
 | Google   | Uses Gemini/Veo. Supports one image or one video reference.                                                                              |
 | MiniMax  | Single image reference only.                                                                                                             |
@@ -179,6 +181,7 @@ openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2
 - [Background Tasks](/automation/tasks) -- task tracking for async video generation
 - [Alibaba Model Studio](/providers/alibaba)
 - [BytePlus](/providers/byteplus)
+- [ComfyUI](/providers/comfy)
 - [fal](/providers/fal)
 - [Google (Gemini)](/providers/google)
 - [MiniMax](/providers/minimax)

@@ -1200,12 +1200,14 @@
                   "tools/exec",
                   "tools/exec-approvals",
                   "tools/image-generation",
+                  "tools/music-generation",
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",
                   "tools/pdf",
                   "tools/reactions",
-                  "tools/thinking"
+                  "tools/thinking",
+                  "tools/video-generation"
                 ]
               },
               {
@@ -1238,6 +1240,7 @@
                   "providers/bedrock",
                   "providers/bedrock-mantle",
                   "providers/chutes",
+                  "providers/comfy",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/deepgram",
