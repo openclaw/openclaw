@@ -225,6 +225,8 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
+  // Capture raw user text before media/link preprocessing may mutate finalized fields.
+  const rawUserTextForRouting = ctx.RawBody ?? ctx.Body ?? "";
 
   if (!isFastTestEnv) {
     await applyMediaUnderstandingIfNeeded({
@@ -329,7 +331,7 @@ export async function getReplyFromConfig(
 
   // Apply keyword-based message routing if no higher-priority override is in effect.
   if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && !channelModelOverride) {
-    const messageText = ctx.RawBody ?? ctx.Body ?? "";
+    const messageText = rawUserTextForRouting;
     const routingModel = resolveMessageRoutingModel(cfg, agentId, messageText);
     if (routingModel) {
       const resolved = resolveModelRefFromString({
