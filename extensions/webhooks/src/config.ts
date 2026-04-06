@@ -53,7 +53,7 @@ export async function resolveWebhooksPluginConfig(params: {
   const seenPaths = new Map<string, string>();
 
   for (const [routeId, route] of Object.entries(parsed.routes)) {
-    if (route.enabled === false) {
+    if (!route.enabled) {
       continue;
     }
     const path = normalizeWebhookPath(route.path ?? `/plugins/webhooks/${routeId}`);
