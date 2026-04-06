@@ -554,4 +554,43 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     const result = validateAnthropicTurns(msgs);
     expect(result).toHaveLength(3);
   });
+
+  it("matches tool results from standalone toolResult/tool turns and stops at the next assistant", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool-1", name: "test", arguments: {} }],
+      },
+      { role: "user", content: [{ type: "text", text: "intermediate" }] },
+      { role: "toolResult", tool_call_id: "tool-1", content: [{ type: "text", text: "Result" }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "New assistant boundary" }],
+      },
+      { role: "tool", toolUseId: "tool-1", content: [{ type: "text", text: "Late result" }] },
+    ] as unknown as AgentMessage[]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect((result[1] as { content?: unknown[] }).content).toEqual([
+      { type: "toolCall", id: "tool-1", name: "test", arguments: {} },
+    ]);
+  });
+
+  it("does not synthesize fallback text for aborted mid-transcript tool-only turns", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [{ type: "toolCall", id: "tool-1", name: "test", arguments: {} }],
+      },
+      { role: "user", content: [{ type: "text", text: "Retry" }] },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result[1]).toMatchObject({ stopReason: "aborted", content: [] });
+  });
 });
