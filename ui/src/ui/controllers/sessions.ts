@@ -1,6 +1,12 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsListResult } from "../types.ts";
+import type {
+  SessionCompactionCheckpoint,
+  SessionsCompactionBranchResult,
+  SessionsCompactionListResult,
+  SessionsCompactionRestoreResult,
+  SessionsListResult,
+} from "../types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -16,6 +22,11 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsExpandedCheckpointKey: string | null;
+  sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
+  sessionsCheckpointLoadingKey: string | null;
+  sessionsCheckpointBusyKey: string | null;
+  sessionsCheckpointErrorByKey: Record<string, string>;
 };
 
 export async function subscribeSessions(state: SessionsState) {
@@ -155,4 +166,107 @@ export async function deleteSessionsAndRefresh(
     state.sessionsError = deleteErrors.join("; ");
   }
   return deleted;
+}
+
+export async function toggleSessionCompactionCheckpoints(state: SessionsState, key: string) {
+  const trimmedKey = key.trim();
+  if (!trimmedKey) {
+    return;
+  }
+  if (state.sessionsExpandedCheckpointKey === trimmedKey) {
+    state.sessionsExpandedCheckpointKey = null;
+    return;
+  }
+  state.sessionsExpandedCheckpointKey = trimmedKey;
+  if (state.sessionsCheckpointItemsByKey[trimmedKey]) {
+    return;
+  }
+  state.sessionsCheckpointLoadingKey = trimmedKey;
+  state.sessionsCheckpointErrorByKey = {
+    ...state.sessionsCheckpointErrorByKey,
+    [trimmedKey]: "",
+  };
+  try {
+    const result = await state.client?.request<SessionsCompactionListResult>(
+      "sessions.compaction.list",
+      { key: trimmedKey },
+    );
+    if (result) {
+      state.sessionsCheckpointItemsByKey = {
+        ...state.sessionsCheckpointItemsByKey,
+        [trimmedKey]: result.checkpoints ?? [],
+      };
+    }
+  } catch (err) {
+    state.sessionsCheckpointErrorByKey = {
+      ...state.sessionsCheckpointErrorByKey,
+      [trimmedKey]: String(err),
+    };
+  } finally {
+    if (state.sessionsCheckpointLoadingKey === trimmedKey) {
+      state.sessionsCheckpointLoadingKey = null;
+    }
+  }
+}
+
+export async function branchSessionFromCheckpoint(
+  state: SessionsState,
+  key: string,
+  checkpointId: string,
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const confirmed = window.confirm(
+    "Create a new child session from this pre-compaction checkpoint?",
+  );
+  if (!confirmed) {
+    return null;
+  }
+  state.sessionsCheckpointBusyKey = checkpointId;
+  try {
+    const result = await state.client.request<SessionsCompactionBranchResult>(
+      "sessions.compaction.branch",
+      { key, checkpointId },
+    );
+    await loadSessions(state);
+    return result?.key ?? null;
+  } catch (err) {
+    state.sessionsError = String(err);
+    return null;
+  } finally {
+    if (state.sessionsCheckpointBusyKey === checkpointId) {
+      state.sessionsCheckpointBusyKey = null;
+    }
+  }
+}
+
+export async function restoreSessionFromCheckpoint(
+  state: SessionsState,
+  key: string,
+  checkpointId: string,
+) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const confirmed = window.confirm(
+    "Restore this session to the selected pre-compaction checkpoint?\n\nThis replaces the current active transcript for the session key.",
+  );
+  if (!confirmed) {
+    return;
+  }
+  state.sessionsCheckpointBusyKey = checkpointId;
+  try {
+    await state.client.request<SessionsCompactionRestoreResult>("sessions.compaction.restore", {
+      key,
+      checkpointId,
+    });
+    await loadSessions(state);
+  } catch (err) {
+    state.sessionsError = String(err);
+  } finally {
+    if (state.sessionsCheckpointBusyKey === checkpointId) {
+      state.sessionsCheckpointBusyKey = null;
+    }
+  }
 }
