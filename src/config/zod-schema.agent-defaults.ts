@@ -143,6 +143,7 @@ export const AgentDefaultsSchema = z
           .strict()
           .optional(),
         notifyUser: z.boolean().optional(),
+        triggerRatio: z.number().min(0.1).max(1).optional(),
       })
       .strict()
       .optional(),
