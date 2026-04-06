@@ -12,13 +12,16 @@ export async function resolveAndPersistSessionFile(params: {
   sessionsDir?: string;
   fallbackSessionFile?: string;
   activeSessionKey?: string;
+  forceFreshSessionFile?: boolean;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey, sessionStore, storePath } = params;
   const baseEntry = params.sessionEntry ??
     sessionStore[sessionKey] ?? { sessionId, updatedAt: Date.now() };
   const fallbackSessionFile = params.fallbackSessionFile?.trim();
-  const entryForResolve =
-    !baseEntry.sessionFile && fallbackSessionFile
+  const forceFreshSessionFile = params.forceFreshSessionFile === true;
+  const entryForResolve = forceFreshSessionFile
+    ? { ...baseEntry, sessionId, sessionFile: undefined }
+    : !baseEntry.sessionFile && fallbackSessionFile
       ? { ...baseEntry, sessionFile: fallbackSessionFile }
       : baseEntry;
   const sessionFile = resolveSessionFilePath(sessionId, entryForResolve, {
