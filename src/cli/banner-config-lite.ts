@@ -3,7 +3,7 @@ import JSON5 from "json5";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyConfigEnvVars } from "../config/env-vars.js";
 import { resolveConfigIncludes } from "../config/includes.js";
-import { resolveConfigPathCandidate } from "../config/paths.js";
+import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TaglineMode } from "./tagline.js";
 
@@ -22,7 +22,7 @@ export function readCliBannerTaglineMode(
   env: NodeJS.ProcessEnv = process.env,
 ): TaglineMode | undefined {
   try {
-    const configPath = resolveConfigPathCandidate(env);
+    const configPath = resolveConfigPath(env);
     if (!fs.existsSync(configPath)) {
       return undefined;
     }
@@ -35,7 +35,11 @@ export function readCliBannerTaglineMode(
     if (parsed && typeof parsed === "object" && "env" in parsed) {
       applyConfigEnvVars(parsed as OpenClawConfig, env);
     }
-    const resolved = resolveConfigEnvVars(parsed, env) as BannerConfigShape;
+    const resolved = resolveConfigEnvVars(parsed, env, {
+      onMissing: () => {
+        // Match the full config loader by tolerating unrelated missing env vars.
+      },
+    }) as BannerConfigShape;
     return parseTaglineMode(resolved.cli?.banner?.taglineMode);
   } catch {
     return undefined;

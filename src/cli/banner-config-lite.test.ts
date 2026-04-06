@@ -114,4 +114,53 @@ describe("readCliBannerTaglineMode", () => {
 
     expect(readCliBannerTaglineMode({ OPENCLAW_CONFIG_PATH: configPath })).toBe("default");
   });
+
+  it("prefers the OPENCLAW_STATE_DIR config path over legacy home fallbacks", () => {
+    const homeRoot = makeTempDir("openclaw-banner-home-");
+    const stateDir = makeTempDir("openclaw-banner-state-");
+    const legacyConfigDir = path.join(homeRoot, ".openclaw");
+    const legacyConfigPath = path.join(legacyConfigDir, "openclaw.json");
+    fs.mkdirSync(legacyConfigDir, { recursive: true });
+    fs.writeFileSync(
+      legacyConfigPath,
+      `{
+        cli: {
+          banner: {
+            taglineMode: "off",
+          },
+        },
+      }
+      `,
+      "utf-8",
+    );
+
+    expect(
+      readCliBannerTaglineMode({
+        HOME: homeRoot,
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps a valid banner mode when unrelated env vars are missing", () => {
+    const root = makeTempDir("openclaw-banner-missing-env-");
+    const configPath = path.join(root, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      `{
+        features: {
+          extra: "\${MISSING_VALUE}",
+        },
+        cli: {
+          banner: {
+            taglineMode: "off",
+          },
+        },
+      }
+      `,
+      "utf-8",
+    );
+
+    expect(readCliBannerTaglineMode({ OPENCLAW_CONFIG_PATH: configPath })).toBe("off");
+  });
 });
