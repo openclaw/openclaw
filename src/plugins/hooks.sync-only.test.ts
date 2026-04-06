@@ -13,8 +13,8 @@ function createToolResultMessage(text: string): AgentMessage {
 }
 
 function createLogger(): HookRunnerLogger & {
-  warn: ReturnType<typeof vi.fn>;
-  error: ReturnType<typeof vi.fn>;
+  warn: ReturnType<typeof vi.fn<(message: string) => void>>;
+  error: ReturnType<typeof vi.fn<(message: string) => void>>;
 } {
   const warn = vi.fn<(message: string) => void>();
   const error = vi.fn<(message: string) => void>();
