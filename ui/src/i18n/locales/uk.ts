@@ -572,7 +572,7 @@ export const uk: TranslationMap = {
     onboardingDisabled: "Вимкнено під час налаштування",
   },
   languages: {
-    en: "English",
+    en: "Англійська",
     zhCN: "简体中文 (спрощена китайська)",
     zhTW: "繁體中文 (традиційна китайська)",
     ptBR: "Português (бразильська португальська)",

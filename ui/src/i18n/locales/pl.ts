@@ -286,12 +286,12 @@ export const pl: TranslationMap = {
     header: {
       refresh: "Odśwież",
       refreshing: "Odświeżanie…",
-      on: "Dreaming On",
-      off: "Dreaming Off",
+      on: "Dreaming włączone",
+      off: "Dreaming wyłączone",
     },
     status: {
-      active: "Dreaming Active",
-      idle: "Dreaming Idle",
+      active: "Dreaming aktywne",
+      idle: "Dreaming bezczynne",
       promotedSuffix: "promowany",
       nextSweepPrefix: "następne przetwarzanie",
     },

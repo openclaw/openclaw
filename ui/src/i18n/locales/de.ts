@@ -136,8 +136,8 @@ export const de: TranslationMap = {
   agentTools: {
     connectedSource: "Verbunden: {id}",
     connected: "Verbunden",
-    channelSource: "Channel: {id}",
-    channel: "Channel",
+    channelSource: "Kanal: {id}",
+    channel: "Kanal",
     builtIn: "Integriert",
   },
   nav: {
