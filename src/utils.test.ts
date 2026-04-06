@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withTempDir, withTempDirSync } from "./test-helpers/temp-dir.js";
+import { withTempDir } from "./test-helpers/temp-dir.js";
 import {
   ensureDir,
   resolveConfigDir,
@@ -34,7 +34,7 @@ describe("sleep", () => {
 
 describe("resolveConfigDir", () => {
   it("prefers ~/.openclaw when legacy dir is missing", async () => {
-    await withTempDirSync({ prefix: "openclaw-config-dir-" }, async (root) => {
+    await withTempDir({ prefix: "openclaw-config-dir-" }, async (root) => {
       const newDir = path.join(root, ".openclaw");
       await fs.promises.mkdir(newDir, { recursive: true });
       const resolved = resolveConfigDir({} as NodeJS.ProcessEnv, () => root);

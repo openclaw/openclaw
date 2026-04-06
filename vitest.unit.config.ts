@@ -48,7 +48,8 @@ export function createUnitVitestConfigWithOptions(
       exclude: [
         ...new Set([
           ...exclude,
-          ...(options.extraExcludePatterns ?? unitTestAdditionalExcludePatterns),
+          ...unitTestAdditionalExcludePatterns,
+          ...(options.extraExcludePatterns ?? []),
           ...loadExtraExcludePatternsFromEnv(env),
         ]),
       ],

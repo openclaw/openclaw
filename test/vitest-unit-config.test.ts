@@ -97,4 +97,16 @@ describe("unit vitest config", () => {
       "test/setup-openclaw-runtime.ts",
     ]);
   });
+
+  it("appends extra exclude patterns instead of replacing the base unit excludes", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        extraExcludePatterns: ["src/security/**"],
+      },
+    );
+    expect(unitConfig.test?.exclude).toEqual(
+      expect.arrayContaining(["src/commands/**", "src/config/**", "src/security/**"]),
+    );
+  });
 });
