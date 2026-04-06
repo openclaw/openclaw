@@ -90,15 +90,6 @@ export function enqueueFollowupRun(
   queue.lastEnqueuedAt = Date.now();
   queue.lastRun = run.run;
 
-  const shouldEnqueue = applyQueueDropPolicy({
-    queue,
-    summarize: (item) =>
-      getFollowupSummaryLine(item) ?? getFollowupAgentPrompt(item) ?? "[Hidden message]", 
-  });
-  if (!shouldEnqueue) {
-    return false;
-  }
-
   if (run.messageId?.trim()) {
     const sameMessageTarget = queue.items.find(
       (item) =>
@@ -115,6 +106,15 @@ export function enqueueFollowupRun(
       sameMessageTarget.run = run.run;
       return true;
     }
+  }
+
+  const shouldEnqueue = applyQueueDropPolicy({
+    queue,
+    summarize: (item) =>
+      getFollowupSummaryLine(item) ?? getFollowupAgentPrompt(item) ?? "[Hidden message]",
+  });
+  if (!shouldEnqueue) {
+    return false;
   }
 
   queue.items.push(run);

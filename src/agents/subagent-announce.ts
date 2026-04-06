@@ -541,10 +541,10 @@ export async function runSubagentAnnounceFlow(params: {
             params.requesterDisplayKey.trim() === targetRequesterSessionKey &&
             !targetRequesterSessionKey.endsWith(":parent-missing"));
 
+        if (shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)) {
+          return true;
+        }
         if (!parentSessionAlive) {
-          if (shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)) {
-            return true;
-          }
           const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
           if (!fallback?.requesterSessionKey) {
             shouldDeleteChildSession = false;

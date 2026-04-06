@@ -439,4 +439,35 @@ describe("subagent announce seam flow", () => {
       }),
     );
   });
+
+  it("suppresses late nested announces when ignore-check matches even if parent session still exists", async () => {
+    loadSessionStoreMock.mockImplementation(() => ({
+      "agent:main:subagent:orchestrator": {
+        sessionId: "session-orchestrator",
+        updatedAt: Date.now(),
+      },
+    }));
+    subagentRegistryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(true);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-ignore-after-cleanup",
+      requesterSessionKey: "agent:main:subagent:orchestrator",
+      requesterDisplayKey: "orchestrator",
+      task: "deliver nested completion",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).not.toHaveBeenCalled();
+    expect(subagentRegistryRuntimeMock.resolveRequesterForChildSession).not.toHaveBeenCalled();
+    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+  });
 });

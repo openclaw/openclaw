@@ -10,9 +10,11 @@ import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   enqueueFollowupRun,
+  getFollowupQueueDepth,
   resetRecentQueuedMessageIdDedupe,
   scheduleFollowupDrain,
 } from "./queue.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter } from "./reply-threading.js";
 
@@ -368,6 +370,52 @@ describe("followup queue deduplication", () => {
 
     expect(redelivery).toBe(false);
     expect(calls).toHaveLength(1);
+  });
+
+  it("refreshes same-message entries before applying queue cap when dedupeMode is none", () => {
+    const key = `test-refresh-before-cap-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "new",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "original",
+        displayText: "original",
+        messageId: "same-id",
+        originatingChannel: "telegram",
+        originatingTo: "chat-1",
+      }),
+      settings,
+      "none",
+    );
+    const refresh = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "refreshed",
+        displayText: "refreshed",
+        messageId: "same-id",
+        originatingChannel: "telegram",
+        originatingTo: "chat-1",
+      }),
+      settings,
+      "none",
+    );
+
+    expect(first).toBe(true);
+    expect(refresh).toBe(true);
+    expect(getFollowupQueueDepth(key)).toBe(1);
+
+    const queue = getExistingFollowupQueue(key);
+    expect(queue?.items).toHaveLength(1);
+    expect(queue?.items[0]?.execution.agentPrompt).toBe("refreshed");
+    expect(queue?.items[0]?.display?.text).toBe("refreshed");
+    expect(queue?.droppedCount).toBe(0);
+    expect(queue?.summaryLines).toEqual([]);
   });
 
   it("deduplicates same message_id across distinct enqueue module instances", async () => {
