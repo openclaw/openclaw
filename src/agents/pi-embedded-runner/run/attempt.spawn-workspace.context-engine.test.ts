@@ -18,6 +18,7 @@ import {
   createContextEngineBootstrapAndAssemble,
   expectCalledWithSessionKey,
   getHoisted,
+  type MutableSession,
   resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
 import {
@@ -30,6 +31,8 @@ const embeddedSessionId = "embedded-session";
 const sessionFile = "/tmp/session.jsonl";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
+type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
+type AfterTurnUnknownPromptCacheCall = { runtimeContext?: { promptCache?: unknown } };
 
 function appendAssistantWithUsage(usage: {
   input?: number;
@@ -38,11 +41,7 @@ function appendAssistantWithUsage(usage: {
   cacheWrite?: number;
   total?: number;
 }) {
-  return async (
-    session: { messages: AgentMessage[] },
-    _prompt: string,
-    _options?: { images?: unknown[] },
-  ) => {
+  return async (session: MutableSession, _prompt: string, _options?: { images?: unknown[] }) => {
     session.messages = [
       ...session.messages,
       {
@@ -334,7 +333,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("passes prompt-cache retention, last-call usage, and cache-touch metadata to afterTurn", async () => {
-    const afterTurn = vi.fn(async () => {});
+    const afterTurn = vi.fn(async (_params: AfterTurnPromptCacheCall) => {});
 
     await createContextEngineAttemptRunner({
       contextEngine: {
@@ -366,9 +365,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       tempPaths,
     });
 
-    const afterTurnCall = afterTurn.mock.calls[0]?.[0] as
-      | { runtimeContext?: { promptCache?: Record<string, unknown> } }
-      | undefined;
+    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
     const runtimeContext = afterTurnCall?.runtimeContext;
 
     expect(runtimeContext?.promptCache).toEqual(
@@ -387,7 +384,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("omits prompt-cache metadata from afterTurn when no cache data is available", async () => {
-    const afterTurn = vi.fn(async () => {});
+    const afterTurn = vi.fn(async (_params: AfterTurnUnknownPromptCacheCall) => {});
 
     await createContextEngineAttemptRunner({
       contextEngine: {
@@ -398,16 +395,67 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       tempPaths,
     });
 
-    const afterTurnCall = afterTurn.mock.calls[0]?.[0] as
-      | { runtimeContext?: { promptCache?: unknown } }
-      | undefined;
+    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
     const runtimeContext = afterTurnCall?.runtimeContext;
 
     expect(runtimeContext?.promptCache).toBeUndefined();
   });
 
+  it("does not reuse a prior turn's usage when the current attempt exits before a new assistant", async () => {
+    const afterTurn = vi.fn(async (_params: AfterTurnPromptCacheCall) => {});
+
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+        afterTurn,
+      },
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              contextPruning: {
+                mode: "cache-ttl",
+              },
+            },
+          },
+        },
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-5",
+        model: cacheTtlEligibleModel,
+        contextTokenBudget: 1,
+        prompt: "force-preflight-overflow",
+      },
+      sessionMessages: [
+        seedMessage,
+        {
+          role: "assistant",
+          content: "prior turn",
+          timestamp: 2,
+          usage: {
+            input: 99,
+            output: 7,
+            cacheRead: 1234,
+            total: 1340,
+          },
+        } as unknown as AgentMessage,
+      ],
+      sessionKey,
+      tempPaths,
+    });
+
+    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
+    const promptCache = afterTurnCall?.runtimeContext?.promptCache;
+
+    expect(promptCache).toEqual(
+      expect.objectContaining({
+        retention: "short",
+      }),
+    );
+    expect(promptCache?.lastCallUsage).toBeUndefined();
+  });
+
   it("threads prompt-cache break observations into afterTurn", async () => {
-    const afterTurn = vi.fn(async () => {});
+    const afterTurn = vi.fn(async (_params: AfterTurnPromptCacheCall) => {});
 
     await finalizeTurn(sessionKey, createTestContextEngine({ afterTurn }), {
       runtimeContext: {
@@ -422,9 +470,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    const afterTurnCall = afterTurn.mock.calls[0]?.[0] as
-      | { runtimeContext?: { promptCache?: Record<string, unknown> } }
-      | undefined;
+    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
     const runtimeContext = afterTurnCall?.runtimeContext;
     const observation = runtimeContext?.promptCache?.observation as
       | { broke?: boolean; previousCacheRead?: number; cacheRead?: number; changes?: unknown[] }

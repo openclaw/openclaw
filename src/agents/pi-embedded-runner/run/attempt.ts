@@ -289,6 +289,16 @@ function buildContextEnginePromptCacheInfo(params: {
   }
   return Object.keys(promptCache).length > 0 ? promptCache : undefined;
 }
+
+function findCurrentAttemptAssistantMessage(params: {
+  messagesSnapshot: AgentMessage[];
+  prePromptMessageCount: number;
+}): AgentMessage | undefined {
+  return params.messagesSnapshot
+    .slice(Math.max(0, params.prePromptMessageCount))
+    .toReversed()
+    .find((message) => message.role === "assistant");
+}
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
@@ -2058,6 +2068,10 @@ export async function runEmbeddedAttempt(
           .slice()
           .toReversed()
           .find((m) => m.role === "assistant");
+        const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+          messagesSnapshot,
+          prePromptMessageCount,
+        });
         attemptUsage = getUsageTotals();
         cacheBreak = cacheObservabilityEnabled
           ? completePromptCacheObservation({
@@ -2066,9 +2080,9 @@ export async function runEmbeddedAttempt(
               usage: attemptUsage,
             })
           : null;
-        const lastCallUsage = normalizeUsage(
-          (lastAssistant as { usage?: UsageLike } | undefined)?.usage,
-        );
+        const lastCallUsage =
+          normalizeUsage((currentAttemptAssistant as { usage?: UsageLike } | undefined)?.usage) ??
+          normalizeUsage(attemptUsage);
         const promptCacheObservation =
           cacheObservabilityEnabled &&
           (cacheBreak || promptCacheChangesForTurn || typeof attemptUsage?.cacheRead === "number")
