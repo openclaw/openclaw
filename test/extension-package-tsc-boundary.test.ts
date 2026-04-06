@@ -1,25 +1,28 @@
 import { spawnSync } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const XAI_ROOT = resolve(REPO_ROOT, "extensions/xai");
-const TSC_BIN = resolve(REPO_ROOT, "node_modules/.bin/tsc");
+const require = createRequire(import.meta.url);
+const TSC_BIN = require.resolve("typescript/bin/tsc");
 const PLUGIN_SDK_PACKAGE_TSCONFIG = resolve(REPO_ROOT, "packages/plugin-sdk/tsconfig.json");
+
+function runTsc(args: string[]) {
+  return spawnSync(process.execPath, [TSC_BIN, ...args], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+}
 
 describe("xai package TypeScript boundary", () => {
   it("typechecks cleanly through @openclaw/plugin-sdk", () => {
-    const prepareResult = spawnSync(TSC_BIN, ["-p", PLUGIN_SDK_PACKAGE_TSCONFIG], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    });
+    const prepareResult = runTsc(["-p", PLUGIN_SDK_PACKAGE_TSCONFIG]);
     expect(prepareResult.status, `${prepareResult.stdout}\n${prepareResult.stderr}`).toBe(0);
 
-    const result = spawnSync(TSC_BIN, ["-p", resolve(XAI_ROOT, "tsconfig.json"), "--noEmit"], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    });
+    const result = runTsc(["-p", resolve(XAI_ROOT, "tsconfig.json"), "--noEmit"]);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   });
 
@@ -47,10 +50,7 @@ describe("xai package TypeScript boundary", () => {
         "utf8",
       );
 
-      const result = spawnSync(TSC_BIN, ["-p", tsconfigPath, "--noEmit"], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-      });
+      const result = runTsc(["-p", tsconfigPath, "--noEmit"]);
 
       const output = `${result.stdout}\n${result.stderr}`;
       expect(result.status).not.toBe(0);
