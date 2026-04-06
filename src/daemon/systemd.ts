@@ -370,6 +370,14 @@ async function execSystemctlUser(
       if (machineResult.code === 0) {
         return machineResult;
       }
+      // Only fall through when the machine scope itself is unreachable
+      // (e.g. systemd-machined unavailable or permission denied). If the
+      // machine scope returned a real service-state result (inactive,
+      // not-found, etc.) return it directly so we don't mask it with --user.
+      const machineDetail = `${machineResult.stderr} ${machineResult.stdout}`.trim();
+      if (!shouldFallbackToMachineUserScope(machineDetail)) {
+        return machineResult;
+      }
     }
   }
 
