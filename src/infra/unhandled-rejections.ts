@@ -8,7 +8,29 @@ import {
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
-const handlers = new Set<UnhandledRejectionHandler>();
+const unhandledRejectionsStateKey = Symbol.for("openclaw.unhandled-rejections.state");
+
+type UnhandledRejectionsState = {
+  installed: boolean;
+  handlers: Set<UnhandledRejectionHandler>;
+};
+
+function getUnhandledRejectionsState(): UnhandledRejectionsState {
+  const globalState = globalThis as typeof globalThis & {
+    [unhandledRejectionsStateKey]?: UnhandledRejectionsState;
+  };
+
+  let state = globalState[unhandledRejectionsStateKey];
+  if (!state) {
+    state = {
+      installed: false,
+      handlers: new Set<UnhandledRejectionHandler>(),
+    };
+    globalState[unhandledRejectionsStateKey] = state;
+  }
+
+  return state;
+}
 
 const FATAL_ERROR_CODES = new Set([
   "ERR_OUT_OF_MEMORY",
@@ -317,6 +339,7 @@ export function isTransientUnhandledRejectionError(err: unknown): boolean {
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
+  const { handlers } = getUnhandledRejectionsState();
   handlers.add(handler);
   return () => {
     handlers.delete(handler);
@@ -324,6 +347,7 @@ export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHan
 }
 
 export function isUnhandledRejectionHandled(reason: unknown): boolean {
+  const { handlers } = getUnhandledRejectionsState();
   for (const handler of handlers) {
     try {
       if (handler(reason)) {
@@ -340,6 +364,13 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 }
 
 export function installUnhandledRejectionHandler(): void {
+  const state = getUnhandledRejectionsState();
+  if (state.installed) {
+    return;
+  }
+
+  state.installed = true;
+
   process.on("unhandledRejection", (reason, _promise) => {
     if (isUnhandledRejectionHandled(reason)) {
       return;
