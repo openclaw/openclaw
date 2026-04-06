@@ -97,6 +97,7 @@ export async function handleDiscordGuildAction(
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
   cfg?: OpenClawConfig,
+  options?: { mediaLocalRoots?: readonly string[] },
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
   switch (action) {
@@ -305,7 +306,9 @@ export async function handleDiscordGuildAction(
       const entityTypeRaw = readStringParam(params, "entityType");
       const entityType = entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
       const image = imageUrl
-        ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl)
+        ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, {
+            localRoots: options?.mediaLocalRoots,
+          })
         : undefined;
       const payload = {
         name,

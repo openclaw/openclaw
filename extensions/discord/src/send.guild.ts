@@ -82,8 +82,13 @@ export async function listScheduledEventsDiscord(
 const ALLOWED_EVENT_COVER_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/gif"];
 
 // Loads an image from a URL or path and returns a data URI suitable for the Discord API.
-export async function resolveEventCoverImage(imageUrl: string): Promise<string> {
-  const media = await loadWebMediaRaw(imageUrl, DISCORD_MAX_EVENT_COVER_BYTES);
+export async function resolveEventCoverImage(
+  imageUrl: string,
+  opts?: { localRoots?: readonly string[] },
+): Promise<string> {
+  const media = await loadWebMediaRaw(imageUrl, DISCORD_MAX_EVENT_COVER_BYTES, {
+    localRoots: opts?.localRoots,
+  });
   const contentType = media.contentType?.toLowerCase();
   if (!contentType || !ALLOWED_EVENT_COVER_TYPES.includes(contentType)) {
     throw new Error(
