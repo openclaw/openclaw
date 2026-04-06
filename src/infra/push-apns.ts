@@ -66,6 +66,7 @@ export type ApnsPushAlertResult = ApnsPushResult;
 export type ApnsPushWakeResult = ApnsPushResult;
 
 const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
+const EXEC_APPROVAL_NOTIFICATION_CATEGORY = "openclaw.exec-approval";
 
 type ApnsPushType = "alert" | "background";
 
@@ -908,6 +909,8 @@ function createExecApprovalAlertPayload(params: { nodeId: string; approvalId: st
         body: resolveExecApprovalAlertBody(),
       },
       sound: "default",
+      category: EXEC_APPROVAL_NOTIFICATION_CATEGORY,
+      "content-available": 1,
     },
     openclaw: {
       kind: "exec.approval.requested",
