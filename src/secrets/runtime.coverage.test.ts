@@ -1,12 +1,55 @@
+import fs from "node:fs";
+import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
-import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
-type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
+type SecretRegistryEntry = {
+  id: string;
+  configFile: "openclaw.json" | "auth-profiles.json";
+  pathPattern: string;
+  refPathPattern?: string;
+  secretShape: "secret_input" | "sibling_ref";
+  expectedResolvedValue: "string";
+  authProfileType?: "api_key" | "token";
+};
+
+type SecretRefCredentialMatrix = {
+  entries: Array<{
+    id: string;
+    configFile: "openclaw.json" | "auth-profiles.json";
+    path: string;
+    refPath?: string;
+    secretShape: SecretRegistryEntry["secretShape"];
+    when?: {
+      type?: SecretRegistryEntry["authProfileType"];
+    };
+  }>;
+};
+
+function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
+  const matrixPath = path.join(
+    process.cwd(),
+    "docs",
+    "reference",
+    "secretref-user-supplied-credentials-matrix.json",
+  );
+  const matrix = JSON.parse(fs.readFileSync(matrixPath, "utf8")) as SecretRefCredentialMatrix;
+  return matrix.entries.map((entry) => ({
+    id: entry.id,
+    configFile: entry.configFile,
+    pathPattern: entry.path,
+    ...(entry.refPath ? { refPathPattern: entry.refPath } : {}),
+    secretShape: entry.secretShape,
+    expectedResolvedValue: "string",
+    ...(entry.when?.type ? { authProfileType: entry.when.type } : {}),
+  }));
+}
+
+const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
 let collectAuthStoreAssignments: typeof import("./runtime-auth-collectors.js").collectAuthStoreAssignments;
@@ -65,6 +108,67 @@ function buildCoverageLoadablePluginOrigins(
   return origins;
 }
 
+function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
+  if (entry.id.startsWith("agents.defaults.")) {
+    return entry.id;
+  }
+  if (entry.id.startsWith("agents.list[].")) {
+    return entry.id;
+  }
+  if (entry.id.startsWith("gateway.auth.")) {
+    return entry.id;
+  }
+  if (entry.id.startsWith("gateway.remote.")) {
+    return entry.id;
+  }
+  if (entry.id.startsWith("models.providers.*.request.auth.")) {
+    return entry.id;
+  }
+  if (entry.id.startsWith("channels.")) {
+    const segments = entry.id.split(".");
+    const field = segments.at(-1);
+    if (field === "accessToken" || field === "password") {
+      return entry.id;
+    }
+    const channelId = segments[1] ?? "unknown";
+    const scope = segments[2] === "accounts" ? "accounts" : "root";
+    return `channels.${channelId}.${scope}`;
+  }
+  if (entry.id.startsWith("messages.tts.providers.")) {
+    return "messages.tts.providers";
+  }
+  if (entry.id.startsWith("models.providers.")) {
+    return "models.providers";
+  }
+  if (entry.id.startsWith("plugins.entries.")) {
+    return entry.id;
+  }
+  if (entry.id.startsWith("skills.entries.")) {
+    return "skills.entries";
+  }
+  if (entry.id.startsWith("talk.providers.")) {
+    return "talk.providers";
+  }
+  if (entry.id.startsWith("talk.")) {
+    return "talk";
+  }
+  return entry.id;
+}
+
+function buildCoverageBatches(entries: readonly SecretRegistryEntry[]): SecretRegistryEntry[][] {
+  const batches = new Map<string, SecretRegistryEntry[]>();
+  for (const entry of entries) {
+    const batchKey = resolveCoverageBatchKey(entry);
+    const batch = batches.get(batchKey);
+    if (batch) {
+      batch.push(entry);
+      continue;
+    }
+    batches.set(batchKey, [entry]);
+  }
+  return [...batches.values()];
+}
+
 function applyConfigForOpenClawTarget(
   config: OpenClawConfig,
   entry: SecretRegistryEntry,
@@ -89,6 +193,9 @@ function applyConfigForOpenClawTarget(
     );
     setPathCreateStrict(config, ["models", "providers", wildcardToken, "models"], []);
   }
+  if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {
+    setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
+  }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
   }
@@ -102,7 +209,7 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "channels.telegram.accounts.*.webhookSecret") {
     setPathCreateStrict(
       config,
-      ["channels", "telegram", "accounts", "sample", "webhookUrl"],
+      ["channels", "telegram", "accounts", wildcardToken, "webhookUrl"],
       "https://example.com/hook",
     );
   }
@@ -110,7 +217,7 @@ function applyConfigForOpenClawTarget(
     setPathCreateStrict(config, ["channels", "slack", "mode"], "http");
   }
   if (entry.id === "channels.slack.accounts.*.signingSecret") {
-    setPathCreateStrict(config, ["channels", "slack", "accounts", "sample", "mode"], "http");
+    setPathCreateStrict(config, ["channels", "slack", "accounts", wildcardToken, "mode"], "http");
   }
   if (entry.id === "channels.zalo.webhookSecret") {
     setPathCreateStrict(config, ["channels", "zalo", "webhookUrl"], "https://example.com/hook");
@@ -118,7 +225,7 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "channels.zalo.accounts.*.webhookSecret") {
     setPathCreateStrict(
       config,
-      ["channels", "zalo", "accounts", "sample", "webhookUrl"],
+      ["channels", "zalo", "accounts", wildcardToken, "webhookUrl"],
       "https://example.com/hook",
     );
   }
@@ -131,14 +238,14 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "channels.feishu.accounts.*.verificationToken") {
     setPathCreateStrict(
       config,
-      ["channels", "feishu", "accounts", "sample", "connectionMode"],
+      ["channels", "feishu", "accounts", wildcardToken, "connectionMode"],
       "webhook",
     );
   }
   if (entry.id === "channels.feishu.accounts.*.encryptKey") {
     setPathCreateStrict(
       config,
-      ["channels", "feishu", "accounts", "sample", "connectionMode"],
+      ["channels", "feishu", "accounts", wildcardToken, "connectionMode"],
       "webhook",
     );
   }
@@ -297,69 +404,67 @@ describe("secrets runtime target coverage", () => {
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {
-    const entries = listSecretTargetRegistryEntries().filter(
+    const entries = COVERAGE_REGISTRY_ENTRIES.filter(
       (entry) => entry.configFile === "openclaw.json",
     );
-    const config = {} as OpenClawConfig;
-    const env: Record<string, string> = {};
-    for (const [index, entry] of entries.entries()) {
-      const envId = `OPENCLAW_SECRET_TARGET_${index}`;
-      const runtimeEnvId = resolveCoverageEnvId(entry, envId);
-      const expectedValue = `resolved-${entry.id}`;
-      const wildcardToken = resolveCoverageWildcardToken(index);
-      env[runtimeEnvId] = expectedValue;
-      applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
-    }
-    const snapshot = await prepareCoverageSnapshot({
-      config,
-      env,
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-      loadablePluginOrigins: buildCoverageLoadablePluginOrigins(entries),
-    });
-    for (const [index, entry] of entries.entries()) {
-      const resolved = getPath(
-        snapshot.config,
-        resolveCoverageResolvedSegments(entry, resolveCoverageWildcardToken(index)),
-      );
-      if (entry.expectedResolvedValue === "string") {
-        expect(resolved).toBe(`resolved-${entry.id}`);
-      } else {
-        expect(typeof resolved === "string" || (resolved && typeof resolved === "object")).toBe(
-          true,
+    for (const batch of buildCoverageBatches(entries)) {
+      const config = {} as OpenClawConfig;
+      const env: Record<string, string> = {};
+      for (const [index, entry] of batch.entries()) {
+        const envId = `OPENCLAW_SECRET_TARGET_${entry.id}`;
+        const runtimeEnvId = resolveCoverageEnvId(entry, envId);
+        const expectedValue = `resolved-${entry.id}`;
+        const wildcardToken = resolveCoverageWildcardToken(index);
+        env[runtimeEnvId] = expectedValue;
+        applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
+      }
+      const snapshot = await prepareCoverageSnapshot({
+        config,
+        env,
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+        loadablePluginOrigins: buildCoverageLoadablePluginOrigins(batch),
+      });
+      for (const [index, entry] of batch.entries()) {
+        const resolved = getPath(
+          snapshot.config,
+          resolveCoverageResolvedSegments(entry, resolveCoverageWildcardToken(index)),
         );
+        expect(resolved).toBe(`resolved-${entry.id}`);
       }
     }
   });
 
   it("handles every auth-profiles registry target", async () => {
-    const entries = listSecretTargetRegistryEntries().filter(
+    const entries = COVERAGE_REGISTRY_ENTRIES.filter(
       (entry) => entry.configFile === "auth-profiles.json",
     );
-    const env: Record<string, string> = {};
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {},
-    };
-    for (const [index, entry] of entries.entries()) {
-      const envId = `OPENCLAW_AUTH_SECRET_TARGET_${index}`;
-      env[envId] = `resolved-${entry.id}`;
-      applyAuthStoreTarget(authStore, entry, envId, resolveCoverageWildcardToken(index));
-    }
-    const snapshot = await prepareCoverageSnapshot({
-      config: {} as OpenClawConfig,
-      env,
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => authStore,
-    });
-    const resolvedStore = snapshot.authStores[0]?.store;
-    expect(resolvedStore).toBeDefined();
-    for (const [index, entry] of entries.entries()) {
-      const resolved = getPath(
-        resolvedStore,
-        toConcretePathSegments(entry.pathPattern, resolveCoverageWildcardToken(index)),
-      );
-      expect(resolved).toBe(`resolved-${entry.id}`);
+    for (const batch of buildCoverageBatches(entries)) {
+      const env: Record<string, string> = {};
+      const authStore: AuthProfileStore = {
+        version: 1,
+        profiles: {},
+      };
+      for (const [index, entry] of batch.entries()) {
+        const envId = `OPENCLAW_AUTH_SECRET_TARGET_${entry.id}`;
+        env[envId] = `resolved-${entry.id}`;
+        applyAuthStoreTarget(authStore, entry, envId, resolveCoverageWildcardToken(index));
+      }
+      const snapshot = await prepareCoverageSnapshot({
+        config: {} as OpenClawConfig,
+        env,
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => authStore,
+      });
+      const resolvedStore = snapshot.authStores[0]?.store;
+      expect(resolvedStore).toBeDefined();
+      for (const [index, entry] of batch.entries()) {
+        const resolved = getPath(
+          resolvedStore,
+          toConcretePathSegments(entry.pathPattern, resolveCoverageWildcardToken(index)),
+        );
+        expect(resolved).toBe(`resolved-${entry.id}`);
+      }
     }
   });
 });
