@@ -1,15 +1,9 @@
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { routeReply } from "../auto-reply/reply/route-reply.js";
 import { loadCombinedSessionStoreForGateway } from "../gateway/session-utils.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
-import {
-  type ExecHost,
-  loadExecApprovals,
-  maxAsk,
-  minSecurity,
-  resolveExecApprovalsFromFile,
-} from "../infra/exec-approvals.js";
+import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { SafeOpenError, readFileWithinRoot } from "../infra/fs-safe.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
@@ -19,6 +13,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo, logWarn } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { runRubberBandCheck } from "../security/rubberband.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
