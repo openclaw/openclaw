@@ -206,15 +206,79 @@ function Install-OpenClawNpm {
     
     Write-Host "Installing OpenClaw ($installSpec)..." -Level info
     
+    # First attempt: standard install with SSL verification enabled (default/safe)
+    # Wrapped in try/catch so CommandNotFoundException (npm not on PATH) returns
+    # false cleanly instead of aborting the script with a terminating error.
     try {
-        # Use -ExecutionPolicy Bypass to handle restricted execution policy
-        npm install -g $installSpec --no-fund --no-audit 2>&1
-        Write-Host "OpenClaw installed" -Level success
-        return $true
+        $output = npm install -g $installSpec --no-fund --no-audit 2>&1
+        $exitCode = $LASTEXITCODE
     } catch {
-        Write-Host "npm install failed: $_" -Level error
+        Write-Host "npm not found or failed to launch: $_" -Level error
         return $false
     }
+
+    if ($exitCode -eq 0) {
+        Write-Host "OpenClaw installed" -Level success
+        return $true
+    }
+
+    # Check if failure is caused by a TLS certificate verification error
+    # This can happen on Windows when corporate proxies or outdated root CAs
+    # cause UNABLE_TO_VERIFY_LEAF_SIGNATURE or CERT_UNTRUSTED errors.
+    $outputStr = $output -join "`n"
+    $tlsError = $outputStr -match "UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_UNTRUSTED|SELF_SIGNED_CERT|unable to verify the first certificate"
+
+    if ($tlsError) {
+        Write-Host "" -Level info
+        Write-Host "TLS certificate verification failed during npm install." -Level warn
+        Write-Host "This is common on Windows when a corporate proxy or outdated root CA" -Level warn
+        Write-Host "intercepts HTTPS traffic." -Level warn
+        Write-Host "" -Level info
+        Write-Host "NOTE: --strict-ssl=false disables SSL certificate verification for this" -Level warn
+        Write-Host "install only. Ensure you trust your network before proceeding." -Level warn
+        Write-Host "" -Level info
+
+        # Detect non-interactive environments (CI, automation, -NonInteractive flag).
+        # In those contexts Read-Host raises a terminating error, so we skip the
+        # prompt and abort with guidance instead of hanging or crashing.
+        $isInteractive = [Environment]::UserInteractive -and
+                         -not ([Console]::IsInputRedirected) -and
+                         ($Host.UI.RawUI -ne $null)
+        if (-not $isInteractive) {
+            Write-Host "Non-interactive environment detected. Aborting TLS fallback." -Level error
+            Write-Host "To install in CI with a corporate proxy, set npm cafile or pass --strict-ssl=false explicitly." -Level info
+            return $false
+        }
+
+        $response = Read-Host "Retry installation with --strict-ssl=false? [y/N]"
+        if ($response -notmatch '^[Yy]$') {
+            Write-Host "Aborted. To fix permanently, update your root CA certificates or run: npm config set cafile <path-to-ca-bundle.pem>" -Level info
+            return $false
+        }
+
+        try {
+            $retryOutput = npm install -g $installSpec --no-fund --no-audit --strict-ssl=false 2>&1
+            $retryExitCode = $LASTEXITCODE
+        } catch {
+            Write-Host "npm not found or failed to launch during retry: $_" -Level error
+            return $false
+        }
+
+        if ($retryExitCode -eq 0) {
+            Write-Host "OpenClaw installed (TLS fallback used)" -Level success
+            Write-Host "" -Level info
+            Write-Host "To avoid this warning in future, update your system's root CA certificates" -Level info
+            Write-Host "or configure npm to use your corporate CA:" -Level info
+            Write-Host "  npm config set cafile <path-to-your-ca-bundle.pem>" -Level info
+            return $true
+        }
+
+        Write-Host "npm install failed even with --strict-ssl=false:`n$($retryOutput -join `"`n`")" -Level error
+        return $false
+    }
+
+    Write-Host "npm install failed:`n$($output -join `"`n`")" -Level error
+    return $false
 }
 
 function Install-OpenClawGit {
