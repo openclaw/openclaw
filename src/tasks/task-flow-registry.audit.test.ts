@@ -184,6 +184,78 @@ describe("task-flow-registry audit", () => {
     });
   });
 
+  it("reuses linked-task lifecycle evidence in stale waiting and blocked details", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const waitingFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Wait on child evidence",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      const waitingChild = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: waitingFlow.flowId,
+        childSessionKey: "agent:main:subagent:waiting-child-missing",
+        runId: "task-flow-audit-waiting-child",
+        task: "Wait on child result",
+        startedAt: 1,
+        lastEventAt: 1,
+      });
+      setFlowWaiting({
+        flowId: waitingFlow.flowId,
+        expectedRevision: waitingFlow.revision,
+        waitJson: { kind: "task", taskId: waitingChild.taskId },
+        updatedAt: 1,
+      });
+
+      const blockedFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Block on child evidence",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      const blockedChild = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: blockedFlow.flowId,
+        childSessionKey: "agent:main:subagent:blocked-child-missing",
+        runId: "task-flow-audit-blocked-child",
+        task: "Blocked child result",
+        startedAt: 1,
+        lastEventAt: 1,
+      });
+      setFlowWaiting({
+        flowId: blockedFlow.flowId,
+        expectedRevision: blockedFlow.revision,
+        blockedTaskId: blockedChild.taskId,
+        updatedAt: 1,
+      });
+
+      const findings = listTaskFlowAuditFindings({ now: 31 * 60_000 });
+      expect(findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "stale_waiting",
+            flow: expect.objectContaining({ flowId: waitingFlow.flowId }),
+            detail: `waiting TaskFlow has not advanced recently; waiting on task ${waitingChild.taskId}: Backing session is missing; task may be orphaned.`,
+          }),
+          expect.objectContaining({
+            code: "stale_blocked",
+            flow: expect.objectContaining({ flowId: blockedFlow.flowId }),
+            detail: `blocked TaskFlow has not advanced recently; blocked on task ${blockedChild.taskId}: Backing session is missing; task may be orphaned.`,
+          }),
+        ]),
+      );
+    });
+  });
+
   it("does not flag missing linked tasks before the flow is stale", async () => {
     await withTaskFlowAuditStateDir(async () => {
       const now = Date.now();

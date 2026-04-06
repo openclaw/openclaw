@@ -9,6 +9,7 @@ import { completeTaskRunByRunId, createRunningTaskRun } from "../tasks/task-exec
 import {
   createManagedTaskFlow,
   resetTaskFlowRegistryForTests,
+  setFlowWaiting,
 } from "../tasks/task-flow-registry.js";
 import {
   resetTaskRegistryDeliveryRuntimeForTests,
@@ -156,6 +157,51 @@ describe("tasks commands", () => {
           ]),
         },
       });
+    });
+  });
+
+  it("shows linked-task lifecycle evidence in tasks audit text output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 40 * 60_000);
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/tasks-command",
+        goal: "Wait on child evidence",
+        status: "running",
+        createdAt: now - 40 * 60_000,
+        updatedAt: now - 40 * 60_000,
+      });
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:tasks-audit-child-missing",
+        runId: "task-audit-child-missing",
+        task: "Wait for child result",
+        startedAt: now - 40 * 60_000,
+        lastEventAt: now - 40 * 60_000,
+      });
+      setFlowWaiting({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        waitJson: { kind: "task", taskId: child.taskId },
+        updatedAt: now - 40 * 60_000,
+      });
+      vi.setSystemTime(now);
+
+      const runtime = createRuntime();
+      await tasksAuditCommand({ code: "stale_waiting" }, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n");
+      expect(output).toContain("stale_waiting");
+      expect(output).toContain(`waiting on task ${child.taskId}`);
+      expect(output).toContain("Backing session is missing; task may be orphaned.");
     });
   });
 

@@ -204,7 +204,7 @@ function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
         shortToken(finding.token).padEnd(ID_PAD),
         status,
         formatAgeMs(finding.ageMs).padEnd(8),
-        truncate(finding.detail, 88),
+        truncate(finding.detail, 160),
       ]
         .join(" ")
         .trimEnd(),

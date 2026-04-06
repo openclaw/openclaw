@@ -54,16 +54,18 @@ function createFinding(params: {
   detail: string;
   ageMs?: number;
   flow?: TaskFlowRecord;
+  lifecycleReason?: LifecycleStatusReason;
 }): TaskFlowAuditFinding {
+  const lifecycleReason =
+    params.lifecycleReason ??
+    (params.flow ? resolveTaskFlowLifecycleStatusReason({ flow: params.flow }) : undefined);
   return {
     severity: params.severity,
     code: params.code,
     detail: params.detail,
     ...(typeof params.ageMs === "number" ? { ageMs: params.ageMs } : {}),
     ...(params.flow ? { flow: params.flow } : {}),
-    ...(params.flow
-      ? { lifecycleReason: resolveTaskFlowLifecycleStatusReason({ flow: params.flow }) }
-      : {}),
+    ...(lifecycleReason ? { lifecycleReason } : {}),
   };
 }
 
@@ -96,6 +98,71 @@ function hasBlockingMetadata(flow: TaskFlowRecord): boolean {
   return Boolean(
     flow.blockedTaskId?.trim() || flow.blockedSummary?.trim() || flow.waitJson != null,
   );
+}
+
+function normalizeTaskId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function getLinkedTaskLifecycleEvidence(
+  reason: LifecycleStatusReason | undefined,
+  relation: "blocked_task" | "wait_task",
+): { summary: string; taskId?: string } | undefined {
+  for (const entry of reason?.evidence ?? []) {
+    if (entry.kind !== "linked_task_reason" || !entry.summary) {
+      continue;
+    }
+    const data = entry.data;
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      continue;
+    }
+    if ((data as { relation?: unknown }).relation !== relation) {
+      continue;
+    }
+    const taskId = normalizeTaskId(
+      typeof (data as { taskId?: unknown }).taskId === "string"
+        ? ((data as { taskId?: unknown }).taskId as string)
+        : undefined,
+    );
+    return {
+      summary: entry.summary,
+      ...(taskId ? { taskId } : {}),
+    };
+  }
+  return undefined;
+}
+
+const GENERIC_FLOW_REASON_SUMMARIES = new Set([
+  "Flow is waiting.",
+  "Flow is blocked.",
+  "Flow is running.",
+]);
+
+function buildStaleFlowDetail(
+  status: Extract<TaskFlowRecord["status"], "running" | "waiting" | "blocked">,
+  lifecycleReason: LifecycleStatusReason | undefined,
+): string {
+  const base = `${status} TaskFlow has not advanced recently`;
+  if (status === "waiting") {
+    const linkedEvidence = getLinkedTaskLifecycleEvidence(lifecycleReason, "wait_task");
+    if (linkedEvidence) {
+      const subject = linkedEvidence.taskId ? `task ${linkedEvidence.taskId}` : "linked task";
+      return `${base}; waiting on ${subject}: ${linkedEvidence.summary}`;
+    }
+  }
+  if (status === "blocked") {
+    const linkedEvidence = getLinkedTaskLifecycleEvidence(lifecycleReason, "blocked_task");
+    if (linkedEvidence) {
+      const subject = linkedEvidence.taskId ? `task ${linkedEvidence.taskId}` : "linked task";
+      return `${base}; blocked on ${subject}: ${linkedEvidence.summary}`;
+    }
+  }
+  const summary = lifecycleReason?.summary?.trim();
+  if (summary && !GENERIC_FLOW_REASON_SUMMARIES.has(summary)) {
+    return `${base}; ${summary}`;
+  }
+  return base;
 }
 
 function findTimestampInconsistency(flow: TaskFlowRecord): TaskFlowAuditFinding | null {
@@ -173,6 +240,7 @@ export function listTaskFlowAuditFindings(
     const activeTasks = linkedTasks.filter(
       (task) => task.status === "queued" || task.status === "running",
     );
+    const lifecycleReason = resolveTaskFlowLifecycleStatusReason({ flow });
 
     if (flow.status === "running" && ageMs >= staleRunningMs) {
       findings.push(
@@ -181,7 +249,8 @@ export function listTaskFlowAuditFindings(
           code: "stale_running",
           flow,
           ageMs,
-          detail: "running TaskFlow has not advanced recently",
+          lifecycleReason,
+          detail: buildStaleFlowDetail(flow.status, lifecycleReason),
         }),
       );
     }
@@ -193,7 +262,8 @@ export function listTaskFlowAuditFindings(
           code: "stale_waiting",
           flow,
           ageMs,
-          detail: "waiting TaskFlow has not advanced recently",
+          lifecycleReason,
+          detail: buildStaleFlowDetail(flow.status, lifecycleReason),
         }),
       );
     }
@@ -205,7 +275,8 @@ export function listTaskFlowAuditFindings(
           code: "stale_blocked",
           flow,
           ageMs,
-          detail: "blocked TaskFlow has not advanced recently",
+          lifecycleReason,
+          detail: buildStaleFlowDetail(flow.status, lifecycleReason),
         }),
       );
     }
@@ -225,6 +296,7 @@ export function listTaskFlowAuditFindings(
           code: "cancel_stuck",
           flow,
           ageMs: Math.max(0, now - flow.cancelRequestedAt),
+          lifecycleReason,
           detail: "cancel-requested TaskFlow has no active child tasks but is still nonterminal",
         }),
       );
@@ -248,6 +320,7 @@ export function listTaskFlowAuditFindings(
           code: "missing_linked_tasks",
           flow,
           ageMs,
+          lifecycleReason,
           detail: "managed TaskFlow has no linked tasks or wait state",
         }),
       );
@@ -262,6 +335,7 @@ export function listTaskFlowAuditFindings(
             code: "blocked_task_missing",
             flow,
             ageMs,
+            lifecycleReason,
             detail: `blocked TaskFlow points at missing task ${blockedTaskId}`,
           }),
         );
