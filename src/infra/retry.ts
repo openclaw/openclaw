@@ -72,7 +72,7 @@ function applyJitter(delayMs: number, jitter: number): number {
  * Detect rate-limit-like errors by inspecting HTTP status codes on the error
  * object itself or nested under `response.status` / `response.statusCode`.
  */
-function isRateLimitLikeError(err: unknown): boolean {
+export function isRateLimitLikeError(err: unknown): boolean {
   if (!err) {
     return false;
   }
@@ -112,11 +112,88 @@ function isRateLimitLikeError(err: unknown): boolean {
   );
 }
 
+/**
+ * Parse an RFC 7231 HTTP-date string to a Unix timestamp in ms.
+ * Supports all three IMF-fixdate, RFC-850, and asctime formats.
+ */
+function parseHttpDate(value: string): number | undefined {
+  if (!value || typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+
+  // IMF-fixdate  = day-name "," SP date1 SP time-of-day SP GMT
+  // e.g. "Sat, 05 Apr 2025 12:00:05 GMT"
+  const IMF_RE =
+    /^[A-Z][a-z]{2},?\s+(\d{1,2})\s+([A-Z][a-z]{2})\s+(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\s+GMT$/i;
+  const imfMatch = IMF_RE.exec(trimmed);
+  if (imfMatch) {
+    const [, day, monthStr, year, hour, minute, second] = imfMatch;
+    const monthIdx = MONTH_MAP[monthStr.toLowerCase() as Lowercase<string>];
+    if (monthIdx === undefined) {
+      return undefined;
+    }
+    const d = new Date(Date.UTC(+year, monthIdx, +day, +hour, +minute, +second));
+    return Number.isFinite(d.getTime()) ? d.getTime() : undefined;
+  }
+
+  // RFC-850    = day-name "," SP date2 SP time-of-day SP GMT
+  // e.g. "Saturday, 05-Apr-25 12:00:05 GMT"
+  const RFC850_RE =
+    /^[A-Z][a-z]+,?\s+(\d{1,2})-([A-Z][a-z]{2})-(\d{2,4})\s+(\d{2}):(\d{2}):(\d{2})\s+GMT$/i;
+  const rfc850Match = RFC850_RE.exec(trimmed);
+  if (rfc850Match) {
+    const [, day, monthStr, yearStr, hour, minute, second] = rfc850Match;
+    const monthIdx = MONTH_MAP[monthStr.toLowerCase() as Lowercase<string>];
+    if (monthIdx === undefined) {
+      return undefined;
+    }
+    let year = +yearStr;
+    if (year < 100) {
+      year += year < 70 ? 2000 : 1900;
+    }
+    const d = new Date(Date.UTC(year, monthIdx, +day, +hour, +minute, +second));
+    return Number.isFinite(d.getTime()) ? d.getTime() : undefined;
+  }
+
+  // asctime    = day-name SP date3 SP time-of-day SP year
+  // e.g. "Sat Apr  5 12:00:05 2025"
+  const ASCTIME_RE =
+    /^[A-Z][a-z]{2}\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})$/i;
+  const asctimeMatch = ASCTIME_RE.exec(trimmed);
+  if (asctimeMatch) {
+    const [, monthStr, day, hour, minute, second, year] = asctimeMatch;
+    const monthIdx = MONTH_MAP[monthStr.toLowerCase() as Lowercase<string>];
+    if (monthIdx === undefined) {
+      return undefined;
+    }
+    const d = new Date(Date.UTC(+year, monthIdx, +day, +hour, +minute, +second));
+    return Number.isFinite(d.getTime()) ? d.getTime() : undefined;
+  }
+
+  return undefined;
+}
+
+const MONTH_MAP: Record<string, number> = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+} as const;
+
 const RETRY_AFTER_MESSAGE_RE =
   /retry[\s_-]*after[\s:=]*(\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|sec(?:onds?)?|m|min(?:utes?)?)?/i;
 const RETRY_AFTER_MS_KEY_RE = /retry[\s_-]*after[\s_-]*ms[\s:=]*(\d+(?:\.\d+)?)/i;
 
-function parseRetryAfterFromMessage(message: string): number | undefined {
+export function parseRetryAfterFromMessage(message: string): number | undefined {
   const msMatch = RETRY_AFTER_MS_KEY_RE.exec(message);
   if (msMatch) {
     const ms = Number(msMatch[1]);
@@ -150,7 +227,7 @@ function parseRetryAfterFromMessage(message: string): number | undefined {
  *   3. `headers['retry-after']` on the error or nested `response.headers`
  *   4. Regex match in `err.message` (e.g. "retry after 3 seconds")
  */
-function extractRetryAfterMsFromError(err: unknown): number | undefined {
+export function extractRetryAfterMsFromError(err: unknown): number | undefined {
   if (!err || !isRateLimitLikeError(err)) {
     return undefined;
   }
@@ -196,10 +273,10 @@ function extractRetryAfterMsFromError(err: unknown): number | undefined {
     if (Number.isFinite(headerNum) && headerNum >= 0) {
       return Math.round(headerNum * 1000);
     }
-    // Handle HTTP-date format (e.g. "Sat, 05 Apr 2025 12:00:00 GMT")
-    const parsedDate = Date.parse(headerValue);
-    if (Number.isFinite(parsedDate)) {
-      const deltaMs = parsedDate - Date.now();
+    // Handle HTTP-date format (RFC 7231)
+    const httpDateMs = parseHttpDate(headerValue);
+    if (httpDateMs !== undefined) {
+      const deltaMs = httpDateMs - Date.now();
       if (deltaMs >= 0) {
         return Math.round(deltaMs);
       }

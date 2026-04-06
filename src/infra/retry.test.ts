@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveRetryConfig, retryAsync } from "./retry.js";
+import {
+  extractRetryAfterMsFromError,
+  isRateLimitLikeError,
+  parseRetryAfterFromMessage,
+  resolveRetryConfig,
+  retryAsync,
+} from "./retry.js";
 
 const randomMocks = vi.hoisted(() => ({
   generateSecureFraction: vi.fn(),
@@ -411,5 +417,255 @@ describe("retry-after inference", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ─── isRateLimitLikeError unit tests ──────────────────────────────────────────
+
+describe("isRateLimitLikeError", () => {
+  it("returns true for error with status 429", () => {
+    expect(isRateLimitLikeError({ status: 429 })).toBe(true);
+  });
+
+  it("returns true for error with statusCode 429", () => {
+    expect(isRateLimitLikeError({ statusCode: 429 })).toBe(true);
+  });
+
+  it("returns true for error with response.status 429", () => {
+    expect(isRateLimitLikeError({ response: { status: 429 } })).toBe(true);
+  });
+
+  it("returns true for error with response.statusCode 429", () => {
+    expect(isRateLimitLikeError({ response: { statusCode: "429" } })).toBe(true);
+  });
+
+  it("returns false for error with status 200", () => {
+    expect(isRateLimitLikeError({ status: 200 })).toBe(false);
+  });
+
+  it("returns false for error with response.status 500", () => {
+    expect(isRateLimitLikeError({ response: { status: 500 } })).toBe(false);
+  });
+
+  it("returns true for error with code RESOURCE_EXHAUSTED", () => {
+    expect(isRateLimitLikeError({ code: "RESOURCE_EXHAUSTED" })).toBe(true);
+  });
+
+  it("returns true for error with code THROTTLING_EXCEPTION", () => {
+    expect(isRateLimitLikeError({ code: "THROTTLING_EXCEPTION" })).toBe(true);
+  });
+
+  it("returns true for error with code ERATELIMIT", () => {
+    expect(isRateLimitLikeError({ code: "ERATELIMIT" })).toBe(true);
+  });
+
+  it("returns true for error with code TOO_MANY_REQUESTS", () => {
+    expect(isRateLimitLikeError({ code: "TOO_MANY_REQUESTS" })).toBe(true);
+  });
+
+  it("returns true for error with lowercase code", () => {
+    expect(isRateLimitLikeError({ code: "resource_exhausted" })).toBe(true);
+  });
+
+  it("returns true for error with message containing 'rate limit'", () => {
+    expect(isRateLimitLikeError({ message: "you have exceeded the rate limit" })).toBe(true);
+  });
+
+  it("returns true for error with message containing '429'", () => {
+    expect(isRateLimitLikeError({ message: "error 429 too many requests" })).toBe(true);
+  });
+
+  it("returns false for null", () => {
+    expect(isRateLimitLikeError(null)).toBe(false);
+  });
+
+  it("returns false for undefined", () => {
+    expect(isRateLimitLikeError(undefined)).toBe(false);
+  });
+
+  it("returns false for a plain error without rate-limit signals", () => {
+    expect(isRateLimitLikeError(new Error("something went wrong"))).toBe(false);
+  });
+});
+
+// ─── parseRetryAfterFromMessage unit tests ────────────────────────────────────
+
+describe("parseRetryAfterFromMessage", () => {
+  it("parses plain seconds", () => {
+    expect(parseRetryAfterFromMessage("retry after 3")).toBe(3000);
+  });
+
+  it("parses seconds with 's' unit", () => {
+    expect(parseRetryAfterFromMessage("retry after 5s")).toBe(5000);
+  });
+
+  it("parses seconds with 'sec' unit", () => {
+    expect(parseRetryAfterFromMessage("retry after 10sec")).toBe(10_000);
+  });
+
+  it("parses seconds with 'seconds' unit", () => {
+    expect(parseRetryAfterFromMessage("retry after 4 seconds")).toBe(4000);
+  });
+
+  it("parses milliseconds with 'ms' unit", () => {
+    expect(parseRetryAfterFromMessage("retry-after: 500ms")).toBe(500);
+  });
+
+  it("parses milliseconds with 'milliseconds' unit", () => {
+    expect(parseRetryAfterFromMessage("retry-after: 200 milliseconds")).toBe(200);
+  });
+
+  it("parses minutes with 'm' unit", () => {
+    expect(parseRetryAfterFromMessage("retry after 2m")).toBe(120_000);
+  });
+
+  it("parses minutes with 'min' unit", () => {
+    expect(parseRetryAfterFromMessage("retry after 3 min")).toBe(180_000);
+  });
+
+  it("parses minutes with 'minutes' unit", () => {
+    expect(parseRetryAfterFromMessage("retry after 1 minutes")).toBe(60_000);
+  });
+
+  it("parses retry-after-ms key", () => {
+    expect(parseRetryAfterFromMessage("retry-after-ms: 1234")).toBe(1234);
+  });
+
+  it("parses retry_after_ms key with colon", () => {
+    expect(parseRetryAfterFromMessage("retry_after_ms: 999")).toBe(999);
+  });
+
+  it("returns undefined when no delay info in message", () => {
+    expect(parseRetryAfterFromMessage("something went wrong")).toBeUndefined();
+  });
+
+  it("handles decimal values", () => {
+    expect(parseRetryAfterFromMessage("retry after 1.5s")).toBe(1500);
+  });
+
+  it("is case-insensitive", () => {
+    expect(parseRetryAfterFromMessage("RETRY AFTER 2 SEC")).toBe(2000);
+  });
+});
+
+// ─── extractRetryAfterMsFromError unit tests ──────────────────────────────────
+
+describe("extractRetryAfterMsFromError", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns undefined for non-rate-limit error", () => {
+    const err = new Error("boom");
+    expect(extractRetryAfterMsFromError(err)).toBeUndefined();
+  });
+
+  it("extracts retryAfterMs (milliseconds) from status 429 error", () => {
+    const err = { status: 429, retryAfterMs: 1500 };
+    expect(extractRetryAfterMsFromError(err)).toBe(1500);
+  });
+
+  it("extracts retryAfter (seconds) from status 429 error", () => {
+    const err = { status: 429, retryAfter: 5 };
+    expect(extractRetryAfterMsFromError(err)).toBe(5000);
+  });
+
+  it("extracts retryAfter from string value (seconds)", () => {
+    const err = { status: 429, retryAfter: "10" };
+    expect(extractRetryAfterMsFromError(err)).toBe(10_000);
+  });
+
+  it("extracts plain headers['retry-after'] (seconds) from error", () => {
+    const err = { status: 429, headers: { "retry-after": "3" } };
+    expect(extractRetryAfterMsFromError(err)).toBe(3000);
+  });
+
+  it("extracts plain headers['retry-after'] (milliseconds) via retry-after-ms key in message", () => {
+    const err = { status: 429, message: "rate limit hit. retry-after-ms: 700" };
+    expect(extractRetryAfterMsFromError(err)).toBe(700);
+  });
+
+  it("extracts from response.headers['retry-after']", () => {
+    const err = { response: { status: 429, headers: { "retry-after": "2" } } };
+    expect(extractRetryAfterMsFromError(err)).toBe(2000);
+  });
+
+  it("extracts from headers with Headers.get() interface", () => {
+    const headers = new Map([["retry-after", "4"]]);
+    const err = { status: 429, headers: { get: (k: string) => headers.get(k) } };
+    expect(extractRetryAfterMsFromError(err)).toBe(4000);
+  });
+
+  it("extracts retryAfterMs over retryAfter (priority)", () => {
+    const err = { status: 429, retryAfterMs: 100, retryAfter: 999 };
+    expect(extractRetryAfterMsFromError(err)).toBe(100);
+  });
+
+  it("extracts retryAfter over headers (priority)", () => {
+    const err = { status: 429, retryAfter: 5, headers: { "retry-after": "999" } };
+    expect(extractRetryAfterMsFromError(err)).toBe(5000);
+  });
+
+  describe("HTTP-date format", () => {
+    it("parses IMF-fixdate format from headers", () => {
+      const fakeNow = new Date("2025-04-05T12:00:00Z").getTime();
+      vi.setSystemTime(fakeNow);
+      const err = {
+        status: 429,
+        headers: { "retry-after": "Sat, 05 Apr 2025 12:00:05 GMT" },
+      };
+      expect(extractRetryAfterMsFromError(err)).toBe(5000);
+    });
+
+    it("parses RFC-850 format from headers", () => {
+      const fakeNow = new Date("2025-04-05T12:00:00Z").getTime();
+      vi.setSystemTime(fakeNow);
+      const err = {
+        status: 429,
+        headers: { "retry-after": "Saturday, 05-Apr-25 12:00:05 GMT" },
+      };
+      expect(extractRetryAfterMsFromError(err)).toBe(5000);
+    });
+
+    it("parses asctime format from headers", () => {
+      const fakeNow = new Date("2025-04-05T12:00:00Z").getTime();
+      vi.setSystemTime(fakeNow);
+      const err = {
+        status: 429,
+        headers: { "retry-after": "Sat Apr  5 12:00:05 2025" },
+      };
+      expect(extractRetryAfterMsFromError(err)).toBe(5000);
+    });
+
+    it("returns undefined for past HTTP-date", () => {
+      const fakeNow = new Date("2025-04-05T12:00:00Z").getTime();
+      vi.setSystemTime(fakeNow);
+      const err = {
+        status: 429,
+        headers: { "retry-after": "Sat, 05 Apr 2025 11:59:59 GMT" },
+      };
+      expect(extractRetryAfterMsFromError(err)).toBeUndefined();
+    });
+  });
+
+  it("extracts from message regex as fallback", () => {
+    const err = { status: 429, message: "please retry after 7 seconds" };
+    expect(extractRetryAfterMsFromError(err)).toBe(7000);
+  });
+
+  it("returns undefined when no retry info is present", () => {
+    const err = { status: 429 };
+    expect(extractRetryAfterMsFromError(err)).toBeUndefined();
+  });
+
+  it("returns undefined for null", () => {
+    expect(extractRetryAfterMsFromError(null)).toBeUndefined();
+  });
+
+  it("returns undefined for undefined", () => {
+    expect(extractRetryAfterMsFromError(undefined)).toBeUndefined();
   });
 });
