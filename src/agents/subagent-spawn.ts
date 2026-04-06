@@ -252,7 +252,7 @@ async function cleanupProvisionalSession(
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
       },
-      timeoutMs: 10_000,
+      timeoutMs: startupWaitTimeoutMs,
     });
   } catch {
     // Best-effort cleanup only.
