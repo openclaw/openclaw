@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 
 export type SearchImpl = () => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
@@ -7,6 +6,7 @@ export type MemoryReadResult = { text: string; path: string };
 type MemoryBackend = "builtin" | "qmd";
 
 let backend: MemoryBackend = "builtin";
+let workspaceDir = "/workspace";
 let searchImpl: SearchImpl = async () => [];
 let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
   text: "",
@@ -21,7 +21,7 @@ const stubManager = {
     files: 1,
     chunks: 1,
     dirty: false,
-    workspaceDir: "/workspace",
+    workspaceDir,
     dbPath: "/workspace/.memory/index.sqlite",
     provider: "builtin",
     model: "builtin",
@@ -39,22 +39,16 @@ const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
 
-const memoryIndexModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "memory-core",
-  artifactBasename: "src/memory/index.js",
-});
-const memoryToolsRuntimeModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "memory-core",
-  artifactBasename: "src/tools.runtime.js",
-});
+const { memoryIndexModuleId, memoryToolsRuntimeModuleId } = vi.hoisted(() => ({
+  memoryIndexModuleId: "../../extensions/memory-core/src/memory/index.js",
+  memoryToolsRuntimeModuleId: "../../extensions/memory-core/src/tools.runtime.js",
+}));
 
 vi.mock(memoryIndexModuleId, () => ({
   getMemorySearchManager: getMemorySearchManagerMock,
 }));
 
-vi.mock("../../packages/memory-host-sdk/src/host/read-file.js", () => ({
+vi.mock("../../src/memory-host-sdk/host/read-file.js", () => ({
   readAgentMemoryFile: readAgentMemoryFileMock,
 }));
 
@@ -75,6 +69,10 @@ export function setMemoryBackend(next: MemoryBackend): void {
   backend = next;
 }
 
+export function setMemoryWorkspaceDir(next: string): void {
+  workspaceDir = next;
+}
+
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
@@ -91,6 +89,7 @@ export function resetMemoryToolMockState(overrides?: {
   readFileImpl?: (params: MemoryReadParams) => Promise<MemoryReadResult>;
 }): void {
   backend = overrides?.backend ?? "builtin";
+  workspaceDir = "/workspace";
   searchImpl = overrides?.searchImpl ?? (async () => []);
   readFileImpl =
     overrides?.readFileImpl ??

@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
+import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { __test__, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const { mapSensitivePaths } = __test__;
+const { collectMatchingSchemaPaths, mapSensitivePaths } = __test__;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
   "channels.bluebubbles",
   "channels.discord",
@@ -46,6 +47,8 @@ describe("isSensitiveConfigPath", () => {
     expect(isSensitiveConfigPath("channels.irc.nickserv.password")).toBe(true);
     expect(isSensitiveConfigPath("channels.feishu.encryptKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.feishu.accounts.default.encryptKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.nostr.privateKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.nostr.accounts.default.privateKey")).toBe(true);
   });
 });
 
@@ -165,6 +168,8 @@ describe("mapSensitivePaths", () => {
     expect(hints["agents.list[].memorySearch.remote.apiKey"]?.sensitive).toBe(true);
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.request.headers.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.request.proxy.tls.cert"]?.sensitive).toBe(true);
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
   });
 
@@ -181,5 +186,16 @@ describe("mapSensitivePaths", () => {
     expect(hints["encryptKey"]?.sensitive).toBe(true);
     expect(hints["appSecret"]?.sensitive).toBe(true);
     expect(hints["nested.verificationToken"]?.sensitive).toBe(true);
+  });
+});
+
+describe("collectMatchingSchemaPaths", () => {
+  it("finds base-config URL fields that may embed secrets", () => {
+    const paths = collectMatchingSchemaPaths(OpenClawSchema, "", isSensitiveUrlConfigPath);
+
+    expect(paths.has("mcp.servers.*.url")).toBe(true);
+    expect(paths.has("models.providers.*.baseUrl")).toBe(true);
+    expect(paths.has("models.providers.*.request.proxy.url")).toBe(true);
+    expect(paths.has("tools.media.audio.request.proxy.url")).toBe(true);
   });
 });

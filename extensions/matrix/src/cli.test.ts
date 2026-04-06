@@ -1,6 +1,7 @@
 import { Command } from "commander";
+import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatZonedTimestamp } from "../runtime-api.js";
+import { registerMatrixCli, resetMatrixCliStateForTests } from "./cli.js";
 
 const bootstrapMatrixVerificationMock = vi.fn();
 const getMatrixRoomKeyBackupStatusMock = vi.fn();
@@ -72,8 +73,6 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-let registerMatrixCli: typeof import("./cli.js").registerMatrixCli;
-
 function buildProgram(): Command {
   const program = new Command();
   registerMatrixCli({ program });
@@ -112,9 +111,8 @@ function mockMatrixVerificationStatus(params: {
 }
 
 describe("matrix CLI verification commands", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ registerMatrixCli } = await import("./cli.js"));
+  beforeEach(() => {
+    resetMatrixCliStateForTests();
     vi.clearAllMocks();
     process.exitCode = undefined;
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => consoleLogMock(...args));
@@ -609,6 +607,49 @@ describe("matrix CLI verification commands", () => {
     );
   });
 
+  it("forwards --avatar-url through account add setup and profile sync", async () => {
+    matrixRuntimeLoadConfigMock.mockReturnValue({ channels: {} });
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "matrix",
+        "account",
+        "add",
+        "--name",
+        "Ops Bot",
+        "--homeserver",
+        "https://matrix.example.org",
+        "--access-token",
+        "ops-token",
+        "--avatar-url",
+        "mxc://example/ops-avatar",
+      ],
+      { from: "user" },
+    );
+
+    expect(matrixSetupApplyAccountConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "ops-bot",
+        input: expect.objectContaining({
+          name: "Ops Bot",
+          homeserver: "https://matrix.example.org",
+          accessToken: "ops-token",
+          avatarUrl: "mxc://example/ops-avatar",
+        }),
+      }),
+    );
+    expect(updateMatrixOwnProfileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "ops-bot",
+        displayName: "Ops Bot",
+        avatarUrl: "mxc://example/ops-avatar",
+      }),
+    );
+    expect(console.log).toHaveBeenCalledWith("Saved matrix account: ops-bot");
+    expect(console.log).toHaveBeenCalledWith("Config path: channels.matrix.accounts.ops-bot");
+  });
+
   it("sets profile name and avatar via profile set command", async () => {
     const program = buildProgram();
 
@@ -872,7 +913,7 @@ describe("matrix CLI verification commands", () => {
     await program.parseAsync(["matrix", "verify", "status"], { from: "user" });
 
     expect(console.log).toHaveBeenCalledWith(
-      "- If you want a fresh backup baseline and accept losing unrecoverable history, run 'openclaw matrix verify backup reset --yes'.",
+      "- If you want a fresh backup baseline and accept losing unrecoverable history, run 'openclaw matrix verify backup reset --yes'. This may also repair secret storage so the new backup key can be loaded after restart.",
     );
   });
 

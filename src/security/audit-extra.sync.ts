@@ -23,8 +23,7 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
-import { resolveBrowserConfig } from "../plugin-sdk/browser-runtime.js";
-import { hasBundledWebSearchCredential } from "../plugins/bundled-web-search-registry.js";
+import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
@@ -327,7 +326,12 @@ function resolveToolPolicies(params: {
 }
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return hasBundledWebSearchCredential({ config: cfg, env });
+  return hasConfiguredWebSearchCredential({
+    config: cfg,
+    env,
+    origin: "bundled",
+    bundledAllowlistCompat: true,
+  });
 }
 
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -350,11 +354,9 @@ function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
-  try {
-    return resolveBrowserConfig(cfg.browser, cfg).enabled;
-  } catch {
-    return true;
-  }
+  // The audit only needs the enablement policy, not full browser runtime
+  // resolution. Browser defaults to enabled unless it is explicitly disabled.
+  return cfg.browser?.enabled !== false;
 }
 
 function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
@@ -526,7 +528,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
-  const internalHooksEnabled = cfg.hooks?.internal?.enabled === true;
+  const internalHooksEnabled = cfg.hooks?.internal?.enabled !== false;
   const browserEnabled = cfg.browser?.enabled ?? true;
 
   const detail =

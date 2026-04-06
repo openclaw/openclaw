@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingController = vi.hoisted(() => vi.fn());
 const evaluateGroupRouteAccessForPolicy = vi.hoisted(() => vi.fn());
@@ -69,6 +69,8 @@ const defaultSender = {
   senderEmail: "alice@example.com",
 } as const;
 
+let applyGoogleChatInboundAccessPolicy: typeof import("./monitor-access.js").applyGoogleChatInboundAccessPolicy;
+
 function allowInboundGroupTraffic(options?: {
   effectiveGroupAllowFrom?: string[];
   effectiveWasMentioned?: boolean;
@@ -89,13 +91,8 @@ function allowInboundGroupTraffic(options?: {
 }
 
 async function applyInboundAccessPolicy(
-  overrides: Partial<
-    Parameters<
-      Awaited<typeof import("./monitor-access.js")>["applyGoogleChatInboundAccessPolicy"]
-    >[0]
-  >,
+  overrides: Partial<Parameters<typeof applyGoogleChatInboundAccessPolicy>[0]>,
 ) {
-  const { applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js");
   return applyGoogleChatInboundAccessPolicy({
     account: {
       accountId: "default",
@@ -114,6 +111,10 @@ async function applyInboundAccessPolicy(
 }
 
 describe("googlechat inbound access policy", () => {
+  beforeAll(async () => {
+    ({ applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js"));
+  });
+
   it("issues a pairing challenge for unauthorized DMs in pairing mode", async () => {
     primeCommonDefaults();
     const issueChallenge = vi.fn(async ({ onCreated, sendPairingReply }) => {
@@ -132,7 +133,6 @@ describe("googlechat inbound access policy", () => {
     });
     sendGoogleChatMessage.mockResolvedValue({ ok: true });
 
-    const { applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js");
     const statusSink = vi.fn();
     const logVerbose = vi.fn();
 
@@ -230,7 +230,7 @@ describe("googlechat inbound access policy", () => {
           config: {
             groups: {
               "spaces/AAA": {
-                allow: true,
+                enabled: true,
               },
             },
           },
@@ -337,7 +337,7 @@ describe("googlechat inbound access policy", () => {
                 users: ["users/alice"],
               },
               "Finance Ops": {
-                allow: false,
+                enabled: false,
                 users: ["users/bob"],
               },
             },

@@ -99,6 +99,18 @@ function asProviderBaseUrl(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
+const TALK_ADMIN_SCOPE = "operator.admin";
+
+function requiresAdminToSetVoice(
+  channel: string,
+  gatewayClientScopes?: readonly string[],
+): boolean {
+  if (Array.isArray(gatewayClientScopes)) {
+    return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
+  }
+  return channel === "webchat";
+}
+
 export default definePluginEntry({
   id: "talk-voice",
   name: "Talk Voice",
@@ -132,15 +144,14 @@ export default definePluginEntry({
         const apiKey = asTrimmedString(active.config.apiKey);
         const baseUrl = asProviderBaseUrl(active.config.baseUrl);
 
-        const currentVoiceId =
-          asTrimmedString(active.config.voiceId) || asTrimmedString(cfg.talk?.voiceId);
+        const currentVoiceId = asTrimmedString(active.config.voiceId);
 
         if (action === "status") {
           return {
             text:
               "Talk voice status:\n" +
               `- provider: ${providerId}\n` +
-              `- talk.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
+              `- talk.providers.${providerId}.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
               `- ${providerId}.apiKey: ${apiKey ? mask(apiKey) : "(unset)"}`,
           };
         }
@@ -164,10 +175,9 @@ export default definePluginEntry({
         }
 
         if (action === "set") {
-          // Internal gateway callers already expose operator scopes and should
-          // match the admin-only config.patch RPC. External channels rely on
-          // the plugin command's authorized-sender gate instead.
-          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
+          // Gateway callers can override messageChannel, so scope presence is
+          // the reliable signal for internal admin-only mutations.
+          if (requiresAdminToSetVoice(ctx.channel, ctx.gatewayClientScopes)) {
             return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
           }
 

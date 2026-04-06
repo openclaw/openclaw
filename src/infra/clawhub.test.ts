@@ -2,15 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
   parseClawHubPluginSpec,
   resolveClawHubAuthToken,
-  searchClawHubSkills,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
+  searchClawHubSkills,
 } from "./clawhub.js";
 
 describe("clawhub helpers", () => {
@@ -92,63 +93,68 @@ describe("clawhub helpers", () => {
   });
 
   it("resolves ClawHub auth token from config.json", async () => {
-    const configRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-config-"));
-    const configPath = path.join(configRoot, "clawhub", "config.json");
-    process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = configPath;
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify({ auth: { token: "cfg-token-123" } }), "utf8");
+    await withTempDir({ prefix: "openclaw-clawhub-config-" }, async (configRoot) => {
+      const configPath = path.join(configRoot, "clawhub", "config.json");
+      process.env.OPENCLAW_CLAWHUB_CONFIG_PATH = configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify({ auth: { token: "cfg-token-123" } }), "utf8");
 
-    await expect(resolveClawHubAuthToken()).resolves.toBe("cfg-token-123");
+      await expect(resolveClawHubAuthToken()).resolves.toBe("cfg-token-123");
+    });
   });
 
   it("resolves ClawHub auth token from the legacy config path override", async () => {
-    const configRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawdhub-config-"));
-    const configPath = path.join(configRoot, "config.json");
-    process.env.CLAWDHUB_CONFIG_PATH = configPath;
-    await fs.writeFile(configPath, JSON.stringify({ token: "legacy-token-123" }), "utf8");
+    await withTempDir({ prefix: "openclaw-clawdhub-config-" }, async (configRoot) => {
+      const configPath = path.join(configRoot, "config.json");
+      process.env.CLAWDHUB_CONFIG_PATH = configPath;
+      await fs.writeFile(configPath, JSON.stringify({ token: "legacy-token-123" }), "utf8");
 
-    await expect(resolveClawHubAuthToken()).resolves.toBe("legacy-token-123");
+      await expect(resolveClawHubAuthToken()).resolves.toBe("legacy-token-123");
+    });
   });
 
   it.runIf(process.platform === "darwin")(
     "resolves ClawHub auth token from the macOS Application Support path",
     async () => {
-      const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-home-"));
-      const configPath = path.join(
-        fakeHome,
-        "Library",
-        "Application Support",
-        "clawhub",
-        "config.json",
-      );
-      const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
-      try {
-        await fs.mkdir(path.dirname(configPath), { recursive: true });
-        await fs.writeFile(configPath, JSON.stringify({ token: "macos-token-123" }), "utf8");
+      await withTempDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
+        const configPath = path.join(
+          fakeHome,
+          "Library",
+          "Application Support",
+          "clawhub",
+          "config.json",
+        );
+        const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+        try {
+          await fs.mkdir(path.dirname(configPath), { recursive: true });
+          await fs.writeFile(configPath, JSON.stringify({ token: "macos-token-123" }), "utf8");
 
-        await expect(resolveClawHubAuthToken()).resolves.toBe("macos-token-123");
-      } finally {
-        homedirSpy.mockRestore();
-      }
+          await expect(resolveClawHubAuthToken()).resolves.toBe("macos-token-123");
+        } finally {
+          homedirSpy.mockRestore();
+        }
+      });
     },
   );
 
   it.runIf(process.platform === "darwin")(
     "falls back to XDG_CONFIG_HOME on macOS when Application Support has no config",
     async () => {
-      const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-home-"));
-      const xdgRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-xdg-"));
-      const configPath = path.join(xdgRoot, "clawhub", "config.json");
-      const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
-      process.env.XDG_CONFIG_HOME = xdgRoot;
-      try {
-        await fs.mkdir(path.dirname(configPath), { recursive: true });
-        await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");
+      await withTempDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
+        await withTempDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
+          const configPath = path.join(xdgRoot, "clawhub", "config.json");
+          const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+          process.env.XDG_CONFIG_HOME = xdgRoot;
+          try {
+            await fs.mkdir(path.dirname(configPath), { recursive: true });
+            await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");
 
-        await expect(resolveClawHubAuthToken()).resolves.toBe("xdg-token-123");
-      } finally {
-        homedirSpy.mockRestore();
-      }
+            await expect(resolveClawHubAuthToken()).resolves.toBe("xdg-token-123");
+          } finally {
+            homedirSpy.mockRestore();
+          }
+        });
+      });
     },
   );
 
@@ -166,10 +172,10 @@ describe("clawhub helpers", () => {
 
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
   });
-
-  it("writes scoped package archives to a safe temp file name", async () => {
+  it("downloads package archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubPackageArchive({
-      name: "@soimy/dingtalk",
+      name: "@hyf/zai-external-alpha",
+      version: "0.0.1",
       fetchImpl: async () =>
         new Response(new Uint8Array([1, 2, 3]), {
           status: 200,
@@ -178,16 +184,20 @@ describe("clawhub helpers", () => {
     });
 
     try {
-      expect(path.basename(archive.archivePath)).toBe("@soimy__dingtalk.zip");
+      expect(path.basename(archive.archivePath)).toBe("zai-external-alpha.zip");
+      expect(archive.archivePath.includes("@hyf")).toBe(false);
       await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
     } finally {
-      await fs.rm(path.dirname(archive.archivePath), { recursive: true, force: true });
+      const archiveDir = path.dirname(archive.archivePath);
+      await archive.cleanup();
+      await expect(fs.stat(archiveDir)).rejects.toThrow();
     }
   });
 
-  it("writes skill archives to a safe temp file name when slugs contain separators", async () => {
+  it("downloads skill archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubSkillArchive({
-      slug: "ops/calendar",
+      slug: "agentreceipt",
+      version: "1.0.0",
       fetchImpl: async () =>
         new Response(new Uint8Array([4, 5, 6]), {
           status: 200,
@@ -196,10 +206,12 @@ describe("clawhub helpers", () => {
     });
 
     try {
-      expect(path.basename(archive.archivePath)).toBe("ops__calendar.zip");
+      expect(path.basename(archive.archivePath)).toBe("agentreceipt.zip");
       await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([4, 5, 6]));
     } finally {
-      await fs.rm(path.dirname(archive.archivePath), { recursive: true, force: true });
+      const archiveDir = path.dirname(archive.archivePath);
+      await archive.cleanup();
+      await expect(fs.stat(archiveDir)).rejects.toThrow();
     }
   });
 });

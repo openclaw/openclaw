@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
+import type { AuthProfileCredential } from "./auth-profiles/types.js";
 
 describe("ensureAuthProfileStore", () => {
   function withTempAgentDir<T>(prefix: string, run: (agentDir: string) => T): T {
@@ -13,6 +14,42 @@ describe("ensureAuthProfileStore", () => {
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
+  }
+
+  function writeAuthProfileStore(agentDir: string, profiles: Record<string, unknown>): void {
+    fs.writeFileSync(
+      path.join(agentDir, "auth-profiles.json"),
+      `${JSON.stringify({ version: AUTH_STORE_VERSION, profiles }, null, 2)}\n`,
+      "utf8",
+    );
+  }
+
+  function loadAuthProfile(agentDir: string, profileId: string): AuthProfileCredential {
+    clearRuntimeAuthProfileStoreSnapshots();
+    const store = ensureAuthProfileStore(agentDir);
+    const profile = store.profiles[profileId];
+    expect(profile).toBeDefined();
+    return profile;
+  }
+
+  function expectApiKeyProfile(
+    profile: AuthProfileCredential,
+  ): Extract<AuthProfileCredential, { type: "api_key" }> {
+    expect(profile.type).toBe("api_key");
+    if (profile.type !== "api_key") {
+      throw new Error(`Expected api_key profile, got ${profile.type}`);
+    }
+    return profile;
+  }
+
+  function expectTokenProfile(
+    profile: AuthProfileCredential,
+  ): Extract<AuthProfileCredential, { type: "token" }> {
+    expect(profile.type).toBe("token");
+    if (profile.type !== "token") {
+      throw new Error(`Expected token profile, got ${profile.type}`);
+    }
+    return profile;
   }
 
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
@@ -304,6 +341,70 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
+  it("exposes Codex CLI auth without persisting copied tokens into auth-profiles.json", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-external-sync-"));
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(root, "codex-home");
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(
+        path.join(codexHome, "auth.json"),
+        `${JSON.stringify(
+          {
+            auth_mode: "chatgpt",
+            tokens: {
+              access_token: "codex-access-token",
+              refresh_token: "codex-refresh-token",
+              account_id: "acct_123",
+            },
+            last_refresh: "2026-03-01T00:00:00.000Z",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      process.env.CODEX_HOME = codexHome;
+      process.env.OPENCLAW_AGENT_DIR = agentDir;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(store.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "codex-access-token",
+        refresh: "codex-refresh-token",
+        managedBy: "codex-cli",
+      });
+
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("logs one warning with aggregated reasons for rejected auth-profiles entries", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {
@@ -326,7 +427,6 @@ describe("ensureAuthProfileStore", () => {
           `${JSON.stringify(invalidStore, null, 2)}\n`,
           "utf8",
         );
-
         const store = ensureAuthProfileStore(agentDir);
         expect(store.profiles).toEqual({});
         expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -348,4 +448,152 @@ describe("ensureAuthProfileStore", () => {
       warnSpy.mockRestore();
     }
   });
+
+  it.each([
+    {
+      name: "migrates SecretRef object in `key` to `keyRef` and clears `key`",
+      prefix: "openclaw-nonstr-key-ref-",
+      profileId: "openai:default",
+      profile: {
+        type: "api_key",
+        provider: "openai",
+        key: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+      assert(profile: AuthProfileCredential) {
+        const apiKey = expectApiKeyProfile(profile);
+        expect(apiKey.key).toBeUndefined();
+        expect(apiKey.keyRef).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENAI_API_KEY",
+        });
+      },
+    },
+    {
+      name: "deletes non-string non-SecretRef `key` without setting keyRef",
+      prefix: "openclaw-nonstr-key-num-",
+      profileId: "openai:default",
+      profile: {
+        type: "api_key",
+        provider: "openai",
+        key: 12345,
+      },
+      assert(profile: AuthProfileCredential) {
+        const apiKey = expectApiKeyProfile(profile);
+        expect(apiKey.key).toBeUndefined();
+        expect(apiKey.keyRef).toBeUndefined();
+      },
+    },
+    {
+      name: "does not overwrite existing `keyRef` when `key` contains a SecretRef",
+      prefix: "openclaw-nonstr-key-dup-",
+      profileId: "openai:default",
+      profile: {
+        type: "api_key",
+        provider: "openai",
+        key: { source: "env", provider: "default", id: "WRONG_VAR" },
+        keyRef: { source: "env", provider: "default", id: "CORRECT_VAR" },
+      },
+      assert(profile: AuthProfileCredential) {
+        const apiKey = expectApiKeyProfile(profile);
+        expect(apiKey.key).toBeUndefined();
+        expect(apiKey.keyRef).toEqual({
+          source: "env",
+          provider: "default",
+          id: "CORRECT_VAR",
+        });
+      },
+    },
+    {
+      name: "overwrites malformed `keyRef` with migrated ref from `key`",
+      prefix: "openclaw-nonstr-key-malformed-ref-",
+      profileId: "openai:default",
+      profile: {
+        type: "api_key",
+        provider: "openai",
+        key: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        keyRef: null,
+      },
+      assert(profile: AuthProfileCredential) {
+        const apiKey = expectApiKeyProfile(profile);
+        expect(apiKey.key).toBeUndefined();
+        expect(apiKey.keyRef).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENAI_API_KEY",
+        });
+      },
+    },
+    {
+      name: "preserves valid string `key` values unchanged",
+      prefix: "openclaw-str-key-",
+      profileId: "openai:default",
+      profile: {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-valid-plaintext-key",
+      },
+      assert(profile: AuthProfileCredential) {
+        const apiKey = expectApiKeyProfile(profile);
+        expect(apiKey.key).toBe("sk-valid-plaintext-key");
+      },
+    },
+    {
+      name: "migrates SecretRef object in `token` to `tokenRef` and clears `token`",
+      prefix: "openclaw-nonstr-token-ref-",
+      profileId: "anthropic:default",
+      profile: {
+        type: "token",
+        provider: "anthropic",
+        token: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
+      },
+      assert(profile: AuthProfileCredential) {
+        const token = expectTokenProfile(profile);
+        expect(token.token).toBeUndefined();
+        expect(token.tokenRef).toEqual({
+          source: "env",
+          provider: "default",
+          id: "ANTHROPIC_TOKEN",
+        });
+      },
+    },
+    {
+      name: "deletes non-string non-SecretRef `token` without setting tokenRef",
+      prefix: "openclaw-nonstr-token-num-",
+      profileId: "anthropic:default",
+      profile: {
+        type: "token",
+        provider: "anthropic",
+        token: 99999,
+      },
+      assert(profile: AuthProfileCredential) {
+        const token = expectTokenProfile(profile);
+        expect(token.token).toBeUndefined();
+        expect(token.tokenRef).toBeUndefined();
+      },
+    },
+    {
+      name: "preserves valid string `token` values unchanged",
+      prefix: "openclaw-str-token-",
+      profileId: "anthropic:default",
+      profile: {
+        type: "token",
+        provider: "anthropic",
+        token: "tok-valid-plaintext",
+      },
+      assert(profile: AuthProfileCredential) {
+        const token = expectTokenProfile(profile);
+        expect(token.token).toBe("tok-valid-plaintext");
+      },
+    },
+  ] as const)(
+    "normalizes secret-backed auth profile fields during store load: $name (#58861)",
+    (testCase) => {
+      withTempAgentDir(testCase.prefix, (agentDir) => {
+        writeAuthProfileStore(agentDir, { [testCase.profileId]: testCase.profile });
+        const profile = loadAuthProfile(agentDir, testCase.profileId);
+        testCase.assert(profile);
+      });
+    },
+  );
 });

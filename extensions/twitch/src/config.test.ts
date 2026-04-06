@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getAccountConfig, listAccountIds } from "./config.js";
+import {
+  getAccountConfig,
+  listAccountIds,
+  resolveDefaultTwitchAccountId,
+  resolveTwitchAccountContext,
+} from "./config.js";
 
 describe("getAccountConfig", () => {
   const mockMultiAccountConfig = {
@@ -114,5 +119,48 @@ describe("listAccountIds", () => {
         },
       } as Parameters<typeof listAccountIds>[0]),
     ).toEqual(["default", "secondary"]);
+  });
+});
+
+describe("resolveDefaultTwitchAccountId", () => {
+  it("prefers channels.twitch.defaultAccount when configured", () => {
+    expect(
+      resolveDefaultTwitchAccountId({
+        channels: {
+          twitch: {
+            defaultAccount: "secondary",
+            accounts: {
+              default: { username: "default" },
+              secondary: { username: "secondary" },
+            },
+          },
+        },
+      } as Parameters<typeof resolveDefaultTwitchAccountId>[0]),
+    ).toBe("secondary");
+  });
+});
+
+describe("resolveTwitchAccountContext", () => {
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const context = resolveTwitchAccountContext({
+      channels: {
+        twitch: {
+          defaultAccount: "secondary",
+          accounts: {
+            default: {
+              username: "default-bot",
+              accessToken: "oauth:default-token",
+            },
+            secondary: {
+              username: "second-bot",
+              accessToken: "oauth:second-token",
+            },
+          },
+        },
+      },
+    } as Parameters<typeof resolveTwitchAccountContext>[0]);
+
+    expect(context.accountId).toBe("secondary");
+    expect(context.account?.username).toBe("second-bot");
   });
 });

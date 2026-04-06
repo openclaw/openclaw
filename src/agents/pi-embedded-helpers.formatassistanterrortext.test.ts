@@ -191,6 +191,16 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it.each(["disk full", "ENOSPC: no space left on device, write"])(
+    "returns a friendly disk-space message for %s",
+    (errorMessage) => {
+      const msg = makeAssistantError(errorMessage);
+      expect(formatAssistantErrorText(msg)).toBe(
+        "OpenClaw could not write local session data because the disk is full. Free some disk space and try again.",
+      );
+    },
+  );
+
   it("returns a DNS-specific message for provider lookup failures", () => {
     const msg = makeAssistantError("dial tcp: lookup api.example.com: no such host (ENOTFOUND)");
     expect(formatAssistantErrorText(msg)).toBe(

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { __testing, ensurePluginRegistryLoaded } from "./plugin-registry.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
@@ -37,8 +38,8 @@ vi.mock("../plugins/runtime.js", () => ({
 
 describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
+    __testing.resetPluginRegistryLoadedForTests();
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [],
       channels: [],
@@ -67,13 +68,17 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(baseConfig);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        "demo-chat": ["demo-chat configured"],
+      },
+    });
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [{ id: "demo-chat", channels: ["demo-chat"] }],
       diagnostics: [],
     });
-
-    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
 
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
 
@@ -92,6 +97,10 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
+        activationSourceConfig: baseConfig,
+        autoEnabledReasons: {
+          "demo-chat": ["demo-chat configured"],
+        },
         onlyPluginIds: ["demo-chat"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
@@ -106,7 +115,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         { id: "demo-channel-a", channels: ["demo-channel-a"] },
@@ -126,8 +135,6 @@ describe("ensurePluginRegistryLoaded", () => {
         channels: [{ plugin: { id: "demo-channel-a" } }],
         tools: [],
       });
-
-    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
 
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
     ensurePluginRegistryLoaded({ scope: "channels" });
@@ -153,14 +160,12 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [],
       channels: [{ plugin: { id: "demo-channel-a" } }],
       tools: [],
     });
-
-    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
 
     ensurePluginRegistryLoaded({ scope: "all" });
 
@@ -181,14 +186,12 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
     mocks.getActivePluginRegistry.mockReturnValue({
       plugins: [],
       channels: [],
       tools: [{ pluginId: "demo-tool" }],
     });
-
-    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
 
     ensurePluginRegistryLoaded({ scope: "configured-channels" });
 
@@ -214,7 +217,7 @@ describe("ensurePluginRegistryLoaded", () => {
     };
 
     mocks.loadConfig.mockReturnValue(config);
-    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [], autoEnabledReasons: {} });
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         { id: "demo-channel-a", channels: ["demo-channel-a"] },

@@ -61,7 +61,6 @@ function createToolHandlerCtx() {
     },
     hookRunner: hookMocks.runner,
     state: {
-      toolMetaById: new Map<string, unknown>(),
       ...createBaseToolHandlerState(),
       successfulCronAdds: 0,
     },
@@ -85,7 +84,9 @@ async function loadFreshAfterToolCallModulesForTest() {
     getGlobalHookRunner: () => hookMocks.runner,
   }));
   vi.doMock("../infra/agent-events.js", () => ({
+    emitAgentCommandOutputEvent: vi.fn(),
     emitAgentEvent: vi.fn(),
+    emitAgentItemEvent: vi.fn(),
   }));
   vi.doMock("./pi-tools.before-tool-call.js", () => ({
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,

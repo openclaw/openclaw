@@ -1,6 +1,6 @@
 import "./test-helpers.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
@@ -9,8 +9,10 @@ let buildMentionConfig: typeof import("./auto-reply/mentions.js").buildMentionCo
 let createEchoTracker: typeof import("./auto-reply/monitor/echo.js").createEchoTracker;
 let createWebOnMessageHandler: typeof import("./auto-reply/monitor/on-message.js").createWebOnMessageHandler;
 
-vi.mock("./auto-reply/monitor/last-route.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./auto-reply/monitor/last-route.js")>();
+vi.mock("./auto-reply/monitor/last-route.js", async () => {
+  const actual = await vi.importActual<typeof import("./auto-reply/monitor/last-route.js")>(
+    "./auto-reply/monitor/last-route.js",
+  );
   return {
     ...actual,
     updateLastRouteInBackground: (...args: unknown[]) => updateLastRouteInBackgroundMock(...args),

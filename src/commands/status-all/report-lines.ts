@@ -1,9 +1,14 @@
 import type { ProgressReporter } from "../../cli/progress.js";
 import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { isRich, theme } from "../../terminal/theme.js";
-import { groupChannelIssuesByChannel } from "./channel-issues.js";
+import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 import { formatTimeAgo } from "./format.js";
+import {
+  appendStatusLinesSection,
+  appendStatusSectionHeading,
+  appendStatusTableSection,
+} from "./text-report.js";
 
 type OverviewRow = { Item: string; Value: string };
 
@@ -68,44 +73,20 @@ export async function buildStatusAllReportLines(params: {
     rows: params.overviewRows,
   });
 
-  const channelRows = params.channels.rows.map((row) => ({
-    channelId: row.id,
-    Channel: row.label,
-    Enabled: row.enabled ? ok("ON") : muted("OFF"),
-    State:
-      row.state === "ok"
-        ? ok("OK")
-        : row.state === "warn"
-          ? warn("WARN")
-          : row.state === "off"
-            ? muted("OFF")
-            : theme.accentDim("SETUP"),
-    Detail: row.detail,
-  }));
-  const channelIssuesByChannel = groupChannelIssuesByChannel(params.channelIssues);
-  const channelRowsWithIssues = channelRows.map((row) => {
-    const issues = channelIssuesByChannel.get(row.channelId) ?? [];
-    if (issues.length === 0) {
-      return row;
-    }
-    const issue = issues[0];
-    const suffix = ` · ${warn(`gateway: ${String(issue.message).slice(0, 90)}`)}`;
-    return {
-      ...row,
-      State: warn("WARN"),
-      Detail: `${row.Detail}${suffix}`,
-    };
-  });
-
   const channelsTable = renderTable({
     width: tableWidth,
-    columns: [
-      { key: "Channel", header: "Channel", minWidth: 10 },
-      { key: "Enabled", header: "Enabled", minWidth: 7 },
-      { key: "State", header: "State", minWidth: 8 },
-      { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
-    ],
-    rows: channelRowsWithIssues,
+    columns: statusChannelsTableColumns.map((column) =>
+      column.key === "Detail" ? { ...column, minWidth: 28 } : column,
+    ),
+    rows: buildStatusChannelsTableRows({
+      rows: params.channels.rows,
+      channelIssues: params.channelIssues,
+      ok,
+      warn,
+      muted,
+      accentDim: theme.accentDim,
+      formatIssueMessage: (message) => String(message).slice(0, 90),
+    }),
   });
 
   const agentRows = params.agentStatus.agents.map((a) => ({
@@ -135,40 +116,52 @@ export async function buildStatusAllReportLines(params: {
 
   const lines: string[] = [];
   lines.push(heading("OpenClaw status --all"));
-  lines.push("");
-  lines.push(heading("Overview"));
-  lines.push(overview.trimEnd());
-  lines.push("");
-  lines.push(heading("Channels"));
-  lines.push(channelsTable.trimEnd());
+  appendStatusLinesSection({
+    lines,
+    heading,
+    title: "Overview",
+    body: [overview.trimEnd()],
+  });
+  appendStatusLinesSection({
+    lines,
+    heading,
+    title: "Channels",
+    body: [channelsTable.trimEnd()],
+  });
   for (const detail of params.channels.details) {
-    lines.push("");
-    lines.push(heading(detail.title));
-    lines.push(
-      renderTable({
-        width: tableWidth,
-        columns: detail.columns.map((c) => ({
-          key: c,
-          header: c,
-          flex: c === "Notes",
-          minWidth: c === "Notes" ? 28 : 10,
-        })),
-        rows: detail.rows.map((r) => ({
-          ...r,
-          ...(r.Status === "OK"
-            ? { Status: ok("OK") }
-            : r.Status === "WARN"
-              ? { Status: warn("WARN") }
-              : {}),
-        })),
-      }).trimEnd(),
-    );
+    appendStatusTableSection({
+      lines,
+      heading,
+      title: detail.title,
+      width: tableWidth,
+      renderTable,
+      columns: detail.columns.map((c) => ({
+        key: c,
+        header: c,
+        flex: c === "Notes",
+        minWidth: c === "Notes" ? 28 : 10,
+      })),
+      rows: detail.rows.map((r) => ({
+        ...r,
+        ...(r.Status === "OK"
+          ? { Status: ok("OK") }
+          : r.Status === "WARN"
+            ? { Status: warn("WARN") }
+            : {}),
+      })),
+    });
   }
-  lines.push("");
-  lines.push(heading("Agents"));
-  lines.push(agentsTable.trimEnd());
-  lines.push("");
-  lines.push(heading("Diagnosis (read-only)"));
+  appendStatusLinesSection({
+    lines,
+    heading,
+    title: "Agents",
+    body: [agentsTable.trimEnd()],
+  });
+  appendStatusSectionHeading({
+    lines,
+    heading,
+    title: "Diagnosis (read-only)",
+  });
 
   await appendStatusAllDiagnosis({
     lines,

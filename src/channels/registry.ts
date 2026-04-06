@@ -1,13 +1,13 @@
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getChatChannelMeta, listChatChannels, type ChatChannelMeta } from "./chat-meta.js";
 import {
+  CHANNEL_IDS,
   CHAT_CHANNEL_ALIASES,
-  getChatChannelMeta,
+  CHAT_CHANNEL_ORDER,
   listChatChannelAliases,
-  listChatChannels,
   normalizeChatChannelId,
-  type ChatChannelMeta,
-} from "./chat-meta.js";
-import { CHANNEL_IDS, CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
+  type ChatChannelId,
+} from "./ids.js";
 import type { ChannelId, ChannelMeta } from "./plugins/types.js";
 export { CHANNEL_IDS, CHAT_CHANNEL_ORDER } from "./ids.js";
 export type { ChatChannelId } from "./ids.js";

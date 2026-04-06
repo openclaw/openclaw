@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-const { loadConfig, migrateLegacyConfig, readConfigFileSnapshot, validateConfigObject } =
+const { loadConfig, readConfigFileSnapshot, validateConfigObject } =
   await vi.importActual<typeof import("./config.js")>("./config.js");
 import { withTempHome } from "./test-helpers.js";
 
@@ -199,7 +199,7 @@ describe("legacy config detection", () => {
   });
   it("rejects legacy agent.model string", async () => {
     const res = validateConfigObject({
-      agent: { model: "anthropic/claude-opus-4-5" },
+      agent: { model: "anthropic/claude-opus-4-6" },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -207,34 +207,24 @@ describe("legacy config detection", () => {
       expect(res.issues[0]?.message).toContain('"agent"');
     }
   });
-  it("does not rewrite removed telegram.requireMention migrations", async () => {
-    const res = migrateLegacyConfig({
-      telegram: { requireMention: false },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-  it("does not rewrite removed messages.tts.enabled migrations", async () => {
-    const res = migrateLegacyConfig({
-      messages: { tts: { enabled: true } },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
-  });
-  it("does not rewrite removed legacy model config migrations", async () => {
-    const res = migrateLegacyConfig({
-      agent: {
-        model: "anthropic/claude-opus-4-5",
-        modelFallbacks: ["openai/gpt-4.1-mini"],
-        imageModel: "openai/gpt-4.1-mini",
-        imageModelFallbacks: ["anthropic/claude-opus-4-5"],
-        allowedModels: ["anthropic/claude-opus-4-5", "openai/gpt-4.1-mini"],
-        modelAliases: { Opus: "anthropic/claude-opus-4-5" },
+  it("flags channels.telegram.groupMentionsOnly as legacy in snapshot", async () => {
+    await withSnapshotForConfig(
+      { channels: { telegram: { groupMentionsOnly: true } } },
+      async (ctx) => {
+        expect(ctx.snapshot.valid).toBe(false);
+        expect(
+          ctx.snapshot.legacyIssues.some(
+            (issue) => issue.path === "channels.telegram.groupMentionsOnly",
+          ),
+        ).toBe(true);
+        const parsed = ctx.parsed as {
+          channels?: { telegram?: { groupMentionsOnly?: boolean } };
+        };
+        expect(parsed.channels?.telegram?.groupMentionsOnly).toBe(true);
       },
-    });
-    expect(res.changes).toEqual([]);
-    expect(res.config).toBeNull();
+    );
   });
+
   it("rejects removed routing.allowFrom in snapshot", async () => {
     await withSnapshotForConfig({ routing: { allowFrom: ["+15555550123"] } }, async (ctx) => {
       expectSnapshotInvalidRootKey(ctx, "routing");
@@ -244,7 +234,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { memorySearch: { provider: "local", fallback: "none" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(true);
+        expect(ctx.snapshot.valid).toBe(false);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
       },
     );
@@ -253,7 +243,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(true);
+        expect(ctx.snapshot.valid).toBe(false);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
       },
     );
@@ -263,7 +253,7 @@ describe("legacy config detection", () => {
       expectSnapshotInvalidRootKey(ctx, "whatsapp");
     });
   });
-  it("does not auto-migrate claude-cli auth profile mode on load", async () => {
+  it("does not auto-migrate removed cli auth profile modes on load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -273,7 +263,7 @@ describe("legacy config detection", () => {
           {
             auth: {
               profiles: {
-                "anthropic:claude-cli": { provider: "anthropic", mode: "token" },
+                "anthropic:removed-cli": { provider: "anthropic", mode: "token" },
               },
             },
           },
@@ -284,20 +274,20 @@ describe("legacy config detection", () => {
       );
 
       const cfg = loadConfig();
-      expect(cfg.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
+      expect(cfg.auth?.profiles?.["anthropic:removed-cli"]?.mode).toBe("token");
 
       const raw = await fs.readFile(configPath, "utf-8");
       const parsed = JSON.parse(raw) as {
         auth?: { profiles?: Record<string, { mode?: string }> };
       };
-      expect(parsed.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
+      expect(parsed.auth?.profiles?.["anthropic:removed-cli"]?.mode).toBe("token");
     });
   });
   it("still flags memorySearch in snapshot under the shorter support window", async () => {
     await withSnapshotForConfig(
       { memorySearch: { provider: "local", fallback: "none" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(true);
+        expect(ctx.snapshot.valid).toBe(false);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
       },
     );

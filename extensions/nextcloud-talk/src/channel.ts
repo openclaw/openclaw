@@ -5,13 +5,13 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildWebhookChannelStatusSummary,
@@ -19,19 +19,21 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
-  buildChannelConfigSchema,
-  clearAccountEntryFields,
-  DEFAULT_ACCOUNT_ID,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "../runtime-api.js";
-import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
   resolveNextcloudTalkAccount,
   type ResolvedNextcloudTalkAccount,
 } from "./accounts.js";
+import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
+import {
+  buildChannelConfigSchema,
+  clearAccountEntryFields,
+  DEFAULT_ACCOUNT_ID,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "./channel-api.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
+import { nextcloudTalkDoctor } from "./doctor.js";
 import { monitorNextcloudTalkProvider } from "./monitor.js";
 import {
   looksLikeNextcloudTalkTargetId,
@@ -39,6 +41,7 @@ import {
 } from "./normalize.js";
 import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import { nextcloudTalkSetupAdapter } from "./setup-core.js";
@@ -139,6 +142,8 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
             },
           }),
       },
+      auth: nextcloudTalkApprovalAuth,
+      doctor: nextcloudTalkDoctor,
       groups: {
         resolveRequireMention: ({ cfg, accountId, groupId }) => {
           const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
@@ -168,6 +173,10 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           looksLikeId: looksLikeNextcloudTalkTargetId,
           hint: "<roomToken>",
         },
+      },
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
       },
       setup: nextcloudTalkSetupAdapter,
       status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({

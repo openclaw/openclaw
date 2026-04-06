@@ -1,10 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  mergeImplicitAnthropicVertexProvider,
-  resolveImplicitAnthropicVertexProvider,
-} from "../plugin-sdk/anthropic-vertex.js";
-import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
   resolvePluginDiscoveryProviders,
@@ -34,19 +30,8 @@ const PROVIDER_IMPLICIT_MERGERS: Partial<
     (params: { existing: ProviderConfig | undefined; implicit: ProviderConfig }) => ProviderConfig
   >
 > = {
-  "anthropic-vertex": mergeImplicitAnthropicVertexProvider,
   ollama: ({ implicit }) => implicit,
 };
-
-const CORE_IMPLICIT_PROVIDER_RESOLVERS = [
-  {
-    id: "anthropic-vertex",
-    resolve: async (params: { config?: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
-      resolveImplicitAnthropicVertexProvider({
-        env: params.env,
-      }),
-  },
-] as const;
 
 const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 
@@ -79,7 +64,15 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
-function resolveLiveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
+function resolveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
+  const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
+  if (testRaw) {
+    const ids = testRaw
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return ids.length > 0 ? [...new Set(ids)] : undefined;
+  }
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
   if (!live) {
@@ -165,15 +158,9 @@ function resolveExistingImplicitProviderFromContext(params: {
 
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
+  providers: import("../plugins/types.js").ProviderPlugin[],
   order: import("../plugins/types.js").ProviderDiscoveryOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
-  const onlyPluginIds = resolveLiveProviderDiscoveryFilter(ctx.env);
-  const providers = await resolvePluginDiscoveryProviders({
-    config: ctx.config,
-    workspaceDir: ctx.workspaceDir,
-    env: ctx.env,
-    onlyPluginIds,
-  });
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig = buildPluginCatalogConfig(ctx);
@@ -309,31 +296,6 @@ async function runProviderCatalogWithTimeout(
   }
 }
 
-async function mergeCoreImplicitProviders(params: {
-  config?: OpenClawConfig;
-  explicitProviders?: Record<string, ProviderConfig> | null;
-  env: NodeJS.ProcessEnv;
-  providers: Record<string, ProviderConfig>;
-}): Promise<void> {
-  for (const provider of CORE_IMPLICIT_PROVIDER_RESOLVERS) {
-    const implicit = await provider.resolve({ config: params.config, env: params.env });
-    if (!implicit) {
-      continue;
-    }
-    const merge = PROVIDER_IMPLICIT_MERGERS[provider.id];
-    params.providers[provider.id] = (merge ?? mergeImplicitProviderConfig)({
-      providerId: provider.id,
-      existing:
-        params.providers[provider.id] ??
-        resolveConfiguredImplicitProvider({
-          configuredProviders: params.explicitProviders ?? params.config?.models?.providers,
-          providerIds: [provider.id],
-        }),
-      implicit,
-    });
-  }
-}
-
 export async function resolveImplicitProviders(
   params: ImplicitProviderParams,
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
@@ -349,17 +311,19 @@ export async function resolveImplicitProviders(
     resolveProviderApiKey: createProviderApiKeyResolver(env, authStore, params.config),
     resolveProviderAuth: createProviderAuthResolver(env, authStore, params.config),
   };
+  const discoveryProviders = await resolvePluginDiscoveryProviders({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+    onlyPluginIds: resolveProviderDiscoveryFilter(env),
+  });
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
-    mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, order));
+    mergeImplicitProviderSet(
+      providers,
+      await resolvePluginImplicitProviders(context, discoveryProviders, order),
+    );
   }
-
-  await mergeCoreImplicitProviders({
-    config: params.config,
-    explicitProviders: params.explicitProviders,
-    env,
-    providers,
-  });
 
   return providers;
 }

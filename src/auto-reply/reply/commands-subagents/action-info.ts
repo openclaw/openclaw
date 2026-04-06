@@ -1,6 +1,11 @@
-import { countPendingDescendantRuns } from "../../../agents/subagent-registry.js";
-import { loadSessionStore, resolveStorePath } from "../../../config/sessions.js";
+import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
+import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { loadSessionStore } from "../../../config/sessions/store-load.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
+import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
+import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
@@ -33,16 +38,34 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     run.startedAt && Number.isFinite(run.startedAt)
       ? (formatDurationCompact((run.endedAt ?? Date.now()) - run.startedAt) ?? "n/a")
       : "n/a";
+  const outcomeError = sanitizeTaskStatusText(run.outcome?.error, { errorContext: true });
   const outcome = run.outcome
-    ? `${run.outcome.status}${run.outcome.error ? ` (${run.outcome.error})` : ""}`
+    ? `${run.outcome.status}${outcomeError ? ` (${outcomeError})` : ""}`
     : "n/a";
+  const linkedTask = findTaskByRunIdForOwner({
+    runId: run.runId,
+    callerOwnerKey: params.sessionKey,
+  });
+  const taskText = sanitizeTaskStatusText(run.task) || "n/a";
+  const progressText = sanitizeTaskStatusText(linkedTask?.progressSummary);
+  const taskSummaryText = sanitizeTaskStatusText(linkedTask?.terminalSummary, {
+    errorContext: true,
+  });
+  const taskErrorText = sanitizeTaskStatusText(linkedTask?.error, { errorContext: true });
 
   const lines = [
     "ℹ️ Subagent info",
-    `Status: ${resolveDisplayStatus(run, { pendingDescendants: countPendingDescendantRuns(run.childSessionKey) })}`,
+    `Status: ${resolveDisplayStatus(run, {
+      pendingDescendants: countPendingDescendantRunsFromRuns(
+        getSubagentRunsSnapshotForRead(subagentRuns),
+        run.childSessionKey,
+      ),
+    })}`,
     `Label: ${formatRunLabel(run)}`,
-    `Task: ${run.task}`,
+    `Task: ${taskText}`,
     `Run: ${run.runId}`,
+    linkedTask ? `TaskId: ${linkedTask.taskId}` : undefined,
+    linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
     `Session: ${run.childSessionKey}`,
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
     `Transcript: ${sessionEntry?.sessionFile ?? "n/a"}`,
@@ -54,6 +77,10 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     run.archiveAtMs ? `Archive: ${formatTimestampWithAge(run.archiveAtMs)}` : undefined,
     run.cleanupHandled ? "Cleanup handled: yes" : undefined,
     `Outcome: ${outcome}`,
+    progressText ? `Progress: ${progressText}` : undefined,
+    taskSummaryText ? `Task summary: ${taskSummaryText}` : undefined,
+    taskErrorText ? `Task error: ${taskErrorText}` : undefined,
+    linkedTask ? `Delivery: ${linkedTask.deliveryStatus}` : undefined,
   ].filter(Boolean);
 
   return stopWithText(lines.join("\n"));

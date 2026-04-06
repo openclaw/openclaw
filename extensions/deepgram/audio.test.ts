@@ -3,7 +3,7 @@ import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.js";
+} from "../../src/media-understanding/audio.test-helpers.ts";
 import { transcribeDeepgramAudio } from "./audio.js";
 
 installPinnedHostnameTestHooks();

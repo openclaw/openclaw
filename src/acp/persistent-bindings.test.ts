@@ -4,7 +4,6 @@ import type { ChannelConfiguredBindingProvider, ChannelPlugin } from "../channel
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { parseTelegramTopicConversation } from "./conversation-id.js";
 import { buildConfiguredAcpSessionKey } from "./persistent-bindings.types.js";
 const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
@@ -84,9 +83,44 @@ const discordBindings: ChannelConfiguredBindingProvider = {
   },
 };
 
+function parseTelegramTopicConversationForTest(params: {
+  conversationId: string;
+  parentConversationId?: string;
+}): {
+  canonicalConversationId: string;
+  chatId: string;
+  topicId?: string;
+} | null {
+  const conversationId = params.conversationId.trim();
+  const parentConversationId = params.parentConversationId?.trim() || undefined;
+  if (!conversationId) {
+    return null;
+  }
+  const canonicalTopicMatch = /^(-[^:]+):topic:([^:]+)$/.exec(conversationId);
+  if (canonicalTopicMatch) {
+    const [, chatId, topicId] = canonicalTopicMatch;
+    return {
+      canonicalConversationId: `${chatId}:topic:${topicId}`,
+      chatId,
+      topicId,
+    };
+  }
+  if (parentConversationId) {
+    return {
+      canonicalConversationId: `${parentConversationId}:topic:${conversationId}`,
+      chatId: parentConversationId,
+      topicId: conversationId,
+    };
+  }
+  return {
+    canonicalConversationId: conversationId,
+    chatId: conversationId,
+  };
+}
+
 const telegramBindings: ChannelConfiguredBindingProvider = {
   compileConfiguredBinding: ({ conversationId }) => {
-    const parsed = parseTelegramTopicConversation({ conversationId });
+    const parsed = parseTelegramTopicConversationForTest({ conversationId });
     if (!parsed || !parsed.chatId.startsWith("-")) {
       return null;
     }
@@ -96,7 +130,7 @@ const telegramBindings: ChannelConfiguredBindingProvider = {
     };
   },
   matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
-    const incoming = parseTelegramTopicConversation({
+    const incoming = parseTelegramTopicConversationForTest({
       conversationId,
       parentConversationId,
     });
@@ -377,7 +411,6 @@ function mockReadySession(params: {
 }
 
 beforeAll(async () => {
-  vi.resetModules();
   persistentBindingsResolveModule = await import("./persistent-bindings.resolve.js");
   lifecycleBindingsModule = await import("./persistent-bindings.lifecycle.js");
   persistentBindings = {

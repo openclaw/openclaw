@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
@@ -98,6 +98,7 @@ export function registerDirectoryCli(program: Command) {
       .option("--json", "Output JSON", false);
 
   const resolve = async (opts: { channel?: string; account?: string }) => {
+    const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
     const autoEnabled = applyPluginAutoEnable({
       config: loadConfig(),
       env: process.env,
@@ -115,9 +116,15 @@ export function registerDirectoryCli(program: Command) {
       : null;
     if (resolvedExplicit?.configChanged) {
       cfg = resolvedExplicit.cfg;
-      await writeConfigFile(cfg);
+      await replaceConfigFile({
+        nextConfig: cfg,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
     } else if (autoEnabled.changes.length > 0) {
-      await writeConfigFile(cfg);
+      await replaceConfigFile({
+        nextConfig: cfg,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
     }
     const selection = explicitChannel
       ? {

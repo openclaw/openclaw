@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import readline from "node:readline";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -11,23 +12,77 @@ import { loadConfig } from "../../config/config.js";
 import { mergeSessionEntry, type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../../config/sessions/transcript.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
-import { runCliAgent } from "../cli-runner.js";
-import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
-import { FailoverError } from "../failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
-import { isCliProvider } from "../model-selection.js";
+import { hasInternalRuntimeContext } from "../internal-runtime-context.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent } from "../pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import type { AgentCommandOpts } from "./types.js";
 
-const log = createSubsystemLogger("agents/agent-command");
+/** Maximum number of JSONL records to inspect before giving up. */
+const SESSION_FILE_MAX_RECORDS = 500;
+
+/**
+ * Check whether a session transcript file exists and contains at least one
+ * assistant message, indicating that the SessionManager has flushed the
+ * initial user+assistant exchange to disk.  This is used to decide whether
+ * a fallback retry can rely on the on-disk history or must re-send the
+ * original prompt.
+ *
+ * The check parses JSONL records line-by-line (CWE-703) instead of relying
+ * on a raw substring match against a bounded byte prefix, which could
+ * produce false negatives when the pre-assistant content exceeds the byte
+ * limit.
+ */
+export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
+  if (!sessionFile) {
+    return false;
+  }
+  try {
+    // Guard against symlink-following (CWE-400 / arbitrary-file-read vector).
+    const stat = await fs.lstat(sessionFile);
+    if (stat.isSymbolicLink()) {
+      return false;
+    }
+
+    const fh = await fs.open(sessionFile, "r");
+    try {
+      const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
+      let recordCount = 0;
+      for await (const line of rl) {
+        if (!line.trim()) {
+          continue;
+        }
+        recordCount++;
+        if (recordCount > SESSION_FILE_MAX_RECORDS) {
+          break;
+        }
+        let obj: unknown;
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const rec = obj as Record<string, unknown> | null;
+        if (
+          rec?.type === "message" &&
+          (rec.message as Record<string, unknown> | undefined)?.role === "assistant"
+        ) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
+}
 
 export type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
@@ -54,8 +109,17 @@ export async function persistSessionEntry(params: PersistSessionEntryParams): Pr
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
+  sessionHasHistory?: boolean;
 }): string {
   if (!params.isFallbackRetry) {
+    return params.body;
+  }
+  // When the session has no persisted history (e.g. a freshly-spawned subagent
+  // whose first attempt failed before the SessionManager flushed the user
+  // message to disk), the fallback model would receive only the generic
+  // recovery prompt and lose the original task entirely.  Preserve the
+  // original body in that case so the fallback model can execute the task.
+  if (!params.sessionHasHistory) {
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
@@ -65,7 +129,7 @@ export function prependInternalEventContext(
   body: string,
   events: AgentCommandOpts["internalEvents"],
 ): string {
-  if (body.includes("OpenClaw runtime context (internal):")) {
+  if (hasInternalRuntimeContext(body)) {
     return body;
   }
   const renderedEvents = formatAgentInternalEventsForPrompt(events);
@@ -257,10 +321,12 @@ export function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  sessionHasHistory?: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
+    sessionHasHistory: params.sessionHasHistory,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
@@ -271,93 +337,6 @@ export function runAgentAttempt(params: {
     params.providerOverride === params.authProfileProvider
       ? params.sessionEntry?.authProfileOverride
       : undefined;
-  if (isCliProvider(params.providerOverride, params.cfg)) {
-    const cliSessionBinding = getCliSessionBinding(params.sessionEntry, params.providerOverride);
-    const runCliWithSession = (nextCliSessionId: string | undefined) =>
-      runCliAgent({
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        agentId: params.sessionAgentId,
-        sessionFile: params.sessionFile,
-        workspaceDir: params.workspaceDir,
-        config: params.cfg,
-        prompt: effectivePrompt,
-        provider: params.providerOverride,
-        model: params.modelOverride,
-        thinkLevel: params.resolvedThinkLevel,
-        timeoutMs: params.timeoutMs,
-        runId: params.runId,
-        extraSystemPrompt: params.opts.extraSystemPrompt,
-        cliSessionId: nextCliSessionId,
-        cliSessionBinding:
-          nextCliSessionId === cliSessionBinding?.sessionId ? cliSessionBinding : undefined,
-        authProfileId,
-        bootstrapPromptWarningSignaturesSeen,
-        bootstrapPromptWarningSignature,
-        images: params.isFallbackRetry ? undefined : params.opts.images,
-        streamParams: params.opts.streamParams,
-      });
-    return runCliWithSession(cliSessionBinding?.sessionId).catch(async (err) => {
-      if (
-        err instanceof FailoverError &&
-        err.reason === "session_expired" &&
-        cliSessionBinding?.sessionId &&
-        params.sessionKey &&
-        params.sessionStore &&
-        params.storePath
-      ) {
-        log.warn(
-          `CLI session expired, clearing from session store: provider=${sanitizeForLog(params.providerOverride)} sessionKey=${params.sessionKey}`,
-        );
-
-        const entry = params.sessionStore[params.sessionKey];
-        if (entry) {
-          const updatedEntry = { ...entry };
-          clearCliSession(updatedEntry, params.providerOverride);
-          updatedEntry.updatedAt = Date.now();
-
-          await persistSessionEntry({
-            sessionStore: params.sessionStore,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-            entry: updatedEntry,
-          });
-
-          params.sessionEntry = updatedEntry;
-        }
-
-        return runCliWithSession(undefined).then(async (result) => {
-          if (
-            result.meta.agentMeta?.cliSessionBinding?.sessionId &&
-            params.sessionKey &&
-            params.sessionStore &&
-            params.storePath
-          ) {
-            const entry = params.sessionStore[params.sessionKey];
-            if (entry) {
-              const updatedEntry = { ...entry };
-              setCliSessionBinding(
-                updatedEntry,
-                params.providerOverride,
-                result.meta.agentMeta.cliSessionBinding,
-              );
-              updatedEntry.updatedAt = Date.now();
-
-              await persistSessionEntry({
-                sessionStore: params.sessionStore,
-                sessionKey: params.sessionKey,
-                storePath: params.storePath,
-                entry: updatedEntry,
-              });
-            }
-          }
-          return result;
-        });
-      }
-      throw err;
-    });
-  }
-
   return runEmbeddedPiAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -382,6 +361,7 @@ export function runAgentAttempt(params: {
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,
+    imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
@@ -394,10 +374,12 @@ export function runAgentAttempt(params: {
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
+    internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+    cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
     onAgentEvent: params.onAgentEvent,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,

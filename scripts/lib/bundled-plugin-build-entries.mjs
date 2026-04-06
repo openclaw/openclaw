@@ -8,6 +8,7 @@ import {
 import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
+const toPosixPath = (value) => value.replaceAll("\\", "/");
 
 function readBundledPluginPackageJson(packageJsonPath) {
   if (!fs.existsSync(packageJsonPath)) {
@@ -18,6 +19,14 @@ function readBundledPluginPackageJson(packageJsonPath) {
   } catch {
     return null;
   }
+}
+
+function isManifestlessBundledRuntimeSupportPackage(params) {
+  const packageName = typeof params.packageJson?.name === "string" ? params.packageJson.name : "";
+  if (packageName !== `@openclaw/${params.dirName}`) {
+    return false;
+  }
+  return params.topLevelPublicSurfaceEntries.length > 0;
 }
 
 function collectPluginSourceEntries(packageJson) {
@@ -35,6 +44,10 @@ function collectPluginSourceEntries(packageJson) {
     packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
   }
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
+}
+
+function shouldStageBundledPluginRuntimeDependencies(packageJson) {
+  return packageJson?.openclaw?.bundle?.stageRuntimeDependencies === true;
 }
 
 function collectTopLevelPublicSurfaceEntries(pluginDir) {
@@ -57,6 +70,7 @@ function collectTopLevelPublicSurfaceEntries(pluginDir) {
       const normalizedName = dirent.name.toLowerCase();
       if (
         normalizedName.endsWith(".d.ts") ||
+        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
         normalizedName.includes(".test.") ||
         normalizedName.includes(".spec.") ||
         normalizedName.includes(".fixture.") ||
@@ -83,24 +97,33 @@ export function collectBundledPluginBuildEntries(params = {}) {
 
     const pluginDir = path.join(extensionsRoot, dirent.name);
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
-      continue;
-    }
-
+    const hasManifest = fs.existsSync(manifestPath);
     const packageJsonPath = path.join(pluginDir, "package.json");
     const packageJson = readBundledPluginPackageJson(packageJsonPath);
+    const topLevelPublicSurfaceEntries = collectTopLevelPublicSurfaceEntries(pluginDir);
+    if (
+      !hasManifest &&
+      !isManifestlessBundledRuntimeSupportPackage({
+        dirName: dirent.name,
+        packageJson,
+        topLevelPublicSurfaceEntries,
+      })
+    ) {
+      continue;
+    }
     if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
       continue;
     }
 
     entries.push({
       id: dirent.name,
+      hasManifest,
       hasPackageJson: packageJson !== null,
       packageJson,
       sourceEntries: Array.from(
         new Set([
-          ...collectPluginSourceEntries(packageJson),
-          ...collectTopLevelPublicSurfaceEntries(pluginDir),
+          ...(hasManifest ? collectPluginSourceEntries(packageJson) : []),
+          ...topLevelPublicSurfaceEntries,
         ]),
       ),
     });
@@ -115,7 +138,7 @@ export function listBundledPluginBuildEntries(params = {}) {
       sourceEntries.map((entry) => {
         const normalizedEntry = entry.replace(/^\.\//, "");
         const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
-        return [entryKey, path.join(BUNDLED_PLUGIN_ROOT_DIR, id, normalizedEntry)];
+        return [entryKey, toPosixPath(path.join(BUNDLED_PLUGIN_ROOT_DIR, id, normalizedEntry))];
       }),
     ),
   );
@@ -125,8 +148,10 @@ export function listBundledPluginPackArtifacts(params = {}) {
   const entries = collectBundledPluginBuildEntries(params);
   const artifacts = new Set();
 
-  for (const { id, hasPackageJson, sourceEntries } of entries) {
-    artifacts.add(bundledDistPluginFile(id, "openclaw.plugin.json"));
+  for (const { id, hasManifest, hasPackageJson, sourceEntries } of entries) {
+    if (hasManifest) {
+      artifacts.add(bundledDistPluginFile(id, "openclaw.plugin.json"));
+    }
     if (hasPackageJson) {
       artifacts.add(bundledDistPluginFile(id, "package.json"));
     }
@@ -137,4 +162,24 @@ export function listBundledPluginPackArtifacts(params = {}) {
   }
 
   return [...artifacts].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listBundledPluginRuntimeDependencies(params = {}) {
+  const runtimeDependencies = new Set();
+
+  for (const { packageJson } of collectBundledPluginBuildEntries(params)) {
+    if (!shouldStageBundledPluginRuntimeDependencies(packageJson)) {
+      continue;
+    }
+
+    for (const dependencyName of Object.keys(packageJson?.dependencies ?? {})) {
+      runtimeDependencies.add(dependencyName);
+    }
+
+    for (const dependencyName of Object.keys(packageJson?.optionalDependencies ?? {})) {
+      runtimeDependencies.add(dependencyName);
+    }
+  }
+
+  return [...runtimeDependencies].toSorted((left, right) => left.localeCompare(right));
 }

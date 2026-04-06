@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   rewriteUpdateFlagArgv,
+  resolveMissingPluginCommandMessage,
   shouldEnsureCliPath,
   shouldRegisterPrimarySubcommand,
   shouldSkipPluginCommandRegistration,
@@ -134,5 +135,41 @@ describe("shouldUseRootHelpFastPath", () => {
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
+  });
+});
+
+describe("resolveMissingPluginCommandMessage", () => {
+  it("explains plugins.allow misses for a bundled plugin command", () => {
+    expect(
+      resolveMissingPluginCommandMessage("browser", {
+        plugins: {
+          allow: ["telegram"],
+        },
+      }),
+    ).toContain('`plugins.allow` excludes "browser"');
+  });
+
+  it("explains explicit bundled plugin disablement", () => {
+    expect(
+      resolveMissingPluginCommandMessage("browser", {
+        plugins: {
+          entries: {
+            browser: {
+              enabled: false,
+            },
+          },
+        },
+      }),
+    ).toContain("plugins.entries.browser.enabled=false");
+  });
+
+  it("returns null when the bundled plugin command is already allowed", () => {
+    expect(
+      resolveMissingPluginCommandMessage("browser", {
+        plugins: {
+          allow: ["browser"],
+        },
+      }),
+    ).toBeNull();
   });
 });

@@ -1,21 +1,25 @@
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../../test/helpers/plugins/configured-binding-runtime.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/channels/plugins/binding-routing.js", async (importOriginal) => {
+vi.mock("../../../../src/channels/plugins/binding-routing.js", async () => {
+  const { createConfiguredBindingConversationRuntimeModuleMock } =
+    await import("../test-support/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock(
     {
       ensureConfiguredBindingRouteReadyMock,
       resolveConfiguredBindingRouteMock,
     },
-    importOriginal,
+    () =>
+      vi.importActual<typeof import("../../../../src/channels/plugins/binding-routing.js")>(
+        "../../../../src/channels/plugins/binding-routing.js",
+      ),
   );
 });
 
-import { __testing as sessionBindingTesting } from "../../../../src/infra/outbound/session-binding-service.js";
+import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
@@ -147,7 +151,7 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
       discordConfig: {
         allowBots: true,
       } as NonNullable<
-        import("../../../../src/config/config.js").OpenClawConfig["channels"]
+        import("openclaw/plugin-sdk/config-runtime").OpenClawConfig["channels"]
       >["discord"],
       data: createGuildEvent({
         channelId: CHANNEL_ID,
@@ -161,7 +165,7 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
     discordConfig: {
       allowBots: true,
     } as NonNullable<
-      import("../../../../src/config/config.js").OpenClawConfig["channels"]
+      import("openclaw/plugin-sdk/config-runtime").OpenClawConfig["channels"]
     >["discord"],
     ...overrides,
   } satisfies Parameters<typeof preflightDiscordMessage>[0];
@@ -173,7 +177,6 @@ function createAllowedGuildEntries(requireMention = false) {
       id: GUILD_ID,
       channels: {
         [CHANNEL_ID]: {
-          allow: true,
           enabled: true,
           requireMention,
         },
@@ -246,7 +249,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
-                allow: true,
                 enabled: false,
               },
             },
@@ -268,7 +270,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
-                allow: true,
                 enabled: true,
                 requireMention: false,
               },

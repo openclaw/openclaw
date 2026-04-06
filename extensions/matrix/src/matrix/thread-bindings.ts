@@ -1,13 +1,13 @@
-import type { SessionBindingAdapter } from "openclaw/plugin-sdk/conversation-runtime";
+import path from "node:path";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
-  readJsonFileWithFallback,
   registerSessionBindingAdapter,
-  resolveAgentIdFromSessionKey,
   resolveThreadBindingFarewellText,
+  type SessionBindingAdapter,
   unregisterSessionBindingAdapter,
-  writeJsonFileAtomically,
-} from "../runtime-api.js";
-import { resolveMatrixStateFilePath } from "./client/storage.js";
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
+import { claimCurrentTokenStorageState, resolveMatrixStateFilePath } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";
 import { sendMessageMatrix } from "./send.js";
@@ -132,6 +132,9 @@ async function persistBindingsSnapshot(
   bindings: MatrixThreadBindingRecord[],
 ): Promise<void> {
   await writeJsonFileAtomically(filePath, toStoredBindingsState(bindings));
+  claimCurrentTokenStorageState({
+    rootDir: path.dirname(filePath),
+  });
 }
 
 function buildMatrixBindingIntroText(params: {
