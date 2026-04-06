@@ -2,6 +2,7 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -149,6 +150,21 @@ export const slackApprovalCapability = createApproverRestrictedNativeApprovalCap
   resolveOriginTarget: resolveSlackOriginTarget,
   resolveApproverDmTargets: resolveSlackApproverDmTargets,
   notifyOriginWhenDmOnly: true,
+  nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    eventKinds: ["exec"],
+    isConfigured: ({ cfg, accountId }) =>
+      isSlackExecApprovalClientEnabled({
+        cfg,
+        accountId,
+      }),
+    shouldHandle: ({ cfg, accountId, request }) =>
+      shouldHandleSlackExecApprovalRequest({
+        cfg,
+        accountId,
+        request,
+      }),
+    load: async () => (await import("./approval-handler.runtime.js")).slackApprovalNativeRuntime,
+  }),
 });
 
 export const slackNativeApprovalAdapter = splitChannelApprovalCapability(slackApprovalCapability);

@@ -3,6 +3,7 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -145,6 +146,21 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
     normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveMatrixOriginTarget,
   resolveApproverDmTargets: resolveMatrixApproverDmTargets,
+  nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    eventKinds: ["exec"],
+    isConfigured: ({ cfg, accountId }) =>
+      isMatrixExecApprovalClientEnabled({
+        cfg,
+        accountId,
+      }),
+    shouldHandle: ({ cfg, accountId, request }) =>
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId,
+        request,
+      }),
+    load: async () => (await import("./approval-handler.runtime.js")).matrixApprovalNativeRuntime,
+  }),
 });
 
 const splitMatrixApprovalCapability = splitChannelApprovalCapability(
@@ -214,6 +230,7 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
   describeExecApprovalSetup: matrixNativeApprovalCapability.describeExecApprovalSetup,
   approvals: {
     delivery: matrixDeliveryAdapter,
+    nativeRuntime: matrixNativeApprovalCapability.nativeRuntime,
     native: matrixExecOnlyNativeApprovalAdapter,
     render: matrixNativeApprovalCapability.render,
   },
@@ -225,6 +242,7 @@ export const matrixNativeApprovalAdapter = {
     getActionAvailabilityState: matrixApprovalCapability.getActionAvailabilityState,
   },
   delivery: matrixDeliveryAdapter,
+  nativeRuntime: matrixApprovalCapability.nativeRuntime,
   render: matrixApprovalCapability.render,
   native: matrixExecOnlyNativeApprovalAdapter,
 };

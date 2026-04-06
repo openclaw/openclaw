@@ -13,6 +13,7 @@ function buildApprovalCapabilityFromLegacyPlugin(
     !resolveApproveCommandBehavior &&
     !approvals?.describeExecApprovalSetup &&
     !approvals?.delivery &&
+    !approvals?.nativeRuntime &&
     !approvals?.render &&
     !approvals?.native
   ) {
@@ -24,6 +25,7 @@ function buildApprovalCapabilityFromLegacyPlugin(
     resolveApproveCommandBehavior,
     describeExecApprovalSetup: approvals?.describeExecApprovalSetup,
     delivery: approvals?.delivery,
+    nativeRuntime: approvals?.nativeRuntime,
     render: approvals?.render,
     native: approvals?.native,
   };
@@ -49,6 +51,7 @@ export function resolveChannelApprovalCapability(
     describeExecApprovalSetup:
       capability.describeExecApprovalSetup ?? legacyCapability.describeExecApprovalSetup,
     delivery: capability.delivery ?? legacyCapability.delivery,
+    nativeRuntime: capability.nativeRuntime ?? legacyCapability.nativeRuntime,
     render: capability.render ?? legacyCapability.render,
     native: capability.native ?? legacyCapability.native,
   };
@@ -61,12 +64,18 @@ export function resolveChannelApprovalAdapter(
   if (!capability) {
     return undefined;
   }
-  if (!capability.delivery && !capability.render && !capability.native) {
+  if (
+    !capability.delivery &&
+    !capability.nativeRuntime &&
+    !capability.render &&
+    !capability.native
+  ) {
     return undefined;
   }
   return {
     describeExecApprovalSetup: capability.describeExecApprovalSetup,
     delivery: capability.delivery,
+    nativeRuntime: capability.nativeRuntime,
     render: capability.render,
     native: capability.native,
   };

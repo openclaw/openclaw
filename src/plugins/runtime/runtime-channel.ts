@@ -66,9 +66,91 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
+import type {
+  PluginRuntimeChannelContextEvent,
+  PluginRuntimeChannelContextKey,
+} from "./types-channel.js";
 import type { PluginRuntime } from "./types.js";
 
+type StoredRuntimeContext = {
+  token: symbol;
+  context: unknown;
+  normalizedKey: {
+    channelId: string;
+    accountId?: string;
+    capability: string;
+  };
+};
+
+function normalizeRuntimeContextString(value: string | null | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function normalizeRuntimeContextKey(params: PluginRuntimeChannelContextKey): {
+  mapKey: string;
+  normalizedKey: {
+    channelId: string;
+    accountId?: string;
+    capability: string;
+  };
+} | null {
+  const channelId = normalizeRuntimeContextString(params.channelId);
+  const capability = normalizeRuntimeContextString(params.capability);
+  const accountId = normalizeRuntimeContextString(params.accountId);
+  if (!channelId || !capability) {
+    return null;
+  }
+  return {
+    mapKey: `${channelId}\u0000${accountId}\u0000${capability}`,
+    normalizedKey: {
+      channelId,
+      capability,
+      ...(accountId ? { accountId } : {}),
+    },
+  };
+}
+
+function doesRuntimeContextWatcherMatch(params: {
+  watcher: {
+    channelId?: string;
+    accountId?: string;
+    capability?: string;
+  };
+  event: PluginRuntimeChannelContextEvent;
+}): boolean {
+  if (params.watcher.channelId && params.watcher.channelId !== params.event.key.channelId) {
+    return false;
+  }
+  if (
+    params.watcher.accountId !== undefined &&
+    params.watcher.accountId !== (params.event.key.accountId ?? "")
+  ) {
+    return false;
+  }
+  if (params.watcher.capability && params.watcher.capability !== params.event.key.capability) {
+    return false;
+  }
+  return true;
+}
+
 export function createRuntimeChannel(): PluginRuntime["channel"] {
+  const runtimeContexts = new Map<string, StoredRuntimeContext>();
+  const runtimeContextWatchers = new Set<{
+    filter: {
+      channelId?: string;
+      accountId?: string;
+      capability?: string;
+    };
+    onEvent: (event: PluginRuntimeChannelContextEvent) => void;
+  }>();
+  const emitRuntimeContextEvent = (event: PluginRuntimeChannelContextEvent) => {
+    for (const watcher of runtimeContextWatchers) {
+      if (!doesRuntimeContextWatcherMatch({ watcher: watcher.filter, event })) {
+        continue;
+      }
+      watcher.onEvent(event);
+    }
+  };
   const channelRuntime = {
     text: {
       chunkByNewline,
@@ -171,6 +253,64 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
           accountId,
           maxAgeMs,
         }),
+    },
+    runtimeContexts: {
+      register: (params) => {
+        const normalized = normalizeRuntimeContextKey(params);
+        if (!normalized) {
+          return { dispose: () => {} };
+        }
+        const token = Symbol(normalized.mapKey);
+        runtimeContexts.set(normalized.mapKey, {
+          token,
+          context: params.context,
+          normalizedKey: normalized.normalizedKey,
+        });
+        emitRuntimeContextEvent({
+          type: "registered",
+          key: normalized.normalizedKey,
+          context: params.context,
+        });
+        let disposed = false;
+        const dispose = () => {
+          if (disposed) {
+            return;
+          }
+          disposed = true;
+          const current = runtimeContexts.get(normalized.mapKey);
+          if (!current || current.token !== token) {
+            return;
+          }
+          runtimeContexts.delete(normalized.mapKey);
+          emitRuntimeContextEvent({
+            type: "unregistered",
+            key: normalized.normalizedKey,
+          });
+        };
+        params.abortSignal?.addEventListener("abort", dispose, { once: true });
+        return { dispose };
+      },
+      get: <T = unknown>(params: PluginRuntimeChannelContextKey) => {
+        const normalized = normalizeRuntimeContextKey(params);
+        if (!normalized) {
+          return undefined;
+        }
+        return runtimeContexts.get(normalized.mapKey)?.context as T | undefined;
+      },
+      watch: (params) => {
+        const watcher = {
+          filter: {
+            ...(params.channelId?.trim() ? { channelId: params.channelId.trim() } : {}),
+            ...(params.accountId != null ? { accountId: params.accountId.trim() } : {}),
+            ...(params.capability?.trim() ? { capability: params.capability.trim() } : {}),
+          },
+          onEvent: params.onEvent,
+        };
+        runtimeContextWatchers.add(watcher);
+        return () => {
+          runtimeContextWatchers.delete(watcher);
+        };
+      },
     },
   } satisfies PluginRuntime["channel"];
 

@@ -487,6 +487,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
 
           return monitorMatrixProvider({
             runtime: ctx.runtime,
+            channelRuntime: ctx.channelRuntime,
             abortSignal: ctx.abortSignal,
             mediaMaxMb: account.config.mediaMaxMb,
             initialSyncLimit: account.config.initialSyncLimit,

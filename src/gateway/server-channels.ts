@@ -2,7 +2,9 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-bootstrap.js";
 import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -108,7 +110,8 @@ type ChannelManagerOptions = {
    * because they can directly import internal modules from the monorepo.
    *
    * This field is optional - omitting it maintains backward compatibility
-   * with existing channels.
+   * with existing channels. When provided, it must be a real
+   * `createPluginRuntime().channel` surface; partial stubs are not supported.
    *
    * @example
    * ```typescript
@@ -131,7 +134,8 @@ type ChannelManagerOptions = {
    *
    * Use this when the caller wants to avoid instantiating the full plugin channel
    * runtime during gateway startup. The manager only needs the runtime surface once
-   * a channel account actually starts.
+   * a channel account actually starts. The resolved value must be a real
+   * `createPluginRuntime().channel` surface.
    */
   resolveChannelRuntime?: () => PluginRuntime["channel"];
 };
@@ -296,6 +300,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const abort = new AbortController();
         store.aborts.set(id, abort);
         let handedOffTask = false;
+        const scopedChannelRuntime = createTaskScopedChannelRuntime({
+          channelRuntime: getChannelRuntime(),
+        });
+        const channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
+        let stopApprovalBootstrap: () => Promise<void> = async () => {};
+        const stopTaskScopedApprovalRuntime = async () => {
+          scopedChannelRuntime.dispose();
+          await stopApprovalBootstrap();
+        };
 
         try {
           const account = plugin.config.resolveAccount(cfg, id);
@@ -360,25 +373,34 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           });
 
           const log = channelLogs[channelId];
-          const resolvedChannelRuntime = getChannelRuntime();
-          const task = startAccount({
+          stopApprovalBootstrap = await startChannelApprovalHandlerBootstrap({
+            plugin,
             cfg,
             accountId: id,
-            account,
-            runtime: channelRuntimeEnvs[channelId],
-            abortSignal: abort.signal,
-            log,
-            getStatus: () => getRuntime(channelId, id),
-            setStatus: (next) => setRuntime(channelId, id, next),
-            ...(resolvedChannelRuntime ? { channelRuntime: resolvedChannelRuntime } : {}),
+            channelRuntime: channelRuntimeForTask,
+            logger: log,
           });
-          const trackedPromise = Promise.resolve(task)
+          const task = Promise.resolve().then(() =>
+            startAccount({
+              cfg,
+              accountId: id,
+              account,
+              runtime: channelRuntimeEnvs[channelId],
+              abortSignal: abort.signal,
+              log,
+              getStatus: () => getRuntime(channelId, id),
+              setStatus: (next) => setRuntime(channelId, id, next),
+              ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+            }),
+          );
+          const trackedPromise = task
             .catch((err) => {
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
-            .finally(() => {
+            .finally(async () => {
+              await stopTaskScopedApprovalRuntime();
               setRuntime(channelId, id, {
                 accountId: id,
                 running: false,
@@ -442,6 +464,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           resolveStart?.();
           if (store.starting.get(id) === startGate) {
             store.starting.delete(id);
+          }
+          if (!handedOffTask) {
+            await stopTaskScopedApprovalRuntime();
           }
           if (!handedOffTask && store.aborts.get(id) === abort) {
             store.aborts.delete(id);

@@ -1,13 +1,14 @@
 import type {
   ChannelApprovalKind,
   ChannelApprovalNativeAdapter,
-  ChannelApprovalNativeTarget,
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveChannelNativeApprovalDeliveryPlan,
   type ChannelApprovalNativePlannedTarget,
+  type ChannelApprovalNativeDeliveryPlan,
 } from "./approval-native-delivery.js";
+import { createExecApprovalNativeRouteReporter } from "./approval-native-route-coordinator.js";
 import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
@@ -26,9 +27,11 @@ export type PreparedChannelNativeApprovalTarget<TPreparedTarget> = {
   target: TPreparedTarget;
 };
 
-function buildTargetKey(target: ChannelApprovalNativeTarget): string {
-  return `${target.to}:${target.threadId == null ? "" : String(target.threadId)}`;
-}
+export type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
+  entries: TPendingEntry[];
+  deliveryPlan: ChannelApprovalNativeDeliveryPlan;
+  deliveredTargets: ChannelApprovalNativePlannedTarget[];
+};
 
 export async function deliverApprovalRequestViaChannelNativePlan<
   TPreparedTarget,
@@ -40,10 +43,6 @@ export async function deliverApprovalRequestViaChannelNativePlan<
   approvalKind: ChannelApprovalKind;
   request: TRequest;
   adapter?: ChannelApprovalNativeAdapter | null;
-  sendOriginNotice?: (params: {
-    originTarget: ChannelApprovalNativeTarget;
-    request: TRequest;
-  }) => Promise<void>;
   prepareTarget: (params: {
     plannedTarget: ChannelApprovalNativePlannedTarget;
     request: TRequest;
@@ -56,11 +55,6 @@ export async function deliverApprovalRequestViaChannelNativePlan<
     preparedTarget: TPreparedTarget;
     request: TRequest;
   }) => TPendingEntry | null | Promise<TPendingEntry | null>;
-  onOriginNoticeError?: (params: {
-    error: unknown;
-    originTarget: ChannelApprovalNativeTarget;
-    request: TRequest;
-  }) => void;
   onDeliveryError?: (params: {
     error: unknown;
     plannedTarget: ChannelApprovalNativePlannedTarget;
@@ -77,7 +71,7 @@ export async function deliverApprovalRequestViaChannelNativePlan<
     request: TRequest;
     entry: TPendingEntry;
   }) => void;
-}): Promise<TPendingEntry[]> {
+}): Promise<ChannelNativeApprovalPlanDeliveryResult<TPendingEntry>> {
   const deliveryPlan = await resolveChannelNativeApprovalDeliveryPlan({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -86,34 +80,9 @@ export async function deliverApprovalRequestViaChannelNativePlan<
     adapter: params.adapter,
   });
 
-  const originTargetKey = deliveryPlan.originTarget
-    ? buildTargetKey(deliveryPlan.originTarget)
-    : null;
-  const plannedTargetKeys = new Set(
-    deliveryPlan.targets.map((plannedTarget) => buildTargetKey(plannedTarget.target)),
-  );
-
-  if (
-    deliveryPlan.notifyOriginWhenDmOnly &&
-    deliveryPlan.originTarget &&
-    (originTargetKey == null || !plannedTargetKeys.has(originTargetKey))
-  ) {
-    try {
-      await params.sendOriginNotice?.({
-        originTarget: deliveryPlan.originTarget,
-        request: params.request,
-      });
-    } catch (error) {
-      params.onOriginNoticeError?.({
-        error,
-        originTarget: deliveryPlan.originTarget,
-        request: params.request,
-      });
-    }
-  }
-
   const deliveredKeys = new Set<string>();
   const pendingEntries: TPendingEntry[] = [];
+  const deliveredTargets: ChannelApprovalNativePlannedTarget[] = [];
   for (const plannedTarget of deliveryPlan.targets) {
     try {
       const preparedTarget = await params.prepareTarget({
@@ -143,6 +112,7 @@ export async function deliverApprovalRequestViaChannelNativePlan<
 
       deliveredKeys.add(preparedTarget.dedupeKey);
       pendingEntries.push(entry);
+      deliveredTargets.push(plannedTarget);
       params.onDelivered?.({
         plannedTarget,
         preparedTarget,
@@ -158,7 +128,11 @@ export async function deliverApprovalRequestViaChannelNativePlan<
     }
   }
 
-  return pendingEntries;
+  return {
+    entries: pendingEntries,
+    deliveryPlan,
+    deliveredTargets,
+  };
 }
 
 function defaultResolveApprovalKind(request: ApprovalRequest): ChannelApprovalKind {
@@ -175,6 +149,8 @@ type ChannelNativeApprovalRuntimeAdapter<
   ExecApprovalChannelRuntimeAdapter<TPendingEntry, TRequest, TResolved>,
   "deliverRequested"
 > & {
+  channel?: string;
+  channelLabel?: string;
   accountId?: string | null;
   nativeAdapter?: ChannelApprovalNativeAdapter | null;
   resolveApprovalKind?: (request: TRequest) => ChannelApprovalKind;
@@ -183,12 +159,6 @@ type ChannelNativeApprovalRuntimeAdapter<
     approvalKind: ChannelApprovalKind;
     nowMs: number;
   }) => TPendingContent | Promise<TPendingContent>;
-  sendOriginNotice?: (params: {
-    originTarget: ChannelApprovalNativeTarget;
-    request: TRequest;
-    approvalKind: ChannelApprovalKind;
-    pendingContent: TPendingContent;
-  }) => Promise<void>;
   prepareTarget: (params: {
     plannedTarget: ChannelApprovalNativePlannedTarget;
     request: TRequest;
@@ -205,13 +175,6 @@ type ChannelNativeApprovalRuntimeAdapter<
     approvalKind: ChannelApprovalKind;
     pendingContent: TPendingContent;
   }) => TPendingEntry | null | Promise<TPendingEntry | null>;
-  onOriginNoticeError?: (params: {
-    error: unknown;
-    originTarget: ChannelApprovalNativeTarget;
-    request: TRequest;
-    approvalKind: ChannelApprovalKind;
-    pendingContent: TPendingContent;
-  }) => void;
   onDeliveryError?: (params: {
     error: unknown;
     plannedTarget: ChannelApprovalNativePlannedTarget;
@@ -234,6 +197,7 @@ type ChannelNativeApprovalRuntimeAdapter<
     pendingContent: TPendingContent;
     entry: TPendingEntry;
   }) => void;
+  onStopped?: () => Promise<void> | void;
 };
 
 export function createChannelNativeApprovalRuntime<
@@ -254,102 +218,138 @@ export function createChannelNativeApprovalRuntime<
   const nowMs = adapter.nowMs ?? Date.now;
   const resolveApprovalKind =
     adapter.resolveApprovalKind ?? ((request: TRequest) => defaultResolveApprovalKind(request));
+  let runtimeRequest:
+    | ((method: string, params: Record<string, unknown>) => Promise<unknown>)
+    | null = null;
+  const handledEventKinds = new Set(adapter.eventKinds ?? ["exec"]);
+  const routeReporter = createExecApprovalNativeRouteReporter({
+    handlesExec: handledEventKinds.has("exec"),
+    channel: adapter.channel,
+    channelLabel: adapter.channelLabel,
+    accountId: adapter.accountId,
+    requestGateway: async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+      if (!runtimeRequest) {
+        throw new Error(`${adapter.label}: gateway client not connected`);
+      }
+      return (await runtimeRequest(method, params)) as T;
+    },
+  });
 
-  return createExecApprovalChannelRuntime<TPendingEntry, TRequest, TResolved>({
+  const runtime = createExecApprovalChannelRuntime<TPendingEntry, TRequest, TResolved>({
     label: adapter.label,
     clientDisplayName: adapter.clientDisplayName,
     cfg: adapter.cfg,
     gatewayUrl: adapter.gatewayUrl,
     eventKinds: adapter.eventKinds,
     isConfigured: adapter.isConfigured,
-    shouldHandle: adapter.shouldHandle,
+    shouldHandle: (request) => {
+      const shouldHandle = adapter.shouldHandle(request);
+      if (shouldHandle || resolveApprovalKind(request) !== "exec") {
+        return shouldHandle;
+      }
+      void routeReporter.reportSkipped(request as ExecApprovalRequest);
+      return false;
+    },
     finalizeResolved: adapter.finalizeResolved,
     finalizeExpired: adapter.finalizeExpired,
+    onStopped: adapter.onStopped,
     nowMs,
     deliverRequested: async (request) => {
       const approvalKind = resolveApprovalKind(request);
-      const pendingContent = await adapter.buildPendingContent({
-        request,
-        approvalKind,
-        nowMs: nowMs(),
-      });
-      return await deliverApprovalRequestViaChannelNativePlan({
-        cfg: adapter.cfg,
-        accountId: adapter.accountId,
-        approvalKind,
-        request,
-        adapter: adapter.nativeAdapter,
-        sendOriginNotice: adapter.sendOriginNotice
-          ? async ({ originTarget, request }) => {
-              await adapter.sendOriginNotice?.({
-                originTarget,
-                request,
-                approvalKind,
-                pendingContent,
-              });
-            }
-          : undefined,
-        prepareTarget: async ({ plannedTarget, request }) =>
-          await adapter.prepareTarget({
-            plannedTarget,
-            request,
-            approvalKind,
-            pendingContent,
-          }),
-        deliverTarget: async ({ plannedTarget, preparedTarget, request }) =>
-          await adapter.deliverTarget({
-            plannedTarget,
-            preparedTarget,
-            request,
-            approvalKind,
-            pendingContent,
-          }),
-        onOriginNoticeError: adapter.onOriginNoticeError
-          ? ({ error, originTarget, request }) => {
-              adapter.onOriginNoticeError?.({
-                error,
-                originTarget,
-                request,
-                approvalKind,
-                pendingContent,
-              });
-            }
-          : undefined,
-        onDeliveryError: adapter.onDeliveryError
-          ? ({ error, plannedTarget, request }) => {
-              adapter.onDeliveryError?.({
-                error,
-                plannedTarget,
-                request,
-                approvalKind,
-                pendingContent,
-              });
-            }
-          : undefined,
-        onDuplicateSkipped: adapter.onDuplicateSkipped
-          ? ({ plannedTarget, preparedTarget, request }) => {
-              adapter.onDuplicateSkipped?.({
-                plannedTarget,
-                preparedTarget,
-                request,
-                approvalKind,
-                pendingContent,
-              });
-            }
-          : undefined,
-        onDelivered: adapter.onDelivered
-          ? ({ plannedTarget, preparedTarget, request, entry }) => {
-              adapter.onDelivered?.({
-                plannedTarget,
-                preparedTarget,
-                request,
-                approvalKind,
-                pendingContent,
-                entry,
-              });
-            }
-          : undefined,
-      });
+      let deliveryPlan: ChannelApprovalNativeDeliveryPlan = {
+        targets: [],
+        originTarget: null,
+        notifyOriginWhenDmOnly: false,
+      };
+      let deliveredTargets: ChannelApprovalNativePlannedTarget[] = [];
+      try {
+        const pendingContent = await adapter.buildPendingContent({
+          request,
+          approvalKind,
+          nowMs: nowMs(),
+        });
+        const deliveryResult = await deliverApprovalRequestViaChannelNativePlan({
+          cfg: adapter.cfg,
+          accountId: adapter.accountId,
+          approvalKind,
+          request,
+          adapter: adapter.nativeAdapter,
+          prepareTarget: async ({ plannedTarget, request }) =>
+            await adapter.prepareTarget({
+              plannedTarget,
+              request,
+              approvalKind,
+              pendingContent,
+            }),
+          deliverTarget: async ({ plannedTarget, preparedTarget, request }) =>
+            await adapter.deliverTarget({
+              plannedTarget,
+              preparedTarget,
+              request,
+              approvalKind,
+              pendingContent,
+            }),
+          onDeliveryError: adapter.onDeliveryError
+            ? ({ error, plannedTarget, request }) => {
+                adapter.onDeliveryError?.({
+                  error,
+                  plannedTarget,
+                  request,
+                  approvalKind,
+                  pendingContent,
+                });
+              }
+            : undefined,
+          onDuplicateSkipped: adapter.onDuplicateSkipped
+            ? ({ plannedTarget, preparedTarget, request }) => {
+                adapter.onDuplicateSkipped?.({
+                  plannedTarget,
+                  preparedTarget,
+                  request,
+                  approvalKind,
+                  pendingContent,
+                });
+              }
+            : undefined,
+          onDelivered: adapter.onDelivered
+            ? ({ plannedTarget, preparedTarget, request, entry }) => {
+                adapter.onDelivered?.({
+                  plannedTarget,
+                  preparedTarget,
+                  request,
+                  approvalKind,
+                  pendingContent,
+                  entry,
+                });
+              }
+            : undefined,
+        });
+        deliveryPlan = deliveryResult.deliveryPlan;
+        deliveredTargets = deliveryResult.deliveredTargets;
+        return deliveryResult.entries;
+      } finally {
+        if (approvalKind === "exec") {
+          await routeReporter.reportDelivery({
+            request: request as ExecApprovalRequest,
+            deliveryPlan,
+            deliveredTargets,
+          });
+        }
+      }
     },
   });
+
+  runtimeRequest = (method, params) => runtime.request(method, params);
+
+  return {
+    ...runtime,
+    async start() {
+      await runtime.start();
+      routeReporter.start();
+    },
+    async stop() {
+      await routeReporter.stop();
+      await runtime.stop();
+    },
+  };
 }

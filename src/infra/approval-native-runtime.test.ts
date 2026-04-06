@@ -1,9 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
+import { clearExecApprovalNativeRouteStateForTest } from "./approval-native-route-coordinator.js";
 import {
   createChannelNativeApprovalRuntime,
   deliverApprovalRequestViaChannelNativePlan,
 } from "./approval-native-runtime.js";
+
+const mockGatewayClientStarts = vi.hoisted(() => vi.fn());
+const mockGatewayClientStops = vi.hoisted(() => vi.fn());
+const mockGatewayClientRequests = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const mockCreateOperatorApprovalsGatewayClient = vi.hoisted(() => vi.fn());
+
+vi.mock("../gateway/operator-approvals-client.js", () => ({
+  createOperatorApprovalsGatewayClient: mockCreateOperatorApprovalsGatewayClient,
+}));
 
 const execRequest = {
   id: "approval-1",
@@ -14,8 +24,13 @@ const execRequest = {
   expiresAtMs: 120_000,
 };
 
+afterEach(() => {
+  clearExecApprovalNativeRouteStateForTest();
+  vi.useRealTimers();
+});
+
 describe("deliverApprovalRequestViaChannelNativePlan", () => {
-  it("sends an origin notice and dedupes converged prepared targets", async () => {
+  it("dedupes converged prepared targets", async () => {
     const adapter: ChannelApprovalNativeAdapter = {
       describeDeliveryCapabilities: () => ({
         enabled: true,
@@ -27,7 +42,6 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
       resolveOriginTarget: async () => ({ to: "origin-room" }),
       resolveApproverDmTargets: async () => [{ to: "approver-1" }, { to: "approver-2" }],
     };
-    const sendOriginNotice = vi.fn().mockResolvedValue(undefined);
     const prepareTarget = vi
       .fn()
       .mockImplementation(
@@ -51,24 +65,21 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
       );
     const onDuplicateSkipped = vi.fn();
 
-    const entries = await deliverApprovalRequestViaChannelNativePlan({
+    const result = await deliverApprovalRequestViaChannelNativePlan({
       cfg: {} as never,
       approvalKind: "exec",
       request: execRequest,
       adapter,
-      sendOriginNotice: async ({ originTarget }) => {
-        await sendOriginNotice(originTarget);
-      },
       prepareTarget,
       deliverTarget,
       onDuplicateSkipped,
     });
 
-    expect(sendOriginNotice).toHaveBeenCalledWith({ to: "origin-room" });
     expect(prepareTarget).toHaveBeenCalledTimes(2);
     expect(deliverTarget).toHaveBeenCalledTimes(1);
     expect(onDuplicateSkipped).toHaveBeenCalledTimes(1);
-    expect(entries).toEqual([{ channelId: "shared-dm" }]);
+    expect(result.entries).toEqual([{ channelId: "shared-dm" }]);
+    expect(result.deliveryPlan.notifyOriginWhenDmOnly).toBe(true);
   });
 
   it("continues after per-target delivery failures", async () => {
@@ -83,7 +94,7 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
     };
     const onDeliveryError = vi.fn();
 
-    const entries = await deliverApprovalRequestViaChannelNativePlan({
+    const result = await deliverApprovalRequestViaChannelNativePlan({
       cfg: {} as never,
       approvalKind: "exec",
       request: execRequest,
@@ -102,11 +113,403 @@ describe("deliverApprovalRequestViaChannelNativePlan", () => {
     });
 
     expect(onDeliveryError).toHaveBeenCalledTimes(1);
-    expect(entries).toEqual([{ channelId: "approver-2" }]);
+    expect(result.entries).toEqual([{ channelId: "approver-2" }]);
   });
 });
 
 describe("createChannelNativeApprovalRuntime", () => {
+  it("posts a same-channel DM redirect notice through the gateway after actual delivery", async () => {
+    mockGatewayClientStarts.mockReset();
+    mockGatewayClientStops.mockReset();
+    mockGatewayClientRequests.mockReset();
+    mockCreateOperatorApprovalsGatewayClient.mockReset().mockResolvedValue({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-same-channel-route-notice",
+      clientDisplayName: "Test",
+      channel: "slack",
+      channelLabel: "Slack",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({ to: "channel:C123", threadId: "1712345678.123456" }),
+        resolveApproverDmTargets: async () => [{ to: "owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "dm:owner",
+        target: { chatId: "owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+
+    await runtime.start();
+    await runtime.handleRequested({
+      id: "req-1",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "1712345678.123456",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("send", {
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "1712345678.123456",
+      message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+      idempotencyKey: "approval-route-notice:req-1",
+    });
+    await runtime.stop();
+  });
+
+  it("aggregates same-channel and cross-channel fallback destinations into one notice", async () => {
+    mockGatewayClientStarts.mockReset();
+    mockGatewayClientStops.mockReset();
+    mockGatewayClientRequests.mockReset();
+    mockCreateOperatorApprovalsGatewayClient.mockReset().mockResolvedValue({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
+    const matrixRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-matrix-route-notice",
+      clientDisplayName: "Matrix",
+      channel: "matrix",
+      channelLabel: "Matrix",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({ to: "room:!ops:example.org" }),
+        resolveApproverDmTargets: async () => [{ to: "user:@owner:example.org" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "matrix-dm:owner",
+        target: { chatId: "matrix-dm:owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "matrix-dm:owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+    const telegramRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-telegram-route-notice",
+      clientDisplayName: "Telegram",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: false,
+          supportsApproverDmSurface: true,
+        }),
+        resolveApproverDmTargets: async () => [{ to: "owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "telegram-dm:owner",
+        target: { chatId: "telegram-dm:owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "telegram-dm:owner", messageId: "m2" }),
+      finalizeResolved: async () => {},
+    });
+
+    await matrixRuntime.start();
+    await telegramRuntime.start();
+    const request = {
+      id: "req-2",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "matrix",
+        turnSourceTo: "room:!ops:example.org",
+        turnSourceAccountId: "default",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    await telegramRuntime.handleRequested(request);
+    await matrixRuntime.handleRequested(request);
+
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("send", {
+      channel: "matrix",
+      to: "room:!ops:example.org",
+      accountId: "default",
+      threadId: undefined,
+      message:
+        "Approval required. I sent the approval request to Matrix DMs or Telegram DMs, not this chat.",
+      idempotencyKey: "approval-route-notice:req-2",
+    });
+    await matrixRuntime.stop();
+    await telegramRuntime.stop();
+  });
+
+  it("suppresses the aggregated notice when another runtime already delivered to the origin chat", async () => {
+    mockGatewayClientStarts.mockReset();
+    mockGatewayClientStops.mockReset();
+    mockGatewayClientRequests.mockReset();
+    mockCreateOperatorApprovalsGatewayClient.mockReset().mockResolvedValue({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
+    const matrixRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-matrix-origin-delivered",
+      clientDisplayName: "Matrix",
+      channel: "matrix",
+      channelLabel: "Matrix",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "origin",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: false,
+        }),
+        resolveOriginTarget: async () => ({ to: "room:!ops:example.org" }),
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async ({ plannedTarget }) => ({
+        dedupeKey: plannedTarget.target.to,
+        target: { chatId: plannedTarget.target.to },
+      }),
+      deliverTarget: async ({ preparedTarget }) => ({
+        chatId: preparedTarget.chatId,
+        messageId: "matrix-origin",
+      }),
+      finalizeResolved: async () => {},
+    });
+    const telegramRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-telegram-elsewhere",
+      clientDisplayName: "Telegram",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: false,
+          supportsApproverDmSurface: true,
+        }),
+        resolveApproverDmTargets: async () => [{ to: "owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "telegram-dm:owner",
+        target: { chatId: "telegram-dm:owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "telegram-dm:owner", messageId: "m2" }),
+      finalizeResolved: async () => {},
+    });
+
+    await matrixRuntime.start();
+    await telegramRuntime.start();
+    const request = {
+      id: "req-3",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "matrix",
+        turnSourceTo: "room:!ops:example.org",
+        turnSourceAccountId: "default",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    await telegramRuntime.handleRequested(request);
+    await matrixRuntime.handleRequested(request);
+
+    expect(mockGatewayClientRequests).not.toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        idempotencyKey: "approval-route-notice:req-3",
+      }),
+    );
+    await matrixRuntime.stop();
+    await telegramRuntime.stop();
+  });
+
+  it("respects channels that opt out of same-channel DM redirect notices", async () => {
+    mockGatewayClientStarts.mockReset();
+    mockGatewayClientStops.mockReset();
+    mockGatewayClientRequests.mockReset();
+    mockCreateOperatorApprovalsGatewayClient.mockReset().mockResolvedValue({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-matrix-no-origin-notice",
+      clientDisplayName: "Matrix",
+      channel: "matrix",
+      channelLabel: "Matrix",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: false,
+        }),
+        resolveOriginTarget: async () => ({ to: "room:!ops:example.org" }),
+        resolveApproverDmTargets: async () => [{ to: "user:@owner:example.org" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "matrix-dm:owner",
+        target: { chatId: "matrix-dm:owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "matrix-dm:owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+
+    await runtime.start();
+    await runtime.handleRequested({
+      id: "req-4",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "matrix",
+        turnSourceTo: "room:!ops:example.org",
+        turnSourceAccountId: "default",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    expect(mockGatewayClientRequests).not.toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        idempotencyKey: "approval-route-notice:req-4",
+      }),
+    );
+    await runtime.stop();
+  });
+
+  it("finalizes pending notices when a sibling runtime stops before reporting", async () => {
+    mockGatewayClientStarts.mockReset();
+    mockGatewayClientStops.mockReset();
+    mockGatewayClientRequests.mockReset();
+    mockCreateOperatorApprovalsGatewayClient.mockReset().mockResolvedValue({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
+    const slackRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-slack-stop-finalize",
+      clientDisplayName: "Slack",
+      channel: "slack",
+      channelLabel: "Slack",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({ to: "channel:C123", threadId: "1712345678.123456" }),
+        resolveApproverDmTargets: async () => [{ to: "owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "slack-dm:owner",
+        target: { chatId: "slack-dm:owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "slack-dm:owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+    const telegramRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-telegram-stop-before-report",
+      clientDisplayName: "Telegram",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: false,
+          supportsApproverDmSurface: true,
+        }),
+        resolveApproverDmTargets: async () => [{ to: "owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "telegram-dm:owner",
+        target: { chatId: "telegram-dm:owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "telegram-dm:owner", messageId: "m2" }),
+      finalizeResolved: async () => {},
+    });
+
+    await slackRuntime.start();
+    await telegramRuntime.start();
+    await slackRuntime.handleRequested({
+      id: "req-5",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "1712345678.123456",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    });
+    await telegramRuntime.stop();
+
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("send", {
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "1712345678.123456",
+      message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+      idempotencyKey: "approval-route-notice:req-5",
+    });
+    await slackRuntime.stop();
+  });
+
   it("passes the resolved approval kind and pending content through native delivery hooks", async () => {
     const describeDeliveryCapabilities = vi.fn().mockReturnValue({
       enabled: true,
@@ -131,6 +534,8 @@ describe("createChannelNativeApprovalRuntime", () => {
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime",
       clientDisplayName: "Test",
+      channel: "telegram",
+      channelLabel: "Telegram",
       cfg: {} as never,
       accountId: "secondary",
       eventKinds: ["exec", "plugin"] as const,
@@ -212,6 +617,8 @@ describe("createChannelNativeApprovalRuntime", () => {
     const runtime = createChannelNativeApprovalRuntime({
       label: "test/native-runtime-expiry",
       clientDisplayName: "Test",
+      channel: "telegram",
+      channelLabel: "Telegram",
       cfg: {} as never,
       nowMs: Date.now,
       nativeAdapter: {

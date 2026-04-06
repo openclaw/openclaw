@@ -50,6 +50,7 @@ type ApproverRestrictedNativeApprovalParams = {
     request: NativeApprovalRequest;
   }) => NativeApprovalTarget[] | Promise<NativeApprovalTarget[]>;
   notifyOriginWhenDmOnly?: boolean;
+  nativeRuntime?: ChannelApprovalCapability["nativeRuntime"];
   describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
 };
 
@@ -158,6 +159,7 @@ function buildApproverRestrictedNativeApprovalCapability(
               resolveApproverDmTargets: params.resolveApproverDmTargets,
             }
           : undefined,
+      nativeRuntime: params.nativeRuntime,
     },
   });
 }
@@ -173,7 +175,7 @@ export function createChannelApprovalCapability(params: {
   getActionAvailabilityState?: ChannelApprovalCapability["getActionAvailabilityState"];
   resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
   describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
-  approvals?: Pick<ChannelApprovalCapability, "delivery" | "render" | "native">;
+  approvals?: Pick<ChannelApprovalCapability, "delivery" | "nativeRuntime" | "render" | "native">;
 }): ChannelApprovalCapability {
   return {
     authorizeActorAction: params.authorizeActorAction,
@@ -181,6 +183,7 @@ export function createChannelApprovalCapability(params: {
     resolveApproveCommandBehavior: params.resolveApproveCommandBehavior,
     describeExecApprovalSetup: params.describeExecApprovalSetup,
     delivery: params.approvals?.delivery,
+    nativeRuntime: params.approvals?.nativeRuntime,
     render: params.approvals?.render,
     native: params.approvals?.native,
   };
@@ -193,6 +196,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
     resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
   };
   delivery: ChannelApprovalCapability["delivery"];
+  nativeRuntime: ChannelApprovalCapability["nativeRuntime"];
   render: ChannelApprovalCapability["render"];
   native: ChannelApprovalCapability["native"];
   describeExecApprovalSetup: ChannelApprovalCapability["describeExecApprovalSetup"];
@@ -204,6 +208,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
       resolveApproveCommandBehavior: capability.resolveApproveCommandBehavior,
     },
     delivery: capability.delivery,
+    nativeRuntime: capability.nativeRuntime,
     render: capability.render,
     native: capability.native,
     describeExecApprovalSetup: capability.describeExecApprovalSetup,

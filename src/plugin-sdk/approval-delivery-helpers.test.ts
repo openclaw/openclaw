@@ -231,6 +231,21 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
 
 describe("createApproverRestrictedNativeApprovalCapability", () => {
   it("builds the canonical approval capability and preserves legacy split compatibility", () => {
+    const nativeRuntime = {
+      availability: {
+        isConfigured: vi.fn(),
+        shouldHandle: vi.fn(),
+      },
+      presentation: {
+        buildPendingPayload: vi.fn(),
+        buildResolvedResult: vi.fn(),
+        buildExpiredResult: vi.fn(),
+      },
+      transport: {
+        prepareTarget: vi.fn(),
+        deliverPending: vi.fn(),
+      },
+    };
     const describeExecApprovalSetup = vi.fn(
       ({
         channel,
@@ -252,6 +267,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       isNativeDeliveryEnabled: () => true,
       resolveNativeDeliveryMode: () => "dm",
       resolveApproverDmTargets: () => [{ to: "user:@owner:example.com" }],
+      nativeRuntime,
     });
 
     expect(
@@ -349,6 +365,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }),
     );
     expect(split.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
+    expect(split.nativeRuntime).toBe(nativeRuntime);
     expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
   });
 });

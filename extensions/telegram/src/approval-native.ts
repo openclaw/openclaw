@@ -2,6 +2,7 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
@@ -118,6 +119,21 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
     normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveTelegramOriginTarget,
   resolveApproverDmTargets: resolveTelegramApproverDmTargets,
+  nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    eventKinds: ["exec", "plugin"],
+    isConfigured: ({ cfg, accountId }) =>
+      isTelegramExecApprovalClientEnabled({
+        cfg,
+        accountId,
+      }),
+    shouldHandle: ({ cfg, accountId, request }) =>
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId,
+        request,
+      }),
+    load: async () => (await import("./approval-handler.runtime.js")).telegramApprovalNativeRuntime,
+  }),
 });
 
 const resolveTelegramApproveCommandBehavior: NonNullable<

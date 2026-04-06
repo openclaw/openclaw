@@ -64,11 +64,20 @@ Most channel plugins do not need approval-specific code.
 - If your channel exposes native exec approvals, implement `approvalCapability.getActionAvailabilityState` even when the native transport lives entirely under `approvalCapability.native`. Core uses that availability hook to distinguish `enabled` vs `disabled`, decide whether the initiating channel supports native approvals, and include the channel in native-client fallback guidance.
 - Use `outbound.shouldSuppressLocalPayloadPrompt` or `outbound.beforeDeliverPayload` for channel-specific payload lifecycle behavior such as hiding duplicate local approval prompts or sending typing indicators before delivery.
 - Use `approvalCapability.delivery` only for native approval routing or fallback suppression.
+- Use `approvalCapability.nativeRuntime` for channel-owned native approval facts. Keep it lazy on hot channel entrypoints with `createLazyChannelApprovalNativeRuntimeAdapter(...)`, which can import your runtime module on demand while still letting core assemble the approval lifecycle.
 - Use `approvalCapability.render` only when a channel truly needs custom approval payloads instead of the shared renderer.
 - Use `approvalCapability.describeExecApprovalSetup` when the channel wants the disabled-path reply to explain the exact config knobs needed to enable native exec approvals. The hook receives `{ channel, channelLabel, accountId }`; named-account channels should render account-scoped paths such as `channels.<channel>.accounts.<id>.execApprovals.*` instead of top-level defaults.
 - If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
-- If a channel needs native approval delivery, keep channel code focused on target normalization and transport hooks. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, `createApproverRestrictedNativeApprovalCapability`, and `createChannelNativeApprovalRuntime` from `openclaw/plugin-sdk/approval-runtime` so core owns request filtering, routing, dedupe, expiry, and gateway subscription.
+- If a channel needs native approval delivery, keep channel code focused on target normalization plus transport/presentation facts. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, and `createApproverRestrictedNativeApprovalCapability` from `openclaw/plugin-sdk/approval-runtime`. Put the channel-specific facts behind `approvalCapability.nativeRuntime`, ideally via `createChannelApprovalNativeRuntimeAdapter(...)` or `createLazyChannelApprovalNativeRuntimeAdapter(...)`, so core can assemble the handler and own request filtering, routing, dedupe, expiry, gateway subscription, and routed-elsewhere notices. `nativeRuntime` is split into a few smaller seams:
+- `availability` — whether the account is configured and whether a request should be handled
+- `presentation` — map the shared approval view model into pending/resolved/expired native payloads or final actions
+- `transport` — prepare targets plus send/update/delete native approval messages
+- `interactions` — optional bind/unbind/clear-action hooks for native buttons or reactions
+- `observe` — optional delivery diagnostics hooks
+- If the channel needs runtime-owned objects such as a client, token, Bolt app, or webhook receiver, register them through `openclaw/plugin-sdk/channel-runtime-context`. The generic runtime-context registry lets core bootstrap capability-driven handlers from channel startup state without adding approval-specific wrapper glue.
+- Reach for the lower-level `createChannelApprovalHandler` or `createChannelNativeApprovalRuntime` only when the capability-driven seam is not expressive enough yet.
 - Native approval channels must route both `accountId` and `approvalKind` through those helpers. `accountId` keeps multi-account approval policy scoped to the right bot account, and `approvalKind` keeps exec vs plugin approval behavior available to the channel without hardcoded branches in core.
+- Core now owns approval reroute notices too. Channel plugins should not send their own "approval went to DMs / another channel" follow-up messages from `createChannelNativeApprovalRuntime`; instead, expose accurate origin + approver-DM routing through the shared approval capability helpers and let core aggregate actual deliveries before posting any notice back to the initiating chat.
 - Preserve the delivered approval id kind end-to-end. Native clients should not
   guess or rewrite exec vs plugin approval routing from channel-local state.
 - Different approval kinds can intentionally expose different native surfaces.
@@ -84,8 +93,10 @@ need one part of that family:
 - `openclaw/plugin-sdk/approval-auth-runtime`
 - `openclaw/plugin-sdk/approval-client-runtime`
 - `openclaw/plugin-sdk/approval-delivery-runtime`
+- `openclaw/plugin-sdk/approval-handler-runtime`
 - `openclaw/plugin-sdk/approval-native-runtime`
 - `openclaw/plugin-sdk/approval-reply-runtime`
+- `openclaw/plugin-sdk/channel-runtime-context`
 
 Likewise, prefer `openclaw/plugin-sdk/setup-runtime`,
 `openclaw/plugin-sdk/setup-adapter-runtime`,
