@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { SessionHistorySseState } from "./session-history-state.js";
+import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import * as sessionUtils from "./session-utils.js";
 
 describe("SessionHistorySseState", () => {
@@ -12,9 +12,9 @@ describe("SessionHistorySseState", () => {
       },
     ]);
     try {
-      const state = new SessionHistorySseState({
+      const state = SessionHistorySseState.fromRawSnapshot({
         target: { sessionId: "sess-main" },
-        initialRawMessages: [
+        rawMessages: [
           {
             role: "assistant",
             content: [{ type: "text", text: "fresh snapshot message" }],
@@ -52,5 +52,27 @@ describe("SessionHistorySseState", () => {
     } finally {
       readSpy.mockRestore();
     }
+  });
+
+  test("reuses one canonical array for items and messages", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "first" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "second" }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+      limit: 1,
+    });
+
+    expect(snapshot.history.items).toBe(snapshot.history.messages);
+    expect(snapshot.history.messages[0]?.__openclaw?.seq).toBe(2);
+    expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 });

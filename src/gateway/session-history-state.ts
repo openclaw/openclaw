@@ -4,11 +4,24 @@ import {
 } from "./server-methods/chat.js";
 import { attachOpenClawTranscriptMeta, readSessionMessages } from "./session-utils.js";
 
+type SessionHistoryTranscriptMeta = {
+  seq?: number;
+};
+
+export type SessionHistoryMessage = Record<string, unknown> & {
+  __openclaw?: SessionHistoryTranscriptMeta;
+};
+
 export type PaginatedSessionHistory = {
-  items: unknown[];
-  messages: unknown[];
+  items: SessionHistoryMessage[];
+  messages: SessionHistoryMessage[];
   nextCursor?: string;
   hasMore: boolean;
+};
+
+export type SessionHistorySnapshot = {
+  history: PaginatedSessionHistory;
+  rawTranscriptSeq: number;
 };
 
 type SessionHistoryTranscriptTarget = {
@@ -26,20 +39,33 @@ function resolveCursorSeq(cursor: string | undefined): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-export function resolveMessageSeq(message: unknown): number | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const meta = (message as { __openclaw?: unknown }).__openclaw;
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const seq = (meta as { seq?: unknown }).seq;
+function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
+  return messages.filter(
+    (message): message is SessionHistoryMessage =>
+      Boolean(message) && typeof message === "object" && !Array.isArray(message),
+  );
+}
+
+function buildPaginatedSessionHistory(params: {
+  messages: SessionHistoryMessage[];
+  hasMore: boolean;
+  nextCursor?: string;
+}): PaginatedSessionHistory {
+  return {
+    items: params.messages,
+    messages: params.messages,
+    hasMore: params.hasMore,
+    ...(params.nextCursor ? { nextCursor: params.nextCursor } : {}),
+  };
+}
+
+export function resolveMessageSeq(message: SessionHistoryMessage | undefined): number | undefined {
+  const seq = message?.__openclaw?.seq;
   return typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : undefined;
 }
 
 export function paginateSessionMessages(
-  messages: unknown[],
+  messages: SessionHistoryMessage[],
   limit: number | undefined,
   cursor: string | undefined,
 ): PaginatedSessionHistory {
@@ -58,30 +84,36 @@ export function paginateSessionMessages(
     }
   }
   const start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
-  const items = messages.slice(start, endExclusive);
-  const firstSeq = resolveMessageSeq(items[0]);
-  return {
-    items,
-    messages: items,
+  const paginatedMessages = messages.slice(start, endExclusive);
+  const firstSeq = resolveMessageSeq(paginatedMessages[0]);
+  return buildPaginatedSessionHistory({
+    messages: paginatedMessages,
     hasMore: start > 0,
     ...(start > 0 && typeof firstSeq === "number" ? { nextCursor: String(firstSeq) } : {}),
-  };
+  });
 }
 
-function sanitizeRawTranscriptMessages(params: {
+export function buildSessionHistorySnapshot(params: {
   rawMessages: unknown[];
   maxChars?: number;
   limit?: number;
   cursor?: string;
-}): PaginatedSessionHistory {
-  return paginateSessionMessages(
-    sanitizeChatHistoryMessages(
-      params.rawMessages,
-      params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+}): SessionHistorySnapshot {
+  const history = paginateSessionMessages(
+    toSessionHistoryMessages(
+      sanitizeChatHistoryMessages(
+        params.rawMessages,
+        params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      ),
     ),
     params.limit,
     params.cursor,
   );
+  const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
+  return {
+    history,
+    rawTranscriptSeq: resolveMessageSeq(rawHistoryMessages.at(-1)) ?? rawHistoryMessages.length,
+  };
 }
 
 export class SessionHistorySseState {
@@ -91,6 +123,22 @@ export class SessionHistorySseState {
   private readonly cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
+
+  static fromRawSnapshot(params: {
+    target: SessionHistoryTranscriptTarget;
+    rawMessages: unknown[];
+    maxChars?: number;
+    limit?: number;
+    cursor?: string;
+  }): SessionHistorySseState {
+    return new SessionHistorySseState({
+      target: params.target,
+      maxChars: params.maxChars,
+      limit: params.limit,
+      cursor: params.cursor,
+      initialRawMessages: params.rawMessages,
+    });
+  }
 
   constructor(params: {
     target: SessionHistoryTranscriptTarget;
@@ -104,13 +152,14 @@ export class SessionHistorySseState {
     this.limit = params.limit;
     this.cursor = params.cursor;
     const rawMessages = params.initialRawMessages ?? this.readRawMessages();
-    this.sentHistory = sanitizeRawTranscriptMessages({
+    const snapshot = buildSessionHistorySnapshot({
       rawMessages,
       maxChars: this.maxChars,
       limit: this.limit,
       cursor: this.cursor,
     });
-    this.rawTranscriptSeq = resolveMessageSeq(rawMessages.at(-1)) ?? rawMessages.length;
+    this.sentHistory = snapshot.history;
+    this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
   }
 
   snapshot(): PaginatedSessionHistory {
@@ -133,12 +182,15 @@ export class SessionHistorySseState {
     if (sanitized.length === 0) {
       return null;
     }
-    const sanitizedMessage = sanitized[0];
-    this.sentHistory = {
-      items: [...this.sentHistory.items, sanitizedMessage],
-      messages: [...this.sentHistory.items, sanitizedMessage],
+    const [sanitizedMessage] = toSessionHistoryMessages(sanitized);
+    if (!sanitizedMessage) {
+      return null;
+    }
+    const nextMessages = [...this.sentHistory.messages, sanitizedMessage];
+    this.sentHistory = buildPaginatedSessionHistory({
+      messages: nextMessages,
       hasMore: false,
-    };
+    });
     return {
       message: sanitizedMessage,
       messageSeq: resolveMessageSeq(sanitizedMessage),
@@ -146,15 +198,15 @@ export class SessionHistorySseState {
   }
 
   refresh(): PaginatedSessionHistory {
-    const rawMessages = this.readRawMessages();
-    this.rawTranscriptSeq = resolveMessageSeq(rawMessages.at(-1)) ?? rawMessages.length;
-    this.sentHistory = sanitizeRawTranscriptMessages({
-      rawMessages,
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: this.readRawMessages(),
       maxChars: this.maxChars,
       limit: this.limit,
       cursor: this.cursor,
     });
-    return this.sentHistory;
+    this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
+    this.sentHistory = snapshot.history;
+    return snapshot.history;
   }
 
   private readRawMessages(): unknown[] {

@@ -18,11 +18,8 @@ import {
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import {
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  sanitizeChatHistoryMessages,
-} from "./server-methods/chat.js";
-import { paginateSessionMessages, SessionHistorySseState } from "./session-history-state.js";
+import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
+import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import {
   readSessionMessages,
   resolveFreshestSessionEntryFromStoreKeys,
@@ -166,8 +163,13 @@ export async function handleSessionHistoryHttpRequest(
   const rawSnapshot = entry?.sessionId
     ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
     : [];
-  const sanitizedMessages = sanitizeChatHistoryMessages(rawSnapshot, effectiveMaxChars);
-  const history = paginateSessionMessages(sanitizedMessages, limit, cursor);
+  const historySnapshot = buildSessionHistorySnapshot({
+    rawMessages: rawSnapshot,
+    maxChars: effectiveMaxChars,
+    limit,
+    cursor,
+  });
+  const history = historySnapshot.history;
 
   if (!shouldStreamSse(req)) {
     sendJson(res, 200, {
@@ -191,16 +193,16 @@ export async function handleSessionHistoryHttpRequest(
     : new Set<string>();
 
   let sentHistory = history;
-  const sseState = new SessionHistorySseState({
+  const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
       sessionId: entry.sessionId,
       storePath: target.storePath,
       sessionFile: entry.sessionFile,
     },
+    rawMessages: rawSnapshot,
     maxChars: effectiveMaxChars,
     limit,
     cursor,
-    initialRawMessages: rawSnapshot,
   });
   sentHistory = sseState.snapshot();
   setSseHeaders(res);
