@@ -679,3 +679,42 @@ describe("applyPathPrepend with case-insensitive PATH key", () => {
     expect("Path" in env).toBe(false);
   });
 });
+
+describe("exec backgrounded onUpdate suppression", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it(
+    "does not invoke onUpdate after the session is backgrounded",
+    async () => {
+      const onUpdateSpy = vi.fn();
+      const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+
+      // Start a background command that produces delayed output after backgrounding.
+      const command = joinCommands([shellEcho("before"), yieldDelayCmd, shellEcho("after")]);
+      const result = await tool.execute(
+        nextCallId(),
+        { command, background: true },
+        undefined,
+        onUpdateSpy,
+      );
+
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+      const sessionId = requireSessionId(result.details as { sessionId?: string });
+
+      // Record how many onUpdate calls happened before backgrounding.
+      const callsBeforeBackground = onUpdateSpy.mock.calls.length;
+
+      // Wait for the process to finish (the delayed "after" echo runs post-background).
+      await expect
+        .poll(() => {
+          const finished = getFinishedSession(sessionId);
+          return Boolean(finished);
+        }, BACKGROUND_POLL_OPTIONS)
+        .toBe(true);
+
+      // After the session was backgrounded, no additional onUpdate calls should have been made.
+      expect(onUpdateSpy.mock.calls.length).toBe(callsBeforeBackground);
+    },
+    isWin ? 15_000 : 5_000,
+  );
+});
