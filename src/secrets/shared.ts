@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { formatErrorMessage } from "../infra/errors.js";
 export { isRecord } from "../utils.js";
 
 export function isNonEmptyString(value: unknown): value is string {
@@ -61,22 +62,8 @@ export function writeTextFileAtomic(pathname: string, value: string, mode = 0o60
 }
 
 export function describeUnknownError(err: unknown): string {
-  if (err instanceof Error && err.message.trim().length > 0) {
-    return err.message;
-  }
-  if (typeof err === "string" && err.trim().length > 0) {
-    return err;
-  }
-  if (typeof err === "number" || typeof err === "bigint") {
-    return err.toString();
-  }
-  if (typeof err === "boolean") {
-    return err ? "true" : "false";
-  }
-  try {
-    const serialized = JSON.stringify(err);
-    return serialized ?? "unknown error";
-  } catch {
-    return "unknown error";
-  }
+  // Delegate to formatErrorMessage which applies redactSensitiveText,
+  // preventing credentials and internal paths from leaking into
+  // user-facing error output.
+  return formatErrorMessage(err) || "unknown error";
 }

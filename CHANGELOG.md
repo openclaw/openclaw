@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 - Tools/web search/Exa: show Exa Search in onboarding and configure provider pickers again by marking the bundled Exa provider as setup-visible. Thanks @vincentkoc.
 - Docs/i18n: relocalize final localized-page links after translation and remove the zh-CN homepage redirect override so localized Mintlify pages resolve to the correct language roots again. (#61796) Thanks @hxy91819.
 - Plugins/provider hooks: stop recursive provider snapshot loads from overflowing the stack during plugin initialization, while still preserving cached nested provider-hook results. (#61922, #61938, #61946, #61951)
+- Security/errors: wire `describeUnknownError` through `formatErrorMessage` so user-facing error serialisation gets the same credential redaction that logging already applies. (#62189) Thanks @ademczuk.
 
 ## 2026.4.5
 
