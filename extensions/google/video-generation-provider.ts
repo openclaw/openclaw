@@ -289,15 +289,26 @@ async function toGoogleVideoResult(params: {
           };
         }
         if (typeof inline?.uri === "string" && inline.uri.length > 0) {
-          return {
-            buffer: await downloadGoogleVideoUri({
-              uri: inline.uri,
-              apiKey: params.apiKey,
-              timeoutMs: params.timeoutMs,
-            }),
-            mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
-            fileName: `video-${index + 1}.mp4`,
-          };
+          try {
+            return {
+              buffer: await downloadGoogleVideoUri({
+                uri: inline.uri,
+                apiKey: params.apiKey,
+                timeoutMs: params.timeoutMs,
+              }),
+              mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
+              fileName: `video-${index + 1}.mp4`,
+            };
+          } catch {
+            if (!params.client) {
+              throw;
+            }
+            return await downloadGeneratedVideo({
+              client: params.client,
+              file: inline,
+              index,
+            });
+          }
         }
         if (!inline) {
           throw new Error("Google generated video missing file handle");
