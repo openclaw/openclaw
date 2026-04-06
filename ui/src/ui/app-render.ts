@@ -65,9 +65,9 @@ import {
   rotateDeviceToken,
 } from "./controllers/devices.ts";
 import {
+  loadDreamDiary,
   loadDreamingStatus,
-  updateDreamingMode,
-  type DreamingMode,
+  updateDreamingEnabled,
 } from "./controllers/dreaming.ts";
 import {
   loadExecApprovals,
@@ -149,34 +149,22 @@ const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
 const lazyDreamingView = createLazy(() => import("./views/dreaming.ts"));
-const DREAMING_MODE_OPTIONS: Array<{ id: DreamingMode; label: string; detail: string }> = [
-  { id: "off", label: "Off", detail: "no automatic promotion" },
-  { id: "core", label: "Core", detail: "nightly durable consolidation" },
-  { id: "rem", label: "REM", detail: "every 6 hours, stricter" },
-  { id: "deep", label: "Deep", detail: "every 12 hours, conservative" },
-];
 
 function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
-  mode: DreamingMode;
+  enabled: boolean;
 } {
-  const fallback: DreamingMode = "off";
   if (!configValue) {
-    return { mode: fallback };
+    return {
+      enabled: false,
+    };
   }
   const plugins = configValue.plugins as Record<string, unknown> | undefined;
   const entries = plugins?.entries as Record<string, unknown> | undefined;
   const memoryCore = entries?.["memory-core"] as Record<string, unknown> | undefined;
   const config = memoryCore?.config as Record<string, unknown> | undefined;
   const dreaming = config?.dreaming as Record<string, unknown> | undefined;
-  const modeRaw = typeof dreaming?.mode === "string" ? dreaming.mode.trim().toLowerCase() : "";
-  if (modeRaw === "off" || modeRaw === "core" || modeRaw === "rem" || modeRaw === "deep") {
-    return { mode: modeRaw };
-  }
-  if (typeof dreaming?.enabled === "boolean") {
-    return { mode: dreaming.enabled ? "core" : "off" };
-  }
   return {
-    mode: fallback,
+    enabled: typeof dreaming?.enabled === "boolean" ? dreaming.enabled : false,
   };
 }
 
@@ -191,20 +179,12 @@ function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
 }
 
 function resolveDreamingNextCycle(
-  status: {
-    phases: {
-      deep?: { enabled: boolean; nextRunAtMs?: number };
-      light?: { enabled: boolean; nextRunAtMs?: number };
-      rem?: { enabled: boolean; nextRunAtMs?: number };
-    };
-  } | null,
+  status: { phases: Record<string, { enabled: boolean; nextRunAtMs?: number }> } | null,
 ): string | null {
   if (!status) {
     return null;
   }
-  const phases = [status.phases.deep, status.phases.light, status.phases.rem];
-  const nextRunAtMs = phases
-    .filter((phase): phase is { enabled: boolean; nextRunAtMs?: number } => Boolean(phase))
+  const nextRunAtMs = Object.values(status.phases)
     .filter((phase) => phase.enabled && typeof phase.nextRunAtMs === "number")
     .map((phase) => phase.nextRunAtMs as number)
     .toSorted((a, b) => a - b)[0];
@@ -397,17 +377,19 @@ export function renderApp(state: AppViewState) {
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const configuredDreaming = resolveConfiguredDreaming(configValue);
-  const dreamingMode = configuredDreaming.mode;
-  const dreamingOn = dreamingMode !== "off";
+  const dreamingOn = state.dreamingStatus?.enabled ?? configuredDreaming.enabled;
   const dreamingNextCycle = resolveDreamingNextCycle(state.dreamingStatus);
   const dreamingLoading = state.dreamingStatusLoading || state.dreamingModeSaving;
-  const refreshDreamingStatus = () => loadDreamingStatus(state);
-  const applyDreamingMode = (mode: DreamingMode) => {
-    if (state.dreamingModeSaving || dreamingMode === mode) {
+  const dreamingRefreshLoading = state.dreamingStatusLoading || state.dreamDiaryLoading;
+  const refreshDreaming = () => {
+    void Promise.all([loadDreamingStatus(state), loadDreamDiary(state)]);
+  };
+  const applyDreamingEnabled = (enabled: boolean) => {
+    if (state.dreamingModeSaving || dreamingOn === enabled) {
       return;
     }
     void (async () => {
-      const updated = await updateDreamingMode(state, mode);
+      const updated = await updateDreamingEnabled(state, enabled);
       if (!updated) {
         return;
       }
@@ -714,37 +696,23 @@ export function renderApp(state: AppViewState) {
                       <div class="dreaming-header-controls">
                         <button
                           class="btn btn--subtle btn--sm"
-                          ?disabled=${dreamingLoading}
-                          @click=${refreshDreamingStatus}
+                          ?disabled=${dreamingLoading || state.dreamDiaryLoading}
+                          @click=${refreshDreaming}
                         >
-                          ${state.dreamingStatusLoading ? "Refreshing…" : "Refresh"}
+                          ${dreamingRefreshLoading ? "Refreshing…" : "Refresh"}
                         </button>
-                        <div
-                          class="dreaming-header-controls__modes"
-                          role="group"
-                          aria-label="Dreaming mode"
+                        <button
+                          class="dreams__phase-toggle ${dreamingOn
+                            ? "dreams__phase-toggle--on"
+                            : ""}"
+                          ?disabled=${dreamingLoading}
+                          @click=${() => applyDreamingEnabled(!dreamingOn)}
                         >
-                          ${DREAMING_MODE_OPTIONS.map(
-                            (option) => html`
-                              <button
-                                class="dreaming-header-controls__mode ${dreamingMode === option.id
-                                  ? "dreaming-header-controls__mode--active"
-                                  : ""}"
-                                ?disabled=${dreamingLoading}
-                                title=${option.detail}
-                                aria-label=${`Set dreaming mode to ${option.label}`}
-                                @click=${() => applyDreamingMode(option.id)}
-                              >
-                                <span class="dreaming-header-controls__mode-label"
-                                  >${option.label}</span
-                                >
-                                <span class="dreaming-header-controls__mode-detail"
-                                  >${option.detail}</span
-                                >
-                              </button>
-                            `,
-                          )}
-                        </div>
+                          <span class="dreams__phase-toggle-dot"></span>
+                          <span class="dreams__phase-toggle-label"
+                            >${dreamingOn ? "Dreaming On" : "Dreaming Off"}</span
+                          >
+                        </button>
                       </div>
                     `
                   : nothing}
@@ -2134,19 +2102,23 @@ export function renderApp(state: AppViewState) {
           ? lazyRender(lazyDreamingView, (m) =>
               m.renderDreaming({
                 active: dreamingOn,
-                mode: dreamingMode,
                 shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
                 longTermCount: state.dreamingStatus?.promotedTotal ?? 0,
                 promotedCount: state.dreamingStatus?.promotedToday ?? 0,
                 dreamingOf: null,
                 nextCycle: dreamingNextCycle,
                 timezone: state.dreamingStatus?.timezone ?? null,
-                modes: DREAMING_MODE_OPTIONS,
                 statusLoading: state.dreamingStatusLoading,
                 statusError: state.dreamingStatusError,
                 modeSaving: state.dreamingModeSaving,
-                onRefresh: refreshDreamingStatus,
-                onSelectMode: applyDreamingMode,
+                dreamDiaryLoading: state.dreamDiaryLoading,
+                dreamDiaryError: state.dreamDiaryError,
+                dreamDiaryPath: state.dreamDiaryPath,
+                dreamDiaryContent: state.dreamDiaryContent,
+                onRefresh: refreshDreaming,
+                onRefreshDiary: () => loadDreamDiary(state),
+                onToggleEnabled: applyDreamingEnabled,
+                onRequestUpdate: requestHostUpdate,
               }),
             )
           : nothing}

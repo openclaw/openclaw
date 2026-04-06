@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadDreamingStatus, updateDreamingMode, type DreamingState } from "./dreaming.ts";
+import {
+  loadDreamDiary,
+  loadDreamingStatus,
+  updateDreamingEnabled,
+  type DreamingState,
+} from "./dreaming.ts";
 
 function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn> } {
   const request = vi.fn();
@@ -14,6 +19,10 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
     dreamingStatusError: null,
     dreamingStatus: null,
     dreamingModeSaving: false,
+    dreamDiaryLoading: false,
+    dreamDiaryError: null,
+    dreamDiaryPath: null,
+    dreamDiaryContent: null,
     lastError: null,
   };
   return { state, request };
@@ -24,7 +33,6 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     request.mockResolvedValue({
       dreaming: {
-        mode: "core",
         enabled: true,
         timezone: "America/Los_Angeles",
         verboseLogging: false,
@@ -72,7 +80,6 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
     expect(state.dreamingStatus).toEqual(
       expect.objectContaining({
-        mode: "core",
         enabled: true,
         shortTermCount: 8,
         promotedToday: 2,
@@ -88,18 +95,17 @@ describe("dreaming controller", () => {
     expect(state.dreamingStatusError).toBeNull();
   });
 
-  it("patches config to update dreaming mode", async () => {
+  it("patches config to update global dreaming enablement", async () => {
     const { state, request } = createState();
     request.mockResolvedValue({ ok: true });
 
-    const ok = await updateDreamingMode(state, "deep");
+    const ok = await updateDreamingEnabled(state, false);
 
     expect(ok).toBe(true);
     expect(request).toHaveBeenCalledWith(
       "config.patch",
       expect.objectContaining({
         baseHash: "hash-1",
-        raw: expect.stringContaining('"mode":"deep"'),
         sessionKey: "main",
       }),
     );
@@ -111,10 +117,50 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     state.configSnapshot = {};
 
-    const ok = await updateDreamingMode(state, "core");
+    const ok = await updateDreamingEnabled(state, true);
 
     expect(ok).toBe(false);
     expect(request).not.toHaveBeenCalled();
     expect(state.dreamingStatusError).toContain("Config hash missing");
+  });
+
+  it("loads dream diary content", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValue({
+      found: true,
+      path: "DREAMS.md",
+      content: "## Dream Diary\n- recurring glacier thoughts",
+    });
+
+    await loadDreamDiary(state);
+
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(state.dreamDiaryPath).toBe("DREAMS.md");
+    expect(state.dreamDiaryContent).toContain("glacier");
+    expect(state.dreamDiaryError).toBeNull();
+  });
+
+  it("handles missing dream diary without error", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValue({
+      found: false,
+      path: "DREAMS.md",
+    });
+
+    await loadDreamDiary(state);
+
+    expect(state.dreamDiaryPath).toBe("DREAMS.md");
+    expect(state.dreamDiaryContent).toBeNull();
+    expect(state.dreamDiaryError).toBeNull();
+  });
+
+  it("records dream diary request errors", async () => {
+    const { state, request } = createState();
+    request.mockRejectedValue(new Error("dream diary read failed"));
+
+    await loadDreamDiary(state);
+
+    expect(state.dreamDiaryError).toContain("dream diary read failed");
+    expect(state.dreamDiaryLoading).toBe(false);
   });
 });

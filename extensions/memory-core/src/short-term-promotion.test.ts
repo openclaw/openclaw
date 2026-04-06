@@ -7,9 +7,11 @@ import {
   auditShortTermPromotionArtifacts,
   isShortTermMemoryPath,
   rankShortTermPromotionCandidates,
+  recordDreamingPhaseSignals,
   recordShortTermRecalls,
   repairShortTermPromotionArtifacts,
   resolveShortTermRecallLockPath,
+  resolveShortTermPhaseSignalStorePath,
   resolveShortTermRecallStorePath,
   __testing,
 } from "./short-term-promotion.js";
@@ -246,6 +248,178 @@ describe("short-term promotion", () => {
       expect(slowerDecay[0]?.components.recency).toBeCloseTo(0.5, 3);
       expect(fasterDecay[0]?.components.recency).toBeCloseTo(0.25, 3);
       expect(slowerDecay[0]!.score).toBeGreaterThan(fasterDecay[0]!.score);
+    });
+  });
+
+  it("boosts deep ranking when light/rem phase signals reinforce a candidate", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router setup",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet: "Router VLAN baseline noted.",
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet: "Backup policy for router snapshots.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router backup",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet: "Router VLAN baseline noted.",
+            source: "memory",
+          },
+          {
+            path: "memory/2026-04-02.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet: "Backup policy for router snapshots.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const baseline = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+      expect(baseline).toHaveLength(2);
+      expect(baseline[0]?.path).toBe("memory/2026-04-01.md");
+
+      const boostedKey = baseline.find((entry) => entry.path === "memory/2026-04-02.md")?.key;
+      expect(boostedKey).toBeTruthy();
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "light",
+        keys: [boostedKey!],
+        nowMs,
+      });
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "rem",
+        keys: [boostedKey!],
+        nowMs,
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+      expect(ranked[0]?.path).toBe("memory/2026-04-02.md");
+      expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+
+      const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+      const phaseStore = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
+        entries: Record<string, { lightHits: number; remHits: number }>;
+      };
+      expect(phaseStore.entries[boostedKey!]).toMatchObject({
+        lightHits: 1,
+        remHits: 1,
+      });
+    });
+  });
+
+  it("weights fresh phase signals more than stale ones", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier cadence",
+        nowMs: Date.parse("2026-04-01T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "backup lifecycle",
+        nowMs: Date.parse("2026-04-01T12:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const rankedBaseline = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+      const key = rankedBaseline[0]?.key;
+      expect(key).toBeTruthy();
+
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "rem",
+        keys: [key!],
+        nowMs: Date.parse("2026-02-01T10:00:00.000Z"),
+      });
+      const staleSignalRank = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+      await recordDreamingPhaseSignals({
+        workspaceDir,
+        phase: "rem",
+        keys: [key!],
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+      const freshSignalRank = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+
+      expect(staleSignalRank).toHaveLength(1);
+      expect(freshSignalRank).toHaveLength(1);
+      expect(freshSignalRank[0]!.score).toBeGreaterThan(staleSignalRank[0]!.score);
     });
   });
 

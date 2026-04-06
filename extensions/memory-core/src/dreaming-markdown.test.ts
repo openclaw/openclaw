@@ -24,8 +24,6 @@ describe("dreaming markdown storage", () => {
       workspaceDir,
       phase: "light",
       bodyLines: ["- Candidate: remember the API key is fake"],
-      nowMs: Date.parse("2026-04-05T10:00:00Z"),
-      timezone: "UTC",
       storage: {
         mode: "inline",
         separateReports: false,
@@ -34,7 +32,7 @@ describe("dreaming markdown storage", () => {
 
     expect(result.inlinePath).toBe(path.join(workspaceDir, "DREAMS.md"));
     const content = await fs.readFile(result.inlinePath!, "utf-8");
-    expect(content).toContain("## 2026-04-05 - Light Sleep");
+    expect(content).toContain("## Light Sleep");
     expect(content).toContain("- Candidate: remember the API key is fake");
   });
 
@@ -45,8 +43,6 @@ describe("dreaming markdown storage", () => {
       workspaceDir,
       phase: "light",
       bodyLines: ["- Candidate: first block"],
-      nowMs: Date.parse("2026-04-05T10:00:00Z"),
-      timezone: "UTC",
       storage: {
         mode: "inline",
         separateReports: false,
@@ -56,8 +52,6 @@ describe("dreaming markdown storage", () => {
       workspaceDir,
       phase: "rem",
       bodyLines: ["- Theme: `focus` kept surfacing."],
-      nowMs: Date.parse("2026-04-05T11:00:00Z"),
-      timezone: "UTC",
       storage: {
         mode: "inline",
         separateReports: false,
@@ -66,76 +60,31 @@ describe("dreaming markdown storage", () => {
 
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
     const content = await fs.readFile(dreamsPath, "utf-8");
-    expect(content).toContain("## 2026-04-05 - Light Sleep");
-    expect(content).toContain("## 2026-04-05 - REM Sleep");
+    expect(content).toContain("## Light Sleep");
+    expect(content).toContain("## REM Sleep");
     expect(content).toContain("- Candidate: first block");
     expect(content).toContain("- Theme: `focus` kept surfacing.");
   });
 
-  it("preserves prior days when writing later inline dreaming output", async () => {
+  it("reuses existing lowercase dreams.md when present", async () => {
     const workspaceDir = await createTempWorkspace();
+    const lowercasePath = path.join(workspaceDir, "dreams.md");
+    await fs.writeFile(lowercasePath, "# Scratch\n\n", "utf-8");
 
-    await writeDailyDreamingPhaseBlock({
-      workspaceDir,
-      phase: "light",
-      bodyLines: ["- Candidate: day one"],
-      nowMs: Date.parse("2026-04-05T10:00:00Z"),
-      timezone: "UTC",
-      storage: {
-        mode: "inline",
-        separateReports: false,
-      },
-    });
-    await writeDailyDreamingPhaseBlock({
-      workspaceDir,
-      phase: "light",
-      bodyLines: ["- Candidate: day two"],
-      nowMs: Date.parse("2026-04-06T10:00:00Z"),
-      timezone: "UTC",
-      storage: {
-        mode: "inline",
-        separateReports: false,
-      },
-    });
-
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("## 2026-04-05 - Light Sleep");
-    expect(content).toContain("## 2026-04-06 - Light Sleep");
-    expect(content).toContain("- Candidate: day one");
-    expect(content).toContain("- Candidate: day two");
-  });
-
-  it("replaces the same day and phase block instead of appending duplicates", async () => {
-    const workspaceDir = await createTempWorkspace();
-
-    await writeDailyDreamingPhaseBlock({
+    const result = await writeDailyDreamingPhaseBlock({
       workspaceDir,
       phase: "rem",
-      bodyLines: ["- Theme: initial pass"],
-      nowMs: Date.parse("2026-04-05T10:00:00Z"),
-      timezone: "UTC",
-      storage: {
-        mode: "inline",
-        separateReports: false,
-      },
-    });
-    await writeDailyDreamingPhaseBlock({
-      workspaceDir,
-      phase: "rem",
-      bodyLines: ["- Theme: refreshed pass"],
-      nowMs: Date.parse("2026-04-05T14:00:00Z"),
-      timezone: "UTC",
+      bodyLines: ["- Theme: `glacier` kept surfacing."],
       storage: {
         mode: "inline",
         separateReports: false,
       },
     });
 
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("## 2026-04-05 - REM Sleep");
-    expect(content).toContain("- Theme: refreshed pass");
-    expect(content).not.toContain("- Theme: initial pass");
-    expect(content.match(/## 2026-04-05 - REM Sleep/g)).toHaveLength(1);
+    expect(result.inlinePath).toBe(lowercasePath);
+    const content = await fs.readFile(lowercasePath, "utf-8");
+    expect(content).toContain("## REM Sleep");
+    expect(content).toContain("- Theme: `glacier` kept surfacing.");
   });
 
   it("still writes deep reports to the per-phase report directory", async () => {
@@ -156,5 +105,10 @@ describe("dreaming markdown storage", () => {
     const content = await fs.readFile(reportPath!, "utf-8");
     expect(content).toContain("# Deep Sleep");
     expect(content).toContain("- Promoted: durable preference");
+
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    const dreamsContent = await fs.readFile(dreamsPath, "utf-8");
+    expect(dreamsContent).toContain("## Deep Sleep");
+    expect(dreamsContent).toContain("- Promoted: durable preference");
   });
 });
