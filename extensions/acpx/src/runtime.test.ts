@@ -114,4 +114,37 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(baseStore.load).toHaveBeenCalledTimes(2);
   });
+
+  it("marks the session fresh after discardPersistentState close", async () => {
+    const baseStore: AcpSessionStore = {
+      load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
+      save: vi.fn(async () => {}),
+    };
+
+    const runtime = new AcpxRuntime({
+      cwd: "/tmp",
+      sessionStore: baseStore,
+      agentRegistry: {
+        resolve: () => "codex",
+        list: () => ["codex"],
+      },
+      permissionMode: "default",
+    });
+
+    const wrappedStore = mocks.state.capturedStore;
+    expect(wrappedStore).toBeDefined();
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+
+    expect(await wrappedStore?.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore.load).not.toHaveBeenCalled();
+  });
 });

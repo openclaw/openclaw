@@ -117,13 +117,16 @@ export class AcpxRuntime implements AcpxRuntimeLike {
   }
 
   close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
-    if (input.discardPersistentState) {
-      this.sessionStore.markFresh(input.handle.sessionKey);
-    }
-    return this.delegate.close({
-      handle: input.handle,
-      reason: input.reason,
-    });
+    return this.delegate
+      .close({
+        handle: input.handle,
+        reason: input.reason,
+      })
+      .then(() => {
+        if (input.discardPersistentState) {
+          this.sessionStore.markFresh(input.handle.sessionKey);
+        }
+      });
   }
 }
 

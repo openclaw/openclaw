@@ -1244,14 +1244,6 @@ export class AcpSessionManager {
       }
       const meta = requireReadySessionMeta(resolution);
 
-      if (input.discardPersistentState) {
-        const configuredBackend = (meta.backend || input.cfg.acp?.backend || "").trim();
-        const runtimeBackend = this.deps.requireRuntimeBackend(configuredBackend || undefined);
-        await runtimeBackend.runtime.prepareFreshSession?.({
-          sessionKey,
-        });
-      }
-
       let runtimeClosed = false;
       let runtimeNotice: string | undefined;
       try {
@@ -1285,6 +1277,13 @@ export class AcpSessionManager {
             (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
             this.isRecoverableAcpxExitError(acpError.message))
         ) {
+          if (input.discardPersistentState) {
+            const configuredBackend = (meta.backend || input.cfg.acp?.backend || "").trim();
+            const runtimeBackend = this.deps.requireRuntimeBackend(configuredBackend || undefined);
+            await runtimeBackend.runtime.prepareFreshSession?.({
+              sessionKey,
+            });
+          }
           // Treat unavailable backends as terminal for this cached handle so it
           // cannot continue counting against maxConcurrentSessions.
           this.clearCachedRuntimeState(sessionKey);
