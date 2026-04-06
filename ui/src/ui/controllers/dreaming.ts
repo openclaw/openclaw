@@ -38,10 +38,18 @@ export type DreamingStatus = {
   storageMode: "inline" | "separate" | "both";
   separateReports: boolean;
   shortTermCount: number;
+  recallSignalCount: number;
+  dailySignalCount: number;
+  totalSignalCount: number;
+  phaseSignalCount: number;
+  lightPhaseHitCount: number;
+  remPhaseHitCount: number;
   promotedTotal: number;
   promotedToday: number;
   storePath?: string;
+  phaseSignalPath?: string;
   storeError?: string;
+  phaseSignalError?: string;
   phases: {
     light: LightDreamingStatus;
     deep: DeepDreamingStatus;
@@ -142,7 +150,9 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const remRecord = asRecord(phasesRecord?.rem);
   const timezone = normalizeTrimmedString(record.timezone);
   const storePath = normalizeTrimmedString(record.storePath);
+  const phaseSignalPath = normalizeTrimmedString(record.phaseSignalPath);
   const storeError = normalizeTrimmedString(record.storeError);
+  const phaseSignalError = normalizeTrimmedString(record.phaseSignalError);
 
   return {
     enabled: normalizeBoolean(record.enabled, false),
@@ -151,10 +161,18 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
     storageMode: normalizeStorageMode(record.storageMode),
     separateReports: normalizeBoolean(record.separateReports, false),
     shortTermCount: normalizeFiniteInt(record.shortTermCount, 0),
+    recallSignalCount: normalizeFiniteInt(record.recallSignalCount, 0),
+    dailySignalCount: normalizeFiniteInt(record.dailySignalCount, 0),
+    totalSignalCount: normalizeFiniteInt(record.totalSignalCount, 0),
+    phaseSignalCount: normalizeFiniteInt(record.phaseSignalCount, 0),
+    lightPhaseHitCount: normalizeFiniteInt(record.lightPhaseHitCount, 0),
+    remPhaseHitCount: normalizeFiniteInt(record.remPhaseHitCount, 0),
     promotedTotal: normalizeFiniteInt(record.promotedTotal, 0),
     promotedToday: normalizeFiniteInt(record.promotedToday, 0),
     ...(storePath ? { storePath } : {}),
+    ...(phaseSignalPath ? { phaseSignalPath } : {}),
     ...(storeError ? { storeError } : {}),
+    ...(phaseSignalError ? { phaseSignalError } : {}),
     phases: {
       light: {
         ...normalizePhaseStatusBase(lightRecord),

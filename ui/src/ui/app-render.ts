@@ -2103,7 +2103,8 @@ export function renderApp(state: AppViewState) {
               m.renderDreaming({
                 active: dreamingOn,
                 shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
-                longTermCount: state.dreamingStatus?.promotedTotal ?? 0,
+                totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
+                phaseSignalCount: state.dreamingStatus?.phaseSignalCount ?? 0,
                 promotedCount: state.dreamingStatus?.promotedToday ?? 0,
                 dreamingOf: null,
                 nextCycle: dreamingNextCycle,

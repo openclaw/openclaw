@@ -8,7 +8,8 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   return {
     active: true,
     shortTermCount: 47,
-    longTermCount: 182,
+    totalSignalCount: 182,
+    phaseSignalCount: 29,
     promotedCount: 12,
     dreamingOf: null,
     nextCycle: "4:00 AM",
@@ -64,7 +65,7 @@ describe("dreaming view", () => {
     expect(values.length).toBe(3);
     expect(values[0]?.textContent).toBe("47");
     expect(values[1]?.textContent).toBe("182");
-    expect(values[2]?.textContent).toBe("12");
+    expect(values[2]?.textContent).toBe("29");
   });
 
   it("shows dream bubble when active", () => {

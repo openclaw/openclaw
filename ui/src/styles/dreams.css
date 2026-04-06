@@ -106,31 +106,33 @@
   animation: dreams-float-z 4s ease-out infinite;
 }
 
-.dreams__z:nth-child(1) {
+/* Z's originate from the lobster's head and float up-right at an angle.
+   Use nth-of-type because Z's are <span> while stars/moon/glow are <div>. */
+.dreams__z:nth-of-type(1) {
   font-size: 14px;
-  right: calc(50% - 100px);
-  top: calc(50% - 80px);
+  left: calc(50% + 70px);
+  top: calc(50% - 90px);
   animation-delay: 0s;
 }
 
-.dreams__z:nth-child(2) {
+.dreams__z:nth-of-type(2) {
   font-size: 20px;
-  right: calc(50% - 130px);
-  top: calc(50% - 120px);
+  left: calc(50% + 100px);
+  top: calc(50% - 130px);
   animation-delay: 1.2s;
 }
 
-.dreams__z:nth-child(3) {
+.dreams__z:nth-of-type(3) {
   font-size: 28px;
-  right: calc(50% - 160px);
-  top: calc(50% - 170px);
+  left: calc(50% + 130px);
+  top: calc(50% - 175px);
   animation-delay: 2.4s;
 }
 
 @keyframes dreams-float-z {
   0% {
     opacity: 0;
-    transform: translateY(10px) rotate(-5deg);
+    transform: translate(0, 0) rotate(-10deg);
   }
   15% {
     opacity: 0.7;
@@ -140,7 +142,7 @@
   }
   100% {
     opacity: 0;
-    transform: translateY(-40px) rotate(10deg);
+    transform: translate(20px, -40px) rotate(15deg);
   }
 }
 
@@ -167,7 +169,7 @@
 
 .dreams__bubble {
   position: absolute;
-  top: calc(50% - 200px);
+  top: calc(50% - 260px);
   left: calc(50% - 200px);
   padding: 16px 20px;
   background: var(--accent-subtle);

@@ -39,6 +39,12 @@ describe("dreaming controller", () => {
         storageMode: "inline",
         separateReports: false,
         shortTermCount: 8,
+        recallSignalCount: 14,
+        dailySignalCount: 6,
+        totalSignalCount: 20,
+        phaseSignalCount: 11,
+        lightPhaseHitCount: 7,
+        remPhaseHitCount: 4,
         promotedTotal: 21,
         promotedToday: 2,
         phases: {
@@ -82,6 +88,8 @@ describe("dreaming controller", () => {
       expect.objectContaining({
         enabled: true,
         shortTermCount: 8,
+        totalSignalCount: 20,
+        phaseSignalCount: 11,
         promotedToday: 2,
         phases: expect.objectContaining({
           deep: expect.objectContaining({
