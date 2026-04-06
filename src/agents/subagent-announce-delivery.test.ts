@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAnnounceOrigin } from "./subagent-announce-delivery.js";
+import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
 describe("resolveAnnounceOrigin telegram forum topics", () => {
   it("preserves stored forum topic thread ids when requester origin omits one for the same chat", () => {
