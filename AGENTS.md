@@ -4,6 +4,18 @@
 - In chat replies, file references must be repo-root relative only (example: `src/telegram/index.ts:80`); never absolute paths or `~/...`.
 - Do not edit files covered by security-focused `CODEOWNERS` rules unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted surfaces, not drive-by cleanup.
 
+## Hybrid Live/Draft Workflow (GStack)
+
+- This repo uses a hybrid live/draft control plane. Keep one clean live checkout for the Telegram-facing runtime, and do exploratory or parallel work in draft worktrees.
+- At the start of any session that may touch runtime behavior, agent workflows, or repo coordination, run `openclaw live status` and `openclaw live journal --limit 10` before making changes.
+- The live checkout must stay boring: clean, singular, and on the policy branch. Do not branch-switch inside the live lane for normal work.
+- Nathan-on-Telegram may inspect and propose changes, but it must not directly mutate the live checkout or branch-switch it. Use draft lanes instead.
+- Create draft worktrees with `openclaw live propose <name>`. Local Codex work should happen in draft space by default when the change is not an immediate live-lane fix.
+- Only `openclaw live promote <source>` is allowed to change live behavior. The promotion bar is build + smoke-check + restart + journal append.
+- If a promotion goes bad, use `openclaw live promote rollback` to restore the previously promoted live commit.
+- Treat `gateway:watch` as a reload primitive, not the trust boundary. The Telegram-facing gateway should run from the canonical live checkout only.
+- This repo is gstack-native. Use `/review` before merging when the diff is non-trivial, use `/ship` and `/land-and-deploy` for the normal publish flow, and use `/checkpoint` when handing work across sessions or changing lanes.
+
 ## Project Structure & Module Organization
 
 - Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).

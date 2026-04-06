@@ -30,6 +30,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`mcp`](/cli/mcp)
 - [`status`](/cli/status)
 - [`health`](/cli/health)
+- [`live`](/cli/live)
 - [`sessions`](/cli/sessions)
 - [`gateway`](/cli/gateway)
 - [`logs`](/cli/logs)
@@ -204,6 +205,12 @@ openclaw [--dev] [--profile <name>] <command>
     unset
   status
   health
+  live
+    status
+    start
+    propose
+    promote
+    journal
   sessions
     cleanup
   tasks

@@ -4,6 +4,14 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Added
+
+- CLI/live control: add `openclaw live` commands for `status`, `start`, `propose`, `promote`, and `journal`, backed by a persisted live-control manifest, journal, and dedicated draft worktrees under `~/.openclaw/live-control/`, so Codex and Telegram-driven changes can share one clean live lane with explicit draft promotion.
+
+### Changed
+
+- CLI/live status: treat an inactive watcher as a normal stable-mode state instead of a live-lane issue, show clean vs dirty state for each draft worktree, and document the control-plane workflow in the CLI docs plus repo-local operator guidance.
+
 ### Fixes
 
 - Remote operator task updates now surface task IDs, progress, artifact hints, and next actions in Telegram-visible task/status replies, and audio-only mention-gated voice notes keep preflight transcription even when the local audio lane is busy.
