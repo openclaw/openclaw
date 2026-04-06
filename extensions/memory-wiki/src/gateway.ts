@@ -22,7 +22,17 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const READ_SCOPE = "operator.read" as const;
 const WRITE_SCOPE = "operator.write" as const;
+type GatewayMethodContext = Parameters<
+  Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
+>[0];
+type GatewayRespond = GatewayMethodContext["respond"];
 
+function readStringParam(params: Record<string, unknown>, key: string): string | undefined;
+function readStringParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: { required: true },
+): string;
 function readStringParam(
   params: Record<string, unknown>,
   key: string,
@@ -67,16 +77,9 @@ function readEnumParam<T extends string>(
   throw new Error(`${key} must be one of: ${allowed.join(", ")}.`);
 }
 
-function respondError(
-  respond: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1] extends (
-    ctx: infer T,
-  ) => unknown
-    ? T["respond"]
-    : never,
-  error: unknown,
-) {
+function respondError(respond: GatewayRespond, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  respond(false, undefined, { message });
+  respond(false, undefined, { code: "internal_error", message });
 }
 
 async function syncImportedSourcesIfNeeded(

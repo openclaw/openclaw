@@ -901,6 +901,18 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 }
 ```
 
+### `agents.defaults.contextInjection`
+
+Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
+
+- `"continuation-skip"`: safe continuation turns (after a completed assistant response) skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs and post-compaction retries still rebuild context.
+
+```json5
+{
+  agents: { defaults: { contextInjection: "continuation-skip" } },
+}
+```
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.

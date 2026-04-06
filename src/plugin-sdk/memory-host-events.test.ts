@@ -1,23 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   appendMemoryHostEvent,
   readMemoryHostEvents,
   resolveMemoryHostEventLogPath,
 } from "./memory-host-events.js";
+import { createPluginSdkTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const { createTempDir } = createPluginSdkTestHarness();
 
 describe("memory host event journal helpers", () => {
   it("appends and reads typed workspace events", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-events-"));
-    tempDirs.push(workspaceDir);
+    const workspaceDir = await createTempDir("memory-host-events-");
 
     await appendMemoryHostEvent(workspaceDir, {
       type: "memory.recall.recorded",
