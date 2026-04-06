@@ -451,6 +451,20 @@ def derive_recovery_actionable(
     return True
 
 
+def build_recovery_vector(
+    recovery_bucket: str | None,
+    recovery_owner: str | None,
+    recovery_actionable: bool | None,
+    recovery_rank: int | None,
+) -> dict:
+    return {
+        'bucket': recovery_bucket,
+        'owner': recovery_owner,
+        'actionable': bool(recovery_actionable),
+        'rank': recovery_rank if isinstance(recovery_rank, int) else 0,
+    }
+
+
 def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
     entry_status = 'completed' if isinstance(entry_result, dict) else None
     bridge_status = None
@@ -579,6 +593,7 @@ def build_feedback_memory(entry_result: dict, dispatch_result: dict, feedback_su
         'last_recovery_bucket': manager_handoff.get('recovery_bucket'),
         'last_recovery_owner': manager_handoff.get('recovery_owner'),
         'last_recovery_actionable': manager_handoff.get('recovery_actionable'),
+        'last_recovery_vector': manager_handoff.get('recovery_vector'),
     }
 
 
@@ -652,6 +667,12 @@ def main() -> int:
         recovery_rank = derive_recovery_rank(recovery_priority)
         recovery_bucket = derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage)
         recovery_owner = derive_recovery_owner(recovery_bucket, error_source_layer, error_stage)
+        recovery_actionable = derive_recovery_actionable(
+            error_code,
+            recovery_hint,
+            recovery_priority,
+            recovery_bucket,
+        )
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -674,11 +695,12 @@ def main() -> int:
             'recovery_rank': recovery_rank,
             'recovery_bucket': recovery_bucket,
             'recovery_owner': recovery_owner,
-            'recovery_actionable': derive_recovery_actionable(
-                error_code,
-                recovery_hint,
-                recovery_priority,
+            'recovery_actionable': recovery_actionable,
+            'recovery_vector': build_recovery_vector(
                 recovery_bucket,
+                recovery_owner,
+                recovery_actionable,
+                recovery_rank,
             ),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
@@ -727,6 +749,12 @@ def main() -> int:
         recovery_rank = derive_recovery_rank(recovery_priority)
         recovery_bucket = derive_recovery_bucket(error_code, error_detail_code, error_source_layer, error_stage)
         recovery_owner = derive_recovery_owner(recovery_bucket, error_source_layer, error_stage)
+        recovery_actionable = derive_recovery_actionable(
+            error_code,
+            recovery_hint,
+            recovery_priority,
+            recovery_bucket,
+        )
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_trace_span_id': entry_trace_span_id,
@@ -749,11 +777,12 @@ def main() -> int:
             'recovery_rank': recovery_rank,
             'recovery_bucket': recovery_bucket,
             'recovery_owner': recovery_owner,
-            'recovery_actionable': derive_recovery_actionable(
-                error_code,
-                recovery_hint,
-                recovery_priority,
+            'recovery_actionable': recovery_actionable,
+            'recovery_vector': build_recovery_vector(
                 recovery_bucket,
+                recovery_owner,
+                recovery_actionable,
+                recovery_rank,
             ),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),

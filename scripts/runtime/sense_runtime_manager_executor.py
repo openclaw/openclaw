@@ -313,6 +313,20 @@ def derive_recovery_actionable(
     return True
 
 
+def build_recovery_vector(
+    recovery_bucket: str | None,
+    recovery_owner: str | None,
+    recovery_actionable: bool | None,
+    recovery_rank: int | None,
+) -> dict:
+    return {
+        'bucket': recovery_bucket,
+        'owner': recovery_owner,
+        'actionable': bool(recovery_actionable),
+        'rank': recovery_rank if isinstance(recovery_rank, int) else 0,
+    }
+
+
 def finalize_output(output: dict) -> dict:
     output['error_code'] = normalize_executor_error_code(output)
     output['error_detail_code'] = normalize_executor_error_detail_code(output)
@@ -345,6 +359,12 @@ def finalize_output(output: dict) -> dict:
         output.get('recovery_hint'),
         output.get('recovery_priority'),
         output.get('recovery_bucket'),
+    )
+    output['recovery_vector'] = build_recovery_vector(
+        output.get('recovery_bucket'),
+        output.get('recovery_owner'),
+        output.get('recovery_actionable'),
+        output.get('recovery_rank'),
     )
     output['manager_handoff'] = build_manager_handoff(output)
     return output
@@ -808,6 +828,7 @@ def build_manager_handoff(report: dict) -> dict:
         'recovery_bucket': report.get('recovery_bucket'),
         'recovery_owner': report.get('recovery_owner'),
         'recovery_actionable': report.get('recovery_actionable'),
+        'recovery_vector': report.get('recovery_vector'),
         'loop_convergence_state': convergence.get('state'),
         'primary_remaining_issue': summary.get('primary_remaining_issue'),
         'secondary_remaining_issues': summary.get('secondary_remaining_issues', []),
