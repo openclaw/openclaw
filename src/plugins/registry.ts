@@ -24,6 +24,7 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive-registry.js";
 import type { PluginManifestContracts } from "./manifest.js";
+import { normalizePluginRegisteredMcpServerConfig } from "./mcp-servers.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
@@ -415,6 +416,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const normalized = normalizePluginRegisteredMcpServerConfig({
+      name,
+      server,
+      rootDir: record.rootDir,
+    });
+    if (!normalized.ok) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: normalized.error,
+      });
+      return;
+    }
     const existing = registry.mcpServers.find((entry) => entry.name === name);
     if (existing) {
       pushDiagnostic({
@@ -429,7 +444,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       name,
-      server: { ...server },
+      server: normalized.server,
       source: record.source,
       rootDir: record.rootDir,
     });

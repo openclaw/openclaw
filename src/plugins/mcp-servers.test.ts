@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { loadEnabledPluginMcpServerConfig } from "./mcp-servers.js";
+import {
+  loadEnabledPluginMcpServerConfig,
+  normalizePluginRegisteredMcpServerConfig,
+} from "./mcp-servers.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
@@ -91,6 +94,25 @@ describe("loadEnabledPluginMcpServerConfig", () => {
     });
   });
 
+  it("fails closed when the active registry has no workspace binding", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));
+    registry.mcpServers.push({
+      pluginId: "plugin-a",
+      name: "helloWorld",
+      server: { command: "node", args: ["hello.mjs"] },
+      source: "/tmp/plugin-a/index.cjs",
+      rootDir: "/tmp/plugin-a",
+    });
+    setActivePluginRegistry(registry, "mcp-server-test");
+
+    expect(loadEnabledPluginMcpServerConfig({ workspaceDir: "/tmp/workspace-a" })).toEqual({
+      config: {
+        mcpServers: {},
+      },
+    });
+  });
+
   it("honors plugins.entries.<id>.enabled=false from runtime config", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));
@@ -120,6 +142,44 @@ describe("loadEnabledPluginMcpServerConfig", () => {
       config: {
         mcpServers: {},
       },
+    });
+  });
+
+  it("normalizes plugin MCP registrations to managed stdio config", () => {
+    expect(
+      normalizePluginRegisteredMcpServerConfig({
+        name: "helloWorld",
+        server: { command: " node ", args: ["hello.mjs"] },
+        rootDir: "/tmp/plugin-a",
+      }),
+    ).toEqual({
+      ok: true,
+      server: {
+        command: "node",
+        args: ["hello.mjs"],
+        cwd: "/tmp/plugin-a",
+      },
+    });
+  });
+
+  it("rejects plugin MCP registrations without a managed stdio command", () => {
+    expect(
+      normalizePluginRegisteredMcpServerConfig({
+        name: "helloWorld",
+        server: { url: "http://127.0.0.1:8787/mcp" },
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'MCP server "helloWorld" must use managed stdio transport, not URL transport',
+    });
+    expect(
+      normalizePluginRegisteredMcpServerConfig({
+        name: "helloWorld",
+        server: { transport: "sse", command: "node" },
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'MCP server "helloWorld" must use stdio transport (received sse)',
     });
   });
 });

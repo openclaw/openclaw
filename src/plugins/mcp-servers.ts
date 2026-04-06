@@ -8,6 +8,14 @@ export type PluginMcpServerConfigResult = {
   config: BundleMcpConfig;
 };
 
+type PluginMcpServerConfigNormalizationResult =
+  | { ok: true; server: Record<string, unknown> }
+  | { ok: false; error: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function isPluginEnabledByConfig(pluginId: string, cfg?: OpenClawConfig): boolean {
   const entry = cfg?.plugins?.entries?.[pluginId];
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -17,10 +25,68 @@ function isPluginEnabledByConfig(pluginId: string, cfg?: OpenClawConfig): boolea
 }
 
 function isWorkspaceMatch(params: { workspaceDir?: string; activeWorkspaceDir?: string }): boolean {
-  if (!params.workspaceDir || !params.activeWorkspaceDir) {
+  if (!params.workspaceDir) {
     return true;
   }
+  if (!params.activeWorkspaceDir) {
+    return false;
+  }
   return path.resolve(params.workspaceDir) === path.resolve(params.activeWorkspaceDir);
+}
+
+export function normalizePluginRegisteredMcpServerConfig(params: {
+  name: string;
+  server: unknown;
+  rootDir?: string;
+}): PluginMcpServerConfigNormalizationResult {
+  if (!isRecord(params.server)) {
+    return {
+      ok: false,
+      error: `MCP server "${params.name}" registration must be an object`,
+    };
+  }
+
+  if (typeof params.server.url === "string" && params.server.url.trim().length > 0) {
+    return {
+      ok: false,
+      error: `MCP server "${params.name}" must use managed stdio transport, not URL transport`,
+    };
+  }
+
+  if (
+    typeof params.server.transport === "string" &&
+    params.server.transport.trim().length > 0 &&
+    params.server.transport !== "stdio"
+  ) {
+    return {
+      ok: false,
+      error: `MCP server "${params.name}" must use stdio transport (received ${params.server.transport})`,
+    };
+  }
+
+  if (typeof params.server.command !== "string" || params.server.command.trim().length === 0) {
+    return {
+      ok: false,
+      error: `MCP server "${params.name}" must use stdio transport with a non-empty command`,
+    };
+  }
+
+  const normalized = {
+    ...params.server,
+    command: params.server.command.trim(),
+  };
+  if (
+    params.rootDir &&
+    typeof normalized.cwd !== "string" &&
+    typeof normalized.workingDirectory !== "string"
+  ) {
+    normalized.cwd = params.rootDir;
+  }
+
+  return {
+    ok: true,
+    server: normalized,
+  };
 }
 
 export function loadEnabledPluginMcpServerConfig(params?: {

@@ -2363,9 +2363,45 @@ module.exports = { id: "throws-after-import", register() {} };`,
       expect.objectContaining({
         pluginId: "mcp-server-demo",
         name: "helloWorld",
-        server: { command: "node", args: ["server.mjs"] },
+        server: { command: "node", args: ["server.mjs"], cwd: plugin.dir },
       }),
     ]);
+  });
+
+  it("rejects plugin MCP servers that do not use managed stdio transport", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "mcp-server-demo-invalid",
+      filename: "mcp-server-demo-invalid.cjs",
+      body: `module.exports = { id: "mcp-server-demo-invalid", register(api) {
+  api.registerMcpServer("helloWorld", { url: "http://127.0.0.1:8787/mcp" });
+  api.registerMcpServer("helloSse", { command: "node", transport: "sse" });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["mcp-server-demo-invalid"] },
+    });
+
+    expect(registry.mcpServers).toEqual([]);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "warn" &&
+          diag.pluginId === "mcp-server-demo-invalid" &&
+          diag.message ===
+            'MCP server "helloWorld" must use managed stdio transport, not URL transport',
+      ),
+    ).toBe(true);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "warn" &&
+          diag.pluginId === "mcp-server-demo-invalid" &&
+          diag.message === 'MCP server "helloSse" must use stdio transport (received sse)',
+      ),
+    ).toBe(true);
   });
 
   it("rejects duplicate plugin registrations", () => {
