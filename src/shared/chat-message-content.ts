@@ -110,17 +110,24 @@ export function extractAssistantTextForPhase(
   };
   const sanitizeText = options?.sanitizeText;
   const joinWith = options?.joinWith ?? "\n";
-  const normalizeText = (text: string) => {
-    const normalized = (sanitizeText ? sanitizeText(text) : text).trim();
+  const sanitizeBlockText = (text: string) => (sanitizeText ? sanitizeText(text) : text);
+  const normalizeJoinedText = (text: string) => {
+    const normalized = text.trim();
     return normalized || undefined;
   };
 
   if (typeof entry.text === "string") {
-    return shouldIncludeContent(messagePhase) ? normalizeText(entry.text) : undefined;
+    if (!shouldIncludeContent(messagePhase)) {
+      return undefined;
+    }
+    return normalizeJoinedText(sanitizeBlockText(entry.text));
   }
 
   if (typeof entry.content === "string") {
-    return shouldIncludeContent(messagePhase) ? normalizeText(entry.content) : undefined;
+    if (!shouldIncludeContent(messagePhase)) {
+      return undefined;
+    }
+    return normalizeJoinedText(sanitizeBlockText(entry.content));
   }
 
   if (!Array.isArray(entry.content)) {
@@ -153,14 +160,15 @@ export function extractAssistantTextForPhase(
       if (!shouldIncludeContent(resolvedPhase)) {
         return null;
       }
-      return normalizeText(record.text) ?? null;
+      const sanitized = sanitizeBlockText(record.text);
+      return sanitized.trim() ? sanitized : null;
     })
     .filter((value): value is string => typeof value === "string");
 
   if (parts.length === 0) {
     return undefined;
   }
-  return parts.join(joinWith);
+  return normalizeJoinedText(parts.join(joinWith));
 }
 
 export function extractAssistantVisibleText(message: unknown): string | undefined {

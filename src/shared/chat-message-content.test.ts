@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractAssistantTextForPhase,
   extractAssistantVisibleText,
   extractFirstTextBlock,
   resolveAssistantMessagePhase,
@@ -53,6 +54,29 @@ describe("shared/chat-message-content", () => {
 });
 
 describe("extractAssistantVisibleText", () => {
+  it("preserves boundary spacing when joining adjacent final_answer text blocks", () => {
+    expect(
+      extractAssistantTextForPhase(
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Hi ",
+              textSignature: JSON.stringify({ v: 1, id: "msg_final_1", phase: "final_answer" }),
+            },
+            {
+              type: "text",
+              text: "there",
+              textSignature: JSON.stringify({ v: 1, id: "msg_final_2", phase: "final_answer" }),
+            },
+          ],
+        },
+        { phase: "final_answer", joinWith: "" },
+      ),
+    ).toBe("Hi there");
+  });
+
   it("prefers final_answer text over commentary text", () => {
     expect(
       extractAssistantVisibleText({

@@ -43,6 +43,31 @@ describe("phase-aware assistant text helpers", () => {
     expect(extractChatHistoryAssistantText(message)).toBeUndefined();
   });
 
+  it("preserves spaces across split final_answer blocks in chat history helpers", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Need verify healthy.",
+          textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Hi ",
+          textSignature: JSON.stringify({ v: 1, id: "final_1", phase: "final_answer" }),
+        },
+        {
+          type: "text",
+          text: "<think>secret</think>there",
+          textSignature: JSON.stringify({ v: 1, id: "final_2", phase: "final_answer" }),
+        },
+      ],
+    };
+
+    expect(extractChatHistoryAssistantText(message)).toBe("Hi there");
+  });
+
   it("prefers final_answer text over commentary in session message helpers", () => {
     const message = {
       role: "assistant",
@@ -61,5 +86,30 @@ describe("phase-aware assistant text helpers", () => {
     };
 
     expect(extractSessionAssistantText(message)).toBe("Health check completed successfully.");
+  });
+
+  it("preserves spaces across split final_answer blocks in session message helpers", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Need verify healthy.",
+          textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Hi ",
+          textSignature: JSON.stringify({ v: 1, id: "final_1", phase: "final_answer" }),
+        },
+        {
+          type: "text",
+          text: "<think>secret</think>there",
+          textSignature: JSON.stringify({ v: 1, id: "final_2", phase: "final_answer" }),
+        },
+      ],
+    };
+
+    expect(extractSessionAssistantText(message)).toBe("Hi there");
   });
 });

@@ -99,6 +99,37 @@ describe("readLatestAssistantReply", () => {
 
     expect(result).toBe("Fixed the quoting issue.");
   });
+
+  it("preserves spaces across split final_answer history blocks", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Need fix line quoting properly.",
+              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Hi ",
+              textSignature: JSON.stringify({ v: 1, id: "final_1", phase: "final_answer" }),
+            },
+            {
+              type: "text",
+              text: "there",
+              textSignature: JSON.stringify({ v: 1, id: "final_2", phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+
+    expect(result).toBe("Hi there");
+  });
 });
 
 describe("waitForAgentRun", () => {
