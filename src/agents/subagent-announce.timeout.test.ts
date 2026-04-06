@@ -317,8 +317,16 @@ describe("subagent announce timeout config", () => {
   });
 
   it("prefers completionAnnounceTimeoutMs over legacy announceTimeoutMs", async () => {
-    configOverride.agents.defaults.subagents.announceTimeoutMs = 45_000;
-    configOverride.agents.defaults.subagents.completionAnnounceTimeoutMs = 55_000;
+    configOverride = {
+      agents: {
+        defaults: {
+          subagents: {
+            announceTimeoutMs: 45_000,
+            completionAnnounceTimeoutMs: 55_000,
+          },
+        },
+      },
+    };
     await runAnnounceFlowForTest("run-completion-timeout-preferred", {
       requesterOrigin: { channel: "discord", to: "12345" },
       expectsCompletionMessage: true,

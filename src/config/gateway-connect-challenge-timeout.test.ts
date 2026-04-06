@@ -18,6 +18,9 @@ describe("gateway.connectChallengeTimeoutMs", () => {
       },
     });
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Expected config validation to fail");
+    }
     expect(JSON.stringify(result.issues)).toContain("connectChallengeTimeoutMs");
   });
 });
