@@ -243,3 +243,37 @@ export function resolveBundledPluginGeneratedPath(
   }
   return null;
 }
+
+function normalizeRelativePluginEntryPath(entryPath: string): string {
+  return entryPath.replace(/^\.\//u, "");
+}
+
+export function resolveBundledPluginRepoEntryPath(params: {
+  rootDir: string;
+  pluginId: string;
+  preferBuilt?: boolean;
+}): string | null {
+  const metadata = findBundledPluginMetadataById(params.pluginId, { rootDir: params.rootDir });
+  if (!metadata) {
+    return null;
+  }
+
+  const entryOrder = params.preferBuilt
+    ? [metadata.source.built, metadata.source.source]
+    : [metadata.source.source, metadata.source.built];
+  const baseDirs = [
+    path.resolve(params.rootDir, "dist", "extensions", metadata.dirName),
+    path.resolve(params.rootDir, "extensions", metadata.dirName),
+  ];
+
+  for (const baseDir of baseDirs) {
+    for (const entryPath of entryOrder) {
+      const candidate = path.resolve(baseDir, normalizeRelativePluginEntryPath(entryPath));
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
