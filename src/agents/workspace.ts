@@ -436,8 +436,12 @@ export async function ensureAgentWorkspace(params?: {
     // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
     // already-configured workspaces.
     const [identityContent, userContent] = await Promise.all([
-      fs.readFile(identityPath, "utf-8"),
-      fs.readFile(userPath, "utf-8"),
+      skipSet.has(DEFAULT_IDENTITY_FILENAME)
+        ? Promise.resolve(identityTemplate)
+        : fs.readFile(identityPath, "utf-8"),
+      skipSet.has(DEFAULT_USER_FILENAME)
+        ? Promise.resolve(userTemplate)
+        : fs.readFile(userPath, "utf-8"),
     ]);
     const hasUserContent = await (async () => {
       const indicators = [
