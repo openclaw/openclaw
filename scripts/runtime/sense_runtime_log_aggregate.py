@@ -66,6 +66,21 @@ def derive_route_signature(record: dict) -> str | None:
     return None
 
 
+def derive_path_signature(route_signature: str) -> str:
+    if ' | ' in route_signature:
+        return route_signature.split(' | ', 1)[0].strip()
+    return route_signature.strip()
+
+
+def derive_recovery_bucket_from_route_signature(route_signature: str) -> str:
+    if ' | ' not in route_signature:
+        return 'unknown'
+    recovery_signature = route_signature.split(' | ', 1)[1].strip()
+    if not recovery_signature:
+        return 'unknown'
+    return recovery_signature.split(':', 1)[0].strip() or 'unknown'
+
+
 def load_records(raw_input: str) -> list[dict]:
     stripped = raw_input.strip()
     if not stripped:
@@ -309,6 +324,11 @@ def main() -> int:
     route_severity_compact = [
         {
             'route_signature': item['route_signature'],
+            'notification_signature': (
+                f"{derive_recovery_bucket_from_route_signature(str(item.get('route_signature') or ''))}."
+                f"{item.get('strongest_priority_band', 'none')}."
+                f"{derive_path_signature(str(item.get('route_signature') or ''))}"
+            ),
             'count': item['count'],
             'score': item['max_recovery_rank'],
             'band': item.get('strongest_priority_band', 'none'),
