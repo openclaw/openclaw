@@ -1,4 +1,34 @@
+import type { TableColumn } from "../../terminal/table.js";
+
 type HeadingFn = (text: string) => string;
+type TableRenderer = (input: {
+  width: number;
+  columns: Array<Record<string, unknown>>;
+  rows: Array<Record<string, string>>;
+}) => string;
+
+export type StatusReportSection =
+  | {
+      kind: "lines";
+      title: string;
+      body: string[];
+      skipIfEmpty?: boolean;
+    }
+  | {
+      kind: "table";
+      title: string;
+      width: number;
+      renderTable: TableRenderer;
+      columns: Array<Record<string, unknown>>;
+      rows: Array<Record<string, string>>;
+      trailer?: string | null;
+      skipIfEmpty?: boolean;
+    }
+  | {
+      kind: "raw";
+      body: string[];
+      skipIfEmpty?: boolean;
+    };
 
 export function appendStatusSectionHeading(params: {
   lines: string[];
@@ -26,12 +56,8 @@ export function appendStatusTableSection<Row extends Record<string, string>>(par
   heading: HeadingFn;
   title: string;
   width: number;
-  renderTable: (input: {
-    width: number;
-    columns: Array<Record<string, unknown>>;
-    rows: Row[];
-  }) => string;
-  columns: Array<Record<string, unknown>>;
+  renderTable: (input: { width: number; columns: TableColumn[]; rows: Row[] }) => string;
+  columns: readonly TableColumn[];
   rows: Row[];
 }) {
   appendStatusSectionHeading(params);
@@ -39,9 +65,52 @@ export function appendStatusTableSection<Row extends Record<string, string>>(par
     params
       .renderTable({
         width: params.width,
-        columns: params.columns,
+        columns: [...params.columns],
         rows: params.rows,
       })
       .trimEnd(),
   );
+}
+
+export function appendStatusReportSections(params: {
+  lines: string[];
+  heading: HeadingFn;
+  sections: StatusReportSection[];
+}) {
+  for (const section of params.sections) {
+    if (section.kind === "raw") {
+      if (section.skipIfEmpty && section.body.length === 0) {
+        continue;
+      }
+      params.lines.push(...section.body);
+      continue;
+    }
+    if (section.kind === "lines") {
+      if (section.skipIfEmpty && section.body.length === 0) {
+        continue;
+      }
+      appendStatusLinesSection({
+        lines: params.lines,
+        heading: params.heading,
+        title: section.title,
+        body: section.body,
+      });
+      continue;
+    }
+    if (section.skipIfEmpty && section.rows.length === 0) {
+      continue;
+    }
+    appendStatusTableSection({
+      lines: params.lines,
+      heading: params.heading,
+      title: section.title,
+      width: section.width,
+      renderTable: section.renderTable,
+      columns: section.columns,
+      rows: section.rows,
+    });
+    if (section.trailer) {
+      params.lines.push(section.trailer);
+    }
+  }
 }

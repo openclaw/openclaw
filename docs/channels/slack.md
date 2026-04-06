@@ -26,12 +26,13 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
 <Tabs>
   <Tab title="Socket Mode (default)">
     <Steps>
-      <Step title="Create Slack app and tokens">
-        In Slack app settings:
+      <Step title="Create a new Slack app">
+        In Slack app settings press the **[Create New App](https://api.slack.com/apps/new)** button:
 
-        - enable **Socket Mode**
-        - create **App Token** (`xapp-...`) with `connections:write`
-        - install app and copy **Bot Token** (`xoxb-...`)
+        - choose **from a manifest** and select a workspace for your app
+        - paste the [example manifest](#manifest-and-scope-checklist) from below and continue to create
+        - generate an **App-Level Token** (`xapp-...`) with `connections:write`
+        - install app and copy the **Bot Token** (`xoxb-...`) shown
       </Step>
 
       <Step title="Configure OpenClaw">
@@ -58,19 +59,6 @@ SLACK_BOT_TOKEN=xoxb-...
 
       </Step>
 
-      <Step title="Subscribe app events">
-        Subscribe bot events for:
-
-        - `app_mention`
-        - `message.channels`, `message.groups`, `message.im`, `message.mpim`
-        - `reaction_added`, `reaction_removed`
-        - `member_joined_channel`, `member_left_channel`
-        - `channel_rename`
-        - `pin_added`, `pin_removed`
-
-        Also enable App Home **Messages Tab** for DMs.
-      </Step>
-
       <Step title="Start gateway">
 
 ```bash
@@ -84,15 +72,17 @@ openclaw gateway
 
   <Tab title="HTTP Request URLs">
     <Steps>
-      <Step title="Configure Slack app for HTTP">
+      <Step title="Create a new Slack app">
+        In Slack app settings press the **[Create New App](https://api.slack.com/apps/new)** button:
 
-        - set mode to HTTP (`channels.slack.mode="http"`)
-        - copy Slack **Signing Secret**
-        - set Event Subscriptions + Interactivity + Slash command Request URL to the same webhook path (default `/slack/events`)
+        - choose **from a manifest** and select a workspace for your app
+        - paste the [example manifest](#manifest-and-scope-checklist) and update the URLs before create
+        - save the **Signing Secret** for request verification
+        - install app and copy the **Bot Token** (`xoxb-...`) shown
 
       </Step>
 
-      <Step title="Configure OpenClaw HTTP mode">
+      <Step title="Configure OpenClaw">
 
 ```json5
 {
@@ -108,12 +98,20 @@ openclaw gateway
 }
 ```
 
+        <Note>
+        Use unique webhook paths for multi-account HTTP
+
+        Give each account a distinct `webhookPath` (default `/slack/events`) so registrations do not collide.
+        </Note>
+
       </Step>
 
-      <Step title="Use unique webhook paths for multi-account HTTP">
-        Per-account HTTP mode is supported.
+      <Step title="Start gateway">
 
-        Give each account a distinct `webhookPath` so registrations do not collide.
+```bash
+openclaw gateway
+```
+
       </Step>
     </Steps>
 

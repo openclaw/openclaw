@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, test } from "vitest";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -52,6 +54,56 @@ async function seedSession(params?: { text?: string }) {
     expect(appended.ok).toBe(true);
   }
   return { storePath };
+}
+
+function makeTranscriptAssistantMessage(params: {
+  text: string;
+  content?: Array<Record<string, unknown>>;
+}) {
+  return {
+    role: "assistant" as const,
+    content: params.content ?? [{ type: "text", text: params.text }],
+    api: "openai-responses",
+    provider: "openclaw",
+    model: "delivery-mirror",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: "stop" as const,
+    timestamp: Date.now(),
+  };
+}
+
+function appendTranscriptMessage(params: {
+  sessionFile: string;
+  sessionKey: string;
+  message: ReturnType<typeof makeTranscriptAssistantMessage>;
+  emitInlineMessage?: boolean;
+}): string {
+  const sessionManager = SessionManager.open(params.sessionFile);
+  const messageId = sessionManager.appendMessage(params.message);
+  emitSessionTranscriptUpdate(
+    params.emitInlineMessage === false
+      ? params.sessionFile
+      : {
+          sessionFile: params.sessionFile,
+          sessionKey: params.sessionKey,
+          message: params.message,
+          messageId,
+        },
+  );
+  return messageId;
 }
 
 async function fetchSessionHistory(
@@ -329,6 +381,69 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("sanitizes phased assistant history entries before returning them", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const hidden = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "NO_REPLY",
+        storePath,
+      });
+      expect(hidden.ok).toBe(true);
+
+      if (!hidden.ok) {
+        throw new Error(`append failed: ${hidden.reason}`);
+      }
+      const visibleMessageId = appendTranscriptMessage({
+        sessionFile: hidden.sessionFile,
+        sessionKey: "agent:main:main",
+        message: makeTranscriptAssistantMessage({
+          text: "Done.",
+          content: [
+            {
+              type: "text",
+              text: "internal reasoning",
+              textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Done.",
+              textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+            },
+          ],
+        }),
+        emitInlineMessage: false,
+      });
+
+      const historyRes = await fetchSessionHistory(harness.port, "agent:main:main");
+      expect(historyRes.status).toBe(200);
+      const body = (await historyRes.json()) as {
+        sessionKey?: string;
+        messages?: Array<{
+          content?: Array<{ text?: string }>;
+          __openclaw?: { id?: string; seq?: number };
+        }>;
+      };
+      expect(body.sessionKey).toBe("agent:main:main");
+      expect(body.messages).toHaveLength(1);
+      expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
+      expect(body.messages?.[0]?.__openclaw).toMatchObject({
+        id: visibleMessageId,
+        seq: 2,
+      });
+    });
+  });
+
   test("streams session history updates over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 
@@ -383,6 +498,128 @@ describe("session history HTTP endpoints", () => {
       ).toMatchObject({
         id: appended.ok ? appended.messageId : undefined,
         seq: 2,
+      });
+
+      await reader?.cancel();
+    });
+  });
+
+  test("suppresses NO_REPLY-only SSE fast-path updates while preserving raw sequence numbering", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
+
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        headers: { Accept: "text/event-stream" },
+      });
+
+      expect(res.status).toBe(200);
+      const reader = res.body?.getReader();
+      expect(reader).toBeTruthy();
+      const streamState = { buffer: "" };
+      await readSseEvent(reader!, streamState);
+
+      const silent = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "NO_REPLY",
+        storePath,
+      });
+      expect(silent.ok).toBe(true);
+
+      const visible = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "third visible message",
+        storePath,
+      });
+      expect(visible.ok).toBe(true);
+
+      const messageEvent = await readSseEvent(reader!, streamState);
+      expect(messageEvent.event).toBe("message");
+      expect(
+        (messageEvent.data as { message?: { content?: Array<{ text?: string }> } }).message
+          ?.content?.[0]?.text,
+      ).toBe("third visible message");
+      expect((messageEvent.data as { messageSeq?: number }).messageSeq).toBe(3);
+      expect(
+        (
+          messageEvent.data as {
+            message?: { __openclaw?: { id?: string; seq?: number } };
+          }
+        ).message?.__openclaw,
+      ).toMatchObject({
+        id: visible.ok ? visible.messageId : undefined,
+        seq: 3,
+      });
+
+      await reader?.cancel();
+    });
+  });
+
+  test("resyncs raw sequence numbering after transcript-only SSE refreshes", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
+
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        headers: { Accept: "text/event-stream" },
+      });
+
+      expect(res.status).toBe(200);
+      const reader = res.body?.getReader();
+      expect(reader).toBeTruthy();
+      const streamState = { buffer: "" };
+      await readSseEvent(reader!, streamState);
+
+      const second = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "second visible message",
+        storePath,
+      });
+      expect(second.ok).toBe(true);
+
+      const secondEvent = await readSseEvent(reader!, streamState);
+      expect(secondEvent.event).toBe("message");
+      expect((secondEvent.data as { messageSeq?: number }).messageSeq).toBe(2);
+
+      if (!second.ok) {
+        throw new Error(`append failed: ${second.reason}`);
+      }
+      appendTranscriptMessage({
+        sessionFile: second.sessionFile,
+        sessionKey: "agent:main:main",
+        message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }),
+        emitInlineMessage: false,
+      });
+
+      const refreshEvent = await readSseEvent(reader!, streamState);
+      expect(refreshEvent.event).toBe("history");
+      expect(
+        (
+          refreshEvent.data as { messages?: Array<{ content?: Array<{ text?: string }> }> }
+        ).messages?.map((message) => message.content?.[0]?.text),
+      ).toEqual(["first message", "second visible message"]);
+
+      const third = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "third visible message",
+        storePath,
+      });
+      expect(third.ok).toBe(true);
+
+      const thirdEvent = await readSseEvent(reader!, streamState);
+      expect(thirdEvent.event).toBe("message");
+      expect(
+        (thirdEvent.data as { message?: { content?: Array<{ text?: string }> } }).message
+          ?.content?.[0]?.text,
+      ).toBe("third visible message");
+      expect((thirdEvent.data as { messageSeq?: number }).messageSeq).toBe(4);
+      expect(
+        (
+          thirdEvent.data as {
+            message?: { __openclaw?: { id?: string; seq?: number } };
+          }
+        ).message?.__openclaw,
+      ).toMatchObject({
+        id: third.ok ? third.messageId : undefined,
+        seq: 4,
       });
 
       await reader?.cancel();

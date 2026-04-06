@@ -382,12 +382,6 @@ export async function resolveRuntimeWebTools(params: {
 
   const sourceTools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
   const sourceWeb = isRecord(sourceTools?.web) ? sourceTools.web : undefined;
-  const resolvedTools = isRecord(params.resolvedConfig.tools)
-    ? params.resolvedConfig.tools
-    : undefined;
-  const resolvedWeb = isRecord(resolvedTools?.web) ? resolvedTools.web : undefined;
-  const legacyXSearchSource = isRecord(sourceWeb?.x_search) ? sourceWeb.x_search : undefined;
-  const legacyXSearchResolved = isRecord(resolvedWeb?.x_search) ? resolvedWeb.x_search : undefined;
   if (!sourceWeb && !hasPluginWebToolConfig(params.sourceConfig)) {
     return {
       search: {
@@ -400,23 +394,6 @@ export async function resolveRuntimeWebTools(params: {
       },
       diagnostics,
     };
-  }
-  if (
-    legacyXSearchSource &&
-    legacyXSearchResolved &&
-    Object.prototype.hasOwnProperty.call(legacyXSearchSource, "apiKey")
-  ) {
-    const resolution = await resolveSecretInputWithEnvFallback({
-      sourceConfig: params.sourceConfig,
-      context: params.context,
-      defaults,
-      value: legacyXSearchSource.apiKey,
-      path: "tools.web.x_search.apiKey",
-      envVars: ["XAI_API_KEY"],
-    });
-    if (resolution.value) {
-      legacyXSearchResolved.apiKey = resolution.value;
-    }
   }
   const search = isRecord(sourceWeb?.search) ? sourceWeb.search : undefined;
   const rawProvider =

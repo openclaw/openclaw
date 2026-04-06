@@ -12,7 +12,7 @@ vi.mock("../gateway/connection-details.js", () => ({
   buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetailsWithResolvers,
 }));
 
-vi.mock("../gateway/probe-auth.js", () => ({
+vi.mock("../gateway/probe-target.js", () => ({
   resolveGatewayProbeTarget: mocks.resolveGatewayProbeTarget,
 }));
 

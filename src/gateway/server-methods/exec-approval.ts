@@ -7,6 +7,7 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalRequestAllowedDecisions,
+  type ExecApprovalDecision,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
@@ -324,17 +325,18 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
+      const decision: ExecApprovalDecision = p.decision;
       await handleApprovalResolve({
         manager,
         inputId: p.id,
-        decision: p.decision,
+        decision,
         respond,
         context,
         client,
         exposeAmbiguousPrefixError: true,
         validateDecision: (snapshot) => {
           const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot.request);
-          return allowedDecisions.includes(p.decision)
+          return allowedDecisions.includes(decision)
             ? null
             : {
                 message:

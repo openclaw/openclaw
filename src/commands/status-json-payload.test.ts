@@ -25,8 +25,20 @@ describe("status-json-payload", () => {
       resolveStatusUpdateChannelInfo({
         updateConfigChannel: "beta",
         update: {
-          installKind: "npm",
-          git: { tag: "v1.2.3", branch: "main" },
+          root: "/tmp/openclaw",
+          installKind: "package",
+          packageManager: "npm",
+          git: {
+            root: "/tmp/openclaw",
+            sha: null,
+            tag: "v1.2.3",
+            branch: "main",
+            upstream: null,
+            dirty: false,
+            ahead: 0,
+            behind: 0,
+            fetchOk: true,
+          },
         },
       }),
     ).toEqual({
@@ -37,7 +49,7 @@ describe("status-json-payload", () => {
     expect(mocks.normalizeUpdateChannel).toHaveBeenCalledWith("beta");
     expect(mocks.resolveUpdateChannelDisplay).toHaveBeenCalledWith({
       configChannel: "beta",
-      installKind: "npm",
+      installKind: "package",
       gitTag: "v1.2.3",
       gitBranch: "main",
     });
@@ -48,7 +60,12 @@ describe("status-json-payload", () => {
       buildStatusJsonPayload({
         summary: { ok: true },
         updateConfigChannel: "stable",
-        update: { installKind: "npm", git: null, version: "1.2.3" },
+        update: {
+          root: "/tmp/openclaw",
+          installKind: "package",
+          packageManager: "npm",
+          registry: { latestVersion: "1.2.3" },
+        },
         osSummary: { platform: "linux" },
         memory: null,
         memoryPlugin: { enabled: true },
@@ -67,12 +84,24 @@ describe("status-json-payload", () => {
         health: { ok: true },
         usage: { providers: [] },
         lastHeartbeat: { status: "ok" },
-        pluginCompatibility: [{ pluginId: "legacy", message: "warn" }],
+        pluginCompatibility: [
+          {
+            pluginId: "legacy",
+            code: "legacy-before-agent-start",
+            severity: "warn",
+            message: "warn",
+          },
+        ],
       }),
     ).toEqual({
       ok: true,
       os: { platform: "linux" },
-      update: { installKind: "npm", git: null, version: "1.2.3" },
+      update: {
+        root: "/tmp/openclaw",
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: "1.2.3" },
+      },
       updateChannel: "stable",
       updateChannelSource: "config",
       memory: null,
@@ -98,7 +127,14 @@ describe("status-json-payload", () => {
       lastHeartbeat: { status: "ok" },
       pluginCompatibility: {
         count: 1,
-        warnings: [{ pluginId: "legacy", message: "warn" }],
+        warnings: [
+          {
+            pluginId: "legacy",
+            code: "legacy-before-agent-start",
+            severity: "warn",
+            message: "warn",
+          },
+        ],
       },
     });
   });
@@ -108,7 +144,11 @@ describe("status-json-payload", () => {
       buildStatusJsonPayload({
         summary: { ok: true },
         updateConfigChannel: null,
-        update: { installKind: "npm", git: null },
+        update: {
+          root: "/tmp/openclaw",
+          installKind: "package",
+          packageManager: "npm",
+        },
         osSummary: { platform: "linux" },
         memory: null,
         memoryPlugin: null,

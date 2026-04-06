@@ -651,6 +651,41 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts legacy x_search SecretRefs via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "X_SEARCH_KEY_REF",
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
+        apiKey: {
+          source: "env",
+          provider: "default",
+          id: "X_SEARCH_KEY_REF",
+        },
+      });
+      expect(
+        (snap.sourceConfig.tools?.web?.x_search as Record<string, unknown> | undefined)?.apiKey,
+      ).toBeUndefined();
+    });
+  });
+
   it("accepts legacy thread binding ttlHours via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {

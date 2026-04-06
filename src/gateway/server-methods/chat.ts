@@ -182,7 +182,7 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
-const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
+export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
@@ -738,8 +738,30 @@ function sanitizeChatHistoryMessage(
     changed ||= stripped.changed || res.truncated;
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block, maxChars));
-    if (updated.some((item) => item.changed)) {
-      entry.content = updated.map((item) => item.block);
+    const sanitizedBlocks = updated.map((item) => item.block);
+    const hasPhaseMetadata =
+      entry.role === "assistant" &&
+      entry.content.some(
+        (block) =>
+          block &&
+          typeof block === "object" &&
+          typeof (block as { textSignature?: unknown }).textSignature === "string",
+      );
+    if (hasPhaseMetadata) {
+      const stripped = stripInlineDirectiveTagsForDisplay(
+        extractAssistantVisibleText(entry as Parameters<typeof extractAssistantVisibleText>[0]),
+      );
+      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const nonTextBlocks = sanitizedBlocks.filter(
+        (block) =>
+          !block || typeof block !== "object" || (block as { type?: unknown }).type !== "text",
+      );
+      entry.content = res.text
+        ? [{ type: "text", text: res.text }, ...nonTextBlocks]
+        : nonTextBlocks;
+      changed = true;
+    } else if (updated.some((item) => item.changed)) {
+      entry.content = sanitizedBlocks;
       changed = true;
     }
   }
@@ -764,7 +786,7 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
   return extractAssistantVisibleText(message);
 }
 
-function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
+export function sanitizeChatHistoryMessages(messages: unknown[], maxChars: number): unknown[] {
   if (messages.length === 0) {
     return messages;
   }

@@ -51,14 +51,18 @@ export function shouldSkipStatusScanNetworkChecks(params: {
   return params.coldStart && !params.hasConfiguredChannels && params.all !== true;
 }
 
+type StatusScanExecRunner = (
+  command: string,
+  args: string[],
+  opts?: number | { timeoutMs?: number; maxBuffer?: number; cwd?: string },
+) => Promise<{ stdout: string; stderr: string }>;
+
 export async function createStatusScanCoreBootstrap<TAgentStatus>(params: {
   coldStart: boolean;
   cfg: OpenClawConfig;
   hasConfiguredChannels: boolean;
   opts: { timeoutMs?: number; all?: boolean };
-  getTailnetHostname: (
-    runner: (cmd: string, args: string[]) => Promise<unknown>,
-  ) => Promise<string | null>;
+  getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
   getUpdateCheckResult: (params: {
     timeoutMs: number;
     fetchGit: boolean;
@@ -121,9 +125,7 @@ export async function createStatusScanBootstrap<TAgentStatus, TSummary>(params: 
   sourceConfig: OpenClawConfig;
   hasConfiguredChannels: boolean;
   opts: { timeoutMs?: number; all?: boolean };
-  getTailnetHostname: (
-    runner: (cmd: string, args: string[]) => Promise<unknown>,
-  ) => Promise<string | null>;
+  getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
   getUpdateCheckResult: (params: {
     timeoutMs: number;
     fetchGit: boolean;

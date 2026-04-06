@@ -1947,7 +1947,7 @@ describe("secrets runtime snapshot", () => {
     }
   });
 
-  it("keeps legacy x_search SecretRefs in place until doctor repairs them", async () => {
+  it("leaves legacy x_search SecretRefs untouched so doctor owns the migration", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         tools: {
@@ -1968,41 +1968,9 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
-      apiKey: "xai-runtime-key",
+      apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
       enabled: true,
       model: "grok-4-1-fast",
-    });
-    expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
-  });
-
-  it("still resolves legacy x_search auth in place even when unrelated legacy config is present", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        tools: {
-          web: {
-            x_search: {
-              apiKey: { source: "env", provider: "default", id: "X_SEARCH_KEY_REF" },
-              enabled: true,
-            },
-          },
-        },
-        channels: {
-          telegram: {
-            groupMentionsOnly: true,
-            groups: [],
-          },
-        },
-      }),
-      env: {
-        X_SEARCH_KEY_REF: "xai-runtime-key-invalid-config",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-
-    expect((snapshot.config.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
-      apiKey: "xai-runtime-key-invalid-config",
-      enabled: true,
     });
     expect(snapshot.config.plugins?.entries?.xai).toBeUndefined();
   });

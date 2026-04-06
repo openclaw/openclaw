@@ -3,8 +3,7 @@ import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 
 const mocks = vi.hoisted(() => ({
   buildStatusJsonPayload: vi.fn((input) => ({ built: true, input })),
-  resolveStatusSecurityAudit: vi.fn(),
-  resolveStatusRuntimeDetails: vi.fn(),
+  resolveStatusRuntimeSnapshot: vi.fn(),
 }));
 
 vi.mock("./status-json-payload.ts", () => ({
@@ -12,8 +11,7 @@ vi.mock("./status-json-payload.ts", () => ({
 }));
 
 vi.mock("./status-runtime-shared.ts", () => ({
-  resolveStatusSecurityAudit: mocks.resolveStatusSecurityAudit,
-  resolveStatusRuntimeDetails: mocks.resolveStatusRuntimeDetails,
+  resolveStatusRuntimeSnapshot: mocks.resolveStatusRuntimeSnapshot,
 }));
 
 function createScan() {
@@ -21,7 +19,11 @@ function createScan() {
     cfg: { update: { channel: "stable" }, gateway: {} },
     sourceConfig: { gateway: {} },
     summary: { ok: true },
-    update: { installKind: "npm", git: null },
+    update: {
+      root: "/tmp/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+    },
     osSummary: { platform: "linux" },
     memory: null,
     memoryPlugin: { enabled: true },
@@ -32,17 +34,24 @@ function createScan() {
     gatewayProbe: { connectLatencyMs: 42, error: null },
     gatewaySelf: { host: "gateway" },
     gatewayProbeAuthWarning: null,
-    agentStatus: [{ id: "main" }],
+    agentStatus: { agents: [{ id: "main" }], defaultId: "main" },
     secretDiagnostics: [],
-    pluginCompatibility: [{ pluginId: "legacy", message: "warn" }],
-  };
+    pluginCompatibility: [
+      {
+        pluginId: "legacy",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message: "warn",
+      },
+    ],
+  } satisfies Parameters<typeof resolveStatusJsonOutput>[0]["scan"];
 }
 
 describe("status-json-runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveStatusSecurityAudit.mockResolvedValue({ summary: { critical: 1 } });
-    mocks.resolveStatusRuntimeDetails.mockResolvedValue({
+    mocks.resolveStatusRuntimeSnapshot.mockResolvedValue({
+      securityAudit: { summary: { critical: 1 } },
       usage: { providers: [] },
       health: { ok: true },
       lastHeartbeat: { status: "ok" },
@@ -59,13 +68,14 @@ describe("status-json-runtime", () => {
       includePluginCompatibility: true,
     });
 
-    expect(mocks.resolveStatusSecurityAudit).toHaveBeenCalled();
-    expect(mocks.resolveStatusRuntimeDetails).toHaveBeenCalledWith({
+    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith({
       config: { update: { channel: "stable" }, gateway: {} },
+      sourceConfig: { gateway: {} },
       timeoutMs: 1234,
       usage: true,
       deep: true,
       gatewayReachable: true,
+      includeSecurityAudit: true,
       suppressHealthErrors: undefined,
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
@@ -74,14 +84,22 @@ describe("status-json-runtime", () => {
         usage: { providers: [] },
         health: { ok: true },
         lastHeartbeat: { status: "ok" },
-        pluginCompatibility: [{ pluginId: "legacy", message: "warn" }],
+        pluginCompatibility: [
+          {
+            pluginId: "legacy",
+            code: "legacy-before-agent-start",
+            severity: "warn",
+            message: "warn",
+          },
+        ],
       }),
     );
     expect(result).toEqual({ built: true, input: expect.any(Object) });
   });
 
   it("skips optional sections when flags are off", async () => {
-    mocks.resolveStatusRuntimeDetails.mockResolvedValueOnce({
+    mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
+      securityAudit: undefined,
       usage: undefined,
       health: undefined,
       lastHeartbeat: null,
@@ -96,13 +114,14 @@ describe("status-json-runtime", () => {
       includePluginCompatibility: false,
     });
 
-    expect(mocks.resolveStatusSecurityAudit).not.toHaveBeenCalled();
-    expect(mocks.resolveStatusRuntimeDetails).toHaveBeenCalledWith({
+    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith({
       config: { update: { channel: "stable" }, gateway: {} },
+      sourceConfig: { gateway: {} },
       timeoutMs: 500,
       usage: false,
       deep: false,
       gatewayReachable: true,
+      includeSecurityAudit: false,
       suppressHealthErrors: undefined,
     });
     expect(mocks.buildStatusJsonPayload).toHaveBeenCalledWith(
@@ -117,7 +136,8 @@ describe("status-json-runtime", () => {
   });
 
   it("suppresses health errors when requested", async () => {
-    mocks.resolveStatusRuntimeDetails.mockResolvedValueOnce({
+    mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
+      securityAudit: undefined,
       usage: undefined,
       health: undefined,
       lastHeartbeat: { status: "ok" },
@@ -137,12 +157,14 @@ describe("status-json-runtime", () => {
         health: undefined,
       }),
     );
-    expect(mocks.resolveStatusRuntimeDetails).toHaveBeenCalledWith({
+    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith({
       config: { update: { channel: "stable" }, gateway: {} },
+      sourceConfig: { gateway: {} },
       timeoutMs: 500,
       usage: undefined,
       deep: true,
       gatewayReachable: true,
+      includeSecurityAudit: false,
       suppressHealthErrors: true,
     });
   });

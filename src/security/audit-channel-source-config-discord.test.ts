@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { collectDiscordSecurityAuditFindings } from "../../extensions/discord/contract-api.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { collectDiscordSecurityAuditFindings } from "../plugin-sdk/discord.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
 
 const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({

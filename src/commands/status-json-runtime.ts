@@ -1,21 +1,13 @@
 import type { OpenClawConfig } from "../config/types.js";
+import type { UpdateCheckResult } from "../infra/update-check.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
-import {
-  resolveStatusRuntimeDetails,
-  resolveStatusSecurityAudit,
-} from "./status-runtime-shared.ts";
+import { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
 
 type StatusJsonScanLike = {
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   summary: Record<string, unknown>;
-  update: {
-    installKind?: string | null;
-    git?: {
-      tag?: string | null;
-      branch?: string | null;
-    } | null;
-  } & Record<string, unknown>;
+  update: UpdateCheckResult;
   osSummary: unknown;
   memory: unknown;
   memoryPlugin: unknown;
@@ -60,19 +52,15 @@ export async function resolveStatusJsonOutput(params: {
   suppressHealthErrors?: boolean;
 }) {
   const { scan, opts } = params;
-  const securityAudit = params.includeSecurityAudit
-    ? await resolveStatusSecurityAudit({
-        config: scan.cfg,
-        sourceConfig: scan.sourceConfig,
-      })
-    : undefined;
-  const { usage, health, lastHeartbeat, gatewayService, nodeService } =
-    await resolveStatusRuntimeDetails({
+  const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } =
+    await resolveStatusRuntimeSnapshot({
       config: scan.cfg,
+      sourceConfig: scan.sourceConfig,
       timeoutMs: opts.timeoutMs,
       usage: opts.usage,
       deep: opts.deep,
       gatewayReachable: scan.gatewayReachable,
+      includeSecurityAudit: params.includeSecurityAudit,
       suppressHealthErrors: params.suppressHealthErrors,
     });
 

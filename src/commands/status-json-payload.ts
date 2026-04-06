@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/types.js";
+import type { UpdateCheckResult } from "../infra/update-check.js";
 import {
   buildGatewayStatusJsonPayload,
   resolveStatusUpdateChannelInfo,
@@ -5,16 +7,12 @@ import {
 
 export { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 
+type UpdateConfigChannel = NonNullable<OpenClawConfig["update"]>["channel"];
+
 export function buildStatusJsonPayload(params: {
   summary: Record<string, unknown>;
-  updateConfigChannel?: string | null;
-  update: {
-    installKind?: string | null;
-    git?: {
-      tag?: string | null;
-      branch?: string | null;
-    } | null;
-  } & Record<string, unknown>;
+  updateConfigChannel?: UpdateConfigChannel | null;
+  update: UpdateCheckResult;
   osSummary: unknown;
   memory: unknown;
   memoryPlugin: unknown;
@@ -53,7 +51,7 @@ export function buildStatusJsonPayload(params: {
   pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
 }) {
   const channelInfo = resolveStatusUpdateChannelInfo({
-    updateConfigChannel: params.updateConfigChannel,
+    updateConfigChannel: params.updateConfigChannel ?? undefined,
     update: params.update,
   });
   return {

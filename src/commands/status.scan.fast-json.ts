@@ -1,16 +1,12 @@
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import {
   resolveDefaultMemoryStorePath,
   resolveStatusMemoryStatusSnapshot,
 } from "./status.scan-memory.ts";
-import {
-  resolveStatusSummaryFromOverview,
-  collectStatusScanOverview,
-} from "./status.scan-overview.ts";
+import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
-import { buildStatusScanResult } from "./status.scan-result.ts";
-import { resolveMemoryPluginStatus } from "./status.scan.shared.js";
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
 
 function loadPluginRegistryModule() {
@@ -24,7 +20,7 @@ type StatusJsonScanPolicy = {
   resolveHasConfiguredChannels: (
     cfg: Parameters<typeof hasPotentialConfiguredChannels>[0],
   ) => boolean;
-  resolveMemory: Parameters<typeof scanStatusJsonCore>[0]["resolveMemory"];
+  resolveMemory: Parameters<typeof executeStatusScanFromOverview>[0]["resolveMemory"];
 };
 
 export async function scanStatusJsonWithPolicy(
@@ -56,31 +52,12 @@ export async function scanStatusJsonWithPolicy(
     }
   }
 
-  const memoryPlugin = resolveMemoryPluginStatus(overview.cfg);
-  const memory = await policy.resolveMemory({
-    cfg: overview.cfg,
-    agentStatus: overview.agentStatus,
-    memoryPlugin,
+  return await executeStatusScanFromOverview({
+    overview,
     runtime,
-  });
-  const summary = await resolveStatusSummaryFromOverview({ overview });
-
-  return buildStatusScanResult({
-    cfg: overview.cfg,
-    sourceConfig: overview.sourceConfig,
-    secretDiagnostics: overview.secretDiagnostics,
-    osSummary: overview.osSummary,
-    tailscaleMode: overview.tailscaleMode,
-    tailscaleDns: overview.tailscaleDns,
-    tailscaleHttpsUrl: overview.tailscaleHttpsUrl,
-    update: overview.update,
-    gatewaySnapshot: overview.gatewaySnapshot,
+    resolveMemory: policy.resolveMemory,
     channelIssues: [],
-    agentStatus: overview.agentStatus,
     channels: { rows: [], details: [] },
-    summary,
-    memory,
-    memoryPlugin,
     pluginCompatibility: [],
   });
 }
