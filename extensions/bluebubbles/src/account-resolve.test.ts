@@ -53,4 +53,30 @@ describe("resolveBlueBubblesServerAccount", () => {
       allowPrivateNetworkConfig: true,
     });
   });
+
+  it("uses accounts.default config for the default BlueBubbles account", () => {
+    expect(
+      resolveBlueBubblesServerAccount({
+        cfg: {
+          channels: {
+            bluebubbles: {
+              accounts: {
+                default: {
+                  serverUrl: "http://127.0.0.1:1234",
+                  password: "test-password",
+                  allowPrivateNetwork: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toMatchObject({
+      accountId: "default",
+      baseUrl: "http://127.0.0.1:1234",
+      password: "test-password",
+      allowPrivateNetwork: true,
+      allowPrivateNetworkConfig: true,
+    });
+  });
 });

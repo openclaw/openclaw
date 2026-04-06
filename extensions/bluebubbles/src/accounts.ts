@@ -63,6 +63,20 @@ function normalizeBlueBubblesPrivateNetworkAliases(
   };
 }
 
+function normalizeBlueBubblesAccountsMap(
+  accounts: Record<string, Partial<BlueBubblesAccountConfig>> | undefined,
+): Record<string, Partial<BlueBubblesAccountConfig>> | undefined {
+  if (!accounts) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(accounts).map(([accountKey, accountConfig]) => [
+      accountKey,
+      normalizeBlueBubblesPrivateNetworkAliases(accountConfig) as Partial<BlueBubblesAccountConfig>,
+    ]),
+  );
+}
+
 function mergeBlueBubblesAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -70,19 +84,17 @@ function mergeBlueBubblesAccountConfig(
   const channelConfig = normalizeBlueBubblesPrivateNetworkAliases(
     cfg.channels?.bluebubbles as BlueBubblesAccountConfig | undefined,
   ) as BlueBubblesAccountConfig | undefined;
-  const accounts = cfg.channels?.bluebubbles?.accounts as
-    | Record<string, Partial<BlueBubblesAccountConfig>>
-    | undefined;
-  const accountConfig = normalizeBlueBubblesPrivateNetworkAliases(
-    normalizeAccountId(accountId) === "default"
-      ? undefined
-      : (accounts?.[accountId] as Partial<BlueBubblesAccountConfig> | undefined),
-  ) as Partial<BlueBubblesAccountConfig> | undefined;
+  const accounts = normalizeBlueBubblesAccountsMap(
+    cfg.channels?.bluebubbles?.accounts as
+      | Record<string, Partial<BlueBubblesAccountConfig>>
+      | undefined,
+  );
   const merged = resolveMergedAccountConfig<BlueBubblesAccountConfig>({
     channelConfig,
-    accounts: accountConfig ? { [accountId]: accountConfig } : undefined,
+    accounts,
     accountId,
     omitKeys: ["defaultAccount"],
+    normalizeAccountId,
     nestedObjectKeys: ["network"],
   });
   return {

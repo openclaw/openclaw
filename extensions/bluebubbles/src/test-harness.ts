@@ -66,21 +66,32 @@ function normalizeBlueBubblesPrivateNetworkAliases(
   };
 }
 
+function normalizeBlueBubblesAccountsMap(
+  accounts: Record<string, Record<string, unknown> | undefined> | undefined,
+): Record<string, Record<string, unknown> | undefined> | undefined {
+  if (!accounts) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(accounts).map(([accountKey, accountConfig]) => [
+      accountKey,
+      normalizeBlueBubblesPrivateNetworkAliases(accountConfig),
+    ]),
+  );
+}
+
 export function resolveBlueBubblesAccountFromConfig(params: {
   cfg?: { channels?: { bluebubbles?: Record<string, unknown> } };
   accountId?: string;
 }) {
   const baseConfig =
     normalizeBlueBubblesPrivateNetworkAliases(params.cfg?.channels?.bluebubbles ?? {}) ?? {};
+  const accounts = normalizeBlueBubblesAccountsMap(
+    baseConfig.accounts as Record<string, Record<string, unknown> | undefined> | undefined,
+  );
   const accountId = params.accountId ?? "default";
   const accountConfig =
-    normalizeBlueBubblesPrivateNetworkAliases(
-      accountId === "default"
-        ? {}
-        : ((
-            baseConfig.accounts as Record<string, Record<string, unknown> | undefined> | undefined
-          )?.[accountId] ?? {}),
-    ) ?? {};
+    normalizeBlueBubblesPrivateNetworkAliases(accounts?.[accountId] ?? {}) ?? {};
   const config: Record<string, unknown> = {
     ...baseConfig,
     ...accountConfig,
