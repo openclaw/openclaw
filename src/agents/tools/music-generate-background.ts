@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
@@ -61,17 +62,21 @@ export function failMusicGenerationTaskRun(params: {
 }
 
 export async function wakeMusicGenerationTaskCompletion(params: {
+  config?: OpenClawConfig;
   handle: MusicGenerationTaskHandle | null;
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  mediaUrls?: string[];
   statsLine?: string;
 }) {
   await wakeMediaGenerationTaskCompletion({
+    config: params.config,
     handle: params.handle,
     status: params.status,
     statusLabel: params.statusLabel,
     result: params.result,
+    mediaUrls: params.mediaUrls,
     statsLine: params.statsLine,
     eventSource: "music_generation",
     announceType: "music generation task",

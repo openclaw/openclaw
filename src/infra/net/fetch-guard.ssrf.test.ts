@@ -21,6 +21,13 @@ const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   }),
 }));
 
+function createPinnedDispatcherCompatibilityError(): Error {
+  const cause = Object.assign(new Error("invalid onRequestStart method"), {
+    code: "UND_ERR_INVALID_ARG",
+  });
+  return Object.assign(new TypeError("fetch failed"), { cause });
+}
+
 function redirectResponse(location: string): Response {
   return new Response(null, {
     status: 302,
@@ -308,6 +315,25 @@ describe("fetchWithSsrFGuard hardening", () => {
     } finally {
       (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
     }
+  });
+
+  it("fails closed when the runtime rejects the pinned dispatcher shape", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      if (requestInit.dispatcher) {
+        throw createPinnedDispatcherCompatibilityError();
+      }
+      return okResponse();
+    });
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+      }),
+    ).rejects.toThrow("fetch failed");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("ignores dispatcher support markers on ambient global fetch", async () => {

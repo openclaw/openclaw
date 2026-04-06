@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/config.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
@@ -61,17 +62,21 @@ export function failVideoGenerationTaskRun(params: {
 }
 
 export async function wakeVideoGenerationTaskCompletion(params: {
+  config?: OpenClawConfig;
   handle: VideoGenerationTaskHandle | null;
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  mediaUrls?: string[];
   statsLine?: string;
 }) {
   await wakeMediaGenerationTaskCompletion({
+    config: params.config,
     handle: params.handle,
     status: params.status,
     statusLabel: params.statusLabel,
     result: params.result,
+    mediaUrls: params.mediaUrls,
     statsLine: params.statsLine,
     eventSource: "video_generation",
     announceType: "video generation task",

@@ -592,10 +592,12 @@ export function createMusicGenerateTool(options?: {
             });
             try {
               await wakeMusicGenerationTaskCompletion({
+                config: effectiveCfg,
                 handle: taskHandle,
                 status: "ok",
                 statusLabel: "completed successfully",
                 result: executed.wakeResult,
+                mediaUrls: executed.savedPaths,
               });
             } catch (error) {
               log.warn("Music generation completion wake failed after successful generation", {
@@ -610,6 +612,7 @@ export function createMusicGenerateTool(options?: {
               error,
             });
             await wakeMusicGenerationTaskCompletion({
+              config: effectiveCfg,
               handle: taskHandle,
               status: "error",
               statusLabel: "failed",

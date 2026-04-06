@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+## 2026.4.6-beta.1
+
 ### Breaking
 
 - Config: remove legacy public config aliases such as `talk.voiceId` / `talk.apiKey`, `agents.*.sandbox.perSession`, `browser.ssrfPolicy.allowPrivateNetwork`, `hooks.internal.handlers`, and channel/group/room `allow` toggles in favor of the canonical public paths and `enabled`, while keeping load-time compatibility and `openclaw doctor --fix` migration support for existing configs. (#60726) Thanks @vincentkoc.
@@ -88,6 +90,7 @@ Docs: https://docs.openclaw.ai
 - Windows/restart: fall back to the installed Startup-entry launcher when the scheduled task was never registered, so `/restart` can relaunch the gateway on Windows setups where `schtasks` install fell back during onboarding. (#58943) Thanks @imechZhangLY.
 - Windows/restart: clean up stale gateway listeners before Windows self-restart and treat listener and argv probe failures as inconclusive, so scheduled-task relaunch no longer falls into an `EADDRINUSE` retry loop. (#60480) Thanks @arifahmedjoy.
 - Update/npm: prefer the npm binary that owns the installed global OpenClaw prefix so mixed Homebrew-plus-nvm setups update the right install. (#60153) Thanks @jayeshp19.
+- Agents/music and video generation: add `tools.media.asyncCompletion.directSend` as an opt-in direct-delivery path for finished async media tasks, while keeping the legacy requester-session wake/model-delivery flow as the default.
 - CLI/skills JSON: route `skills list --json`, `skills info --json`, and `skills check --json` output to stdout instead of stderr so machine-readable consumers receive JSON on the expected stream again. (#60914; fixes #57599; landed from contributor PR #57611 by @Aftabbs) Thanks @Aftabbs.
 - CLI/Commander: preserve Commander-computed exit codes for argument and help-error paths, and cover the user-argv parse mode in the regression tests so invalid CLI invocations no longer report success when exits are intercepted. (#60923) Thanks @Linux2010.
 - Cron: replay interrupted recurring jobs on the first gateway restart instead of waiting for a second restart. (#60583) Thanks @joelnishanth.
@@ -233,8 +236,11 @@ Docs: https://docs.openclaw.ai
 - Plugins: suppress trust-warning noise during non-activating snapshot and CLI metadata loads. (#61427) Thanks @gumadeiras.
 - Agents/video generation: accept `agents.defaults.videoGenerationModel` in strict config validation and `openclaw config set/get`, so gateways using `video_generate` no longer fail to boot after enabling a video model.
 - Matrix/streaming: add a quiet preview mode for streamed Matrix replies, keep legacy `partial` preview-first behavior, and finalize quiet media captions correctly so previews stop notifying early without dropping final text semantics. (#61450) Thanks @gumadeiras.
-
 - Gateway/shutdown: bound websocket-server shutdown even when no tracked clients remain, so gateway restarts stop hanging until the watchdog kills the process. (#61565) Thanks @mbelinky.
+- Control UI/multilingual: localize the remaining shared channel, instances, nodes, and gateway-confirmation strings so the dashboard stops mixing translated UI with hardcoded English labels. Thanks @vincentkoc.
+- Discord/media: raise the default inbound and outbound media cap to `100MB` so Discord matches Telegram more closely and larger attachments stop failing on the old low default.
+- Matrix: keep direct transport requests on the pinned dispatcher by routing them through undici runtime fetch, so Matrix clients resume syncing on newer runtimes without dropping the validated address binding. (#61595) Thanks @gumadeiras.
+- Plugins/facades: resolve globally installed bundled-plugin runtime facades from registry roots so bundled channels like LINE still boot when the winning plugin install lives under the global extensions directory with an encoded scoped folder name. (#61297) Thanks @openperf.
 
 ## 2026.4.2
 

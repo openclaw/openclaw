@@ -120,6 +120,31 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
+  it("wraps corepack.cmd via cmd.exe in runCommandWithTimeout", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["corepack", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      if (!captured) {
+        throw new Error("expected corepack shim spawn");
+      }
+      expect(captured[0]).toBe(expectedComSpec);
+      expect(captured[1].slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(captured[1][3]).toContain("corepack.cmd --version");
+      expect(captured[2].windowsHide).toBe(true);
+      expect(captured[2].windowsVerbatimArguments).toBe(true);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("keeps child exitCode when close reports null on Windows npm shims", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const child = createMockChild({ closeCode: null, exitCode: 0 });
