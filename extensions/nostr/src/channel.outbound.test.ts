@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
-import type { OpenClawConfig } from "../runtime-api.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { setNostrRuntime } from "./runtime.js";
