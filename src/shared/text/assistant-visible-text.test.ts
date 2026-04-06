@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
@@ -420,5 +421,25 @@ describe("sanitizeAssistantVisibleText", () => {
     ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+});
+
+describe("sanitizeAssistantVisibleTextWithProfile", () => {
+  it("uses the history profile to preserve block-boundary whitespace", () => {
+    const input = ["Hi ", '<tool_result>{"output":"hidden"}</tool_result>', "there"].join("");
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe("Hi there");
+  });
+
+  it("uses the internal-scaffolding profile to preserve downgraded tool text behavior", () => {
+    const input = [
+      "[Tool Call: read (ID: toolu_1)]",
+      'Arguments: {"path":"/tmp/x"}',
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toContain(
+      "[Tool Call: read (ID: toolu_1)]",
+    );
   });
 });
