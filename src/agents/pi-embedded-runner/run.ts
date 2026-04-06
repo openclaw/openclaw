@@ -131,7 +131,7 @@ function backfillSessionKey(params: {
     return resolved.sessionKey?.trim() || undefined;
   } catch (err) {
     log.warn(
-      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${sanitizeForLog(params.sessionId)}: ${describeUnknownError(err)}`,
+      `[backfillSessionKey] Failed to resolve sessionKey for sessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}: ${describeUnknownError(err)}`,
     );
     return undefined;
   }
