@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI/chat: show `/tts` and other local audio-only slash replies in webchat by embedding local audio in the assistant message and rendering `<audio>` controls instead of dropping empty-text finals. Fixes #61564. (#61598) Thanks @neeravmakwana.
 - Security: preserve restrictive plugin-only tool allowlists, require owner access for `/allowlist add` and `/allowlist remove`, fail closed when `before_tool_call` hooks crash, block browser SSRF redirect bypasses earlier, and keep non-interactive auth-choice inference scoped to bundled and already-trusted plugins. (#58476, #59836, #59822, #58771, #59120) Thanks @eleqtrizit and @pgondhi987.
 - Providers/OpenAI: make GPT-5 and Codex runs act sooner with lower-verbosity defaults, visible progress during tool work, and a one-shot retry when a turn only narrates the plan instead of taking action.
 - Providers/OpenAI and reply delivery: preserve native `reasoning.effort: "none"` and strict schemas where supported, add GPT-5.4 assistant `phase` metadata across replay and the Gateway `/v1/responses` layer, and keep commentary buffered until `final_answer` so web chat, session previews, embedded replies, and Telegram partials stop leaking planning text. Fixes #59150, #59643, #61282.
