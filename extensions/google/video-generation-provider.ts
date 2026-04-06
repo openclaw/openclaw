@@ -301,9 +301,9 @@ async function toGoogleVideoResult(params: {
               mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
               fileName: `video-${index + 1}.mp4`,
             };
-          } catch {
+          } catch (err) {
             if (!params.client) {
-              throw;
+              throw err;
             }
             return await downloadGeneratedVideo({
               client: params.client,
