@@ -96,6 +96,7 @@ describe("music generate background helpers", () => {
       status: "ok",
       statusLabel: "completed successfully",
       result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+      mediaUrls: ["/tmp/generated-night-drive.mp3"],
     });
 
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
@@ -112,6 +113,7 @@ describe("music generate background helpers", () => {
             announceType: "music generation task",
             status: "ok",
             result: expect.stringContaining("MEDIA:/tmp/generated-night-drive.mp3"),
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
             replyInstruction: expect.stringContaining("include those exact MEDIA: lines"),
           }),
         ],

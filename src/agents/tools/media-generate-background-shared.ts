@@ -161,6 +161,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  mediaUrls?: string[];
   statsLine?: string;
   eventSource: AgentInternalEvent["source"];
   announceType: string;
@@ -181,6 +182,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       status: params.status,
       statusLabel: params.statusLabel,
       result: params.result,
+      ...(params.mediaUrls?.length ? { mediaUrls: params.mediaUrls } : {}),
       ...(params.statsLine?.trim() ? { statsLine: params.statsLine } : {}),
       replyInstruction: buildMediaGenerationReplyInstruction({
         status: params.status,

@@ -65,6 +65,7 @@ export async function wakeMusicGenerationTaskCompletion(params: {
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  mediaUrls?: string[];
   statsLine?: string;
 }) {
   await wakeMediaGenerationTaskCompletion({
@@ -72,6 +73,7 @@ export async function wakeMusicGenerationTaskCompletion(params: {
     status: params.status,
     statusLabel: params.statusLabel,
     result: params.result,
+    mediaUrls: params.mediaUrls,
     statsLine: params.statsLine,
     eventSource: "music_generation",
     announceType: "music generation task",
