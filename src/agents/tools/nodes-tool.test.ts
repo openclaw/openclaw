@@ -120,6 +120,22 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
+  it("keeps an explicit screen_record outPath when provided", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    await tool.execute("call-explicit-out-path", {
+      action: "screen_record",
+      node: "macbook",
+      outPath: "/tmp/custom-screen-record.mp4",
+    });
+
+    expect(screenMocks.writeScreenRecordToFile).toHaveBeenCalledWith(
+      "/tmp/custom-screen-record.mp4",
+      "ZmFrZQ==",
+    );
+  });
+
   it("rejects the removed run action", async () => {
     const tool = createNodesTool();
 

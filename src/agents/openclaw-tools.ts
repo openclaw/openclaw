@@ -9,6 +9,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
+import { wrapToolWorkspaceRootGuardWithOptions } from "./pi-tools.read.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -216,18 +217,23 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const nodesTool = createNodesTool({
+    agentSessionKey: options?.agentSessionKey,
+    agentChannel: options?.agentChannel,
+    agentAccountId: options?.agentAccountId,
+    currentChannelId: options?.currentChannelId,
+    currentThreadTs: options?.currentThreadTs,
+    config: options?.config,
+    modelHasVision: options?.modelHasVision,
+    allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+  });
   const tools: AnyAgentTool[] = [
     createCanvasTool({ config: options?.config }),
-    createNodesTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      currentChannelId: options?.currentChannelId,
-      currentThreadTs: options?.currentThreadTs,
-      config: options?.config,
-      modelHasVision: options?.modelHasVision,
-      allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-    }),
+    options?.fsPolicy?.workspaceOnly
+      ? wrapToolWorkspaceRootGuardWithOptions(nodesTool, workspaceDir, {
+          pathParamNames: ["path", "outPath"],
+        })
+      : nodesTool,
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),

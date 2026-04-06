@@ -130,4 +130,21 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       root,
     });
   });
+
+  it("checks configured alternate path params like outPath", async () => {
+    const { wrapToolWorkspaceRootGuardWithOptions } = await loadModule();
+    const { tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+      pathParamNames: ["outPath"],
+    });
+
+    await wrapped.execute("tc-out-path", { outPath: "/workspace/docs/recording.mp4" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: path.resolve(root, "docs", "recording.mp4"),
+      cwd: root,
+      root,
+    });
+  });
 });
