@@ -45,7 +45,6 @@ import {
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
 import { readStringParam } from "./tools/common.js";
-import { MAX_SAFE_TIMEOUT_MS } from "./timeout.js";
 
 export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
@@ -55,13 +54,15 @@ export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[num
 export { decodeStrictBase64 };
 
 const DEFAULT_SUBAGENT_STARTUP_TIMEOUT_MS = 60_000;
+const SUBAGENT_MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
+const SUBAGENT_SUBAGENT_MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 export function resolveSubagentStartupWaitTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
   const configured = cfg.agents?.defaults?.subagents?.startupWaitTimeoutMs;
   if (typeof configured !== "number" || !Number.isFinite(configured)) {
     return DEFAULT_SUBAGENT_STARTUP_TIMEOUT_MS;
   }
-  return Math.min(Math.max(1, Math.floor(configured)), MAX_SAFE_TIMEOUT_MS);
+  return Math.min(Math.max(1, Math.floor(configured)), SUBAGENT_MAX_SAFE_TIMEOUT_MS);
 }
 
 type SubagentSpawnDeps = {
@@ -252,7 +253,7 @@ async function cleanupProvisionalSession(
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
       },
-      timeoutMs: startupWaitTimeoutMs,
+      timeoutMs: 10_000,
     });
   } catch {
     // Best-effort cleanup only.
@@ -756,7 +757,7 @@ export async function spawnSubagentDirect(
         label: label || undefined,
         ...publicSpawnedMetadata,
       },
-      timeoutMs: 10_000,
+      timeoutMs: startupWaitTimeoutMs,
     });
     const runId = readGatewayRunId(response);
     if (runId) {
