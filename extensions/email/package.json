@@ -1,0 +1,42 @@
+{
+  "name": "@openclaw/email",
+  "version": "2026.4.6",
+  "description": "OpenClaw email channel plugin — IMAP polling inbound, SMTP outbound",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "minHostVersion": ">=2026.3.24-beta.2"
+    },
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "email",
+      "label": "Email",
+      "selectionLabel": "Email (IMAP/SMTP)",
+      "detailLabel": "Email",
+      "docsPath": "/channels/email",
+      "docsLabel": "email",
+      "blurb": "IMAP polling inbound with SMTP replies; works with any standard mail server.",
+      "aliases": [
+        "imap",
+        "smtp",
+        "mail"
+      ],
+      "systemImage": "envelope",
+      "configuredState": {
+        "specifier": "./configured-state",
+        "exportName": "hasEmailConfiguredState"
+      }
+    }
+  },
+  "dependencies": {
+    "imapflow": "^1.0.174",
+    "mailparser": "^3.7.1",
+    "nodemailer": "^6.9.14"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.14"
+  }
+}
