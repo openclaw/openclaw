@@ -12,6 +12,7 @@ import { parseMusicGenerationModelRef } from "./model-ref.js";
 import { getMusicGenerationProvider, listMusicGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedMusicAsset,
+  MusicGenerationIgnoredOverride,
   MusicGenerationOutputFormat,
   MusicGenerationResult,
   MusicGenerationSourceImage,
@@ -39,10 +40,62 @@ export type GenerateMusicRuntimeResult = {
   attempts: FallbackAttempt[];
   lyrics?: string[];
   metadata?: Record<string, unknown>;
+  ignoredOverrides: MusicGenerationIgnoredOverride[];
 };
 
 export function listRuntimeMusicGenerationProviders(params?: { config?: OpenClawConfig }) {
   return listMusicGenerationProviders(params?.config);
+}
+
+function resolveProviderMusicGenerationOverrides(params: {
+  provider: NonNullable<ReturnType<typeof getMusicGenerationProvider>>;
+  model: string;
+  lyrics?: string;
+  instrumental?: boolean;
+  durationSeconds?: number;
+  format?: MusicGenerationOutputFormat;
+}) {
+  const caps = params.provider.capabilities;
+  const ignoredOverrides: MusicGenerationIgnoredOverride[] = [];
+  let lyrics = params.lyrics;
+  let instrumental = params.instrumental;
+  let durationSeconds = params.durationSeconds;
+  let format = params.format;
+
+  if (lyrics?.trim() && !caps.supportsLyrics) {
+    ignoredOverrides.push({ key: "lyrics", value: lyrics });
+    lyrics = undefined;
+  }
+
+  if (typeof instrumental === "boolean" && !caps.supportsInstrumental) {
+    ignoredOverrides.push({ key: "instrumental", value: instrumental });
+    instrumental = undefined;
+  }
+
+  if (typeof durationSeconds === "number" && !caps.supportsDuration) {
+    ignoredOverrides.push({ key: "durationSeconds", value: durationSeconds });
+    durationSeconds = undefined;
+  }
+
+  if (format) {
+    const supportedFormats =
+      caps.supportedFormatsByModel?.[params.model] ?? caps.supportedFormats ?? [];
+    if (
+      !caps.supportsFormat ||
+      (supportedFormats.length > 0 && !supportedFormats.includes(format))
+    ) {
+      ignoredOverrides.push({ key: "format", value: format });
+      format = undefined;
+    }
+  }
+
+  return {
+    lyrics,
+    instrumental,
+    durationSeconds,
+    format,
+    ignoredOverrides,
+  };
 }
 
 export async function generateMusic(
@@ -82,6 +135,14 @@ export async function generateMusic(
     }
 
     try {
+      const sanitized = resolveProviderMusicGenerationOverrides({
+        provider,
+        model: candidate.model,
+        lyrics: params.lyrics,
+        instrumental: params.instrumental,
+        durationSeconds: params.durationSeconds,
+        format: params.format,
+      });
       const result: MusicGenerationResult = await provider.generateMusic({
         provider: candidate.provider,
         model: candidate.model,
@@ -89,10 +150,10 @@ export async function generateMusic(
         cfg: params.cfg,
         agentDir: params.agentDir,
         authStore: params.authStore,
-        lyrics: params.lyrics,
-        instrumental: params.instrumental,
-        durationSeconds: params.durationSeconds,
-        format: params.format,
+        lyrics: sanitized.lyrics,
+        instrumental: sanitized.instrumental,
+        durationSeconds: sanitized.durationSeconds,
+        format: sanitized.format,
         inputImages: params.inputImages,
       });
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
@@ -105,6 +166,7 @@ export async function generateMusic(
         attempts,
         lyrics: result.lyrics,
         metadata: result.metadata,
+        ignoredOverrides: sanitized.ignoredOverrides,
       };
     } catch (err) {
       lastError = err;

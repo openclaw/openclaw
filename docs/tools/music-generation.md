@@ -119,8 +119,9 @@ Direct generation example:
 | `format`          | string   | Output format hint (`mp3` or `wav`) when the provider supports it                                 |
 | `filename`        | string   | Output filename hint                                                                              |
 
-Not all providers support all parameters. The shared tool validates provider
-capability limits before it submits the request.
+Not all providers support all parameters. OpenClaw still validates hard limits
+such as input counts before submission, but unsupported optional hints are
+ignored with a warning when the selected provider or model cannot honor them.
 
 ## Async behavior for the shared provider-backed path
 

@@ -222,31 +222,14 @@ function validateMusicGenerationCapabilities(params: {
       );
     }
   }
-  if (params.lyrics?.trim() && !caps.supportsLyrics) {
-    throw new ToolInputError(`${provider.id} does not support explicit lyrics input.`);
-  }
-  if (typeof params.instrumental === "boolean" && !caps.supportsInstrumental) {
-    throw new ToolInputError(`${provider.id} does not support instrumental toggles.`);
-  }
-  if (typeof params.durationSeconds === "number" && !caps.supportsDuration) {
-    throw new ToolInputError(`${provider.id} does not support duration hints.`);
-  }
-  if (typeof params.durationSeconds === "number" && typeof caps.maxDurationSeconds === "number") {
+  if (
+    typeof params.durationSeconds === "number" &&
+    caps.supportsDuration &&
+    typeof caps.maxDurationSeconds === "number"
+  ) {
     if (params.durationSeconds > caps.maxDurationSeconds) {
       throw new ToolInputError(
         `${provider.id} supports at most ${caps.maxDurationSeconds} seconds per track.`,
-      );
-    }
-  }
-  if (params.format) {
-    if (!caps.supportsFormat) {
-      throw new ToolInputError(`${provider.id} does not support explicit output-format overrides.`);
-    }
-    const supportedFormats =
-      caps.supportedFormatsByModel?.[params.model ?? ""] ?? caps.supportedFormats ?? [];
-    if (supportedFormats.length > 0 && !supportedFormats.includes(params.format)) {
-      throw new ToolInputError(
-        `${provider.id} supports ${supportedFormats.join(", ")} output${params.model ? ` for ${params.model}` : ""}.`,
       );
     }
   }
@@ -419,8 +402,15 @@ async function executeMusicGenerationJob(params: {
       ),
     ),
   );
+  const ignoredOverrides = result.ignoredOverrides ?? [];
+  const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
+  const warning =
+    ignoredOverrides.length > 0
+      ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map((entry) => `${entry.key}=${String(entry.value)}`).join(", ")}.`
+      : undefined;
   const lines = [
     `Generated ${savedTracks.length} track${savedTracks.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+    ...(warning ? [`Warning: ${warning}`] : []),
     ...(result.lyrics?.length ? ["Lyrics returned.", ...result.lyrics] : []),
     ...savedTracks.map((track) => `MEDIA:${track.path}`),
   ];
@@ -446,12 +436,16 @@ async function executeMusicGenerationJob(params: {
             },
           }
         : {}),
-      ...(params.lyrics ? { requestedLyrics: params.lyrics } : {}),
-      ...(typeof params.instrumental === "boolean" ? { instrumental: params.instrumental } : {}),
-      ...(typeof params.durationSeconds === "number"
+      ...(!ignoredOverrideKeys.has("lyrics") && params.lyrics
+        ? { requestedLyrics: params.lyrics }
+        : {}),
+      ...(!ignoredOverrideKeys.has("instrumental") && typeof params.instrumental === "boolean"
+        ? { instrumental: params.instrumental }
+        : {}),
+      ...(!ignoredOverrideKeys.has("durationSeconds") && typeof params.durationSeconds === "number"
         ? { durationSeconds: params.durationSeconds }
         : {}),
-      ...(params.format ? { format: params.format } : {}),
+      ...(!ignoredOverrideKeys.has("format") && params.format ? { format: params.format } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
       ...(params.loadedReferenceImages.length === 1
         ? {
@@ -471,6 +465,8 @@ async function executeMusicGenerationJob(params: {
       ...(result.lyrics?.length ? { lyrics: result.lyrics } : {}),
       attempts: result.attempts,
       metadata: result.metadata,
+      ...(warning ? { warning } : {}),
+      ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
     },
   };
 }
