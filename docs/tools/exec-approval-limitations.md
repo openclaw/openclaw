@@ -19,4 +19,3 @@ Example:
 ```bash
 python email_sender.py --content-file Day_007.md
 python email_sender.py --content-file Day_008.md
-```
