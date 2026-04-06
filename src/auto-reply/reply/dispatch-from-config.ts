@@ -85,6 +85,13 @@ function loadTtsRuntime() {
   return ttsRuntimePromise;
 }
 
+async function maybeApplyTtsToReplyPayload(
+  params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
+) {
+  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  return maybeApplyTtsToPayload(params);
+}
+
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 const normalizeMediaType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
@@ -543,13 +550,12 @@ export async function dispatchReplyFromConfig(params: {
       chatType: sessionStoreEntry.entry?.chatType,
     });
 
-    const { maybeApplyTtsToPayload } = await loadTtsRuntime();
     const shouldSendToolSummaries = ctx.ChatType !== "group" || ctx.IsForum === true;
     const shouldSendToolStartStatuses = ctx.ChatType !== "group" || ctx.IsForum === true;
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
-      const ttsPayload = await maybeApplyTtsToPayload({
+      const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
         channel: ttsChannel,
@@ -803,7 +809,7 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
-            const ttsPayload = await maybeApplyTtsToPayload({
+            const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
               channel: ttsChannel,
@@ -879,7 +885,7 @@ export async function dispatchReplyFromConfig(params: {
                   }
                 : context;
             await params.replyOptions?.onBlockReplyQueued?.(payload, queuedContext);
-            const ttsPayload = await maybeApplyTtsToPayload({
+            const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload,
               cfg,
               channel: ttsChannel,
@@ -963,7 +969,7 @@ export async function dispatchReplyFromConfig(params: {
       accumulatedBlockText.trim()
     ) {
       try {
-        const ttsSyntheticReply = await maybeApplyTtsToPayload({
+        const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
           payload: { text: accumulatedBlockText },
           cfg,
           channel: ttsChannel,
