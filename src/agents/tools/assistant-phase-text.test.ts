@@ -3,6 +3,13 @@ import { extractAssistantText as extractChatHistoryAssistantText } from "./chat-
 import { extractAssistantText as extractSessionAssistantText } from "./session-message-text.js";
 
 describe("phase-aware assistant text helpers", () => {
+  it("fails soft for malformed inputs", () => {
+    for (const message of [null, 42, "broken history entry"]) {
+      expect(extractChatHistoryAssistantText(message)).toBeUndefined();
+      expect(extractSessionAssistantText(message)).toBeUndefined();
+    }
+  });
+
   it("prefers final_answer text over commentary in chat history helpers", () => {
     const message = {
       role: "assistant",

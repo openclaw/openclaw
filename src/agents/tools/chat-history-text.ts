@@ -31,6 +31,10 @@ export function sanitizeTextContent(text: string): string {
 }
 
 export function extractAssistantText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+
   const joined =
     extractAssistantTextForPhase(message, {
       phase: "final_answer",
