@@ -17,10 +17,14 @@ export async function runAudioTranscription(params: {
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
   localPathRoots?: readonly string[];
-}): Promise<{ transcript: string | undefined; attachments: MediaAttachment[] }> {
+}): Promise<{
+  transcript: string | undefined;
+  attachmentIndex: number | undefined;
+  attachments: MediaAttachment[];
+}> {
   const attachments = params.attachments ?? normalizeMediaAttachments(params.ctx);
   if (attachments.length === 0) {
-    return { transcript: undefined, attachments };
+    return { transcript: undefined, attachmentIndex: undefined, attachments };
   }
 
   const providerRegistry = buildProviderRegistry(params.providers, params.cfg);
@@ -43,7 +47,11 @@ export async function runAudioTranscription(params: {
     });
     const output = result.outputs.find((entry) => entry.kind === "audio.transcription");
     const transcript = output?.text?.trim();
-    return { transcript: transcript || undefined, attachments };
+    return {
+      transcript: transcript || undefined,
+      attachmentIndex: output?.attachmentIndex,
+      attachments,
+    };
   } finally {
     await cache.cleanup();
   }

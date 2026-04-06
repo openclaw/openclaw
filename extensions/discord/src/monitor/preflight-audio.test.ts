@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+const transcribeFirstAudioResultMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./preflight-audio.runtime.js", () => ({
-  transcribeFirstAudio: transcribeFirstAudioMock,
+  transcribeFirstAudioResult: transcribeFirstAudioResultMock,
 }));
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -16,12 +16,15 @@ function createAudioAttachment(url = "https://cdn.discordapp.com/attachments/voi
 }
 
 beforeEach(() => {
-  transcribeFirstAudioMock.mockReset();
+  transcribeFirstAudioResultMock.mockReset();
 });
 
 describe("resolveDiscordPreflightAudioMentionContext", () => {
   it("transcribes DM voice notes without mention requirement", async () => {
-    transcribeFirstAudioMock.mockResolvedValueOnce("hello from a voice note");
+    transcribeFirstAudioResultMock.mockResolvedValueOnce({
+      transcript: "hello from a voice note",
+      attachmentIndex: 0,
+    });
 
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },
@@ -31,7 +34,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       cfg: baseCfg,
     });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(transcribeFirstAudioResultMock).toHaveBeenCalledTimes(1);
     expect(result.transcript).toBe("hello from a voice note");
     expect(result.transcribedAttachmentIndex).toBe(0);
     expect(result.hasAudioAttachment).toBe(true);
@@ -39,7 +42,10 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
   });
 
   it("passes chat scope metadata into DM preflight transcription", async () => {
-    transcribeFirstAudioMock.mockResolvedValueOnce("hello from a voice note");
+    transcribeFirstAudioResultMock.mockResolvedValueOnce({
+      transcript: "hello from a voice note",
+      attachmentIndex: 0,
+    });
 
     await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },
@@ -61,7 +67,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       } as OpenClawConfig,
     });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+    expect(transcribeFirstAudioResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         ctx: expect.objectContaining({
           ChatType: "direct",
@@ -73,8 +79,45 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     );
   });
 
+  it("uses the actual transcribed attachment index returned by media preflight", async () => {
+    transcribeFirstAudioResultMock.mockResolvedValueOnce({
+      transcript: "picked last attachment",
+      attachmentIndex: 1,
+    });
+
+    const result = await resolveDiscordPreflightAudioMentionContext({
+      message: {
+        attachments: [
+          createAudioAttachment("https://cdn.discordapp.com/attachments/voice-1.ogg"),
+          createAudioAttachment("https://cdn.discordapp.com/attachments/voice-2.ogg"),
+        ],
+        content: "",
+      },
+      chatType: "direct",
+      shouldRequireMention: false,
+      mentionRegexes: [],
+      cfg: {
+        tools: {
+          media: {
+            audio: {
+              attachments: {
+                prefer: "last",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.transcript).toBe("picked last attachment");
+    expect(result.transcribedAttachmentIndex).toBe(1);
+  });
+
   it("transcribes guild voice notes when mention is required and regexes are present", async () => {
-    transcribeFirstAudioMock.mockResolvedValueOnce("guild voice");
+    transcribeFirstAudioResultMock.mockResolvedValueOnce({
+      transcript: "guild voice",
+      attachmentIndex: 0,
+    });
 
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },
@@ -84,7 +127,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       cfg: baseCfg,
     });
 
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(transcribeFirstAudioResultMock).toHaveBeenCalledTimes(1);
     expect(result.transcript).toBe("guild voice");
   });
 
@@ -97,7 +140,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       cfg: baseCfg,
     });
 
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(transcribeFirstAudioResultMock).not.toHaveBeenCalled();
     expect(result.transcript).toBeUndefined();
     expect(result.hasAudioAttachment).toBe(true);
   });
@@ -111,7 +154,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       cfg: baseCfg,
     });
 
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(transcribeFirstAudioResultMock).not.toHaveBeenCalled();
     expect(result.transcript).toBeUndefined();
   });
 
@@ -124,7 +167,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       cfg: baseCfg,
     });
 
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(transcribeFirstAudioResultMock).not.toHaveBeenCalled();
     expect(result.hasTypedText).toBe(true);
     expect(result.transcript).toBeUndefined();
   });
@@ -141,16 +184,16 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       cfg: baseCfg,
     });
 
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(transcribeFirstAudioResultMock).not.toHaveBeenCalled();
     expect(result.hasAudioAttachment).toBe(false);
     expect(result.transcript).toBeUndefined();
   });
 
   it("clears transcript when abortSignal fires during transcription", async () => {
     const controller = new AbortController();
-    transcribeFirstAudioMock.mockImplementation(async () => {
+    transcribeFirstAudioResultMock.mockImplementation(async () => {
       controller.abort();
-      return "should be cleared";
+      return { transcript: "should be cleared", attachmentIndex: 0 };
     });
 
     const result = await resolveDiscordPreflightAudioMentionContext({
@@ -167,7 +210,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
   });
 
   it("handles transcription errors gracefully", async () => {
-    transcribeFirstAudioMock.mockRejectedValueOnce(new Error("whisper crashed"));
+    transcribeFirstAudioResultMock.mockRejectedValueOnce(new Error("whisper crashed"));
 
     const result = await resolveDiscordPreflightAudioMentionContext({
       message: { attachments: [createAudioAttachment()], content: "" },

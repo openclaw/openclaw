@@ -13,26 +13,26 @@ import type { MediaUnderstandingProvider } from "./types.js";
 /**
  * Transcribes the first audio attachment BEFORE mention checking.
  * This allows voice notes to be processed in group chats with requireMention: true.
- * Returns the transcript or undefined if transcription fails or no audio is found.
+ * Returns the transcript metadata or undefined if transcription fails or no audio is found.
  */
-export async function transcribeFirstAudio(params: {
+export async function transcribeFirstAudioResult(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
-}): Promise<string | undefined> {
+}): Promise<{ transcript?: string; attachmentIndex?: number }> {
   const { ctx, cfg } = params;
 
   // Check if audio transcription is enabled in config
   const audioConfig = cfg.tools?.media?.audio;
   if (audioConfig?.enabled === false) {
-    return undefined;
+    return {};
   }
 
   const attachments = normalizeMediaAttachments(ctx);
   if (!attachments || attachments.length === 0) {
-    return undefined;
+    return {};
   }
 
   // Find first audio attachment
@@ -41,7 +41,7 @@ export async function transcribeFirstAudio(params: {
   );
 
   if (!firstAudio) {
-    return undefined;
+    return {};
   }
 
   if (shouldLogVerbose()) {
@@ -49,7 +49,7 @@ export async function transcribeFirstAudio(params: {
   }
 
   try {
-    const { transcript } = await runAudioTranscription({
+    const { transcript, attachmentIndex } = await runAudioTranscription({
       ctx,
       cfg,
       attachments,
@@ -59,24 +59,42 @@ export async function transcribeFirstAudio(params: {
       localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
     });
     if (!transcript) {
-      return undefined;
+      return {};
     }
 
-    // Mark this attachment as transcribed to avoid double-processing
-    firstAudio.alreadyTranscribed = true;
+    const transcribedAttachment =
+      typeof attachmentIndex === "number"
+        ? attachments.find((attachment) => attachment.index === attachmentIndex)
+        : firstAudio;
+    if (transcribedAttachment) {
+      transcribedAttachment.alreadyTranscribed = true;
+    }
 
     if (shouldLogVerbose()) {
       logVerbose(
-        `audio-preflight: transcribed ${transcript.length} chars from attachment ${firstAudio.index}`,
+        `audio-preflight: transcribed ${transcript.length} chars from attachment ${transcribedAttachment?.index ?? firstAudio.index}`,
       );
     }
 
-    return transcript;
+    return {
+      transcript,
+      attachmentIndex: transcribedAttachment?.index,
+    };
   } catch (err) {
     // Log but don't throw - let the message proceed with text-only mention check
     if (shouldLogVerbose()) {
       logVerbose(`audio-preflight: transcription failed: ${String(err)}`);
     }
-    return undefined;
+    return {};
   }
+}
+
+export async function transcribeFirstAudio(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  providers?: Record<string, MediaUnderstandingProvider>;
+  activeModel?: ActiveMediaModel;
+}): Promise<string | undefined> {
+  return (await transcribeFirstAudioResult(params)).transcript;
 }

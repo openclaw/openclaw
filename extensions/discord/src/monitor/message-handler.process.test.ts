@@ -4,10 +4,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+const transcribeFirstAudioResultMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./preflight-audio.runtime.js", () => ({
-  transcribeFirstAudio: transcribeFirstAudioMock,
+  transcribeFirstAudioResult: transcribeFirstAudioResultMock,
 }));
 
 const sendMocks = vi.hoisted(() => ({
@@ -240,7 +240,7 @@ beforeEach(() => {
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
-  transcribeFirstAudioMock.mockReset();
+  transcribeFirstAudioResultMock.mockReset();
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
   readSessionUpdatedAt.mockClear();
@@ -699,7 +699,10 @@ describe("processDiscordMessage session routing", () => {
 
   it("threads DM preflight transcripts into the dispatched inbound context", async () => {
     const channelId = "dm-voice-process-1";
-    transcribeFirstAudioMock.mockResolvedValueOnce("hello from discord voice");
+    transcribeFirstAudioResultMock.mockResolvedValueOnce({
+      transcript: "hello from discord voice",
+      attachmentIndex: 0,
+    });
 
     const message = createDiscordMessage({
       id: "voice-dm-process-1",
@@ -755,9 +758,74 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchArgs?.ctx?.MediaUrls).toBeUndefined();
   });
 
+  it("prunes the actual preflight-transcribed audio attachment from later media payloads", async () => {
+    const channelId = "dm-voice-process-index-1";
+    transcribeFirstAudioResultMock.mockResolvedValueOnce({
+      transcript: "picked second voice note",
+      attachmentIndex: 1,
+    });
+
+    const message = createDiscordMessage({
+      id: "voice-dm-process-index-1",
+      channelId,
+      content: "",
+      author: { id: "42", bot: false, username: "user" },
+      attachments: [
+        {
+          content_type: "audio/ogg",
+          url: "https://cdn.discordapp.com/attachments/voice-1.ogg",
+          filename: "voice-1.ogg",
+        },
+        {
+          content_type: "audio/ogg",
+          url: "https://cdn.discordapp.com/attachments/voice-2.ogg",
+          filename: "voice-2.ogg",
+        },
+      ],
+    });
+    const data = {
+      channel_id: channelId,
+      author: message.author,
+      message,
+    } as import("./message-handler.preflight.test-helpers.js").DiscordMessageEvent;
+
+    const preflight = await preflightDiscordMessage(
+      createDiscordPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG as OpenClawConfig,
+        discordConfig: { dmPolicy: "open" },
+        data,
+        client: createDmClient(
+          channelId,
+        ) as import("./message-handler.preflight.test-helpers.js").DiscordClient,
+      }),
+    );
+
+    expect(preflight).not.toBeNull();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(preflight as any);
+
+    const dispatchArgs = dispatchInboundMessage.mock.calls.at(-1)?.[0] as
+      | { ctx?: Record<string, unknown> }
+      | undefined;
+    expect(dispatchArgs?.ctx).toEqual(
+      expect.objectContaining({
+        BodyForAgent: "picked second voice note",
+        RawBody: "picked second voice note",
+        CommandBody: "picked second voice note",
+        MediaPaths: [expect.stringContaining("voice-1.ogg")],
+        MediaUrls: ["https://cdn.discordapp.com/attachments/voice-1.ogg"],
+        MediaTypes: ["audio/ogg"],
+      }),
+    );
+  });
+
   it("preserves forwarded snapshot text when substituting a DM preflight transcript", async () => {
     const channelId = "dm-voice-process-forwarded-1";
-    transcribeFirstAudioMock.mockResolvedValueOnce("hello from discord voice");
+    transcribeFirstAudioResultMock.mockResolvedValueOnce({
+      transcript: "hello from discord voice",
+      attachmentIndex: 0,
+    });
 
     const message = createDiscordMessage({
       id: "voice-dm-process-forwarded-1",

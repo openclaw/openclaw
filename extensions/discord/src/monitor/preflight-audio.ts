@@ -58,7 +58,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
       };
     }
     try {
-      const { transcribeFirstAudio } = await import("./preflight-audio.runtime.js");
+      const { transcribeFirstAudioResult } = await import("./preflight-audio.runtime.js");
       if (params.abortSignal?.aborted) {
         return {
           hasAudioAttachment,
@@ -70,7 +70,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
           typeof att.url === "string" && att.url.length > 0,
       );
       if (transcriptionCandidates.length > 0) {
-        transcript = await transcribeFirstAudio({
+        const result = await transcribeFirstAudioResult({
           ctx: {
             MediaUrls: transcriptionCandidates.map((att) => att.url),
             MediaTypes: transcriptionCandidates
@@ -84,10 +84,11 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
           cfg: params.cfg,
           agentDir: undefined,
         });
+        transcript = result.transcript;
         if (params.abortSignal?.aborted) {
           transcript = undefined;
-        } else if (transcript) {
-          transcribedAttachmentIndex = transcriptionCandidates[0].attachmentIndex;
+        } else {
+          transcribedAttachmentIndex = result.attachmentIndex;
         }
       }
     } catch (err) {
