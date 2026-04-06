@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images using configured providers (OpenAI, Google Gemini, fal, MiniMax, ComfyUI)"
+summary: "Generate and edit images using configured providers (OpenAI, Google Gemini, fal, MiniMax, ComfyUI, Vydra)"
 read_when:
   - Generating images via the agent
   - Configuring image generation providers and models
@@ -45,6 +45,7 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 | fal      | `fal-ai/flux/dev`                | Yes                                | `FAL_KEY`                                             |
 | MiniMax  | `image-01`                       | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
 | ComfyUI  | `workflow`                       | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
+| Vydra    | `grok-imagine`                   | No                                 | `VYDRA_API_KEY`                                       |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -123,13 +124,13 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 
 ## Provider capabilities
 
-| Capability            | OpenAI               | Google               | fal                 | MiniMax                    | ComfyUI                            |
-| --------------------- | -------------------- | -------------------- | ------------------- | -------------------------- | ---------------------------------- |
-| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              | Yes (workflow-defined outputs)     |
-| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) | Yes (1 image, workflow-configured) |
-| Size control          | Yes                  | Yes                  | Yes                 | No                         | No                                 |
-| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                        | No                                 |
-| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | No                         | No                                 |
+| Capability            | OpenAI               | Google               | fal                 | MiniMax                    | ComfyUI                            | Vydra |
+| --------------------- | -------------------- | -------------------- | ------------------- | -------------------------- | ---------------------------------- | ----- |
+| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              | Yes (workflow-defined outputs)     | Yes (1) |
+| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) | Yes (1 image, workflow-configured) | No |
+| Size control          | Yes                  | Yes                  | Yes                 | No                         | No                                 | No |
+| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                        | No                                 | No |
+| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | No                         | No                                 | No |
 
 ## Related
 
@@ -139,5 +140,6 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 - [Google (Gemini)](/providers/google) — Gemini image provider setup
 - [MiniMax](/providers/minimax) — MiniMax image provider setup
 - [OpenAI](/providers/openai) — OpenAI Images provider setup
+- [Vydra](/providers/vydra) — Vydra image, video, and speech setup
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults) — `imageGenerationModel` config
 - [Models](/concepts/models) — model configuration and failover
