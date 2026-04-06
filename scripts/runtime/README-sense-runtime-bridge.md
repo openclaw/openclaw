@@ -738,6 +738,8 @@ Manager handoff triage helper:
 - `scripts/runtime/sense-runtime-manager-entry.sh`
 - `scripts/runtime/sense_runtime_manager_dispatch.py`
 - `scripts/runtime/sense-runtime-manager-dispatch.sh`
+- `scripts/runtime/sense_runtime_manager_runtime_entry.py`
+- `scripts/runtime/sense-runtime-manager-runtime-entry.sh`
 
 This helper is intentionally lightweight. It reads `manager_handoff` and decides whether the next manager turn should:
 
@@ -784,6 +786,17 @@ The manager dispatch layer can now connect the shortcut directly to the thin exe
   - dispatch falls back to the existing full evaluator -> manager policy -> executor path
 
 This is still a shortcut only. It does not add another loop, and it does not replace the full evaluator path when shortcut confidence is not high enough.
+
+The manager runtime entrypoint now chains entry and dispatch into a single command:
+
+- if a high-confidence handoff produces a shortcut plan
+  - manager entry returns `use_handoff`
+  - dispatch selects `shortcut_executor`
+- otherwise
+  - manager entry falls back to `hint_only` or `rerun_full_evaluator`
+  - dispatch selects the normal full-evaluator path
+
+This keeps the architecture layered while letting the manager start from a single runtime entry command.
 
 Current convergence states are:
 
