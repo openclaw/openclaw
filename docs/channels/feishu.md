@@ -605,7 +605,7 @@ Notes:
 
 Use `bindings` to route Feishu DMs or groups to different agents.
 
-When no explicit binding matches an incoming message, the gateway falls back to the **default account** (configured via `channels.feishu.defaultAccount` or the first configured account), and then applies the **default group policy** (`channels.defaults.groupPolicy`) to determine which agent handles it. The resulting canonical session key (e.g., `feishu:g-{chatId}` for groups) reflects the final routing destination but does not encode which rule — binding or fallback — was responsible.
+When no explicit binding matches an incoming message, the gateway falls back to the **default account** (configured via `channels.feishu.defaultAccount` or the first configured account) to select the handling agent. The **default group policy** (`channels.defaults.groupPolicy`) then determines whether the message is accepted (`open`/`allowlist`/`disabled`) — it is an access-control gate, not an agent-selection mechanism. The resulting canonical session key (e.g., `feishu:g-{chatId}` for groups) reflects the final routing destination but does not encode which rule — binding or fallback — was responsible.
 
 ```json5
 {

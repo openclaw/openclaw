@@ -610,7 +610,7 @@ openclaw pairing list feishu
 
 使用 `bindings` 将飞书私信或群组路由到不同的智能体。
 
-当没有显式 binding 匹配传入消息时，网关会回退到**默认账号**（通过 `channels.feishu.defaultAccount` 或第一个配置的账号），然后应用**默认群组策略**（`channels.defaults.groupPolicy`）来决定由哪个智能体处理。结果会话键（例如群组的 `feishu:g-{chatId}`）反映了最终的路由目的地，但不会编码是哪条规则——binding 还是回退——决定了这一结果。
+当没有显式 binding 匹配传入消息时，网关会回退到**默认账号**（通过 `channels.feishu.defaultAccount` 或第一个配置的账号）来选择处理智能体。然后**默认群组策略**（`channels.defaults.groupPolicy`）决定是否接受该消息（`open`/`allowlist`/`disabled`）——它是访问控制门，不是智能体选择机制。结果会话键（例如群组的 `feishu:g-{chatId}`）反映了最终的路由目的地，但不会编码是哪条规则——binding 还是回退——决定了这一结果。
 
 ```json5
 {

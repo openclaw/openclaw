@@ -83,7 +83,7 @@ Use `channels.defaults` for shared group-policy and heartbeat behavior across pr
 }
 ```
 
-- `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset. When no explicit binding matches an inbound message, the gateway applies this default policy to select the handling agent. The session key's canonical form reflects the final destination but does not indicate whether routing matched a binding or the fallback chain.
+- `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset. Accepted values are `open`, `allowlist`, and `disabled`; this policy controls whether inbound group messages are accepted when no explicit binding matches, not which agent handles them. Agent selection in the fallback case is governed by `channels.feishu.defaultAccount`. The session key's canonical form reflects the final destination but does not indicate whether routing matched a binding or the fallback chain.
 - `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output.
 - `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output.
 - `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output.
