@@ -380,12 +380,16 @@ def main():
     )
     parser.add_argument(
         "--tool-args",
-        nargs='+',
+        nargs='*',
         default=[],
         help="Tool arguments as flag/type/desc tuples, e.g. '--input:str:Input file' '--output:str:Output file'",
     )
 
-    args = parser.parse_args()
+    # Use parse_known_args to capture --tool-args values that start with dashes
+    args, remaining = parser.parse_known_args()
+    if remaining:
+        # Merge remaining into tool_args (they are the flag/type/desc tuples)
+        args.tool_args = (args.tool_args or []) + remaining
 
     raw_skill_name = args.skill_name
     skill_name = normalize_skill_name(raw_skill_name)
