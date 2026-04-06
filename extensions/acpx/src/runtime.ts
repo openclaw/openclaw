@@ -12,10 +12,17 @@ import {
   type AcpRuntimeHandle,
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
-  type AcpSessionRecord,
-  type AcpSessionStore,
 } from "acpx/runtime";
 import type { AcpRuntime } from "../runtime-api.js";
+
+type AcpSessionRecord = Record<string, unknown> & {
+  name?: string;
+};
+
+type AcpSessionStore = {
+  load(sessionId: string): Promise<AcpSessionRecord | undefined>;
+  save(record: AcpSessionRecord): Promise<void>;
+};
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
@@ -34,7 +41,7 @@ function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSes
     },
     async save(record: AcpSessionRecord): Promise<void> {
       await baseStore.save(record);
-      const sessionName = record.name.trim();
+      const sessionName = typeof record.name === "string" ? record.name.trim() : "";
       if (sessionName) {
         freshSessionKeys.delete(sessionName);
       }
