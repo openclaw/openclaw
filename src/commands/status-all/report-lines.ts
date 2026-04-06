@@ -3,12 +3,13 @@ import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { buildStatusChannelsTableRows, statusChannelsTableColumns } from "./channels-table.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
-import { formatTimeAgo } from "./format.js";
 import {
-  appendStatusLinesSection,
-  appendStatusSectionHeading,
-  appendStatusTableSection,
-} from "./text-report.js";
+  buildStatusAgentTableRows,
+  buildStatusChannelDetailSections,
+  statusAgentsTableColumns,
+  statusOverviewTableColumns,
+} from "./report-tables.js";
+import { appendStatusReportSections, appendStatusSectionHeading } from "./text-report.js";
 
 type OverviewRow = { Item: string; Value: string };
 
@@ -64,98 +65,58 @@ export async function buildStatusAllReportLines(params: {
 
   const tableWidth = getTerminalTableWidth();
 
-  const overview = renderTable({
-    width: tableWidth,
-    columns: [
-      { key: "Item", header: "Item", minWidth: 10 },
-      { key: "Value", header: "Value", flex: true, minWidth: 24 },
-    ],
-    rows: params.overviewRows,
-  });
-
-  const channelsTable = renderTable({
-    width: tableWidth,
-    columns: statusChannelsTableColumns.map((column) =>
-      column.key === "Detail" ? { ...column, minWidth: 28 } : column,
-    ),
-    rows: buildStatusChannelsTableRows({
-      rows: params.channels.rows,
-      channelIssues: params.channelIssues,
-      ok,
-      warn,
-      muted,
-      accentDim: theme.accentDim,
-      formatIssueMessage: (message) => String(message).slice(0, 90),
-    }),
-  });
-
-  const agentRows = params.agentStatus.agents.map((a) => ({
-    Agent: a.name?.trim() ? `${a.id} (${a.name.trim()})` : a.id,
-    BootstrapFile:
-      a.bootstrapPending === true
-        ? warn("PRESENT")
-        : a.bootstrapPending === false
-          ? ok("ABSENT")
-          : "unknown",
-    Sessions: String(a.sessionsCount),
-    Active: a.lastActiveAgeMs != null ? formatTimeAgo(a.lastActiveAgeMs) : "unknown",
-    Store: a.sessionsPath,
-  }));
-
-  const agentsTable = renderTable({
-    width: tableWidth,
-    columns: [
-      { key: "Agent", header: "Agent", minWidth: 12 },
-      { key: "BootstrapFile", header: "Bootstrap file", minWidth: 14 },
-      { key: "Sessions", header: "Sessions", align: "right", minWidth: 8 },
-      { key: "Active", header: "Active", minWidth: 10 },
-      { key: "Store", header: "Store", flex: true, minWidth: 34 },
-    ],
-    rows: agentRows,
-  });
-
   const lines: string[] = [];
   lines.push(heading("OpenClaw status --all"));
-  appendStatusLinesSection({
+  appendStatusReportSections({
     lines,
     heading,
-    title: "Overview",
-    body: [overview.trimEnd()],
-  });
-  appendStatusLinesSection({
-    lines,
-    heading,
-    title: "Channels",
-    body: [channelsTable.trimEnd()],
-  });
-  for (const detail of params.channels.details) {
-    appendStatusTableSection({
-      lines,
-      heading,
-      title: detail.title,
-      width: tableWidth,
-      renderTable,
-      columns: detail.columns.map((c) => ({
-        key: c,
-        header: c,
-        flex: c === "Notes",
-        minWidth: c === "Notes" ? 28 : 10,
-      })),
-      rows: detail.rows.map((r) => ({
-        ...r,
-        ...(r.Status === "OK"
-          ? { Status: ok("OK") }
-          : r.Status === "WARN"
-            ? { Status: warn("WARN") }
-            : {}),
-      })),
-    });
-  }
-  appendStatusLinesSection({
-    lines,
-    heading,
-    title: "Agents",
-    body: [agentsTable.trimEnd()],
+    sections: [
+      {
+        kind: "table",
+        title: "Overview",
+        width: tableWidth,
+        renderTable,
+        columns: statusOverviewTableColumns,
+        rows: params.overviewRows,
+      },
+      {
+        kind: "table",
+        title: "Channels",
+        width: tableWidth,
+        renderTable,
+        columns: statusChannelsTableColumns.map((column) =>
+          column.key === "Detail" ? { ...column, minWidth: 28 } : column,
+        ),
+        rows: buildStatusChannelsTableRows({
+          rows: params.channels.rows,
+          channelIssues: params.channelIssues,
+          ok,
+          warn,
+          muted,
+          accentDim: theme.accentDim,
+          formatIssueMessage: (message) => String(message).slice(0, 90),
+        }),
+      },
+      ...buildStatusChannelDetailSections({
+        details: params.channels.details,
+        width: tableWidth,
+        renderTable,
+        ok,
+        warn,
+      }),
+      {
+        kind: "table",
+        title: "Agents",
+        width: tableWidth,
+        renderTable,
+        columns: statusAgentsTableColumns,
+        rows: buildStatusAgentTableRows({
+          agentStatus: params.agentStatus,
+          ok,
+          warn,
+        }),
+      },
+    ],
   });
   appendStatusSectionHeading({
     lines,
