@@ -272,8 +272,12 @@ function buildNativeMcpInspectEntries(
   }
 
   for (const entry of report.mcpServers.filter((entry) => entry.pluginId === plugin.id)) {
-    entries.set(entry.name, {
-      name: entry.name,
+    const normalized = entry.name.trim();
+    if (!normalized) {
+      continue;
+    }
+    entries.set(normalized, {
+      name: normalized,
       hasStdioTransport:
         typeof entry.server.command === "string" && entry.server.command.trim().length > 0,
     });

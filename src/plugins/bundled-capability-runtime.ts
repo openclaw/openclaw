@@ -124,6 +124,7 @@ function createCapabilityPluginRecord(params: {
   source: string;
   rootDir?: string;
   workspaceDir?: string;
+  mcpServerNames?: string[];
 }): PluginRecord {
   return {
     id: params.id,
@@ -150,7 +151,7 @@ function createCapabilityPluginRecord(params: {
     musicGenerationProviderIds: [],
     webFetchProviderIds: [],
     webSearchProviderIds: [],
-    mcpServerNames: [],
+    mcpServerNames: [...(params.mcpServerNames ?? [])],
     memoryEmbeddingProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
@@ -252,6 +253,9 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       name: manifest.name,
       description: manifest.description,
       version: manifest.version,
+      mcpServerNames: Array.from(
+        new Set((manifest.contracts?.mcpServers ?? []).map((name) => name.trim()).filter(Boolean)),
+      ),
       source:
         env?.VITEST && params.pluginSdkResolution === "dist"
           ? (resolveBundledPluginRepoEntryPath({
@@ -330,6 +334,12 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
         ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
       );
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
+      record.mcpServerNames = Array.from(
+        new Set([
+          ...(record.mcpServerNames ?? []),
+          ...captured.mcpServers.map((entry) => entry.name),
+        ]),
+      );
 
       registry.cliBackends?.push(
         ...captured.cliBackends.map((backend) => ({

@@ -810,6 +810,42 @@ describe("plugin status reports", () => {
     expect(inspect.mcpServers).toEqual([{ name: "helloWorld", hasStdioTransport: true }]);
   });
 
+  it("trims and skips empty runtime MCP server names in inspect output", () => {
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "native-mcp",
+        name: "Native MCP",
+      }),
+      {
+        mcpServers: [
+          {
+            pluginId: "native-mcp",
+            pluginName: "Native MCP",
+            name: "  helloWorld  ",
+            server: { command: "node", args: ["hello-world.mjs"] },
+            source: "/tmp/native-mcp/index.ts",
+          },
+          {
+            pluginId: "native-mcp",
+            pluginName: "Native MCP",
+            name: "   ",
+            server: { command: "node", args: ["blank.mjs"] },
+            source: "/tmp/native-mcp/index.ts",
+          },
+        ],
+      },
+    );
+
+    const inspect = expectInspectReport("native-mcp");
+
+    expect(inspect.mcpServers).toEqual([{ name: "helloWorld", hasStdioTransport: true }]);
+    expectInspectShape(inspect, {
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["mcp-server"],
+    });
+  });
+
   it("formats and summarizes compatibility notices", () => {
     const notice = createCompatibilityNotice({
       pluginId: "legacy-plugin",

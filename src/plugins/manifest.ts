@@ -215,6 +215,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const musicGenerationProviders = normalizeTrimmedStringList(value.musicGenerationProviders);
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
+  const mcpServers = normalizeTrimmedStringList(value.mcpServers);
   const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
@@ -227,6 +228,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(musicGenerationProviders.length > 0 ? { musicGenerationProviders } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
+    ...(mcpServers.length > 0 ? { mcpServers } : {}),
     ...(tools.length > 0 ? { tools } : {}),
   } satisfies PluginManifestContracts;
 

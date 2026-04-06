@@ -102,6 +102,25 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes manifest contract MCP server names", () => {
+    const dir = makeTempDir();
+    const json5Content = `{
+  id: "native-mcp-plugin",
+  contracts: {
+    mcpServers: [" helloWorld ", "", "statusServer"],
+  },
+  configSchema: { type: "object" }
+}`;
+    fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), json5Content, "utf-8");
+    const result = loadPluginManifest(dir, false);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.contracts).toEqual({
+        mcpServers: ["helloWorld", "statusServer"],
+      });
+    }
+  });
+
   it("still rejects completely invalid syntax", () => {
     const dir = makeTempDir();
     fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), "not json at all {{{}}", "utf-8");
