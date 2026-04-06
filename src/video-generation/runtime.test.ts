@@ -255,6 +255,13 @@ describe("video-generation runtime", () => {
     });
 
     expect(seenDurationSeconds).toBe(6);
+    expect(result.normalization).toMatchObject({
+      durationSeconds: {
+        requested: 5,
+        applied: 6,
+        supportedValues: [4, 6, 8],
+      },
+    });
     expect(result.metadata).toMatchObject({
       requestedDurationSeconds: 5,
       normalizedDurationSeconds: 6,
@@ -382,6 +389,12 @@ describe("video-generation runtime", () => {
       resolution: undefined,
     });
     expect(result.ignoredOverrides).toEqual([]);
+    expect(result.normalization).toMatchObject({
+      aspectRatio: {
+        applied: "16:9",
+        derivedFrom: "size",
+      },
+    });
     expect(result.metadata).toMatchObject({
       requestedSize: "1280x720",
       normalizedAspectRatio: "16:9",

@@ -6,20 +6,16 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildNoCapabilityModelConfiguredMessage,
   deriveAspectRatioFromSize,
-  resolveClosestAspectRatio,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
-import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
-import {
-  normalizeVideoGenerationDuration,
-  resolveVideoGenerationSupportedDurations,
-} from "./duration-support.js";
 import { parseVideoGenerationModelRef } from "./model-ref.js";
+import { resolveVideoGenerationOverrides } from "./normalization.js";
 import { getVideoGenerationProvider, listVideoGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationIgnoredOverride,
+  VideoGenerationNormalization,
   VideoGenerationResolution,
   VideoGenerationResult,
   VideoGenerationSourceAsset,
@@ -48,6 +44,7 @@ export type GenerateVideoRuntimeResult = {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  normalization?: VideoGenerationNormalization;
   metadata?: Record<string, unknown>;
   ignoredOverrides: VideoGenerationIgnoredOverride[];
 };
@@ -62,87 +59,6 @@ function buildNoVideoGenerationModelConfiguredMessage(cfg: OpenClawConfig): stri
 
 export function listRuntimeVideoGenerationProviders(params?: { config?: OpenClawConfig }) {
   return listVideoGenerationProviders(params?.config);
-}
-
-function resolveProviderVideoGenerationOverrides(params: {
-  provider: NonNullable<ReturnType<typeof getVideoGenerationProvider>>;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: VideoGenerationResolution;
-  audio?: boolean;
-  watermark?: boolean;
-  inputImageCount?: number;
-  inputVideoCount?: number;
-}) {
-  const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
-    provider: params.provider,
-    inputImageCount: params.inputImageCount,
-    inputVideoCount: params.inputVideoCount,
-  });
-  const ignoredOverrides: VideoGenerationIgnoredOverride[] = [];
-  let size = params.size;
-  let aspectRatio = params.aspectRatio;
-  let resolution = params.resolution;
-  let audio = params.audio;
-  let watermark = params.watermark;
-
-  if (!caps) {
-    return {
-      size,
-      aspectRatio,
-      resolution,
-      audio,
-      watermark,
-      ignoredOverrides,
-    };
-  }
-
-  if (size && !caps.supportsSize) {
-    let translated = false;
-    if (caps.supportsAspectRatio) {
-      const normalizedAspectRatio = resolveClosestAspectRatio({
-        requestedAspectRatio: aspectRatio,
-        requestedSize: size,
-      });
-      if (normalizedAspectRatio) {
-        aspectRatio = normalizedAspectRatio;
-        translated = true;
-      }
-    }
-    if (!translated) {
-      ignoredOverrides.push({ key: "size", value: size });
-    }
-    size = undefined;
-  }
-
-  if (aspectRatio && !caps.supportsAspectRatio) {
-    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
-    aspectRatio = undefined;
-  }
-
-  if (resolution && !caps.supportsResolution) {
-    ignoredOverrides.push({ key: "resolution", value: resolution });
-    resolution = undefined;
-  }
-
-  if (typeof audio === "boolean" && !caps.supportsAudio) {
-    ignoredOverrides.push({ key: "audio", value: audio });
-    audio = undefined;
-  }
-
-  if (typeof watermark === "boolean" && !caps.supportsWatermark) {
-    ignoredOverrides.push({ key: "watermark", value: watermark });
-    watermark = undefined;
-  }
-
-  return {
-    size,
-    aspectRatio,
-    resolution,
-    audio,
-    watermark,
-    ignoredOverrides,
-  };
 }
 
 export async function generateVideo(
@@ -177,30 +93,15 @@ export async function generateVideo(
     }
 
     try {
-      const sanitized = resolveProviderVideoGenerationOverrides({
+      const sanitized = resolveVideoGenerationOverrides({
         provider,
+        model: candidate.model,
         size: params.size,
         aspectRatio: params.aspectRatio,
         resolution: params.resolution,
+        durationSeconds: params.durationSeconds,
         audio: params.audio,
         watermark: params.watermark,
-        inputImageCount: params.inputImages?.length ?? 0,
-        inputVideoCount: params.inputVideos?.length ?? 0,
-      });
-      const requestedDurationSeconds =
-        typeof params.durationSeconds === "number" && Number.isFinite(params.durationSeconds)
-          ? Math.max(1, Math.round(params.durationSeconds))
-          : undefined;
-      const normalizedDurationSeconds = normalizeVideoGenerationDuration({
-        provider,
-        model: candidate.model,
-        durationSeconds: requestedDurationSeconds,
-        inputImageCount: params.inputImages?.length ?? 0,
-        inputVideoCount: params.inputVideos?.length ?? 0,
-      });
-      const supportedDurationSeconds = resolveVideoGenerationSupportedDurations({
-        provider,
-        model: candidate.model,
         inputImageCount: params.inputImages?.length ?? 0,
         inputVideoCount: params.inputVideos?.length ?? 0,
       });
@@ -214,7 +115,7 @@ export async function generateVideo(
         size: sanitized.size,
         aspectRatio: sanitized.aspectRatio,
         resolution: sanitized.resolution,
-        durationSeconds: normalizedDurationSeconds,
+        durationSeconds: sanitized.durationSeconds,
         audio: sanitized.audio,
         watermark: sanitized.watermark,
         inputImages: params.inputImages,
@@ -228,37 +129,49 @@ export async function generateVideo(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
+        normalization: sanitized.normalization,
         ignoredOverrides: sanitized.ignoredOverrides,
         metadata: {
           ...result.metadata,
-          ...((params.size && sanitized.aspectRatio && params.size !== sanitized.size) ||
-          (params.aspectRatio &&
-            sanitized.aspectRatio &&
-            params.aspectRatio !== sanitized.aspectRatio)
+          ...(sanitized.normalization?.size?.requested !== undefined &&
+          sanitized.normalization.size.applied !== undefined
             ? {
-                ...(params.size ? { requestedSize: params.size } : {}),
-                ...(params.aspectRatio ? { requestedAspectRatio: params.aspectRatio } : {}),
-                normalizedAspectRatio: sanitized.aspectRatio,
-                ...(params.size
-                  ? { aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size) }
+                requestedSize: sanitized.normalization.size.requested,
+                normalizedSize: sanitized.normalization.size.applied,
+              }
+            : {}),
+          ...(sanitized.normalization?.aspectRatio?.applied !== undefined
+            ? {
+                ...(sanitized.normalization.aspectRatio.requested !== undefined
+                  ? { requestedAspectRatio: sanitized.normalization.aspectRatio.requested }
+                  : {}),
+                normalizedAspectRatio: sanitized.normalization.aspectRatio.applied,
+                ...(sanitized.normalization.aspectRatio.derivedFrom === "size" && params.size
+                  ? {
+                      requestedSize: params.size,
+                      aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size),
+                    }
                   : {}),
               }
             : {}),
-          ...(params.resolution &&
-          sanitized.resolution &&
-          params.resolution !== sanitized.resolution
+          ...(sanitized.normalization?.resolution?.requested !== undefined &&
+          sanitized.normalization.resolution.applied !== undefined
             ? {
-                requestedResolution: params.resolution,
-                normalizedResolution: sanitized.resolution,
+                requestedResolution: sanitized.normalization.resolution.requested,
+                normalizedResolution: sanitized.normalization.resolution.applied,
               }
             : {}),
-          ...(typeof requestedDurationSeconds === "number" &&
-          typeof normalizedDurationSeconds === "number" &&
-          requestedDurationSeconds !== normalizedDurationSeconds
+          ...(sanitized.normalization?.durationSeconds?.requested !== undefined &&
+          sanitized.normalization.durationSeconds.applied !== undefined
             ? {
-                requestedDurationSeconds,
-                normalizedDurationSeconds,
-                ...(supportedDurationSeconds ? { supportedDurationSeconds } : {}),
+                requestedDurationSeconds: sanitized.normalization.durationSeconds.requested,
+                normalizedDurationSeconds: sanitized.normalization.durationSeconds.applied,
+                ...(sanitized.normalization.durationSeconds.supportedValues?.length
+                  ? {
+                      supportedDurationSeconds:
+                        sanitized.normalization.durationSeconds.supportedValues,
+                    }
+                  : {}),
               }
             : {}),
         },

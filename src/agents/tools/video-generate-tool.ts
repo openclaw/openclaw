@@ -529,10 +529,11 @@ async function executeVideoGenerationJob(params: {
     ),
   );
   const requestedDurationSeconds =
-    typeof result.metadata?.requestedDurationSeconds === "number" &&
+    result.normalization?.durationSeconds?.requested ??
+    (typeof result.metadata?.requestedDurationSeconds === "number" &&
     Number.isFinite(result.metadata.requestedDurationSeconds)
       ? result.metadata.requestedDurationSeconds
-      : params.durationSeconds;
+      : params.durationSeconds);
   const ignoredOverrides = result.ignoredOverrides ?? [];
   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
   const warning =
@@ -540,34 +541,41 @@ async function executeVideoGenerationJob(params: {
       ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredVideoGenerationOverride).join(", ")}.`
       : undefined;
   const normalizedDurationSeconds =
-    typeof result.metadata?.normalizedDurationSeconds === "number" &&
+    result.normalization?.durationSeconds?.applied ??
+    (typeof result.metadata?.normalizedDurationSeconds === "number" &&
     Number.isFinite(result.metadata.normalizedDurationSeconds)
       ? result.metadata.normalizedDurationSeconds
-      : requestedDurationSeconds;
-  const supportedDurationSeconds = Array.isArray(result.metadata?.supportedDurationSeconds)
-    ? result.metadata.supportedDurationSeconds.filter(
-        (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
-      )
-    : undefined;
+      : requestedDurationSeconds);
+  const supportedDurationSeconds =
+    result.normalization?.durationSeconds?.supportedValues ??
+    (Array.isArray(result.metadata?.supportedDurationSeconds)
+      ? result.metadata.supportedDurationSeconds.filter(
+          (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
+        )
+      : undefined);
   const normalizedSize =
-    typeof result.metadata?.normalizedSize === "string" && result.metadata.normalizedSize.trim()
+    result.normalization?.size?.applied ??
+    (typeof result.metadata?.normalizedSize === "string" && result.metadata.normalizedSize.trim()
       ? result.metadata.normalizedSize
-      : undefined;
+      : undefined);
   const normalizedAspectRatio =
-    typeof result.metadata?.normalizedAspectRatio === "string" &&
+    result.normalization?.aspectRatio?.applied ??
+    (typeof result.metadata?.normalizedAspectRatio === "string" &&
     result.metadata.normalizedAspectRatio.trim()
       ? result.metadata.normalizedAspectRatio
-      : undefined;
+      : undefined);
   const normalizedResolution =
-    typeof result.metadata?.normalizedResolution === "string" &&
+    result.normalization?.resolution?.applied ??
+    (typeof result.metadata?.normalizedResolution === "string" &&
     result.metadata.normalizedResolution.trim()
       ? result.metadata.normalizedResolution
-      : undefined;
+      : undefined);
   const sizeTranslatedToAspectRatio =
-    !normalizedSize &&
-    typeof result.metadata?.requestedSize === "string" &&
-    result.metadata.requestedSize === params.size &&
-    Boolean(normalizedAspectRatio);
+    result.normalization?.aspectRatio?.derivedFrom === "size" ||
+    (!normalizedSize &&
+      typeof result.metadata?.requestedSize === "string" &&
+      result.metadata.requestedSize === params.size &&
+      Boolean(normalizedAspectRatio));
   const lines = [
     `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
@@ -660,6 +668,7 @@ async function executeVideoGenerationJob(params: {
         : {}),
       ...(params.filename ? { filename: params.filename } : {}),
       attempts: result.attempts,
+      ...(result.normalization ? { normalization: result.normalization } : {}),
       metadata: result.metadata,
       ...(warning ? { warning } : {}),
       ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),

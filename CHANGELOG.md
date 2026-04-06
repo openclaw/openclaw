@@ -13,6 +13,8 @@ Docs: https://docs.openclaw.ai
 - Providers/Google: add Gemma 4 model support and keep Google fallback resolution on the requested provider path so native Google Gemma routes work again. (#61507) Thanks @eyjohn.
 - Providers/Anthropic: restore Claude CLI as the preferred local Anthropic path in onboarding, model-auth guidance, doctor flows, and Docker Claude CLI live lanes again.
 - ACP/ACPX plugin: bump the bundled `acpx` pin to `0.5.1` so plugin-local installs and strict version checks pick up the latest published runtime release. (#62148) Thanks @onutc.
+- Tools/media generation: auto-fallback across auth-backed image, music, and video providers by default, and remap fallback size, aspect ratio, resolution, and duration hints to the closest supported option instead of dropping intent on provider switches.
+- Tools/media generation: report applied fallback geometry and duration settings consistently in tool results, add a shared normalization contract for image/music/video runtimes, and simplify the bundled image-generation-core runtime test to only verify the plugin-sdk re-export seam.
 
 ### Fixes
 

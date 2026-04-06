@@ -136,6 +136,8 @@ uses a shorter maximum than the requested value, OpenClaw automatically clamps
 to the closest supported duration. Truly unsupported optional hints are ignored
 with a warning when the selected provider or model cannot honor them.
 
+Tool results report the applied settings. When OpenClaw clamps duration during provider fallback, the returned `durationSeconds` reflects the submitted value and `details.normalization.durationSeconds` shows the requested-to-applied mapping.
+
 ## Async behavior for the shared provider-backed path
 
 - Session-backed agent runs: `music_generate` creates a background task, returns a started/task response immediately, and posts the finished track later in a follow-up agent message.

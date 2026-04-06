@@ -745,6 +745,12 @@ describe("createImageGenerateTool", () => {
           fileName: "generated.png",
         },
       ],
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
       metadata: {
         requestedSize: "1280x720",
         normalizedAspectRatio: "16:9",
@@ -765,6 +771,12 @@ describe("createImageGenerateTool", () => {
 
     expect(result.details).toMatchObject({
       aspectRatio: "16:9",
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
       metadata: {
         requestedSize: "1280x720",
         normalizedAspectRatio: "16:9",

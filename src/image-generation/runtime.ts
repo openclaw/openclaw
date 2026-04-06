@@ -6,17 +6,16 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildNoCapabilityModelConfiguredMessage,
   deriveAspectRatioFromSize,
-  resolveClosestAspectRatio,
-  resolveClosestResolution,
-  resolveClosestSize,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { parseImageGenerationModelRef } from "./model-ref.js";
+import { resolveImageGenerationOverrides } from "./normalization.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedImageAsset,
   ImageGenerationIgnoredOverride,
+  ImageGenerationNormalization,
   ImageGenerationResolution,
   ImageGenerationResult,
   ImageGenerationSourceImage,
@@ -42,6 +41,7 @@ export type GenerateImageRuntimeResult = {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  normalization?: ImageGenerationNormalization;
   metadata?: Record<string, unknown>;
   ignoredOverrides: ImageGenerationIgnoredOverride[];
 };
@@ -56,108 +56,6 @@ function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): stri
 
 export function listRuntimeImageGenerationProviders(params?: { config?: OpenClawConfig }) {
   return listImageGenerationProviders(params?.config);
-}
-
-function resolveProviderImageGenerationOverrides(params: {
-  provider: NonNullable<ReturnType<typeof getImageGenerationProvider>>;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: ImageGenerationResolution;
-  inputImages?: ImageGenerationSourceImage[];
-}) {
-  const hasInputImages = (params.inputImages?.length ?? 0) > 0;
-  const modeCaps = hasInputImages
-    ? params.provider.capabilities.edit
-    : params.provider.capabilities.generate;
-  const geometry = params.provider.capabilities.geometry;
-  const ignoredOverrides: ImageGenerationIgnoredOverride[] = [];
-  let size = params.size;
-  let aspectRatio = params.aspectRatio;
-  let resolution = params.resolution;
-
-  if (size && (geometry?.sizes?.length ?? 0) > 0 && modeCaps.supportsSize) {
-    size = resolveClosestSize({
-      requestedSize: size,
-      supportedSizes: geometry?.sizes,
-    });
-  }
-
-  if (!modeCaps.supportsSize && size) {
-    let translated = false;
-    if (modeCaps.supportsAspectRatio) {
-      const normalizedAspectRatio = resolveClosestAspectRatio({
-        requestedAspectRatio: aspectRatio,
-        requestedSize: size,
-        supportedAspectRatios: geometry?.aspectRatios,
-      });
-      if (normalizedAspectRatio) {
-        aspectRatio = normalizedAspectRatio;
-        translated = true;
-      }
-    }
-    if (!translated) {
-      ignoredOverrides.push({ key: "size", value: size });
-    }
-    size = undefined;
-  }
-
-  if (aspectRatio && (geometry?.aspectRatios?.length ?? 0) > 0 && modeCaps.supportsAspectRatio) {
-    aspectRatio = resolveClosestAspectRatio({
-      requestedAspectRatio: aspectRatio,
-      requestedSize: size,
-      supportedAspectRatios: geometry?.aspectRatios,
-    });
-  } else if (!modeCaps.supportsAspectRatio && aspectRatio) {
-    const derivedSize =
-      modeCaps.supportsSize && !size
-        ? resolveClosestSize({
-            requestedSize: params.size,
-            requestedAspectRatio: aspectRatio,
-            supportedSizes: geometry?.sizes,
-          })
-        : undefined;
-    let translated = false;
-    if (derivedSize) {
-      size = derivedSize;
-      translated = true;
-    }
-    if (!translated) {
-      ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
-    }
-    aspectRatio = undefined;
-  }
-
-  if (resolution && (geometry?.resolutions?.length ?? 0) > 0 && modeCaps.supportsResolution) {
-    resolution = resolveClosestResolution({
-      requestedResolution: resolution,
-      supportedResolutions: geometry?.resolutions,
-    });
-  } else if (!modeCaps.supportsResolution && resolution) {
-    ignoredOverrides.push({ key: "resolution", value: resolution });
-    resolution = undefined;
-  }
-
-  if (size && !modeCaps.supportsSize) {
-    ignoredOverrides.push({ key: "size", value: size });
-    size = undefined;
-  }
-
-  if (aspectRatio && !modeCaps.supportsAspectRatio) {
-    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
-    aspectRatio = undefined;
-  }
-
-  if (resolution && !modeCaps.supportsResolution) {
-    ignoredOverrides.push({ key: "resolution", value: resolution });
-    resolution = undefined;
-  }
-
-  return {
-    size,
-    aspectRatio,
-    resolution,
-    ignoredOverrides,
-  };
 }
 
 export async function generateImage(
@@ -192,7 +90,7 @@ export async function generateImage(
     }
 
     try {
-      const sanitized = resolveProviderImageGenerationOverrides({
+      const sanitized = resolveImageGenerationOverrides({
         provider,
         size: params.size,
         aspectRatio: params.aspectRatio,
@@ -220,30 +118,35 @@ export async function generateImage(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
+        normalization: sanitized.normalization,
         metadata: {
           ...result.metadata,
-          ...(params.size && sanitized.size && params.size !== sanitized.size
-            ? { requestedSize: params.size, normalizedSize: sanitized.size }
-            : {}),
-          ...((params.aspectRatio &&
-            sanitized.aspectRatio &&
-            params.aspectRatio !== sanitized.aspectRatio) ||
-          (!params.aspectRatio && params.size && sanitized.aspectRatio)
+          ...(sanitized.normalization?.size?.requested !== undefined &&
+          sanitized.normalization.size.applied !== undefined
             ? {
-                ...(params.size ? { requestedSize: params.size } : {}),
-                ...(params.aspectRatio ? { requestedAspectRatio: params.aspectRatio } : {}),
-                normalizedAspectRatio: sanitized.aspectRatio,
-                ...(params.size
-                  ? { aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size) }
+                requestedSize: sanitized.normalization.size.requested,
+                normalizedSize: sanitized.normalization.size.applied,
+              }
+            : {}),
+          ...(sanitized.normalization?.aspectRatio?.applied !== undefined
+            ? {
+                ...(sanitized.normalization.aspectRatio.requested !== undefined
+                  ? { requestedAspectRatio: sanitized.normalization.aspectRatio.requested }
+                  : {}),
+                normalizedAspectRatio: sanitized.normalization.aspectRatio.applied,
+                ...(sanitized.normalization.aspectRatio.derivedFrom === "size" && params.size
+                  ? {
+                      requestedSize: params.size,
+                      aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size),
+                    }
                   : {}),
               }
             : {}),
-          ...(params.resolution &&
-          sanitized.resolution &&
-          params.resolution !== sanitized.resolution
+          ...(sanitized.normalization?.resolution?.requested !== undefined &&
+          sanitized.normalization.resolution.applied !== undefined
             ? {
-                requestedResolution: params.resolution,
-                normalizedResolution: sanitized.resolution,
+                requestedResolution: sanitized.normalization.resolution.requested,
+                normalizedResolution: sanitized.normalization.resolution.applied,
               }
             : {}),
         },

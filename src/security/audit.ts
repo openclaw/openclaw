@@ -16,6 +16,7 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
@@ -195,10 +196,6 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
     return [];
   }
   return list.map((v) => String(v).trim()).filter(Boolean);
-}
-
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 export async function collectFilesystemFindings(params: {

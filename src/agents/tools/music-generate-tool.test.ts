@@ -369,6 +369,12 @@ describe("createMusicGenerateTool", () => {
           fileName: "night-drive.mp3",
         },
       ],
+      normalization: {
+        durationSeconds: {
+          requested: 45,
+          applied: 30,
+        },
+      },
       metadata: {
         requestedDurationSeconds: 45,
         normalizedDurationSeconds: 30,
@@ -404,6 +410,12 @@ describe("createMusicGenerateTool", () => {
     expect(result.details).toMatchObject({
       durationSeconds: 30,
       requestedDurationSeconds: 45,
+      normalization: {
+        durationSeconds: {
+          requested: 45,
+          applied: 30,
+        },
+      },
     });
   });
 });

@@ -14,6 +14,10 @@ export function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+export function normalizeString(value: unknown): string | undefined {
+  return readString(value)?.trim() || undefined;
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

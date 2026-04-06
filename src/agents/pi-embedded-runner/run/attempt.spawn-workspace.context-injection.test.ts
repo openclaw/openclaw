@@ -131,7 +131,7 @@ describe("runEmbeddedAttempt context injection", () => {
     expect(hoisted.resolveBootstrapContextForRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
         contextMode: "full",
-        runKind: undefined,
+        runKind: "default",
       }),
     );
   });

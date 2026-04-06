@@ -156,6 +156,8 @@ and the shared live sweep.
 
 Not all providers support all parameters. OpenClaw already normalizes duration to the closest provider-supported value, and it also remaps translated geometry hints such as size-to-aspect-ratio when a fallback provider exposes a different control surface. Truly unsupported overrides are ignored on a best-effort basis and reported as warnings in the tool result. Hard capability limits (such as too many reference inputs) fail before submission.
 
+Tool results report the applied settings. When OpenClaw remaps duration or geometry during provider fallback, the returned `durationSeconds`, `size`, `aspectRatio`, and `resolution` values reflect what was submitted, and `details.normalization` captures the requested-to-applied translation.
+
 Reference inputs also select the runtime mode:
 
 - No reference media: `generate`

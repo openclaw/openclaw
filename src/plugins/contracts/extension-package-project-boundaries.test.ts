@@ -84,7 +84,7 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.extends).toBe("../../tsconfig.json");
     expect(tsconfig.compilerOptions?.declaration).toBe(true);
     expect(tsconfig.compilerOptions?.emitDeclarationOnly).toBe(true);
-    expect(tsconfig.compilerOptions?.outDir).toBe("dist/packages/plugin-sdk/src");
+    expect(tsconfig.compilerOptions?.outDir).toBe("dist");
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
       "../../src/plugin-sdk/config-runtime.ts",
@@ -108,6 +108,8 @@ describe("opt-in extension package boundaries", () => {
       "../../src/plugin-sdk/telegram-command-config.ts",
       "../../src/plugin-sdk/testing.ts",
       "../../src/plugin-sdk/video-generation.ts",
+      "../../src/video-generation/dashscope-compatible.ts",
+      "../../src/video-generation/types.ts",
       "../../src/types/**/*.d.ts",
     ]);
 

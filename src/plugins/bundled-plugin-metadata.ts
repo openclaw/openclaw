@@ -6,7 +6,9 @@ import {
   collectBundledPluginPublicSurfaceArtifacts,
   collectBundledPluginRuntimeSidecarArtifacts,
   deriveBundledPluginIdHint,
+  rewriteBundledPluginEntryToBuiltPath,
   resolveBundledPluginScanDir,
+  trimBundledPluginString,
 } from "./bundled-plugin-scan.js";
 import {
   getPackageManifestMetadata,
@@ -52,23 +54,11 @@ export function clearBundledPluginMetadataCache(): void {
   bundledPluginMetadataCache.clear();
 }
 
-function trimString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.map((entry) => trimString(entry) ?? "").filter(Boolean);
-}
-
-function rewriteEntryToBuiltPath(entry: string | undefined): string | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  const normalized = entry.replace(/^\.\//u, "");
-  return normalized.replace(/\.[^.]+$/u, ".js");
+  return value.map((entry) => trimBundledPluginString(entry) ?? "").filter(Boolean);
 }
 
 function readPackageManifest(pluginDir: string): PackageManifest | undefined {
@@ -114,18 +104,18 @@ function collectBundledPluginMetadataForPackageRoot(
     if (extensions.length === 0) {
       continue;
     }
-    const sourceEntry = trimString(extensions[0]);
-    const builtEntry = rewriteEntryToBuiltPath(sourceEntry);
+    const sourceEntry = trimBundledPluginString(extensions[0]);
+    const builtEntry = rewriteBundledPluginEntryToBuiltPath(sourceEntry);
     if (!sourceEntry || !builtEntry) {
       continue;
     }
 
-    const setupSourcePath = trimString(packageManifest?.setupEntry);
+    const setupSourcePath = trimBundledPluginString(packageManifest?.setupEntry);
     const setupSource =
-      setupSourcePath && rewriteEntryToBuiltPath(setupSourcePath)
+      setupSourcePath && rewriteBundledPluginEntryToBuiltPath(setupSourcePath)
         ? {
             source: setupSourcePath,
-            built: rewriteEntryToBuiltPath(setupSourcePath)!,
+            built: rewriteBundledPluginEntryToBuiltPath(setupSourcePath)!,
           }
         : undefined;
     const publicSurfaceArtifacts = collectBundledPluginPublicSurfaceArtifacts({
@@ -149,7 +139,7 @@ function collectBundledPluginMetadataForPackageRoot(
       idHint: deriveBundledPluginIdHint({
         entryPath: sourceEntry,
         manifestId: manifestResult.manifest.id,
-        packageName: trimString(packageJson?.name),
+        packageName: trimBundledPluginString(packageJson?.name),
         hasMultipleExtensions: extensions.length > 1,
       }),
       source: {
@@ -159,12 +149,14 @@ function collectBundledPluginMetadataForPackageRoot(
       ...(setupSource ? { setupSource } : {}),
       ...(publicSurfaceArtifacts ? { publicSurfaceArtifacts } : {}),
       ...(runtimeSidecarArtifacts ? { runtimeSidecarArtifacts } : {}),
-      ...(trimString(packageJson?.name) ? { packageName: trimString(packageJson?.name) } : {}),
-      ...(trimString(packageJson?.version)
-        ? { packageVersion: trimString(packageJson?.version) }
+      ...(trimBundledPluginString(packageJson?.name)
+        ? { packageName: trimBundledPluginString(packageJson?.name) }
         : {}),
-      ...(trimString(packageJson?.description)
-        ? { packageDescription: trimString(packageJson?.description) }
+      ...(trimBundledPluginString(packageJson?.version)
+        ? { packageVersion: trimBundledPluginString(packageJson?.version) }
+        : {}),
+      ...(trimBundledPluginString(packageJson?.description)
+        ? { packageDescription: trimBundledPluginString(packageJson?.description) }
         : {}),
       ...(packageManifest ? { packageManifest } : {}),
       manifest: {

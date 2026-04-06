@@ -336,6 +336,12 @@ describe("image-generation runtime", () => {
       resolution: undefined,
     });
     expect(result.ignoredOverrides).toEqual([]);
+    expect(result.normalization).toMatchObject({
+      aspectRatio: {
+        applied: "16:9",
+        derivedFrom: "size",
+      },
+    });
     expect(result.metadata).toMatchObject({
       requestedSize: "1280x720",
       normalizedAspectRatio: "16:9",

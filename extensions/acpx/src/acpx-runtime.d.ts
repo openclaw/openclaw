@@ -1,35 +1,36 @@
-declare module "acpx/runtime" {
-  export const ACPX_BACKEND_ID: string;
+declare module "acpx/dist/runtime.js" {
+  import type {
+    AcpRuntimeCapabilities,
+    AcpRuntimeDoctorReport,
+    AcpRuntimeEvent,
+    AcpRuntimeHandle,
+    AcpRuntimeStatus,
+  } from "../../../src/acp/runtime/types.js";
 
-  export type AcpRuntimeDoctorReport =
-    import("../../../src/acp/runtime/types.js").AcpRuntimeDoctorReport;
-  export type AcpRuntimeEnsureInput =
-    import("../../../src/acp/runtime/types.js").AcpRuntimeEnsureInput;
-  export type AcpRuntimeEvent = import("../../../src/acp/runtime/types.js").AcpRuntimeEvent;
-  export type AcpRuntimeHandle = import("../../../src/acp/runtime/types.js").AcpRuntimeHandle;
-  export type AcpRuntimeTurnInput = import("../../../src/acp/runtime/types.js").AcpRuntimeTurnInput;
-  export type AcpRuntimeStatus = import("../../../src/acp/runtime/types.js").AcpRuntimeStatus;
-  export type AcpRuntimeCapabilities =
-    import("../../../src/acp/runtime/types.js").AcpRuntimeCapabilities;
+  export const ACPX_BACKEND_ID: string;
+  export type { AcpRuntimeDoctorReport, AcpRuntimeEvent, AcpRuntimeHandle, AcpRuntimeStatus };
+
+  export type AcpSessionRecord = {
+    name?: string;
+    [key: string]: unknown;
+  };
 
   export type AcpSessionStore = {
-    load(sessionId: string): Promise<unknown>;
-    save(record: unknown): Promise<void>;
+    load: (sessionId: string) => Promise<AcpSessionRecord | undefined>;
+    save: (record: AcpSessionRecord) => Promise<void>;
   };
 
   export type AcpAgentRegistry = {
-    resolve(agentId: string): string;
-    list(): string[];
+    resolve: (agentId: string) => string;
+    list: () => string[];
   };
 
   export type AcpRuntimeOptions = {
     cwd: string;
     sessionStore: AcpSessionStore;
     agentRegistry: AcpAgentRegistry;
-    permissionMode: string;
-    mcpServers?: unknown[];
-    nonInteractivePermissions?: unknown;
-    timeoutMs?: number;
+    permissionMode?: string;
+    [key: string]: unknown;
   };
 
   export class AcpxRuntime {
@@ -37,17 +38,17 @@ declare module "acpx/runtime" {
     isHealthy(): boolean;
     probeAvailability(): Promise<void>;
     doctor(): Promise<AcpRuntimeDoctorReport>;
-    ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle>;
-    runTurn(input: AcpRuntimeTurnInput): AsyncIterable<AcpRuntimeEvent>;
+    ensureSession(input: unknown): Promise<AcpRuntimeHandle>;
+    runTurn(input: unknown): AsyncIterable<AcpRuntimeEvent>;
     getCapabilities(input?: { handle?: AcpRuntimeHandle }): AcpRuntimeCapabilities;
-    getStatus(input: { handle: AcpRuntimeHandle; signal?: AbortSignal }): Promise<AcpRuntimeStatus>;
-    setMode(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
-    setConfigOption(input: { handle: AcpRuntimeHandle; key: string; value: string }): Promise<void>;
-    cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
-    close(input: { handle: AcpRuntimeHandle; reason: string }): Promise<void>;
+    getStatus(input: unknown): Promise<AcpRuntimeStatus>;
+    setMode(input: unknown): Promise<void>;
+    setConfigOption(input: unknown): Promise<void>;
+    cancel(input: unknown): Promise<void>;
+    close(input: unknown): Promise<void>;
   }
 
-  export function createAcpRuntime(...args: unknown[]): unknown;
+  export function createAcpRuntime(...args: unknown[]): AcpxRuntime;
   export function createAgentRegistry(...args: unknown[]): AcpAgentRegistry;
   export function createFileSessionStore(...args: unknown[]): AcpSessionStore;
   export function decodeAcpxRuntimeHandleState(...args: unknown[]): unknown;

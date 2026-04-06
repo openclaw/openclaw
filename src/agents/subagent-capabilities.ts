@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
 export const SUBAGENT_SESSION_ROLES = ["main", "orchestrator", "leaf"] as const;
 export type SubagentSessionRole = (typeof SUBAGENT_SESSION_ROLES)[number];
@@ -16,14 +17,6 @@ type SessionCapabilityEntry = {
   subagentRole?: unknown;
   subagentControlScope?: unknown;
 };
-
-function normalizeSessionKey(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
   if (typeof value !== "string") {
@@ -53,12 +46,12 @@ function findEntryBySessionId(
   store: Record<string, SessionCapabilityEntry>,
   sessionId: string,
 ): SessionCapabilityEntry | undefined {
-  const normalizedSessionId = normalizeSessionKey(sessionId);
+  const normalizedSessionId = normalizeSubagentSessionKey(sessionId);
   if (!normalizedSessionId) {
     return undefined;
   }
   for (const entry of Object.values(store)) {
-    const candidateSessionId = normalizeSessionKey(entry?.sessionId);
+    const candidateSessionId = normalizeSubagentSessionKey(entry?.sessionId);
     if (candidateSessionId === normalizedSessionId) {
       return entry;
     }
@@ -126,7 +119,7 @@ export function resolveStoredSubagentCapabilities(
     store?: Record<string, SessionCapabilityEntry>;
   },
 ) {
-  const normalizedSessionKey = normalizeSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
   const maxSpawnDepth =
     opts?.cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {

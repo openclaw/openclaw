@@ -219,6 +219,7 @@ describe("scoped vitest configs", () => {
 
   it("keeps the process lane off the openclaw runtime setup", () => {
     expect(defaultProcessConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(defaultRuntimeConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
     expect(defaultPluginSdkConfig.test?.setupFiles).toEqual([
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
