@@ -4275,10 +4275,14 @@ details[open] > .ov-expandable-toggle::after {
 
   .exec-approval-card {
     padding: 16px;
+    max-height: 90dvh;
+    display: flex;
+    flex-direction: column;
   }
 
   .exec-approval-actions {
     flex-direction: column;
+    flex-shrink: 0;
   }
 
   .exec-approval-actions .btn {
@@ -4288,6 +4292,8 @@ details[open] > .ov-expandable-toggle::after {
   .exec-approval-command {
     font-size: 12px;
     padding: 8px 10px;
+    max-height: 40dvh;
+    overflow-y: auto;
   }
 
   .table-head {
