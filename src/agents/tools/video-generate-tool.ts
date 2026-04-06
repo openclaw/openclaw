@@ -7,6 +7,10 @@ import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
+import {
+  resolveVideoGenerationMode,
+  resolveVideoGenerationModeCapabilities,
+} from "../../video-generation/capabilities.js";
 import { resolveVideoGenerationSupportedDurations } from "../../video-generation/duration-support.js";
 import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
 import {
@@ -268,7 +272,34 @@ function validateVideoGenerationCapabilities(params: {
   if (!provider) {
     return;
   }
-  const caps = provider.capabilities;
+  const mode = resolveVideoGenerationMode({
+    inputImageCount: params.inputImageCount,
+    inputVideoCount: params.inputVideoCount,
+  });
+  const { capabilities: caps } = resolveVideoGenerationModeCapabilities({
+    provider,
+    inputImageCount: params.inputImageCount,
+    inputVideoCount: params.inputVideoCount,
+  });
+  if (!caps) {
+    return;
+  }
+  if (
+    mode === "imageToVideo" &&
+    "enabled" in caps &&
+    !caps.enabled &&
+    params.inputVideoCount === 0
+  ) {
+    throw new ToolInputError(`${provider.id} does not support image-to-video reference inputs.`);
+  }
+  if (
+    mode === "videoToVideo" &&
+    "enabled" in caps &&
+    !caps.enabled &&
+    params.inputImageCount === 0
+  ) {
+    throw new ToolInputError(`${provider.id} does not support video-to-video reference inputs.`);
+  }
   if (params.inputImageCount > 0) {
     const maxInputImages = caps.maxInputImages ?? MAX_INPUT_IMAGES;
     if (params.inputImageCount > maxInputImages) {
@@ -291,6 +322,8 @@ function validateVideoGenerationCapabilities(params: {
     !resolveVideoGenerationSupportedDurations({
       provider,
       model: params.model,
+      inputImageCount: params.inputImageCount,
+      inputVideoCount: params.inputVideoCount,
     }) &&
     typeof caps.maxDurationSeconds === "number" &&
     params.durationSeconds > caps.maxDurationSeconds
