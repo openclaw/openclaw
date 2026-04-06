@@ -420,4 +420,29 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       counts: { tool: 1, block: 2, final: 3 },
     });
   });
+  it("still applies send-policy deny after an unhandled plugin dispatch", async () => {
+    hookMocks.runner.runReplyDispatch.mockResolvedValue({
+      handled: false,
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: {
+        ...emptyConfig,
+        session: {
+          sendPolicy: { default: "deny" },
+        },
+      },
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "model reply" }),
+    });
+
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalled();
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+  });
 });
