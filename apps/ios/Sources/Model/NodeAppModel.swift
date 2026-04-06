@@ -2771,14 +2771,23 @@ extension NodeAppModel {
             agentId: Self.trimmedOrNil(prompt.agentId),
             expiresAtMs: prompt.expiresAtMs,
             allowedDecisions: decisions,
-            risk: .high)
+            // Prefer the watch's neutral/default presentation until exec.approval.get
+            // carries an explicit risk signal for exec approvals.
+            risk: nil)
+    }
+
+    nonisolated private static func shouldResetWatchExecApprovalResolvingStateOnPrompt(
+        reason: String) -> Bool
+    {
+        reason == "resolve_retry"
     }
 
     private func publishWatchExecApprovalPrompt(_ prompt: ExecApprovalPrompt, reason: String) async {
         let message = OpenClawWatchExecApprovalPromptMessage(
             approval: Self.makeWatchExecApprovalItem(from: prompt),
             sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
-            deliveryId: UUID().uuidString)
+            deliveryId: UUID().uuidString,
+            resetResolvingState: Self.shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: reason))
         do {
             _ = try await self.watchMessagingService.sendExecApprovalPrompt(message)
             self.watchExecApprovalLogger.debug(
@@ -2871,24 +2880,42 @@ extension NodeAppModel {
         GatewayDiagnostics.log("watch exec approval: refresh on demand end reason=\(reason)")
     }
 
+    nonisolated private static func watchExecApprovalIDsNeedingFetch(
+        candidateIDs: [String],
+        cachedApprovalIDs: [String]) -> [String]
+    {
+        let cachedIDs = Set(cachedApprovalIDs.compactMap { id -> String? in
+            let normalizedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalizedID.isEmpty ? nil : normalizedID
+        })
+        var idsToFetch: [String] = []
+        var seen = Set<String>()
+        for rawID in candidateIDs {
+            let normalizedID = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedID.isEmpty else { continue }
+            guard seen.insert(normalizedID).inserted else { continue }
+            guard !cachedIDs.contains(normalizedID) else { continue }
+            idsToFetch.append(normalizedID)
+        }
+        return idsToFetch
+    }
+
     private func hydrateWatchExecApprovalCacheIfNeeded(reason: String) async {
         self.pruneExpiredWatchExecApprovalPrompts()
-        guard self.watchExecApprovalPromptsByID.isEmpty else {
-            GatewayDiagnostics.log(
-                "watch exec approval: hydrate skipped reason=\(reason) cacheAlreadyPopulated=\(self.watchExecApprovalPromptsByID.count)")
-            return
-        }
 
         let approvalIDs = await self.pendingExecApprovalIDsForWatchRecovery()
+        let missingApprovalIDs = Self.watchExecApprovalIDsNeedingFetch(
+            candidateIDs: approvalIDs,
+            cachedApprovalIDs: Array(self.watchExecApprovalPromptsByID.keys))
         GatewayDiagnostics.log(
-            "watch exec approval: hydrate candidates reason=\(reason) ids=\(approvalIDs.joined(separator: ","))")
-        guard !approvalIDs.isEmpty else {
+            "watch exec approval: hydrate candidates reason=\(reason) ids=\(approvalIDs.joined(separator: ",")) missing=\(missingApprovalIDs.joined(separator: ",")) cached=\(self.watchExecApprovalPromptsByID.count)")
+        guard !missingApprovalIDs.isEmpty else {
             self.watchExecApprovalLogger.debug(
-                "watch exec approval hydrate skipped reason=\(reason, privacy: .public): no approval ids")
+                "watch exec approval hydrate skipped reason=\(reason, privacy: .public): no missing approval ids")
             return
         }
 
-        for approvalId in approvalIDs {
+        for approvalId in missingApprovalIDs {
             GatewayDiagnostics.log(
                 "watch exec approval: hydrate fetch start id=\(approvalId) reason=\(reason)")
             let outcome = await self.fetchExecApprovalPrompt(
@@ -4133,6 +4160,21 @@ extension NodeAppModel {
         self.shouldUseBackgroundAwareExecApprovalReconnect(
             sourceReason: sourceReason,
             isBackgrounded: isBackgrounded)
+    }
+
+    nonisolated static func _test_watchExecApprovalIDsNeedingFetch(
+        candidateIDs: [String],
+        cachedApprovalIDs: [String]) -> [String]
+    {
+        self.watchExecApprovalIDsNeedingFetch(
+            candidateIDs: candidateIDs,
+            cachedApprovalIDs: cachedApprovalIDs)
+    }
+
+    nonisolated static func _test_shouldResetWatchExecApprovalResolvingStateOnPrompt(
+        reason: String) -> Bool
+    {
+        self.shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: reason)
     }
 
     static func _test_makeExecApprovalPrompt(

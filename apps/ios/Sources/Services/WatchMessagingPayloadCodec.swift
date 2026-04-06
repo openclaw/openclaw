@@ -96,6 +96,9 @@ enum WatchMessagingPayloadCodec {
         if let deliveryId = nonEmpty(message.deliveryId) {
             payload["deliveryId"] = deliveryId
         }
+        if message.resetResolvingState == true {
+            payload["resetResolvingState"] = true
+        }
         return payload
     }
 

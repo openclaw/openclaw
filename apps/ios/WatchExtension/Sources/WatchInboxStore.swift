@@ -49,6 +49,7 @@ struct WatchExecApprovalPromptMessage: Codable, Sendable, Equatable {
     var approval: WatchExecApprovalItem
     var sentAtMs: Int?
     var deliveryId: String?
+    var resetResolvingState: Bool?
 }
 
 struct WatchExecApprovalResolvedMessage: Codable, Sendable, Equatable {
@@ -278,7 +279,8 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
         self.upsertExecApproval(
             message.approval,
             transport: transport,
-            keepSelectionIfPossible: true)
+            keepSelectionIfPossible: true,
+            resetResolvingState: message.resetResolvingState == true)
         self.markExecApprovalReviewLoaded()
         self.lastExecApprovalOutcomeText = nil
         self.lastExecApprovalOutcomeAt = nil
@@ -404,19 +406,22 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     private func upsertExecApproval(
         _ approval: WatchExecApprovalItem,
         transport: String,
-        keepSelectionIfPossible: Bool)
+        keepSelectionIfPossible: Bool,
+        resetResolvingState: Bool = false)
     {
         if let index = self.execApprovals.firstIndex(where: { $0.id == approval.id }) {
             self.execApprovals[index] = self.mergedExecApprovalRecord(
                 approval: approval,
                 transport: transport,
-                existingRecord: self.execApprovals[index])
+                existingRecord: self.execApprovals[index],
+                resetResolvingState: resetResolvingState)
         } else {
             self.execApprovals.append(
                 self.mergedExecApprovalRecord(
                     approval: approval,
                     transport: transport,
-                    existingRecord: nil))
+                    existingRecord: nil,
+                    resetResolvingState: resetResolvingState))
         }
         if !keepSelectionIfPossible || self.selectedExecApprovalID == nil {
             self.selectedExecApprovalID = approval.id
@@ -427,16 +432,24 @@ struct WatchExecApprovalRecord: Codable, Sendable, Equatable, Identifiable {
     private func mergedExecApprovalRecord(
         approval: WatchExecApprovalItem,
         transport: String,
-        existingRecord: WatchExecApprovalRecord?) -> WatchExecApprovalRecord
+        existingRecord: WatchExecApprovalRecord?,
+        resetResolvingState: Bool = false) -> WatchExecApprovalRecord
     {
-        WatchExecApprovalRecord(
+        // Preserve in-flight state across ordinary snapshot/prompt refreshes so duplicate
+        // submissions stay disabled, but clear it when the iPhone explicitly republishes a
+        // prompt after a failed resolve so the watch can retry.
+        let isResolving = resetResolvingState ? false : (existingRecord?.isResolving ?? false)
+        let pendingDecision = resetResolvingState ? nil : existingRecord?.pendingDecision
+        let statusText = resetResolvingState ? nil : existingRecord?.statusText
+        let statusAt = resetResolvingState ? nil : existingRecord?.statusAt
+        return WatchExecApprovalRecord(
             approval: approval,
             transport: transport,
             updatedAt: Date(),
-            isResolving: existingRecord?.isResolving ?? false,
-            pendingDecision: existingRecord?.pendingDecision,
-            statusText: existingRecord?.statusText,
-            statusAt: existingRecord?.statusAt)
+            isResolving: isResolving,
+            pendingDecision: pendingDecision,
+            statusText: statusText,
+            statusAt: statusAt)
     }
 
     private func removeExecApproval(id: String) {

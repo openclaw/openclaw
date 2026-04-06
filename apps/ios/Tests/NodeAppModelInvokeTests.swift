@@ -273,6 +273,8 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(sent.approval.id == "approval-watch-sync")
         #expect(sent.approval.allowedDecisions == [.allowOnce, .deny])
         #expect(sent.approval.host == "gateway")
+        #expect(sent.approval.risk == nil)
+        #expect(sent.resetResolvingState != true)
     }
 
     @Test @MainActor func watchExecApprovalSnapshotRequestPublishesCachedApprovalsInBackground() async throws {
@@ -405,6 +407,20 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 sourceReason: "watch_request",
                 isBackgrounded: false)
         )
+    }
+
+    @Test func watchExecApprovalHydrateFetchesOnlyMissingIDs() {
+        let idsToFetch = NodeAppModel._test_watchExecApprovalIDsNeedingFetch(
+            candidateIDs: ["cached", "pending", "cached", "other", "", "  pending  "],
+            cachedApprovalIDs: ["cached", "also-cached"])
+
+        #expect(idsToFetch == ["pending", "other"])
+    }
+
+    @Test func watchExecApprovalRetryPromptResetsResolvingStateOnlyForRetryReason() {
+        #expect(NodeAppModel._test_shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: "resolve_retry"))
+        #expect(!NodeAppModel._test_shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: "push_request"))
+        #expect(!NodeAppModel._test_shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: "present_prompt"))
     }
 
     @Test func operatorLoopWaitsForBootstrapHandoffBeforeUsingStoredToken() {

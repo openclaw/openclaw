@@ -86,16 +86,19 @@ public struct OpenClawWatchExecApprovalPromptMessage: Codable, Sendable, Equatab
     public var approval: OpenClawWatchExecApprovalItem
     public var sentAtMs: Int?
     public var deliveryId: String?
+    public var resetResolvingState: Bool?
 
     public init(
         approval: OpenClawWatchExecApprovalItem,
         sentAtMs: Int? = nil,
-        deliveryId: String? = nil)
+        deliveryId: String? = nil,
+        resetResolvingState: Bool? = nil)
     {
         self.type = .execApprovalPrompt
         self.approval = approval
         self.sentAtMs = sentAtMs
         self.deliveryId = deliveryId
+        self.resetResolvingState = resetResolvingState
     }
 }
 

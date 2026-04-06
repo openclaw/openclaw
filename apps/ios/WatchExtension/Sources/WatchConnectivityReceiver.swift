@@ -297,10 +297,12 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         }
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
         let deliveryId = (payload["deliveryId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resetResolvingState = payload["resetResolvingState"] as? Bool
         return WatchExecApprovalPromptMessage(
             approval: approval,
             sentAtMs: sentAtMs,
-            deliveryId: deliveryId)
+            deliveryId: deliveryId,
+            resetResolvingState: resetResolvingState)
     }
 
     private static func parseExecApprovalResolvedPayload(
