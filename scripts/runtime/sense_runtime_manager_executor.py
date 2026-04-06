@@ -474,6 +474,7 @@ def build_manager_handoff(report: dict) -> dict:
 
     return {
         'handoff_version': 'v1',
+        'decision_trace_id': report.get('decision_trace_id'),
         'source': 'sense_runtime_manager_executor',
         'executor_state': report.get('executor_state'),
         'loop_convergence_state': convergence.get('state'),
@@ -648,6 +649,7 @@ def main() -> int:
     started_at = time.monotonic()
     args = build_parser().parse_args()
     policy = load_policy(args)
+    decision_trace_id = policy.get('decision_trace_id')
     script_dir = Path(__file__).resolve().parent
     runtime_args = build_runtime_args(args)
 
@@ -679,6 +681,7 @@ def main() -> int:
             'result': None,
         }
         output = {
+            'decision_trace_id': decision_trace_id,
             'executor_state': 'stopped',
             'stop_reason': 'confidence gate requested fallback handling' if confidence_gate_applied else f'manager action {manager_action} is non-executing',
             'secondary_gate_decision': 'stop_secondary',
@@ -717,6 +720,7 @@ def main() -> int:
     main_warnings = collect_main_warnings(main_result)
     if main_error:
         output = {
+            'decision_trace_id': decision_trace_id,
             'executor_state': 'failed',
             'secondary_gate_decision': 'skip_secondary',
             'secondary_gate_reason': 'main action returned an error payload',
@@ -740,6 +744,7 @@ def main() -> int:
 
     if main_exit_code is not None and main_exit_code != 0:
         output = {
+            'decision_trace_id': decision_trace_id,
             'executor_state': 'partial_failure',
             'secondary_gate_decision': 'skip_secondary',
             'secondary_gate_reason': 'main action failed with non-zero exit_code',
@@ -781,6 +786,7 @@ def main() -> int:
         )
         if secondary_result.get('executed') and isinstance(secondary_result.get('result'), dict) and secondary_result['result'].get('error'):
             output = {
+                'decision_trace_id': decision_trace_id,
                 'executor_state': 'failed',
                 'secondary_gate_decision': secondary_gate_decision,
                 'secondary_gate_reason': secondary_gate_reason,
@@ -805,6 +811,7 @@ def main() -> int:
         secondary_exit_code = extract_step_exit_code(secondary_result)
         if secondary_exit_code is not None and secondary_exit_code != 0:
             output = {
+                'decision_trace_id': decision_trace_id,
                 'executor_state': 'partial_failure',
                 'secondary_gate_decision': secondary_gate_decision,
                 'secondary_gate_reason': secondary_gate_reason,
@@ -827,6 +834,7 @@ def main() -> int:
             return 1
 
     output = {
+        'decision_trace_id': decision_trace_id,
         'executor_state': 'completed_with_warning' if main_warnings else 'completed',
         'secondary_gate_decision': secondary_gate_decision,
         'secondary_gate_reason': secondary_gate_reason,

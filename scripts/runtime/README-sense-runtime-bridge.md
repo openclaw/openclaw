@@ -838,8 +838,20 @@ Additional top-level observability fields are also included:
   - time spent in the direct executor call when the shortcut path is used
 - `path_tags`
   - short machine-friendly tags such as `handoff`, `triage:use_handoff`, `shortcut`, `bridge`, `executor`, `full_evaluator`, `failed`, or `stopped`
+- `path_codes`
+  - short uppercase machine-readable codes such as `HANDOFF`, `TRIAGE_USE`, `SHORTCUT`, `BRIDGE`, `FULL_EVAL`, `EXECUTOR`, `FAILED`, or `STOPPED`
+- `entry_status`
+  - status of the manager entry layer
+- `bridge_status`
+  - status of the lightweight policy bridge layer
+- `dispatch_status`
+  - status of the dispatch layer
+- `executor_status`
+  - status reported by the thin manager executor
 
 These fields are for observability and aggregation only. They do not change runtime behavior.
+
+The same `decision_trace_id` is also propagated end-to-end through the runtime entry output, the executor's `execution_report`, and the emitted `manager_handoff`, so one runtime pass can be joined across layers without creating another loop.
 
 The runtime entrypoint now also emits a lightweight feedback layer for the next turn:
 

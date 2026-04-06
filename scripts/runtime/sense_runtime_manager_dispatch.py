@@ -88,6 +88,7 @@ def build_shortcut_policy(entry_payload: dict) -> dict | None:
     if not isinstance(next_step, str) or not next_step.strip():
         return None
     return {
+        'decision_trace_id': entry_payload.get('decision_trace_id'),
         'manager_action': manager_action,
         'manager_reason': 'high-confidence handoff shortcut was promoted directly into a thin manager execution plan',
         'secondary_action': None,
@@ -151,6 +152,7 @@ def main() -> int:
         return 0
 
     policy_payload = run_policy(script_dir, evaluator_result)
+    policy_payload['decision_trace_id'] = entry_payload.get('decision_trace_id')
     output = {
         'dispatch_mode': 'full_evaluator',
         'shortcut_used': False,

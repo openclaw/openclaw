@@ -189,6 +189,50 @@ def build_path_tags(
     return deduped
 
 
+def build_path_codes(path_tags: list[str]) -> list[str]:
+    mapping = {
+        'handoff': 'HANDOFF',
+        'no_handoff': 'NO_HANDOFF',
+        'triage:use_handoff': 'TRIAGE_USE',
+        'triage:hint_only': 'TRIAGE_HINT',
+        'triage:rerun_full_evaluator': 'TRIAGE_RERUN',
+        'shortcut': 'SHORTCUT',
+        'bridge': 'BRIDGE',
+        'full_evaluator': 'FULL_EVAL',
+        'executor': 'EXECUTOR',
+        'failed': 'FAILED',
+        'stopped': 'STOPPED',
+    }
+    codes: list[str] = []
+    seen: set[str] = set()
+    for tag in path_tags:
+        code = mapping.get(tag)
+        if code and code not in seen:
+            codes.append(code)
+            seen.add(code)
+    return codes
+
+
+def build_layer_statuses(entry_result: dict | None, bridge_result: dict | None, dispatch_result: dict | None) -> dict:
+    entry_status = 'completed' if isinstance(entry_result, dict) else None
+    bridge_status = None
+    if isinstance(bridge_result, dict) and bridge_result.get('bridge_used') is True:
+        bridge_status = 'used'
+    dispatch_status = dispatch_result.get('dispatch_mode') if isinstance(dispatch_result, dict) else None
+    executor_status = None
+    if isinstance(dispatch_result, dict):
+        dispatch_payload = dispatch_result.get('dispatch_result')
+        if isinstance(dispatch_payload, dict):
+            raw_executor_status = dispatch_payload.get('executor_state')
+            executor_status = raw_executor_status if isinstance(raw_executor_status, str) else None
+    return {
+        'entry_status': entry_status,
+        'bridge_status': bridge_status,
+        'dispatch_status': dispatch_status,
+        'executor_status': executor_status,
+    }
+
+
 def extract_loop_convergence(dispatch_result: dict) -> dict | None:
     result = dispatch_result.get('dispatch_result')
     if isinstance(result, dict):
@@ -293,6 +337,7 @@ def main() -> int:
         started = time.perf_counter()
         entry_result = run_entry(script_dir, args, runtime_args)
         entry_duration_sec = round(time.perf_counter() - started, 6)
+        entry_result['decision_trace_id'] = decision_trace_id
 
         started = time.perf_counter()
         bridge_result = run_bridge(script_dir, entry_result, args.handoff_json)
@@ -300,6 +345,7 @@ def main() -> int:
 
         if bridge_result.get('bridge_used') is True:
             manager_policy_outcome = bridge_result.get('manager_policy_outcome') or {}
+            manager_policy_outcome['decision_trace_id'] = decision_trace_id
             started = time.perf_counter()
             executor_result = run_executor(script_dir, manager_policy_outcome, runtime_args)
             executor_duration_sec = round(time.perf_counter() - started, 6)
@@ -318,13 +364,16 @@ def main() -> int:
         feedback_summary = build_feedback_summary(entry_result, dispatch_result)
         feedback_memory = build_feedback_memory(entry_result, dispatch_result, feedback_summary)
         path_summary = build_path_summary(args, entry_result, bridge_result or {}, dispatch_result)
+        path_tags = build_path_tags(args, entry_result, bridge_result, dispatch_result, runtime_entry_state)
+        layer_statuses = build_layer_statuses(entry_result, bridge_result, dispatch_result)
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_decision': entry_result.get('entry_decision'),
             'dispatch_mode': dispatch_result.get('dispatch_mode'),
             'runtime_entry_state': runtime_entry_state,
             'path_taken': path_summary.get('path_taken'),
-            'path_tags': build_path_tags(args, entry_result, bridge_result, dispatch_result, runtime_entry_state),
+            'path_tags': path_tags,
+            'path_codes': build_path_codes(path_tags),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
@@ -332,6 +381,10 @@ def main() -> int:
             'entry_duration_sec': entry_duration_sec,
             'dispatch_duration_sec': dispatch_duration_sec,
             'executor_duration_sec': executor_duration_sec,
+            'entry_status': layer_statuses.get('entry_status'),
+            'bridge_status': layer_statuses.get('bridge_status'),
+            'dispatch_status': layer_statuses.get('dispatch_status'),
+            'executor_status': layer_statuses.get('executor_status'),
             'bridge_used': bridge_result.get('bridge_used') is True,
             'bridge_mode': bridge_result.get('bridge_mode'),
             'feedback_summary': feedback_summary,
@@ -347,13 +400,18 @@ def main() -> int:
         entry_decision = entry_result.get('entry_decision') if isinstance(entry_result, dict) else ('rerun_full_evaluator' if not args.handoff_json else None)
         runtime_entry_state = 'failed'
         path_summary = build_path_summary(args, entry_result or {}, bridge_result or {}, dispatch_result or {})
+        path_tags = build_path_tags(args, entry_result, bridge_result, dispatch_result, runtime_entry_state)
+        layer_statuses = build_layer_statuses(entry_result, bridge_result, dispatch_result)
+        if layer_statuses.get('entry_status') is None:
+            layer_statuses['entry_status'] = 'failed'
         output = {
             'decision_trace_id': decision_trace_id,
             'entry_decision': entry_decision,
             'dispatch_mode': dispatch_result.get('dispatch_mode') if isinstance(dispatch_result, dict) else None,
             'runtime_entry_state': runtime_entry_state,
             'path_taken': path_summary.get('path_taken'),
-            'path_tags': build_path_tags(args, entry_result, bridge_result, dispatch_result, runtime_entry_state),
+            'path_tags': path_tags,
+            'path_codes': build_path_codes(path_tags),
             'used_handoff': path_summary.get('used_handoff'),
             'used_shortcut': path_summary.get('used_shortcut'),
             'used_bridge': path_summary.get('used_bridge'),
@@ -361,6 +419,10 @@ def main() -> int:
             'entry_duration_sec': entry_duration_sec,
             'dispatch_duration_sec': dispatch_duration_sec,
             'executor_duration_sec': executor_duration_sec,
+            'entry_status': layer_statuses.get('entry_status'),
+            'bridge_status': layer_statuses.get('bridge_status'),
+            'dispatch_status': layer_statuses.get('dispatch_status'),
+            'executor_status': layer_statuses.get('executor_status'),
             'bridge_used': isinstance(bridge_result, dict) and bridge_result.get('bridge_used') is True,
             'bridge_mode': bridge_result.get('bridge_mode') if isinstance(bridge_result, dict) else None,
             'feedback_summary': None,
