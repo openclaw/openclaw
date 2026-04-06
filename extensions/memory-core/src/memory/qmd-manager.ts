@@ -274,7 +274,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
   private readonly sessionWarm = new Set<string>();
-  private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
+  private collectionPatternFlag: QmdCollectionPatternFlag | null = "--glob";
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -653,7 +653,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async addCollection(pathArg: string, name: string, pattern: string): Promise<void> {
     const candidateFlags: QmdCollectionPatternFlag[] =
-      this.collectionPatternFlag === "--mask" ? ["--mask", "--glob"] : ["--glob", "--mask"];
+      this.collectionPatternFlag === "--glob" ? ["--glob", "--mask"] : ["--mask", "--glob"];
     let lastError: unknown;
     for (const flag of candidateFlags) {
       try {
