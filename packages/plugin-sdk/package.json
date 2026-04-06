@@ -24,6 +24,10 @@
       "types": "./dist/packages/plugin-sdk/src/provider-entry.d.ts",
       "default": "./src/provider-entry.ts"
     },
+    "./provider-http": {
+      "types": "./dist/packages/plugin-sdk/src/provider-http.d.ts",
+      "default": "./src/provider-http.ts"
+    },
     "./provider-model-shared": {
       "types": "./dist/packages/plugin-sdk/src/provider-model-shared.d.ts",
       "default": "./src/provider-model-shared.ts"
@@ -55,6 +59,10 @@
     "./testing": {
       "types": "./dist/packages/plugin-sdk/src/testing.d.ts",
       "default": "./src/testing.ts"
+    },
+    "./video-generation": {
+      "types": "./dist/packages/plugin-sdk/src/video-generation.d.ts",
+      "default": "./src/video-generation.ts"
     }
   }
 }

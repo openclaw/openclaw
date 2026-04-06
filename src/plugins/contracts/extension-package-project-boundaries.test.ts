@@ -66,6 +66,12 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./plugin-entry"]?.types).toBe(
       "./dist/packages/plugin-sdk/src/plugin-entry.d.ts",
     );
+    expect(packageJson.exports?.["./provider-http"]?.types).toBe(
+      "./dist/packages/plugin-sdk/src/provider-http.d.ts",
+    );
+    expect(packageJson.exports?.["./video-generation"]?.types).toBe(
+      "./dist/packages/plugin-sdk/src/video-generation.d.ts",
+    );
     expect(existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,
     );
