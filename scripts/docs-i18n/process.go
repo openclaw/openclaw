@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string, routes *routeIndex) (bool, error) {
+func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
 		return false, err
@@ -74,7 +74,6 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 	}
 
 	translatedBody := applyTranslations(body, segments)
-	translatedBody = routes.localizeBodyLinks(translatedBody)
 	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
 	if err != nil {
 		return false, err

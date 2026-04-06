@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestRelocalizeExistingDocsFixesStaleLinksAfterLaterPagesExist(t *testing.T) {
+func TestPostprocessLocalizedDocsFixesStaleLinksAfterLaterPagesExist(t *testing.T) {
 	t.Parallel()
 
 	docsRoot := t.TempDir()
@@ -33,8 +33,8 @@ func TestRelocalizeExistingDocsFixesStaleLinksAfterLaterPagesExist(t *testing.T)
 		"# 故障排除",
 	))
 
-	if err := relocalizeExistingDocs(docsRoot, "zh-CN"); err != nil {
-		t.Fatalf("relocalizeExistingDocs failed: %v", err)
+	if err := postprocessLocalizedDocs(docsRoot, "zh-CN"); err != nil {
+		t.Fatalf("postprocessLocalizedDocs failed: %v", err)
 	}
 
 	got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "index.md"))

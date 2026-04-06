@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 )
 
-func relocalizeExistingDocs(docsRoot, targetLang string) error {
+func postprocessLocalizedDocs(docsRoot, targetLang string) error {
 	if targetLang == "" || targetLang == "en" {
 		return nil
 	}

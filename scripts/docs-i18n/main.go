@@ -58,11 +58,6 @@ func main() {
 		fatal(err)
 	}
 
-	routes, err := loadRouteIndex(resolvedDocsRoot, *targetLang)
-	if err != nil {
-		fatal(err)
-	}
-
 	translator, err := NewPiTranslator(*sourceLang, *targetLang, glossary, *thinking)
 	if err != nil {
 		fatal(err)
@@ -105,14 +100,14 @@ func main() {
 	switch *mode {
 	case "doc":
 		if *parallel > 1 {
-			proc, skip, err := runDocParallel(context.Background(), ordered, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite, *parallel, glossary, *thinking, routes)
+			proc, skip, err := runDocParallel(context.Background(), ordered, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite, *parallel, glossary, *thinking)
 			if err != nil {
 				fatal(err)
 			}
 			processed += proc
 			skipped += skip
 		} else {
-			proc, skip, err := runDocSequential(context.Background(), ordered, translator, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite, routes)
+			proc, skip, err := runDocSequential(context.Background(), ordered, translator, resolvedDocsRoot, *sourceLang, *targetLang, *overwrite)
 			if err != nil {
 				fatal(err)
 			}
@@ -123,7 +118,7 @@ func main() {
 		if *parallel > 1 {
 			fatal(fmt.Errorf("parallel processing is only supported in doc mode"))
 		}
-		proc, err := runSegmentSequential(context.Background(), ordered, translator, tm, resolvedDocsRoot, *sourceLang, *targetLang, routes)
+		proc, err := runSegmentSequential(context.Background(), ordered, translator, tm, resolvedDocsRoot, *sourceLang, *targetLang)
 		if err != nil {
 			fatal(err)
 		}
@@ -135,21 +130,21 @@ func main() {
 	if err := tm.Save(); err != nil {
 		fatal(err)
 	}
-	if err := relocalizeExistingDocs(resolvedDocsRoot, *targetLang); err != nil {
+	if err := postprocessLocalizedDocs(resolvedDocsRoot, *targetLang); err != nil {
 		fatal(err)
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
 	log.Printf("docs-i18n: completed processed=%d skipped=%d elapsed=%s", processed, skipped, elapsed)
 }
 
-func runDocSequential(ctx context.Context, ordered []string, translator *PiTranslator, docsRoot, srcLang, tgtLang string, overwrite bool, routes *routeIndex) (int, int, error) {
+func runDocSequential(ctx context.Context, ordered []string, translator *PiTranslator, docsRoot, srcLang, tgtLang string, overwrite bool) (int, int, error) {
 	processed := 0
 	skipped := 0
 	for index, file := range ordered {
 		relPath := resolveRelPath(docsRoot, file)
 		log.Printf("docs-i18n: [%d/%d] start %s", index+1, len(ordered), relPath)
 		start := time.Now()
-		skip, err := processFileDoc(ctx, translator, docsRoot, file, srcLang, tgtLang, overwrite, routes)
+		skip, err := processFileDoc(ctx, translator, docsRoot, file, srcLang, tgtLang, overwrite)
 		if err != nil {
 			return processed, skipped, err
 		}
@@ -164,7 +159,7 @@ func runDocSequential(ctx context.Context, ordered []string, translator *PiTrans
 	return processed, skipped, nil
 }
 
-func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tgtLang string, overwrite bool, parallel int, glossary []GlossaryEntry, thinking string, routes *routeIndex) (int, int, error) {
+func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tgtLang string, overwrite bool, parallel int, glossary []GlossaryEntry, thinking string) (int, int, error) {
 	jobs := make(chan docJob)
 	results := make(chan docResult, len(ordered))
 	ctx, cancel := context.WithCancel(ctx)
@@ -187,7 +182,7 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 				}
 				log.Printf("docs-i18n: [w%d %d/%d] start %s", workerID, job.index, len(ordered), job.rel)
 				start := time.Now()
-				skip, err := processFileDoc(ctx, translator, docsRoot, job.path, srcLang, tgtLang, overwrite, routes)
+				skip, err := processFileDoc(ctx, translator, docsRoot, job.path, srcLang, tgtLang, overwrite)
 				results <- docResult{
 					index:    job.index,
 					rel:      job.rel,
@@ -230,13 +225,13 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 	return processed, skipped, nil
 }
 
-func runSegmentSequential(ctx context.Context, ordered []string, translator *PiTranslator, tm *TranslationMemory, docsRoot, srcLang, tgtLang string, routes *routeIndex) (int, error) {
+func runSegmentSequential(ctx context.Context, ordered []string, translator *PiTranslator, tm *TranslationMemory, docsRoot, srcLang, tgtLang string) (int, error) {
 	processed := 0
 	for index, file := range ordered {
 		relPath := resolveRelPath(docsRoot, file)
 		log.Printf("docs-i18n: [%d/%d] start %s", index+1, len(ordered), relPath)
 		start := time.Now()
-		if _, err := processFile(ctx, translator, tm, docsRoot, file, srcLang, tgtLang, routes); err != nil {
+		if _, err := processFile(ctx, translator, tm, docsRoot, file, srcLang, tgtLang); err != nil {
 			return processed, err
 		}
 		processed++
