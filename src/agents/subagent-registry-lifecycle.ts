@@ -280,7 +280,7 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     entry.cleanupHandled = true;
-    params.persist({ bumpGeneration: true });
+    params.persist({ bumpGeneration: false });
     return true;
   };
 

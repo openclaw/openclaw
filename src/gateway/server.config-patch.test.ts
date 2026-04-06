@@ -297,32 +297,34 @@ describe("gateway config methods", () => {
   });
 
   it("does not noop config.patch when source config changed", async () => {
+    // Normalize via config.set to get a clean baseline.
     const current = await rpcReq<{
       config?: Record<string, unknown>;
       hash?: string;
     }>(requireWs(), "config.get", {});
     expect(current.ok).toBe(true);
-
-    // Write a config with an extra source key via config.set.
-    const withExtra = structuredClone(current.payload?.config ?? {});
-    withExtra.__testSourceDiffMarker = "present";
-    const setRes = await rpcReq<{ ok?: boolean; hash?: string }>(requireWs(), "config.set", {
-      raw: JSON.stringify(withExtra),
+    const setRes = await rpcReq<{ ok?: boolean }>(requireWs(), "config.set", {
+      raw: JSON.stringify(current.payload?.config ?? {}),
       baseHash: current.payload?.hash,
     });
     expect(setRes.ok).toBe(true);
+    const normalized = await rpcReq<{
+      config?: Record<string, unknown>;
+      hash?: string;
+    }>(requireWs(), "config.get", {});
+    expect(normalized.ok).toBe(true);
 
-    const afterSet = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
-    expect(afterSet.ok).toBe(true);
-
-    // Patch to remove the key (merge-patch null = delete). The source config
+    // Patch with a toggled gateway.controlUi.enabled value — the source config
     // changes, so config.patch must NOT return noop.
+    const cfg = normalized.payload?.config ?? {};
+    const gw = (cfg as Record<string, Record<string, unknown>>).gateway ?? {};
+    const controlUi = (gw.controlUi as Record<string, unknown>) ?? {};
     const patchRes = await rpcReq<{
       ok?: boolean;
       noop?: boolean;
     }>(requireWs(), "config.patch", {
-      raw: JSON.stringify({ __testSourceDiffMarker: null }),
-      baseHash: afterSet.payload?.hash,
+      raw: JSON.stringify({ gateway: { controlUi: { enabled: !controlUi.enabled } } }),
+      baseHash: normalized.payload?.hash,
     });
 
     expect(patchRes.ok).toBe(true);
