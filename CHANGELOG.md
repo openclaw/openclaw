@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+- CLI: add `memes` command — sovereign ASCII art memes about data freedom, open source, and the Burgess Principle (`openclaw memes`, `memes list`, `memes show <id>`, `memes random`).
+
 ### Fixes
 
 - Providers/Anthropic: skip `service_tier` injection for OAuth-authenticated stream wrapper requests so Claude OAuth requests stop failing with HTTP 401. (#60356) thanks @openperf.

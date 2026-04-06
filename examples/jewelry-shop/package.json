@@ -1,0 +1,27 @@
+{
+  "name": "jewelry-shop-stripe-demo",
+  "version": "1.0.0",
+  "description": "Jewelry e-commerce site with Stripe payment integration",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "keywords": [
+    "stripe",
+    "e-commerce",
+    "jewelry",
+    "payment"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "stripe": "^14.9.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
