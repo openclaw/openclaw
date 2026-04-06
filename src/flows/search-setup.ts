@@ -118,21 +118,14 @@ function providerNeedsCredential(
   return entry.requiresCredential !== false;
 }
 
-function providerIsReady(
+function providerHasLocalCredentialSignal(
   config: OpenClawConfig,
-  entry: Pick<
-    PluginWebSearchProviderEntry,
-    "id" | "envVars" | "requiresCredential" | "hasReusableProviderAuthMetadata"
-  >,
+  entry: Pick<PluginWebSearchProviderEntry, "id" | "envVars" | "requiresCredential">,
 ): boolean {
   if (!providerNeedsCredential(entry)) {
     return true;
   }
-  return (
-    hasExistingKey(config, entry.id) ||
-    hasKeyInEnv(entry) ||
-    (entry.hasReusableProviderAuthMetadata?.({ config }) ?? false)
-  );
+  return hasExistingKey(config, entry.id) || hasKeyInEnv(entry);
 }
 
 async function hasImplicitProviderAuth(
@@ -339,6 +332,23 @@ export type SetupSearchOptions = {
   secretInputMode?: SecretInputMode;
 };
 
+async function resolveProviderReadiness(
+  config: OpenClawConfig,
+  entry: Pick<
+    PluginWebSearchProviderEntry,
+    | "id"
+    | "pluginId"
+    | "envVars"
+    | "requiresCredential"
+    | "hasReusableProviderAuthMetadata"
+    | "hasReusableProviderAuth"
+  >,
+): Promise<boolean> {
+  return (
+    providerHasLocalCredentialSignal(config, entry) || (await hasImplicitProviderAuth(config, entry))
+  );
+}
+
 async function finalizeSearchProviderSetup(params: {
   originalConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
@@ -390,12 +400,20 @@ export async function runSearchSetupFlow(
   );
 
   const existingProvider = config.tools?.web?.search?.provider;
+  const providerReadiness = new Map<SearchProvider, boolean>(
+    await Promise.all(
+      providerOptions.map(async (entry) => [
+        entry.id,
+        await resolveProviderReadiness(config, entry),
+      ] as const),
+    ),
+  );
 
   const options = providerOptions.map((entry) => {
     const hint =
       entry.requiresCredential === false
         ? `${entry.hint} · key-free`
-        : providerIsReady(config, entry)
+        : providerReadiness.get(entry.id) === true
           ? `${entry.hint} · configured`
           : entry.hint;
     return { value: entry.id, label: entry.label, hint };
@@ -405,7 +423,7 @@ export async function runSearchSetupFlow(
     if (existingProvider && providerOptions.some((entry) => entry.id === existingProvider)) {
       return existingProvider;
     }
-    const detected = providerOptions.find((entry) => providerIsReady(config, entry));
+    const detected = providerOptions.find((entry) => providerReadiness.get(entry.id) === true);
     if (detected) {
       return detected.id;
     }

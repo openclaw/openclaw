@@ -136,6 +136,32 @@ describe("runSearchSetupFlow", () => {
     mockGrokProvider.hasReusableProviderAuth = undefined;
   });
 
+  it("does not mark stale reusable-auth metadata as configured", async () => {
+    mockGrokProvider.hasReusableProviderAuthMetadata = () => true;
+    mockGrokProvider.hasReusableProviderAuth = vi.fn().mockResolvedValue(false);
+    const select = vi.fn().mockResolvedValueOnce("__skip__");
+    const prompter = createWizardPrompter({
+      select: select as never,
+    });
+
+    await runSearchSetupFlow({ plugins: { allow: ["xai"] } }, createNonExitingRuntime(), prompter);
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            value: "grok",
+            hint: "Search with xAI",
+          }),
+        ]),
+      }),
+    );
+    expect(mockGrokProvider.hasReusableProviderAuth).toHaveBeenCalled();
+
+    mockGrokProvider.hasReusableProviderAuthMetadata = undefined;
+    mockGrokProvider.hasReusableProviderAuth = undefined;
+  });
+
   it("runs provider-owned setup after selecting Grok web search", async () => {
     const select = vi
       .fn()
