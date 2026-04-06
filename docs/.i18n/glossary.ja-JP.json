@@ -1078,5 +1078,225 @@
   {
     "source": "macOS VMs",
     "target": "macOS VM"
+  },
+  {
+    "source": "Configuration Reference",
+    "target": "設定リファレンス"
+  },
+  {
+    "source": "Models",
+    "target": "モデル"
+  },
+  {
+    "source": "Vydra",
+    "target": "Vydra"
+  },
+  {
+    "source": "xAI",
+    "target": "xAI"
+  },
+  {
+    "source": "Ollama Web Search",
+    "target": "Ollama Web Search"
+  },
+  {
+    "source": "Alibaba Model Studio",
+    "target": "Alibaba Model Studio"
+  },
+  {
+    "source": "BytePlus",
+    "target": "BytePlus"
+  },
+  {
+    "source": "ComfyUI",
+    "target": "ComfyUI"
+  },
+  {
+    "source": "fal",
+    "target": "fal"
+  },
+  {
+    "source": "Google (Gemini)",
+    "target": "Google (Gemini)"
+  },
+  {
+    "source": "MiniMax",
+    "target": "MiniMax"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "Qwen",
+    "target": "Qwen"
+  },
+  {
+    "source": "Runway",
+    "target": "Runway"
+  },
+  {
+    "source": "Together AI",
+    "target": "Together AI"
+  },
+  {
+    "source": "QQ Bot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "Music Generation",
+    "target": "音楽生成"
+  },
+  {
+    "source": "Moonshot AI",
+    "target": "Moonshot AI"
+  },
+  {
+    "source": "MiniMax Search",
+    "target": "MiniMax Search"
+  },
+  {
+    "source": "Web Search overview",
+    "target": "ウェブ検索の概要"
+  },
+  {
+    "source": "Tools Overview",
+    "target": "ツール概要"
+  },
+  {
+    "source": "Ollama",
+    "target": "Ollama"
+  },
+  {
+    "source": "Video Generation",
+    "target": "動画生成"
+  },
+  {
+    "source": "Chutes",
+    "target": "Chutes"
+  },
+  {
+    "source": "Fireworks",
+    "target": "Fireworks"
+  },
+  {
+    "source": "Qwen Cloud",
+    "target": "Qwen Cloud"
+  },
+  {
+    "source": "StepFun",
+    "target": "StepFun"
+  },
+  {
+    "source": "Additional bundled variants",
+    "target": "追加のバンドルバリアント"
+  },
+  {
+    "source": "Anthropic (API + Claude CLI)",
+    "target": "Anthropic (API + Claude CLI)"
+  },
+  {
+    "source": "BytePlus (International)",
+    "target": "BytePlus (International)"
+  },
+  {
+    "source": "Mattermost",
+    "target": "Mattermost"
+  },
+  {
+    "source": "/automation/cron-jobs#troubleshooting",
+    "target": "/automation/cron-jobs#troubleshooting"
+  },
+  {
+    "source": "/cli/gateway",
+    "target": "/cli/gateway"
+  },
+  {
+    "source": "/gateway#multiple-gateways-same-host",
+    "target": "/gateway#multiple-gateways-same-host"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "エージェントワークスペース"
+  },
+  {
+    "source": "Amazon Bedrock Mantle",
+    "target": "Amazon Bedrock Mantle"
+  },
+  {
+    "source": "Automation Overview",
+    "target": "自動化の概要"
+  },
+  {
+    "source": "Bridge protocol (legacy nodes, historical)",
+    "target": "Bridge protocol (legacy nodes, historical)"
+  },
+  {
+    "source": "CLI: tasks",
+    "target": "CLI: tasks"
+  },
+  {
+    "source": "Cron Jobs",
+    "target": "Cronジョブ"
+  },
+  {
+    "source": "Dashboard",
+    "target": "ダッシュボード"
+  },
+  {
+    "source": "Dreaming (experimental)",
+    "target": "ドリーミング（実験的）"
+  },
+  {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "ハートビート"
+  },
+  {
+    "source": "Memory",
+    "target": "メモリ"
+  },
+  {
+    "source": "Plugin Architecture",
+    "target": "プラグインアーキテクチャ"
+  },
+  {
+    "source": "QA Channel",
+    "target": "QAチャンネル"
+  },
+  {
+    "source": "QA E2E Automation",
+    "target": "QA E2Eオートメーション"
+  },
+  {
+    "source": "SOUL.md Personality Guide",
+    "target": "SOUL.md パーソナリティガイド"
+  },
+  {
+    "source": "SOUL.md template",
+    "target": "SOUL.md テンプレート"
+  },
+  {
+    "source": "System prompt",
+    "target": "システムプロンプト"
+  },
+  {
+    "source": "Task Flow",
+    "target": "タスクフロー"
+  },
+  {
+    "source": "Timezone",
+    "target": "タイムゾーン"
+  },
+  {
+    "source": "Webhooks",
+    "target": "Webhooks"
+  },
+  {
+    "source": "memory CLI",
+    "target": "memory CLI"
   }
 ]

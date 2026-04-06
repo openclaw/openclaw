@@ -354,5 +354,217 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Configuration Reference",
+    "target": "配置参考"
+  },
+  {
+    "source": "Models",
+    "target": "模型"
+  },
+  {
+    "source": "Vydra",
+    "target": "Vydra"
+  },
+  {
+    "source": "xAI",
+    "target": "xAI"
+  },
+  {
+    "source": "Alibaba Model Studio",
+    "target": "Alibaba Model Studio"
+  },
+  {
+    "source": "BytePlus",
+    "target": "BytePlus"
+  },
+  {
+    "source": "ComfyUI",
+    "target": "ComfyUI"
+  },
+  {
+    "source": "fal",
+    "target": "fal"
+  },
+  {
+    "source": "Google (Gemini)",
+    "target": "Google (Gemini)"
+  },
+  {
+    "source": "MiniMax",
+    "target": "MiniMax"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "Runway",
+    "target": "Runway"
+  },
+  {
+    "source": "Together AI",
+    "target": "Together AI"
+  },
+  {
+    "source": "Automation & Tasks",
+    "target": "自动化与任务"
+  },
+  {
+    "source": "Music Generation",
+    "target": "音乐生成"
+  },
+  {
+    "source": "MiniMax Search",
+    "target": "MiniMax Search"
+  },
+  {
+    "source": "Web Search overview",
+    "target": "网络搜索概述"
+  },
+  {
+    "source": "Background Tasks",
+    "target": "后台任务"
+  },
+  {
+    "source": "Tools Overview",
+    "target": "工具概述"
+  },
+  {
+    "source": "Ollama",
+    "target": "Ollama"
+  },
+  {
+    "source": "Video Generation",
+    "target": "视频生成"
+  },
+  {
+    "source": "Fireworks",
+    "target": "Fireworks"
+  },
+  {
+    "source": "Qwen Cloud",
+    "target": "Qwen Cloud"
+  },
+  {
+    "source": "StepFun",
+    "target": "StepFun"
+  },
+  {
+    "source": "Image Generation",
+    "target": "图像生成"
+  },
+  {
+    "source": "Provider Directory",
+    "target": "提供商目录"
+  },
+  {
+    "source": "/automation/cron-jobs#troubleshooting",
+    "target": "/automation/cron-jobs#troubleshooting"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "代理工作空间"
+  },
+  {
+    "source": "Amazon Bedrock Mantle",
+    "target": "Amazon Bedrock Mantle"
+  },
+  {
+    "source": "Automation Overview",
+    "target": "自动化概述"
+  },
+  {
+    "source": "CLI: tasks",
+    "target": "CLI: tasks"
+  },
+  {
+    "source": "Cron Jobs",
+    "target": "定时任务"
+  },
+  {
+    "source": "Dashboard",
+    "target": "仪表板"
+  },
+  {
+    "source": "Dreaming (experimental)",
+    "target": "梦境（实验性）"
+  },
+  {
+    "source": "GLM Models",
+    "target": "GLM模型"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "心跳"
+  },
+  {
+    "source": "Hooks",
+    "target": "钩子"
+  },
+  {
+    "source": "Memory",
+    "target": "记忆"
+  },
+  {
+    "source": "Memory Search",
+    "target": "记忆搜索"
+  },
+  {
+    "source": "Memory configuration reference",
+    "target": "记忆配置参考"
+  },
+  {
+    "source": "Plugin Architecture",
+    "target": "插件架构"
+  },
+  {
+    "source": "QA Channel",
+    "target": "QA频道"
+  },
+  {
+    "source": "QA E2E Automation",
+    "target": "QA E2E自动化"
+  },
+  {
+    "source": "SOUL.md Personality Guide",
+    "target": "SOUL.md 个性指南"
+  },
+  {
+    "source": "SOUL.md template",
+    "target": "SOUL.md 模板"
+  },
+  {
+    "source": "Scheduled Tasks",
+    "target": "计划任务"
+  },
+  {
+    "source": "Standing Orders",
+    "target": "常规指令"
+  },
+  {
+    "source": "System prompt",
+    "target": "系统提示"
+  },
+  {
+    "source": "Task Flow",
+    "target": "任务流"
+  },
+  {
+    "source": "Timezone",
+    "target": "时区"
+  },
+  {
+    "source": "Webhooks",
+    "target": "Webhooks"
+  },
+  {
+    "source": "flows (redirect)",
+    "target": "flows (重定向)"
+  },
+  {
+    "source": "memory CLI",
+    "target": "memory CLI"
   }
 ]
