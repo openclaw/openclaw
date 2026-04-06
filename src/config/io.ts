@@ -290,8 +290,9 @@ async function tightenStateDirPermissionsIfNeeded(params: {
       return;
     }
     await params.fsModule.promises.chmod(configDir, 0o700);
-  } catch {
+  } catch (err) {
     // Best-effort hardening only; callers still need the config write to proceed.
+    if (process.env.OPENCLAW_DEBUG) console.error(`[config:io] Failed to tighten permissions on ${configDir}:`, err);
   }
 }
 
@@ -726,8 +727,8 @@ async function appendConfigAuditRecord(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config audit write failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -742,8 +743,8 @@ function appendConfigAuditRecordSync(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config audit sync write failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -780,8 +781,8 @@ async function writeConfigHealthState(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config health state write failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -793,8 +794,8 @@ function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigH
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config health state sync write failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -1021,8 +1022,9 @@ async function maybeRecoverSuspiciousConfigRead(params: {
   try {
     await params.deps.fs.promises.copyFile(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {
+  } catch (err) {
     // Keep serving the backup payload for this read even if write-back fails.
+    params.deps.logger.warn(`Config backup restore failed for ${params.configPath}: ${err instanceof Error ? err.message : err}`);
   }
 
   params.deps.logger.warn(
@@ -1151,8 +1153,9 @@ function maybeRecoverSuspiciousConfigReadSync(params: {
   try {
     params.deps.fs.copyFileSync(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {
+  } catch (err) {
     // Keep serving the backup payload for this read even if write-back fails.
+    params.deps.logger.warn(`Config backup sync restore failed for ${params.configPath}: ${err instanceof Error ? err.message : err}`);
   }
 
   params.deps.logger.warn(
@@ -2168,8 +2171,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           ) as OpenClawConfig;
         }
       }
-    } catch {
+    } catch (err) {
       // If reading the current file fails, write cfg as-is (no env restoration)
+      deps.logger.warn(`Config env-restore read failed for ${configPath}: ${err instanceof Error ? err.message : err}`);
     }
 
     const dir = path.dirname(configPath);
@@ -2400,8 +2404,9 @@ function notifyConfigWriteListeners(event: ConfigWriteNotification): void {
   for (const listener of configWriteListeners) {
     try {
       listener(event);
-    } catch {
+    } catch (err) {
       // Best-effort observer path only; successful writes must still complete.
+      console.error(`[config:io] Config write listener threw:`, err);
     }
   }
 }
