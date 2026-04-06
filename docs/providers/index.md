@@ -31,6 +31,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
+- [ComfyUI](/providers/comfy)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [DeepSeek](/providers/deepseek)
 - [fal](/providers/fal)
@@ -71,6 +72,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 - [Additional bundled variants](/providers/models#additional-bundled-provider-variants) - Anthropic Vertex, Copilot Proxy, and Gemini CLI OAuth
 - [Image Generation](/tools/image-generation) - Shared `image_generate` tool, provider selection, and failover
+- [Music Generation](/tools/music-generation) - Plugin-provided `music_generate` tool surfaces
 - [Video Generation](/tools/video-generation) - Shared `video_generate` tool, provider selection, and failover
 
 ## Transcription providers

@@ -13,6 +13,15 @@ export const pluginRegistrationContractCases = {
     pluginId: "brave",
     webSearchProviderIds: ["brave"],
   },
+  comfy: {
+    pluginId: "comfy",
+    providerIds: ["comfy"],
+    imageGenerationProviderIds: ["comfy"],
+    videoGenerationProviderIds: ["comfy"],
+    toolNames: ["music_generate"],
+    requireGenerateImage: true,
+    requireGenerateVideo: true,
+  },
   deepgram: {
     pluginId: "deepgram",
     mediaUnderstandingProviderIds: ["deepgram"],

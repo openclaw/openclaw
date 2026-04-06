@@ -29,6 +29,7 @@ model as `provider/model`.
 - [Amazon Bedrock](/providers/bedrock)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
+- [ComfyUI](/providers/comfy)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)

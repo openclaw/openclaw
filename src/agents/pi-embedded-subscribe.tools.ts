@@ -1,6 +1,7 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
@@ -162,6 +163,9 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "x_search",
   "write",
 ]);
+const TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS = new Set(
+  pluginRegistrationContractRegistry.flatMap((entry) => entry.toolNames),
+);
 const HTTP_URL_RE = /^https?:\/\//i;
 
 function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
@@ -192,7 +196,9 @@ export function isToolResultMediaTrusted(toolName?: string, result?: unknown): b
     return false;
   }
   const normalized = normalizeToolName(toolName);
-  return TRUSTED_TOOL_RESULT_MEDIA.has(normalized);
+  return (
+    TRUSTED_TOOL_RESULT_MEDIA.has(normalized) || TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS.has(normalized)
+  );
 }
 
 export function filterToolResultMediaUrls(

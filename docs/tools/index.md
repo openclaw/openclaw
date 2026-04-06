@@ -75,6 +75,9 @@ For image work, use `image` for analysis and `image_generate` for generation or 
 
 For video work, use `video_generate`. If you target `qwen/*` or another non-default video provider, configure that provider's auth/API key first.
 
+For workflow-driven audio generation, use `music_generate` when a plugin such as
+ComfyUI registers it. This is separate from `tts`, which is text-to-speech.
+
 `session_status` is the lightweight status/readback tool in the sessions group.
 It answers `/status`-style questions about the current session and can
 optionally set a per-session model override; `model=default` clears that
@@ -100,6 +103,7 @@ Plugins can register additional tools. Some examples:
 
 - [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
 - [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
+- [Music Generation](/tools/music-generation) — plugin-provided `music_generate` tool surfaces
 - [Diffs](/tools/diffs) — diff viewer and renderer
 - [OpenProse](/prose) — markdown-first workflow orchestration
 
