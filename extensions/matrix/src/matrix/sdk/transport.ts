@@ -24,6 +24,10 @@ type QueryValue =
 
 export type QueryParams = Record<string, QueryValue> | null | undefined;
 
+type MatrixDispatcherRequestInit = RequestInit & {
+  dispatcher?: ReturnType<typeof createPinnedDispatcher>;
+};
+
 function normalizeEndpoint(endpoint: string): string {
   if (!endpoint) {
     return "/";
@@ -96,7 +100,7 @@ function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
 
 async function fetchWithMatrixDispatcher(params: {
   url: string;
-  init: RequestInit & { dispatcher?: unknown };
+  init: MatrixDispatcherRequestInit;
 }): Promise<Response> {
   // Keep this dispatcher-routing logic local to Matrix transport. Shared SSRF
   // fetches must stay fail-closed unless a retry path can preserve the
@@ -144,7 +148,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
           redirect: "manual",
           signal,
           dispatcher,
-        } as RequestInit & { dispatcher: unknown },
+        } as MatrixDispatcherRequestInit,
       });
 
       if (!isRedirectStatus(response.status)) {
