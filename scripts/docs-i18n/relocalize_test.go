@@ -92,6 +92,42 @@ func TestPostprocessLocalizedDocsOnlyTouchesScopedFiles(t *testing.T) {
 	}
 }
 
+func TestPostprocessLocalizedDocsContinuesAfterUnchangedFile(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+	writeFile(t, filepath.Join(docsRoot, "gateway", "troubleshooting.md"), "# Troubleshooting\n")
+	writeFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "troubleshooting.md"), "# 故障排除\n")
+
+	unchangedPath := filepath.Join(docsRoot, "zh-CN", "gateway", "already-localized.md")
+	needsRewritePath := filepath.Join(docsRoot, "zh-CN", "gateway", "index.md")
+
+	writeFile(t, unchangedPath, stringsJoin(
+		"---",
+		"title: 已本地化",
+		"---",
+		"",
+		"See [Troubleshooting](/zh-CN/gateway/troubleshooting).",
+	))
+	writeFile(t, needsRewritePath, stringsJoin(
+		"---",
+		"title: 网关",
+		"---",
+		"",
+		"See [Troubleshooting](/gateway/troubleshooting).",
+	))
+
+	if err := postprocessLocalizedDocs(docsRoot, "zh-CN", []string{unchangedPath, needsRewritePath}); err != nil {
+		t.Fatalf("postprocessLocalizedDocs failed: %v", err)
+	}
+
+	got := mustReadFile(t, needsRewritePath)
+	if !containsLine(got, "See [Troubleshooting](/zh-CN/gateway/troubleshooting).") {
+		t.Fatalf("expected later file rewrite after unchanged file, got:\n%s", got)
+	}
+}
+
 func stringsJoin(lines ...string) string {
 	result := ""
 	for i, line := range lines {

@@ -23,7 +23,7 @@ func postprocessLocalizedDocs(docsRoot, targetLang string, localizedFiles []stri
 		frontMatter, body := splitFrontMatter(string(content))
 		rewrittenBody := routes.localizeBodyLinks(body)
 		if rewrittenBody == body {
-			return nil
+			continue
 		}
 
 		output := rewrittenBody
