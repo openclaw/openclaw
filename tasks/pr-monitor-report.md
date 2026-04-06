@@ -8,12 +8,12 @@
 
 ## PRs Checked
 
-| PR | Branch | Status | CI | Review | Conflicts | Actions Taken |
-|----|--------|--------|----|--------|-----------|---------------|
-| #45911 | fix/telegram-approval-callback-fallback | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | None |
-| #45584 | feat/cron-fresh-session-option | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | None |
-| #54363 | fix/chat-send-button-contrast | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | None |
-| #54730 | fix/subagent-identity-fallback | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | None |
+| PR     | Branch                                  | Status  | CI      | Review  | Conflicts | Actions Taken |
+| ------ | --------------------------------------- | ------- | ------- | ------- | --------- | ------------- |
+| #45911 | fix/telegram-approval-callback-fallback | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN   | None          |
+| #45584 | feat/cron-fresh-session-option          | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN   | None          |
+| #54363 | fix/chat-send-button-contrast           | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN   | None          |
+| #54730 | fix/subagent-identity-fallback          | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN   | None          |
 
 ---
 
