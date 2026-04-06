@@ -2,6 +2,7 @@ package ai.openclaw.android.gateway
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -58,5 +59,30 @@ class GatewayEventQueueTest {
     scope.advanceUntilIdle()
 
     assertTrue(events.any { it == GatewayEvent("chat", final) })
+  }
+
+  @Test
+  fun `delivers queued events after a collector attaches`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val queue = GatewayEventQueue(scope = scope, json = json, maxQueueSize = 10)
+
+    val mainSessionKey = GatewayEvent("mainSessionKey", "\"main-forwarded\"")
+    val final = GatewayEvent("chat", """{"state":"final","runId":"r1","sessionKey":"main-forwarded"}""")
+
+    queue.emit(mainSessionKey)
+    queue.emit(final)
+
+    scope.runCurrent()
+    scope.advanceUntilIdle()
+
+    val events = mutableListOf<GatewayEvent>()
+    scope.launch {
+      queue.events.take(2).collect { events += it }
+    }
+
+    scope.runCurrent()
+    scope.advanceUntilIdle()
+
+    assertEquals(listOf(mainSessionKey, final), events)
   }
 }

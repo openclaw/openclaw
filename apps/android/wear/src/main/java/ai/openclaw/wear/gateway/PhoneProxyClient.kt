@@ -178,6 +178,11 @@ class PhoneProxyClient internal constructor(
     val result: CompletableDeferred<ProxyHandshake>,
   )
 
+  private data class SyncedFallbackSnapshot(
+    val config: WearGatewayConfig,
+    val tlsFingerprintSha256: String?,
+  )
+
   private val json = Json { ignoreUnknownKeys = true }
   private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<String>>()
   private val messageListener = ProxyMessageListener(::onMessageReceived)
@@ -188,6 +193,7 @@ class PhoneProxyClient internal constructor(
   private var reconnectJob: Job? = null
   private var livenessJob: Job? = null
   private var connectionGeneration = 0L
+  private var lastSyncedFallbackSnapshot: SyncedFallbackSnapshot? = null
   @Volatile private var lastPongReceivedAtNanos: Long = 0L
 
   private val _connected = MutableStateFlow(false)
@@ -207,6 +213,7 @@ class PhoneProxyClient internal constructor(
     _statusText.value = stringResolver(R.string.wear_status_finding_phone)
     val generation = connectionGeneration + 1
     connectionGeneration = generation
+    lastSyncedFallbackSnapshot = null
     clearPendingProbe()
     lastPongReceivedAtNanos = 0L
     scope.launch {
@@ -221,6 +228,7 @@ class PhoneProxyClient internal constructor(
     livenessJob?.cancel()
     livenessJob = null
     connectionGeneration += 1
+    lastSyncedFallbackSnapshot = null
     clearPendingProbe()
     phoneNodeId = null
     _connected.value = false
@@ -372,6 +380,7 @@ class PhoneProxyClient internal constructor(
       return
     }
 
+    syncFallbackConfig(handshake)
     acceptConnectedPhoneNode(sourceNodeId, connectionGeneration)
   }
 
@@ -400,9 +409,7 @@ class PhoneProxyClient internal constructor(
           probePhoneNode(phone, generation)
         }
       selection.node?.let { readyNode ->
-        selection.handshake?.takeIf { it.ready }?.gatewayConfig?.let { syncedConfig ->
-          onGatewayConfigSynced(syncedConfig, selection.handshake.tlsFingerprintSha256)
-        }
+        selection.handshake?.takeIf { it.ready }?.let(::syncFallbackConfig)
         acceptConnectedPhoneNode(readyNode.id, generation)
         return
       }
@@ -479,6 +486,20 @@ class PhoneProxyClient internal constructor(
       eventQueue.emit("proxy.connected", null)
     }
     startLivenessChecks(sourceNodeId, generation)
+  }
+
+  private fun syncFallbackConfig(handshake: ProxyHandshake) {
+    val config = handshake.gatewayConfig ?: return
+    val snapshot =
+      SyncedFallbackSnapshot(
+        config = config,
+        tlsFingerprintSha256 = handshake.tlsFingerprintSha256,
+      )
+    if (lastSyncedFallbackSnapshot == snapshot) {
+      return
+    }
+    lastSyncedFallbackSnapshot = snapshot
+    onGatewayConfigSynced(config, handshake.tlsFingerprintSha256)
   }
 
   private suspend fun sendMessageWithTimeout(

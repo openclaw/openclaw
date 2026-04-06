@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -47,7 +48,6 @@ class GatewayEventQueue(
   }
 
   fun emit(event: GatewayEvent) {
-    if (_events.subscriptionCount.value == 0) return
     val queued = classifyEvent(event)
     scope.launch(start = CoroutineStart.UNDISPATCHED) {
       enqueue(queued)
@@ -70,22 +70,16 @@ class GatewayEventQueue(
       }
       queue.add(event)
       trimQueueIfNeeded()
-      if (drainJob?.isActive != true) {
-        drainJob = scope.launch { drain() }
-      }
+      ensureDrainLocked()
     }
   }
 
   private suspend fun drain() {
     while (true) {
+      _events.subscriptionCount.first { it > 0 }
       val next =
         queueMutex.withLock {
           if (queue.isEmpty()) {
-            drainJob = null
-            return
-          }
-          if (_events.subscriptionCount.value == 0) {
-            queue.clear()
             drainJob = null
             return
           }
@@ -93,6 +87,16 @@ class GatewayEventQueue(
         }
       _events.emit(next.event)
     }
+  }
+
+  private fun ensureDrainLocked() {
+    if (queue.isEmpty()) {
+      return
+    }
+    if (drainJob?.isActive == true) {
+      return
+    }
+    drainJob = scope.launch { drain() }
   }
 
   private fun trimQueueIfNeeded() {
