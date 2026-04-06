@@ -83,6 +83,7 @@ const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "dail
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
+const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -324,22 +325,135 @@ function isDayWithinLookback(day: string, cutoffMs: number): boolean {
   return Number.isFinite(dayMs) && dayMs >= cutoffMs;
 }
 
-function normalizeDailySnippet(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.startsWith("#") || trimmed.startsWith("<!--")) {
-    return null;
-  }
-  const withoutListMarker = trimmed
+function normalizeDailyListMarker(line: string): string {
+  return line
     .replace(/^\d+\.\s+/, "")
     .replace(/^[-*+]\s+/, "")
     .trim();
+}
+
+function normalizeDailyHeading(line: string): string | null {
+  const trimmed = line.trim();
+  const match = trimmed.match(/^#{1,6}\s+(.+)$/);
+  if (!match) {
+    return null;
+  }
+  const heading = match[1] ? normalizeDailyListMarker(match[1]) : "";
+  if (!heading || DAILY_MEMORY_FILENAME_RE.test(heading)) {
+    return null;
+  }
+  return heading.slice(0, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ");
+}
+
+function normalizeDailySnippet(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("<!--")) {
+    return null;
+  }
+  const withoutListMarker = normalizeDailyListMarker(trimmed);
   if (withoutListMarker.length < DAILY_INGESTION_MIN_SNIPPET_CHARS) {
     return null;
   }
   return withoutListMarker.slice(0, DAILY_INGESTION_MAX_SNIPPET_CHARS).replace(/\s+/g, " ");
+}
+
+type DailySnippetChunk = {
+  startLine: number;
+  endLine: number;
+  snippet: string;
+};
+
+function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetChunk[] {
+  const chunks: DailySnippetChunk[] = [];
+  let activeHeading: string | null = null;
+  let chunkLines: string[] = [];
+  let chunkKind: "list" | "paragraph" | null = null;
+  let chunkStartLine = 0;
+  let chunkEndLine = 0;
+
+  const flushChunk = () => {
+    if (chunkLines.length === 0) {
+      chunkKind = null;
+      chunkStartLine = 0;
+      chunkEndLine = 0;
+      return;
+    }
+
+    const joiner = chunkKind === "list" ? "; " : " ";
+    const body = chunkLines.join(joiner).trim();
+    const prefixed = activeHeading ? `${activeHeading}: ${body}` : body;
+    const snippet = prefixed
+      .slice(0, DAILY_INGESTION_MAX_SNIPPET_CHARS)
+      .replace(/\s+/g, " ")
+      .trim();
+    if (snippet.length >= DAILY_INGESTION_MIN_SNIPPET_CHARS) {
+      chunks.push({
+        startLine: chunkStartLine,
+        endLine: chunkEndLine,
+        snippet,
+      });
+    }
+
+    chunkLines = [];
+    chunkKind = null;
+    chunkStartLine = 0;
+    chunkEndLine = 0;
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (typeof line !== "string") {
+      continue;
+    }
+
+    const heading = normalizeDailyHeading(line);
+    if (heading) {
+      flushChunk();
+      activeHeading = heading;
+      continue;
+    }
+
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("<!--")) {
+      flushChunk();
+      continue;
+    }
+
+    const snippet = normalizeDailySnippet(line);
+    if (!snippet) {
+      flushChunk();
+      continue;
+    }
+
+    const nextKind = /^([-*+]\s+|\d+\.\s+)/.test(trimmed) ? "list" : "paragraph";
+    const nextChunkLines = chunkLines.length === 0 ? [snippet] : [...chunkLines, snippet];
+    const nextJoiner = nextKind === "list" ? "; " : " ";
+    const candidateBody = nextChunkLines.join(nextJoiner).trim();
+    const candidateSnippet = activeHeading ? `${activeHeading}: ${candidateBody}` : candidateBody;
+    const shouldSplit =
+      chunkLines.length > 0 &&
+      (chunkKind !== nextKind ||
+        chunkLines.length >= DAILY_INGESTION_MAX_CHUNK_LINES ||
+        candidateSnippet.length > DAILY_INGESTION_MAX_SNIPPET_CHARS);
+
+    if (shouldSplit) {
+      flushChunk();
+    }
+
+    if (chunkLines.length === 0) {
+      chunkStartLine = index + 1;
+      chunkKind = nextKind;
+    }
+    chunkLines.push(snippet);
+    chunkEndLine = index + 1;
+
+    if (chunks.length >= limit) {
+      break;
+    }
+  }
+
+  flushChunk();
+  return chunks.slice(0, limit);
 }
 
 function entryWithinLookback(entry: ShortTermRecallEntry, cutoffMs: number): boolean {
@@ -507,22 +621,15 @@ async function collectDailyIngestionBatches(params: {
       continue;
     }
     const lines = raw.split(/\r?\n/);
+    const chunks = buildDailySnippetChunks(lines, perFileCap);
     const results: MemorySearchResult[] = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index];
-      if (typeof line !== "string") {
-        continue;
-      }
-      const snippet = normalizeDailySnippet(line);
-      if (!snippet) {
-        continue;
-      }
+    for (const chunk of chunks) {
       results.push({
         path: relativePath,
-        startLine: index + 1,
-        endLine: index + 1,
+        startLine: chunk.startLine,
+        endLine: chunk.endLine,
         score: DAILY_INGESTION_SCORE,
-        snippet,
+        snippet: chunk.snippet,
         source: "memory",
       });
       if (results.length >= perFileCap || total + results.length >= totalCap) {
