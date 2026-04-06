@@ -124,7 +124,6 @@ function isLikelyVisionModel(modelId: string): boolean {
   return visionPatterns.some((pattern) => pattern.test(lower));
 }
 
-
 function applyResolvedTransportFallback(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -540,30 +539,47 @@ function resolveConfiguredFallbackModel(params: {
     const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
       stripSecretRefMarkers: true,
     });
+    const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
     const modelHeaders = sanitizeModelHeaders(configuredOpenRouterModel?.headers, {
       stripSecretRefMarkers: true,
+    });
+
+    const openRouterApi =
+      configuredOpenRouterModel?.api ?? providerConfig?.api ?? "openai-completions";
+    const openRouterBaseUrl = providerConfig?.baseUrl ?? "https://openrouter.ai/api/v1";
+    const requestConfig = resolveProviderRequestConfig({
+      provider,
+      api: openRouterApi,
+      baseUrl: openRouterBaseUrl,
+      providerHeaders,
+      modelHeaders,
+      authHeader: providerConfig?.authHeader,
+      request: providerRequest,
+      capability: "llm",
+      transport: "stream",
     });
 
     return normalizeResolvedModel({
       provider,
       cfg,
       agentDir,
-      model: {
-        id: modelId,
-        name: modelId,
-        api: configuredOpenRouterModel?.api ?? providerConfig?.api ?? "openai-completions",
-        provider,
-        baseUrl: providerConfig?.baseUrl ?? "https://openrouter.ai/api/v1",
-        reasoning: configuredOpenRouterModel?.reasoning ?? false,
-        input: resolvedInput,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: configuredOpenRouterModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: configuredOpenRouterModel?.maxTokens ?? 8192,
-        ...(providerHeaders || modelHeaders
-          ? { headers: { ...providerHeaders, ...modelHeaders } }
-          : {}),
-      } as Model<Api>,
+      model: attachModelProviderRequestTransport(
+        {
+          id: modelId,
+          name: modelId,
+          api: requestConfig.api ?? openRouterApi,
+          provider,
+          baseUrl: requestConfig.baseUrl,
+          reasoning: configuredOpenRouterModel?.reasoning ?? false,
+          input: resolvedInput,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: configuredOpenRouterModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+          // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
+          maxTokens: configuredOpenRouterModel?.maxTokens ?? 8192,
+          headers: requestConfig.headers,
+        } as Model<Api>,
+        providerRequest,
+      ),
       runtimeHooks,
     });
   }
