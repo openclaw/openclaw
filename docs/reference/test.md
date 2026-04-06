@@ -77,6 +77,45 @@ Notes:
 - The smoke script writes `.artifacts/pdf-extraction-bench-smoke.json`.
 - For rollout decisions, benchmark a representative local corpus before switching `agents.defaults.pdfExtraction.engine` from `pdfjs` to `auto` or `nutrient`.
 
+## PDF extraction 3-lane bench
+
+Script: [`scripts/pdf-bench/main.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/pdf-bench/main.ts)
+
+A structured benchmark with three lanes that separates parser quality from wrapper overhead:
+
+- **Lane A (shipped-path):** Measures the exact integration paths (pdfjs vs nutrient CLI) as used in OpenClaw. Answers: "Should OpenClaw change the default extraction path today?"
+- **Lane B (quality):** Compares output quality across all available extraction engines with GT-backed scoring (text fields, key-values, tables, snippets). Groups results by document type. Answers: "Is Nutrient core technology actually better for downstream use?"
+- **Lane C (overhead):** Isolates invocation/wrapper overhead by measuring cold/warm timing, per-doc throughput, and failure counts. Answers: "How much of the current latency gap is caused by CLI/process overhead?"
+
+Usage:
+
+- `pnpm test:pdf:bench3:smoke` — all lanes, synthetic corpus with embedded GT
+- `pnpm test:pdf:bench3 -- --manifest /path/to/dataset-manifest.json --gt /path/to/extraction_ground_truth.jsonl`
+- `pnpm test:pdf:bench3 -- --lane a --smoke` — Lane A only
+- `pnpm test:pdf:bench3 -- --lane b --doc-type invoice --smoke`
+- `pnpm test:pdf:bench3 -- --lane c --limit 5 --smoke`
+- `pnpm test:pdf:bench3 -- --check-arms` — check which extraction arms are available
+- `pnpm test:pdf:bench3 -- --help`
+
+Corpus sources:
+
+- `--manifest <path>` + `--gt <path>` for real-world corpus with ground truth
+- `--pdf <path>` (repeatable) for ad-hoc files
+- `--input-dir <dir>` for all PDFs in a directory
+- `--smoke` for self-contained synthetic corpus
+- Filter with `--doc-id`, `--doc-type`, `--limit`
+
+Arm IDs: `pdfjs-text`, `nutrient-cli-markdown`, `nutrient-cli-batch-markdown`, `nutrient-py-text` (scaffold), `nutrient-py-markdown` (scaffold), `nutrient-py-vision` (scaffold).
+
+Output: human-readable table to stdout, `--json` for machine-readable, `--output <path>` writes JSON to file. Smoke writes `.artifacts/pdf-bench3-smoke.json`.
+
+Extending with Python SDK arms:
+
+1. Install the Nutrient Python SDK locally
+2. Implement the adapter in `scripts/pdf-bench/arms.ts` (replace the scaffold `createScaffoldArm` calls for `nutrient-py-*`)
+3. The adapter should call Python via `execFile` or a long-lived subprocess, returning text via stdout
+4. Run `pnpm test:pdf:bench3 -- --check-arms` to verify availability
+
 ## CLI startup bench
 
 Script: [`scripts/bench-cli-startup.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-cli-startup.ts)

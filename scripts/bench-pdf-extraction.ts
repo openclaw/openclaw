@@ -348,7 +348,11 @@ function createSmokeCorpus(tmpDir: string): PdfCorpusEntry[] {
         "Q2 revenue 145 margin 34 with expansion offsetting slower new logo close rates.",
         "Q3 revenue 171 margin 36 with pricing discipline and support efficiency improving operating leverage.",
       ],
-      expectedSnippets: ["Quarter Revenue Margin Summary", "Q1 revenue 120 margin 31", "Q3 revenue 171 margin 36"],
+      expectedSnippets: [
+        "Quarter Revenue Margin Summary",
+        "Q1 revenue 120 margin 31",
+        "Q3 revenue 171 margin 36",
+      ],
     },
   ] as const;
 
@@ -367,7 +371,7 @@ function createSmokeCorpus(tmpDir: string): PdfCorpusEntry[] {
 function listPdfFiles(dir: string): string[] {
   return readdirSync(dir)
     .filter((name) => name.toLowerCase().endsWith(".pdf"))
-    .sort((a, b) => a.localeCompare(b))
+    .toSorted((a, b) => a.localeCompare(b))
     .map((name) => path.join(dir, name));
 }
 
@@ -449,7 +453,8 @@ async function runEngine(params: {
       metaDurationMs: typeof result.meta?.durationMs === "number" ? result.meta.durationMs : null,
       chars: typeof result.meta?.chars === "number" ? result.meta.chars : result.text.trim().length,
       empty: result.meta?.empty ?? result.text.trim().length === 0,
-      imageCount: typeof result.meta?.imageCount === "number" ? result.meta.imageCount : result.images.length,
+      imageCount:
+        typeof result.meta?.imageCount === "number" ? result.meta.imageCount : result.images.length,
       containsExpectedText,
     });
   }
@@ -465,14 +470,13 @@ async function runEngine(params: {
     summary: {
       sampleCount: samples.length,
       durationMs: summarizeNumbers(samples.map((sample) => sample.durationMs)),
-      metaDurationMs:
-        samples.some((sample) => typeof sample.metaDurationMs === "number")
-          ? summarizeNumbers(
-              samples
-                .map((sample) => sample.metaDurationMs)
-                .filter((value): value is number => typeof value === "number"),
-            )
-          : null,
+      metaDurationMs: samples.some((sample) => typeof sample.metaDurationMs === "number")
+        ? summarizeNumbers(
+            samples
+              .map((sample) => sample.metaDurationMs)
+              .filter((value): value is number => typeof value === "number"),
+          )
+        : null,
       chars: summarizeNumbers(samples.map((sample) => sample.chars)),
       imageCount: summarizeNumbers(samples.map((sample) => sample.imageCount)),
       emptyCount: samples.filter((sample) => sample.empty).length,
@@ -506,7 +510,8 @@ function summarizeAggregate(engine: EngineId, files: FileResult[]): AggregateEng
     avgChars: summarizeNumbers(samples.map((sample) => sample.chars)).avg,
     avgImageCount: summarizeNumbers(samples.map((sample) => sample.imageCount)).avg,
     emptyCount: samples.filter((sample) => sample.empty).length,
-    containsExpectedTextHits: expectedHits.length > 0 ? expectedHits.reduce((sum, value) => sum + value, 0) : null,
+    containsExpectedTextHits:
+      expectedHits.length > 0 ? expectedHits.reduce((sum, value) => sum + value, 0) : null,
     containsExpectedTextTotal:
       expectedTotals.length > 0 ? expectedTotals.reduce((sum, value) => sum + value, 0) : null,
   };
@@ -538,9 +543,7 @@ function printHumanReport(report: BenchReport): void {
     if (pdfjs && nutrient) {
       const deltaMs = nutrient.summary.durationMs.avg - pdfjs.summary.durationMs.avg;
       const deltaPct =
-        pdfjs.summary.durationMs.avg > 0
-          ? (deltaMs / pdfjs.summary.durationMs.avg) * 100
-          : null;
+        pdfjs.summary.durationMs.avg > 0 ? (deltaMs / pdfjs.summary.durationMs.avg) * 100 : null;
       console.log(
         `  delta    avg=${deltaMs >= 0 ? "+" : ""}${formatMs(deltaMs)} (${formatPct(deltaPct)}) chars=${(nutrient.summary.chars.avg - pdfjs.summary.chars.avg).toFixed(1)}`,
       );
@@ -567,7 +570,9 @@ async function main(): Promise<void> {
   }
 
   const options = parseOptions();
-  const smokeDir = options.smoke ? mkdtempSync(path.join(os.tmpdir(), "openclaw-pdf-bench-")) : undefined;
+  const smokeDir = options.smoke
+    ? mkdtempSync(path.join(os.tmpdir(), "openclaw-pdf-bench-"))
+    : undefined;
 
   try {
     const corpus = resolveCorpus(options, smokeDir);

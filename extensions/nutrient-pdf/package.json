@@ -1,0 +1,26 @@
+{
+  "name": "@openclaw/nutrient-pdf-plugin",
+  "version": "2026.4.5-beta.1",
+  "private": true,
+  "description": "Nutrient-powered PDF extraction for OpenClaw. Dramatically better table, heading, and reading-order preservation compared to the default pdfjs extractor.",
+  "type": "module",
+  "dependencies": {
+    "@pspdfkit/pdf-to-markdown": "1.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/nutrient-pdf-plugin",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.1"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.1"
+    }
+  }
+}

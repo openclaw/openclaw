@@ -1,0 +1,40 @@
+{
+  "id": "nutrient-pdf",
+  "description": "Nutrient-powered PDF extraction. Replaces the default pdfjs text extractor with Nutrient's pdf-to-markdown CLI for dramatically better table, heading, and reading-order preservation.",
+  "contracts": {
+    "tools": ["nutrient_pdf_extract"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "Path to the pdf-to-markdown CLI binary. Defaults to 'pdf-to-markdown' on PATH."
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Timeout in milliseconds for the Nutrient CLI per document. Default: 30000."
+      },
+      "autoEnable": {
+        "type": "boolean",
+        "description": "Automatically set the PDF extraction engine to 'auto' (Nutrient with pdfjs fallback) when the plugin loads. Default: true."
+      }
+    }
+  },
+  "uiHints": {
+    "command": {
+      "label": "Nutrient CLI Path",
+      "help": "Path to the pdf-to-markdown binary. Leave empty to use the bundled version or PATH lookup.",
+      "placeholder": "pdf-to-markdown"
+    },
+    "timeoutMs": {
+      "label": "Extraction Timeout (ms)",
+      "help": "Maximum time for Nutrient to process a single PDF."
+    },
+    "autoEnable": {
+      "label": "Auto-Enable Nutrient Extraction",
+      "help": "When enabled, the plugin automatically configures OpenClaw to use Nutrient for PDF extraction with pdfjs fallback."
+    }
+  }
+}
