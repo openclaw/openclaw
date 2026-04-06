@@ -5,8 +5,8 @@ import {
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "./config-paths.js";
-import { validateConfigObject } from "./config.js";
-import { buildWebSearchProviderConfig } from "./test-helpers.js";
+import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
+import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("$schema key in config (#14998)", () => {

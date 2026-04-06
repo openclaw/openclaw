@@ -15,12 +15,13 @@ describe("runObsidianSearch", () => {
       { homedir: "/Users/tester" },
     );
     const calls: Array<{ command: string; argv: string[] }> = [];
-    const exec: NonNullable<
-      NonNullable<Parameters<typeof runObsidianSearch>[0]["deps"]>["exec"]
-    > = async (command, argv) => {
-      calls.push({ command, argv: [...argv] });
+    const execImpl = async (command: string, argv?: readonly string[] | null) => {
+      calls.push({ command, argv: argv ? [...argv] : [] });
       return { stdout: "search output\n", stderr: "" };
     };
+    const exec = execImpl as unknown as NonNullable<
+      NonNullable<Parameters<typeof runObsidianSearch>[0]["deps"]>["exec"]
+    >;
 
     const result = await runObsidianSearch({
       config,

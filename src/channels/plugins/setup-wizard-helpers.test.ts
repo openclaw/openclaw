@@ -981,7 +981,7 @@ describe("patchChannelConfigForAccount", () => {
           botToken: "legacy-token",
           allowFrom: ["100"],
           groupPolicy: "allowlist",
-          streaming: "partial",
+          streaming: { mode: "partial" },
         },
       },
     };
@@ -997,7 +997,7 @@ describe("patchChannelConfigForAccount", () => {
       botToken: "legacy-token",
       allowFrom: ["100"],
       groupPolicy: "allowlist",
-      streaming: "partial",
+      streaming: { mode: "partial" },
     });
     expect(next.channels?.telegram?.botToken).toBeUndefined();
     expect(next.channels?.telegram?.allowFrom).toBeUndefined();
