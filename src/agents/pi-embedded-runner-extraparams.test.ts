@@ -2727,7 +2727,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("standard_only");
   });
 
-  it("injects configured Anthropic service_tier into OAuth-authenticated Anthropic payloads", () => {
+  it("does not inject configured Anthropic service_tier into OAuth-authenticated Anthropic payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
       applyModelId: "claude-sonnet-4-5",
@@ -2755,7 +2755,7 @@ describe("applyExtraParamsToAgent", () => {
       },
       payload: {},
     });
-    expect(payload.service_tier).toBe("standard_only");
+    expect(payload.service_tier).toBeUndefined();
   });
 
   it("does not warn for valid Anthropic serviceTier values", () => {
@@ -2840,7 +2840,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("standard_only");
   });
 
-  it("lets explicit Anthropic service_tier override OAuth fast mode defaults", () => {
+  it("does not inject explicit Anthropic service_tier for OAuth auth even when fast mode is enabled", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
       applyModelId: "claude-sonnet-4-5",
@@ -2869,10 +2869,10 @@ describe("applyExtraParamsToAgent", () => {
       },
       payload: {},
     });
-    expect(payload.service_tier).toBe("standard_only");
+    expect(payload.service_tier).toBeUndefined();
   });
 
-  it("injects Anthropic fast mode service_tier for OAuth auth", () => {
+  it("does not inject Anthropic fast mode service_tier for OAuth auth", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
       applyModelId: "claude-sonnet-4-5",
@@ -2888,10 +2888,10 @@ describe("applyExtraParamsToAgent", () => {
       },
       payload: {},
     });
-    expect(payload.service_tier).toBe("auto");
+    expect(payload.service_tier).toBeUndefined();
   });
 
-  it("injects Anthropic standard_only service_tier for OAuth auth when fastMode is false", () => {
+  it("does not inject Anthropic standard_only service_tier for OAuth auth when fastMode is false", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
       applyModelId: "claude-sonnet-4-5",
@@ -2907,7 +2907,7 @@ describe("applyExtraParamsToAgent", () => {
       },
       payload: {},
     });
-    expect(payload.service_tier).toBe("standard_only");
+    expect(payload.service_tier).toBeUndefined();
   });
 
   it("does not inject Anthropic fast mode service_tier for proxied base URLs", () => {
