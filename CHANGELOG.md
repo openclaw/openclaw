@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - Agents/history: use one shared assistant-visible sanitizer across embedded delivery and chat-history extraction so leaked `<tool_call>` and `<tool_result>` XML blocks stay hidden from user-facing replies. (#61729) Thanks @openperf.
 - Gateway/TUI: defer terminal chat finalization for per-attempt lifecycle errors so fallback retries keep streaming before the run is marked failed. (#60043) Thanks @jwchmodx.
 - TUI/command messages: strip inbound envelope metadata before rendering command/system messages so async completion notices stop leaking raw wrappers into the operator terminal. (#59985) Thanks @MoerAI.
+- TUI/terminal: restore Kitty keyboard protocol and `modifyOtherKeys` state on TUI exit and fatal CLI crashes so parent shells stop inheriting broken keyboard input after `openclaw tui` exits. (#49130) Thanks @biefan.
 
 ## 2026.4.5
 
