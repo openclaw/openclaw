@@ -1,26 +1,16 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerMemoryDreamingPhases } from "./dreaming-phases.js";
 import {
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
   resolveShortTermPhaseSignalStorePath,
 } from "./short-term-promotion.js";
+import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-async function createTempWorkspace(): Promise<string> {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dreaming-phases-"));
-  tempDirs.push(workspaceDir);
-  return workspaceDir;
-}
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
+const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 function createHarness(config: OpenClawConfig, workspaceDir?: string) {
   let beforeAgentReply:
@@ -67,7 +57,7 @@ function createHarness(config: OpenClawConfig, workspaceDir?: string) {
 
 describe("memory-core dreaming phases", () => {
   it("checkpoints daily ingestion and skips unchanged daily files", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     const dailyPath = path.join(workspaceDir, "memory", "2026-04-05.md");
     await fs.writeFile(
@@ -124,7 +114,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("ingests recent daily memory files even before recall traffic exists", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
@@ -188,7 +178,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("keeps section context when chunking durable daily notes", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
@@ -248,7 +238,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("drops generic day headings but keeps meaningful section labels", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
@@ -315,7 +305,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("splits noisy daily notes into a few coherent chunks instead of one line per item", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
@@ -389,7 +379,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("records light/rem signals that reinforce deep promotion ranking", async () => {
-    const workspaceDir = await createTempWorkspace();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-phases-");
     const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
     await recordShortTermRecalls({
       workspaceDir,
