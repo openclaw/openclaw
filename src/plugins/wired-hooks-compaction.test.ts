@@ -61,6 +61,8 @@ describe("compaction hook wiring", () => {
     sessionKey?: string;
     compactionCount?: number;
     withRetryHooks?: boolean;
+    /** Simulates the message count recorded by handleAutoCompactionStart. */
+    messageCountBeforeCompaction?: number;
   }) {
     return {
       params: {
@@ -71,7 +73,11 @@ describe("compaction hook wiring", () => {
           sessionFile: params.sessionFile,
         },
       },
-      state: { compactionInFlight: true },
+      state: {
+        compactionInFlight: true,
+        // Seed the pre-compaction count so compactedCount = before - after (per-run delta).
+        messageCountBeforeCompaction: params.messageCountBeforeCompaction ?? null,
+      },
       log: { debug: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
       incrementCompactionCount: vi.fn(),
@@ -186,6 +192,8 @@ describe("compaction hook wiring", () => {
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:web-xyz",
       compactionCount: 1,
+      // 3 messages before, 2 after → compactedCount = 1 (per-run delta)
+      messageCountBeforeCompaction: 3,
     });
 
     runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
@@ -344,6 +352,8 @@ describe("compaction hook wiring", () => {
       sessionFile: "/tmp/s7.jsonl",
       sessionKey: "agent:main:web-xyz",
       compactionCount: 2,
+      // 5 messages before compaction, 3 after → compactedCount should be 2 (per-run delta)
+      messageCountBeforeCompaction: 5,
     });
 
     runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });

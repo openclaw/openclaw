@@ -100,17 +100,19 @@ export function handleAutoCompactionEnd(
   // The after_compaction plugin hook below uses !willRetry (fires on any conclusion),
   // but the internal hook follows the test contract: no dispatch when aborted or no result.
   // Subscribers can use context.completed to confirm success.
+  // Compute per-run compacted count once; used by both the internal hook and the plugin hook.
+  const messageCountAfterCompaction = ctx.params.session.messages?.length ?? 0;
+  const messageCountBeforeCompaction = ctx.state.messageCountBeforeCompaction ?? messageCountAfterCompaction;
+  const perRunCompactedCount = Math.max(0, messageCountBeforeCompaction - messageCountAfterCompaction);
+  ctx.state.messageCountBeforeCompaction = null;
+
   if (!willRetry && hasResult && !wasAborted) {
     const hookSessionKey = ctx.params.sessionKey?.trim() || ctx.params.sessionId || "";
-    const messageCountAfter = ctx.params.session.messages?.length ?? 0;
-    const messageCountBefore = ctx.state.messageCountBeforeCompaction ?? messageCountAfter;
-    const compactedCount = Math.max(0, messageCountBefore - messageCountAfter);
-    ctx.state.messageCountBeforeCompaction = null;
     void triggerInternalHook(
       createInternalHookEvent("session", "compact:after", hookSessionKey, {
         sessionId: ctx.params.sessionId,
-        messageCount: messageCountAfter,
-        compactedCount,
+        messageCount: messageCountAfterCompaction,
+        compactedCount: perRunCompactedCount,
         sessionFile: ctx.params.session.sessionFile,
         completed: true,
       }),
@@ -126,8 +128,10 @@ export function handleAutoCompactionEnd(
       void hookRunnerEnd
         .runAfterCompaction(
           {
-            messageCount: ctx.params.session.messages?.length ?? 0,
-            compactedCount: ctx.getCompactionCount(),
+            messageCount: messageCountAfterCompaction,
+            // Use the per-run delta (not the cumulative session compaction counter)
+            // so subscribers receive consistent per-compaction metrics.
+            compactedCount: perRunCompactedCount,
             sessionFile: ctx.params.session.sessionFile,
           },
           { sessionKey: ctx.params.sessionKey },
