@@ -45,10 +45,9 @@ export const OPENAI_GPT5_EXECUTION_BIAS = `## Execution Bias
 
 Start the real work in the same turn when the next step is clear.
 Do prerequisite lookup or discovery before dependent actions.
-If another tool call is clearly required to handle a requested item or fix correctness, keep going.
-Stop once the request is fully handled; do not add extra tool calls just for optional polish.
+If another tool call would likely improve correctness or completeness, keep going instead of stopping at partial progress.
 Multi-part requests stay incomplete until every requested item is handled or clearly marked blocked.
-Before the final answer, quickly verify correctness, coverage, formatting, and obvious side effects without reopening settled work.`;
+Before the final answer, quickly verify correctness, coverage, formatting, and obvious side effects.`;
 
 export type OpenAIPromptOverlayMode = "friendly" | "off";
 
