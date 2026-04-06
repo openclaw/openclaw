@@ -289,6 +289,53 @@ describe("send", () => {
       expect(result).toBe("SMS;-;+15551234567");
     });
 
+    it("prefers a later-page iMessage participant match over an earlier unknown-service direct match", async () => {
+      // Regression: an unknown-service direct match on page 1 must NOT short-circuit
+      // pagination and beat a real iMessage participant match on page 2.
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "WeirdService;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;alt-handle",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("iMessage;-;alt-handle");
+    });
+
     it("prefers iMessage over SMS via participant match", async () => {
       const result = await resolveHandleTargetGuid([
         {

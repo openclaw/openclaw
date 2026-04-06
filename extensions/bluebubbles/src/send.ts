@@ -251,8 +251,11 @@ export async function resolveChatGuidForTarget(params: {
   // When matching by handle, prefer iMessage over SMS. A user may have both
   // an `iMessage;-;<handle>` and `SMS;-;<handle>` chat; we should never silently
   // downgrade to SMS when an iMessage chat exists for the same handle.
-  let directHandleIMessageMatch: string | null = null;
+  //
+  // Note: real `iMessage;-;<handle>` direct matches `return` immediately below,
+  // so we only need to remember SMS and unknown-service direct fallbacks here.
   let directHandleSmsMatch: string | null = null;
+  let directHandleUnknownServiceMatch: string | null = null;
   let participantIMessageMatch: string | null = null;
   let participantSmsMatch: string | null = null;
   for (let offset = 0; offset < 5000; offset += limit) {
@@ -312,11 +315,13 @@ export async function resolveChatGuidForTarget(params: {
           if (guid.startsWith("iMessage;-;")) {
             return guid;
           }
-          if (guid.startsWith("SMS;-;") && !directHandleSmsMatch) {
-            directHandleSmsMatch = guid;
-          } else if (!directHandleIMessageMatch && !directHandleSmsMatch) {
+          if (guid.startsWith("SMS;-;")) {
+            if (!directHandleSmsMatch) {
+              directHandleSmsMatch = guid;
+            }
+          } else if (!directHandleUnknownServiceMatch) {
             // Unknown service; treat as a last-resort direct match.
-            directHandleIMessageMatch = guid;
+            directHandleUnknownServiceMatch = guid;
           }
         }
         if (guid && !participantIMessageMatch) {
@@ -341,16 +346,18 @@ export async function resolveChatGuidForTarget(params: {
         }
       }
     }
-    // If we already found an iMessage direct or participant match we can stop
-    // scanning further pages; any later SMS chat would still lose out.
-    if (directHandleIMessageMatch || participantIMessageMatch) {
+    // If we already found an iMessage participant match we can stop scanning
+    // further pages; any later SMS chat would still lose out. We deliberately
+    // do NOT break on an unknown-service direct match — a real iMessage
+    // participant match on a later page should still win.
+    if (participantIMessageMatch) {
       break;
     }
   }
   return (
-    directHandleIMessageMatch ??
     participantIMessageMatch ??
     directHandleSmsMatch ??
+    directHandleUnknownServiceMatch ??
     participantSmsMatch
   );
 }
