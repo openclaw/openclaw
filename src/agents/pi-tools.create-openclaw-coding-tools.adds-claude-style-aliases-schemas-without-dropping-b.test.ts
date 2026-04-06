@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
+import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
-const defaultTools = createOpenClawCodingTools();
+const defaultTools = createOpenClawCodingTools({ senderIsOwner: true });
 
 describe("createOpenClawCodingTools", () => {
   it("preserves action enums in normalized schemas", () => {
-    const toolNames = ["browser", "canvas", "nodes", "cron", "gateway", "message"];
+    const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];
+    const missingNames = toolNames.filter(
+      (name) => !defaultTools.some((candidate) => candidate.name === name),
+    );
+    expect(missingNames).toEqual([]);
 
     const collectActionValues = (schema: unknown, values: Set<string>): void => {
       if (!schema || typeof schema !== "object") {
@@ -33,7 +38,6 @@ describe("createOpenClawCodingTools", () => {
 
     for (const name of toolNames) {
       const tool = defaultTools.find((candidate) => candidate.name === name);
-      expect(tool).toBeDefined();
       const parameters = tool?.parameters as {
         properties?: Record<string, unknown>;
       };
@@ -51,61 +55,70 @@ describe("createOpenClawCodingTools", () => {
       expect(values.size).toBeGreaterThanOrEqual(min);
     }
   });
-  it("includes exec and process tools by default", () => {
+  it("enforces apply_patch availability and canonical names across model/provider constraints", () => {
     expect(defaultTools.some((tool) => tool.name === "exec")).toBe(true);
     expect(defaultTools.some((tool) => tool.name === "process")).toBe(true);
     expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);
-  });
-  it("gates apply_patch behind tools.exec.applyPatch for OpenAI models", () => {
-    const config: OpenClawConfig = {
-      tools: {
-        exec: {
-          applyPatch: { enabled: true },
-        },
-      },
-    };
+
     const openAiTools = createOpenClawCodingTools({
-      config,
       modelProvider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
     });
     expect(openAiTools.some((tool) => tool.name === "apply_patch")).toBe(true);
 
-    const anthropicTools = createOpenClawCodingTools({
-      config,
-      modelProvider: "anthropic",
-      modelId: "claude-opus-4-5",
+    const codexTools = createOpenClawCodingTools({
+      modelProvider: "openai-codex",
+      modelId: "gpt-5.4",
     });
-    expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(false);
-  });
-  it("respects apply_patch allowModels", () => {
-    const config: OpenClawConfig = {
+    expect(codexTools.some((tool) => tool.name === "apply_patch")).toBe(true);
+
+    const disabledConfig: OpenClawConfig = {
       tools: {
         exec: {
-          applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
+          applyPatch: { enabled: false },
+        },
+      },
+    };
+    const disabledOpenAiTools = createOpenClawCodingTools({
+      config: disabledConfig,
+      modelProvider: "openai",
+      modelId: "gpt-5.4",
+    });
+    expect(disabledOpenAiTools.some((tool) => tool.name === "apply_patch")).toBe(false);
+
+    const anthropicTools = createOpenClawCodingTools({
+      config: disabledConfig,
+      modelProvider: "anthropic",
+      modelId: "claude-opus-4-6",
+    });
+    expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(false);
+
+    const allowModelsConfig: OpenClawConfig = {
+      tools: {
+        exec: {
+          applyPatch: { allowModels: ["gpt-5.4"] },
         },
       },
     };
     const allowed = createOpenClawCodingTools({
-      config,
+      config: allowModelsConfig,
       modelProvider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
     });
     expect(allowed.some((tool) => tool.name === "apply_patch")).toBe(true);
 
     const denied = createOpenClawCodingTools({
-      config,
+      config: allowModelsConfig,
       modelProvider: "openai",
-      modelId: "gpt-5-mini",
+      modelId: "gpt-5.4-mini",
     });
     expect(denied.some((tool) => tool.name === "apply_patch")).toBe(false);
-  });
-  it("keeps canonical tool names for Anthropic OAuth (pi-ai remaps on the wire)", () => {
-    const tools = createOpenClawCodingTools({
+
+    const oauthTools = createOpenClawCodingTools({
       modelProvider: "anthropic",
       modelAuthMode: "oauth",
     });
-    const names = new Set(tools.map((tool) => tool.name));
+    const names = new Set(oauthTools.map((tool) => tool.name));
     expect(names.has("exec")).toBe(true);
     expect(names.has("read")).toBe(true);
     expect(names.has("write")).toBe(true);

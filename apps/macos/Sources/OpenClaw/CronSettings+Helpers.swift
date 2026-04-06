@@ -17,9 +17,11 @@ extension CronSettings {
 
     func scheduleSummary(_ schedule: CronSchedule) -> String {
         switch schedule {
-        case let .at(atMs):
-            let date = Date(timeIntervalSince1970: TimeInterval(atMs) / 1000)
-            return "at \(date.formatted(date: .abbreviated, time: .standard))"
+        case let .at(at):
+            if let date = CronSchedule.parseAtDate(at) {
+                return "at \(date.formatted(date: .abbreviated, time: .standard))"
+            }
+            return "at \(at)"
         case let .every(everyMs, _):
             return "every \(self.formatDuration(ms: everyMs))"
         case let .cron(expr, tz):
@@ -29,15 +31,7 @@ extension CronSettings {
     }
 
     func formatDuration(ms: Int) -> String {
-        if ms < 1000 { return "\(ms)ms" }
-        let s = Double(ms) / 1000.0
-        if s < 60 { return "\(Int(round(s)))s" }
-        let m = s / 60.0
-        if m < 60 { return "\(Int(round(m)))m" }
-        let h = m / 60.0
-        if h < 48 { return "\(Int(round(h)))h" }
-        let d = h / 24.0
-        return "\(Int(round(d)))d"
+        DurationFormattingSupport.conciseDuration(ms: ms)
     }
 
     func nextRunLabel(_ date: Date, now: Date = .init()) -> String {

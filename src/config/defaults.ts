@@ -1,28 +1,30 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
-import { resolveTalkApiKey } from "./talk.js";
-import type { OpenClawConfig } from "./types.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderSpecificConfig } from "../agents/models-config.providers.policy.js";
+import { applyProviderConfigDefaultsWithPlugin } from "../plugins/provider-runtime.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import { normalizeTalkConfig } from "./talk.js";
+import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 
 type WarnState = { warned: boolean };
 
 let defaultWarnState: WarnState = { warned: false };
 
-type AnthropicAuthDefaultsMode = "api_key" | "oauth";
-
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-5",
-  sonnet: "anthropic/claude-sonnet-4-5",
+  opus: "anthropic/claude-opus-4-6",
+  sonnet: "anthropic/claude-sonnet-4-6",
 
   // OpenAI
-  gpt: "openai/gpt-5.2",
-  "gpt-mini": "openai/gpt-5-mini",
+  gpt: "openai/gpt-5.4",
+  "gpt-mini": "openai/gpt-5.4-mini",
+  "gpt-nano": "openai/gpt-5.4-nano",
 
   // Google Gemini (3.x are preview ids in the catalog)
-  gemini: "google/gemini-3-pro-preview",
+  gemini: "google/gemini-3.1-pro-preview",
   "gemini-flash": "google/gemini-3-flash-preview",
+  "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
@@ -33,6 +35,14 @@ const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
 };
 const DEFAULT_MODEL_INPUT: ModelDefinitionConfig["input"] = ["text"];
 const DEFAULT_MODEL_MAX_TOKENS = 8192;
+const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
+  "devstral-medium-latest": 32_768,
+  "magistral-small": 40_000,
+  "mistral-large-latest": 16_384,
+  "mistral-medium-2508": 8_192,
+  "mistral-small-latest": 16_384,
+  "pixtral-large-latest": 32_768,
+} as const;
 
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
@@ -53,56 +63,22 @@ function resolveModelCost(
   };
 }
 
-function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefaultsMode | null {
-  const profiles = cfg.auth?.profiles ?? {};
-  const anthropicProfiles = Object.entries(profiles).filter(
-    ([, profile]) => profile?.provider === "anthropic",
-  );
-
-  const order = cfg.auth?.order?.anthropic ?? [];
-  for (const profileId of order) {
-    const entry = profiles[profileId];
-    if (!entry || entry.provider !== "anthropic") {
-      continue;
-    }
-    if (entry.mode === "api_key") {
-      return "api_key";
-    }
-    if (entry.mode === "oauth" || entry.mode === "token") {
-      return "oauth";
-    }
+export function resolveNormalizedProviderModelMaxTokens(params: {
+  providerId: string;
+  modelId: string;
+  contextWindow: number;
+  rawMaxTokens: number;
+}): number {
+  const clamped = Math.min(params.rawMaxTokens, params.contextWindow);
+  if (normalizeProviderId(params.providerId) !== "mistral" || clamped < params.contextWindow) {
+    return clamped;
   }
 
-  const hasApiKey = anthropicProfiles.some(([, profile]) => profile?.mode === "api_key");
-  const hasOauth = anthropicProfiles.some(
-    ([, profile]) => profile?.mode === "oauth" || profile?.mode === "token",
-  );
-  if (hasApiKey && !hasOauth) {
-    return "api_key";
-  }
-  if (hasOauth && !hasApiKey) {
-    return "oauth";
-  }
-
-  if (process.env.ANTHROPIC_OAUTH_TOKEN?.trim()) {
-    return "oauth";
-  }
-  if (process.env.ANTHROPIC_API_KEY?.trim()) {
-    return "api_key";
-  }
-  return null;
-}
-
-function resolvePrimaryModelRef(raw?: string): string | null {
-  if (!raw || typeof raw !== "string") {
-    return null;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const aliasKey = trimmed.toLowerCase();
-  return DEFAULT_MODEL_ALIASES[aliasKey] ?? trimmed;
+  const safeMaxTokens =
+    MISTRAL_SAFE_MAX_TOKENS_BY_MODEL[
+      params.modelId as keyof typeof MISTRAL_SAFE_MAX_TOKENS_BY_MODEL
+    ] ?? DEFAULT_MODEL_MAX_TOKENS;
+  return Math.min(safeMaxTokens, params.contextWindow);
 }
 
 export type SessionDefaultsOptions = {
@@ -151,22 +127,8 @@ export function applySessionDefaults(
   return next;
 }
 
-export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
-  const resolved = resolveTalkApiKey();
-  if (!resolved) {
-    return config;
-  }
-  const existing = config.talk?.apiKey?.trim();
-  if (existing) {
-    return config;
-  }
-  return {
-    ...config,
-    talk: {
-      ...config.talk,
-      apiKey: resolved,
-    },
-  };
+export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawConfig {
+  return normalizeTalkConfig(config);
 }
 
 export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
@@ -177,9 +139,19 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
   if (providerConfig) {
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
-      const models = provider.models;
+      const normalizedProvider = normalizeProviderSpecificConfig(providerId, provider);
+      const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {
+        if (normalizedProvider !== provider) {
+          nextProviders[providerId] = normalizedProvider;
+          mutated = true;
+        }
         continue;
+      }
+      const providerApi = normalizedProvider.api;
+      let nextProvider = normalizedProvider;
+      if (nextProvider !== provider) {
+        mutated = true;
       }
       let providerMutated = false;
       const nextModels = models.map((model) => {
@@ -215,8 +187,18 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
         }
 
         const defaultMaxTokens = Math.min(DEFAULT_MODEL_MAX_TOKENS, contextWindow);
-        const maxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
+        const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
+        const maxTokens = resolveNormalizedProviderModelMaxTokens({
+          providerId,
+          modelId: raw.id,
+          contextWindow,
+          rawMaxTokens,
+        });
         if (raw.maxTokens !== maxTokens) {
+          modelMutated = true;
+        }
+        const api = raw.api ?? providerApi;
+        if (raw.api !== api) {
           modelMutated = true;
         }
 
@@ -231,13 +213,17 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
           cost,
           contextWindow,
           maxTokens,
+          api,
         } as ModelDefinitionConfig;
       });
 
       if (!providerMutated) {
+        if (nextProvider !== provider) {
+          nextProviders[providerId] = nextProvider;
+        }
         continue;
       }
-      nextProviders[providerId] = { ...provider, models: nextModels };
+      nextProviders[providerId] = { ...nextProvider, models: nextModels };
       mutated = true;
     }
 
@@ -349,94 +335,16 @@ export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  const defaults = cfg.agents?.defaults;
-  if (!defaults) {
-    return cfg;
-  }
-
-  const authMode = resolveAnthropicDefaultAuthMode(cfg);
-  if (!authMode) {
-    return cfg;
-  }
-
-  let mutated = false;
-  const nextDefaults = { ...defaults };
-  const contextPruning = defaults.contextPruning ?? {};
-  const heartbeat = defaults.heartbeat ?? {};
-
-  if (defaults.contextPruning?.mode === undefined) {
-    nextDefaults.contextPruning = {
-      ...contextPruning,
-      mode: "cache-ttl",
-      ttl: defaults.contextPruning?.ttl ?? "1h",
-    };
-    mutated = true;
-  }
-
-  if (defaults.heartbeat?.every === undefined) {
-    nextDefaults.heartbeat = {
-      ...heartbeat,
-      every: authMode === "oauth" ? "1h" : "30m",
-    };
-    mutated = true;
-  }
-
-  if (authMode === "api_key") {
-    const nextModels = defaults.models ? { ...defaults.models } : {};
-    let modelsMutated = false;
-
-    for (const [key, entry] of Object.entries(nextModels)) {
-      const parsed = parseModelRef(key, "anthropic");
-      if (!parsed || parsed.provider !== "anthropic") {
-        continue;
-      }
-      const current = entry ?? {};
-      const params = (current as { params?: Record<string, unknown> }).params ?? {};
-      if (typeof params.cacheControlTtl === "string") {
-        continue;
-      }
-      nextModels[key] = {
-        ...(current as Record<string, unknown>),
-        params: { ...params, cacheControlTtl: "1h" },
-      };
-      modelsMutated = true;
-    }
-
-    const primary = resolvePrimaryModelRef(defaults.model?.primary ?? undefined);
-    if (primary) {
-      const parsedPrimary = parseModelRef(primary, "anthropic");
-      if (parsedPrimary?.provider === "anthropic") {
-        const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
-        const entry = nextModels[key];
-        const current = entry ?? {};
-        const params = (current as { params?: Record<string, unknown> }).params ?? {};
-        if (typeof params.cacheControlTtl !== "string") {
-          nextModels[key] = {
-            ...(current as Record<string, unknown>),
-            params: { ...params, cacheControlTtl: "1h" },
-          };
-          modelsMutated = true;
-        }
-      }
-    }
-
-    if (modelsMutated) {
-      nextDefaults.models = nextModels;
-      mutated = true;
-    }
-  }
-
-  if (!mutated) {
-    return cfg;
-  }
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: nextDefaults,
-    },
-  };
+  return (
+    applyProviderConfigDefaultsWithPlugin({
+      provider: "anthropic",
+      context: {
+        provider: "anthropic",
+        config: cfg,
+        env: process.env,
+      },
+    }) ?? cfg
+  );
 }
 
 export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {

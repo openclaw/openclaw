@@ -1,62 +1,15 @@
+import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
-import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
-import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { probeGateway } from "../gateway/probe.js";
-import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
-import { resolveOsSummary } from "../infra/os-summary.js";
-import { getTailnetHostname } from "../infra/tailscale.js";
-import type { MemoryIndexManager } from "../memory/manager.js";
-import { runExec } from "../process/exec.js";
+import { buildPluginCompatibilityNotices } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getAgentLocalStatuses } from "./status.agent-local.js";
-import { pickGatewaySelfPresence, resolveGatewayProbeAuth } from "./status.gateway-probe.js";
-import { getStatusSummary } from "./status.summary.js";
-import { getUpdateCheckResult } from "./status.update.js";
-import { buildChannelsTable } from "./status-all/channels.js";
-
-type MemoryStatusSnapshot = ReturnType<MemoryIndexManager["status"]> & {
-  agentId: string;
-};
-
-type MemoryPluginStatus = {
-  enabled: boolean;
-  slot: string | null;
-  reason?: string;
-};
-
-function resolveMemoryPluginStatus(cfg: ReturnType<typeof loadConfig>): MemoryPluginStatus {
-  const pluginsEnabled = cfg.plugins?.enabled !== false;
-  if (!pluginsEnabled) {
-    return { enabled: false, slot: null, reason: "plugins disabled" };
-  }
-  const raw = typeof cfg.plugins?.slots?.memory === "string" ? cfg.plugins.slots.memory.trim() : "";
-  if (raw && raw.toLowerCase() === "none") {
-    return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
-  }
-  return { enabled: true, slot: raw || "memory-core" };
-}
-
-export type StatusScanResult = {
-  cfg: ReturnType<typeof loadConfig>;
-  osSummary: ReturnType<typeof resolveOsSummary>;
-  tailscaleMode: string;
-  tailscaleDns: string | null;
-  tailscaleHttpsUrl: string | null;
-  update: Awaited<ReturnType<typeof getUpdateCheckResult>>;
-  gatewayConnection: ReturnType<typeof buildGatewayConnectionDetails>;
-  remoteUrlMissing: boolean;
-  gatewayMode: "local" | "remote";
-  gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
-  gatewayReachable: boolean;
-  gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
-  channelIssues: ReturnType<typeof collectChannelStatusIssues>;
-  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
-  channels: Awaited<ReturnType<typeof buildChannelsTable>>;
-  summary: Awaited<ReturnType<typeof getStatusSummary>>;
-  memory: MemoryStatusSnapshot | null;
-  memoryPlugin: MemoryPluginStatus;
-};
+import { resolveStatusMemoryStatusSnapshot } from "./status.scan-memory.ts";
+import {
+  collectStatusScanOverview,
+  resolveStatusSummaryFromOverview,
+} from "./status.scan-overview.ts";
+import { buildStatusScanResult, type StatusScanResult } from "./status.scan-result.ts";
+import { scanStatusJsonWithPolicy } from "./status.scan.fast-json.js";
+import { resolveMemoryPluginStatus } from "./status.scan.shared.js";
 
 export async function scanStatus(
   opts: {
@@ -66,138 +19,95 @@ export async function scanStatus(
   },
   _runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
+  if (opts.json) {
+    return await scanStatusJsonWithPolicy(
+      {
+        timeoutMs: opts.timeoutMs,
+        all: opts.all,
+      },
+      _runtime,
+      {
+        commandName: "status --json",
+        resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannels(cfg),
+        resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
+          await resolveStatusMemoryStatusSnapshot({
+            cfg,
+            agentStatus,
+            memoryPlugin,
+          }),
+      },
+    );
+  }
   return await withProgress(
     {
       label: "Scanning status…",
-      total: 10,
-      enabled: opts.json !== true,
+      total: 11,
+      enabled: true,
     },
     async (progress) => {
-      progress.setLabel("Loading config…");
-      const cfg = loadConfig();
-      const osSummary = resolveOsSummary();
-      progress.tick();
-
-      progress.setLabel("Checking Tailscale…");
-      const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-      const tailscaleDns =
-        tailscaleMode === "off"
-          ? null
-          : await getTailnetHostname((cmd, args) =>
-              runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
-            ).catch(() => null);
-      const tailscaleHttpsUrl =
-        tailscaleMode !== "off" && tailscaleDns
-          ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
-          : null;
-      progress.tick();
-
-      progress.setLabel("Checking for updates…");
-      const updateTimeoutMs = opts.all ? 6500 : 2500;
-      const update = await getUpdateCheckResult({
-        timeoutMs: updateTimeoutMs,
-        fetchGit: true,
-        includeRegistry: true,
-      });
-      progress.tick();
-
-      progress.setLabel("Resolving agents…");
-      const agentStatus = await getAgentLocalStatuses();
-      progress.tick();
-
-      progress.setLabel("Probing gateway…");
-      const gatewayConnection = buildGatewayConnectionDetails();
-      const isRemoteMode = cfg.gateway?.mode === "remote";
-      const remoteUrlRaw =
-        typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url : "";
-      const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
-      const gatewayMode = isRemoteMode ? "remote" : "local";
-      const gatewayProbe = remoteUrlMissing
-        ? null
-        : await probeGateway({
-            url: gatewayConnection.url,
-            auth: resolveGatewayProbeAuth(cfg),
-            timeoutMs: Math.min(opts.all ? 5000 : 2500, opts.timeoutMs ?? 10_000),
-          }).catch(() => null);
-      const gatewayReachable = gatewayProbe?.ok === true;
-      const gatewaySelf = gatewayProbe?.presence
-        ? pickGatewaySelfPresence(gatewayProbe.presence)
-        : null;
-      progress.tick();
-
-      progress.setLabel("Querying channel status…");
-      const channelsStatus = gatewayReachable
-        ? await callGateway({
-            method: "channels.status",
-            params: {
-              probe: false,
-              timeoutMs: Math.min(8000, opts.timeoutMs ?? 10_000),
-            },
-            timeoutMs: Math.min(opts.all ? 5000 : 2500, opts.timeoutMs ?? 10_000),
-          }).catch(() => null)
-        : null;
-      const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
-      progress.tick();
-
-      progress.setLabel("Summarizing channels…");
-      const channels = await buildChannelsTable(cfg, {
-        // Show token previews in regular status; keep `status --all` redacted.
-        // Set `OPENCLAW_SHOW_SECRETS=0` to force redaction.
+      const overview = await collectStatusScanOverview({
+        commandName: "status",
+        opts,
         showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
+        progress,
+        labels: {
+          loadingConfig: "Loading config…",
+          checkingTailscale: "Checking Tailscale…",
+          checkingForUpdates: "Checking for updates…",
+          resolvingAgents: "Resolving agents…",
+          probingGateway: "Probing gateway…",
+          queryingChannelStatus: "Querying channel status…",
+          summarizingChannels: "Summarizing channels…",
+        },
       });
-      progress.tick();
 
       progress.setLabel("Checking memory…");
-      const memoryPlugin = resolveMemoryPluginStatus(cfg);
-      const memory = await (async (): Promise<MemoryStatusSnapshot | null> => {
-        if (!memoryPlugin.enabled) {
-          return null;
-        }
-        if (memoryPlugin.slot !== "memory-core") {
-          return null;
-        }
-        const agentId = agentStatus.defaultId ?? "main";
-        const { MemoryIndexManager } = await import("../memory/manager.js");
-        const manager = await MemoryIndexManager.get({ cfg, agentId }).catch(() => null);
-        if (!manager) {
-          return null;
-        }
-        try {
-          await manager.probeVectorAvailability();
-        } catch {}
-        const status = manager.status();
-        await manager.close().catch(() => {});
-        return { agentId, ...status };
-      })();
+      const memoryPlugin = resolveMemoryPluginStatus(overview.cfg);
+      const memory = await resolveStatusMemoryStatusSnapshot({
+        cfg: overview.cfg,
+        agentStatus: overview.agentStatus,
+        memoryPlugin,
+      });
+      progress.tick();
+
+      progress.setLabel("Checking plugins…");
+      const pluginCompatibility = buildPluginCompatibilityNotices({ config: overview.cfg });
       progress.tick();
 
       progress.setLabel("Reading sessions…");
-      const summary = await getStatusSummary();
+      const summary = await resolveStatusSummaryFromOverview({ overview });
       progress.tick();
 
       progress.setLabel("Rendering…");
       progress.tick();
 
-      return {
-        cfg,
-        osSummary,
-        tailscaleMode,
-        tailscaleDns,
-        tailscaleHttpsUrl,
-        update,
-        gatewayConnection,
-        remoteUrlMissing,
-        gatewayMode,
-        gatewayProbe,
-        gatewayReachable,
-        gatewaySelf,
-        channelIssues,
-        agentStatus,
-        channels,
+      return buildStatusScanResult({
+        cfg: overview.cfg,
+        sourceConfig: overview.sourceConfig,
+        secretDiagnostics: overview.secretDiagnostics,
+        osSummary: overview.osSummary,
+        tailscaleMode: overview.tailscaleMode,
+        tailscaleDns: overview.tailscaleDns,
+        tailscaleHttpsUrl: overview.tailscaleHttpsUrl,
+        update: overview.update,
+        gatewaySnapshot: {
+          gatewayConnection: overview.gatewaySnapshot.gatewayConnection,
+          remoteUrlMissing: overview.gatewaySnapshot.remoteUrlMissing,
+          gatewayMode: overview.gatewaySnapshot.gatewayMode,
+          gatewayProbeAuth: overview.gatewaySnapshot.gatewayProbeAuth,
+          gatewayProbeAuthWarning: overview.gatewaySnapshot.gatewayProbeAuthWarning,
+          gatewayProbe: overview.gatewaySnapshot.gatewayProbe,
+          gatewayReachable: overview.gatewaySnapshot.gatewayReachable,
+          gatewaySelf: overview.gatewaySnapshot.gatewaySelf,
+        },
+        channelIssues: overview.channelIssues,
+        agentStatus: overview.agentStatus,
+        channels: overview.channels,
         summary,
         memory,
         memoryPlugin,
-      };
+        pluginCompatibility,
+      });
     },
   );
 }

@@ -1,193 +1,41 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
+import type { OpenClawConfig } from "./config.js";
+import { validateConfigObject } from "./validation.js";
+
+function getChannelConfig(config: unknown, provider: string) {
+  const channels = (config as { channels?: Record<string, Record<string, unknown>> } | undefined)
+    ?.channels;
+  return channels?.[provider];
+}
 
 describe("legacy config detection", () => {
-  it("rejects routing.allowFrom", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({
-      routing: { allowFrom: ["+15555550123"] },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("routing.allowFrom");
-    }
-  });
-  it("rejects routing.groupChat.requireMention", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({
-      routing: { groupChat: { requireMention: false } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("routing.groupChat.requireMention");
-    }
-  });
-  it("migrates routing.allowFrom to channels.whatsapp.allowFrom when whatsapp configured", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      routing: { allowFrom: ["+15555550123"] },
-      channels: { whatsapp: {} },
-    });
-    expect(res.changes).toContain("Moved routing.allowFrom → channels.whatsapp.allowFrom.");
-    expect(res.config?.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
-    expect(res.config?.routing?.allowFrom).toBeUndefined();
-  });
-  it("drops routing.allowFrom when whatsapp missing", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      routing: { allowFrom: ["+15555550123"] },
-    });
-    expect(res.changes).toContain("Removed routing.allowFrom (channels.whatsapp not configured).");
-    expect(res.config?.channels?.whatsapp).toBeUndefined();
-    expect(res.config?.routing?.allowFrom).toBeUndefined();
-  });
-  it("migrates routing.groupChat.requireMention to channels whatsapp/telegram/imessage groups when whatsapp configured", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      routing: { groupChat: { requireMention: false } },
-      channels: { whatsapp: {} },
-    });
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
-    );
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
-    );
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
-    );
-    expect(res.config?.channels?.whatsapp?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.routing?.groupChat?.requireMention).toBeUndefined();
-  });
-  it("migrates routing.groupChat.requireMention to telegram/imessage when whatsapp missing", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      routing: { groupChat: { requireMention: false } },
-    });
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
-    );
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
-    );
-    expect(res.changes).not.toContain(
-      'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
-    );
-    expect(res.config?.channels?.whatsapp).toBeUndefined();
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.routing?.groupChat?.requireMention).toBeUndefined();
-  });
-  it("migrates routing.groupChat.mentionPatterns to messages.groupChat.mentionPatterns", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      routing: { groupChat: { mentionPatterns: ["@openclaw"] } },
-    });
-    expect(res.changes).toContain(
-      "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
-    );
-    expect(res.config?.messages?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
-    expect(res.config?.routing?.groupChat?.mentionPatterns).toBeUndefined();
-  });
-  it("migrates routing agentToAgent/queue/transcribeAudio to tools/messages/media", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      routing: {
-        agentToAgent: { enabled: true, allow: ["main"] },
-        queue: { mode: "queue", cap: 3 },
-        transcribeAudio: {
-          command: ["whisper", "--model", "base"],
-          timeoutSeconds: 2,
-        },
-      },
-    });
-    expect(res.changes).toContain("Moved routing.agentToAgent → tools.agentToAgent.");
-    expect(res.changes).toContain("Moved routing.queue → messages.queue.");
-    expect(res.changes).toContain("Moved routing.transcribeAudio → tools.media.audio.models.");
-    expect(res.config?.tools?.agentToAgent).toEqual({
-      enabled: true,
-      allow: ["main"],
-    });
-    expect(res.config?.messages?.queue).toEqual({
-      mode: "queue",
-      cap: 3,
-    });
-    expect(res.config?.tools?.media?.audio).toEqual({
-      enabled: true,
-      models: [
-        {
-          command: "whisper",
-          type: "cli",
-          args: ["--model", "base"],
-          timeoutSeconds: 2,
-        },
-      ],
-    });
-    expect(res.config?.routing).toBeUndefined();
-  });
-  it("migrates agent config into agents.defaults and tools", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      agent: {
-        model: "openai/gpt-5.2",
-        tools: { allow: ["sessions.list"], deny: ["danger"] },
-        elevated: { enabled: true, allowFrom: { discord: ["user:1"] } },
-        bash: { timeoutSec: 12 },
-        sandbox: { tools: { allow: ["browser.open"] } },
-        subagents: { tools: { deny: ["sandbox"] } },
-      },
-    });
-    expect(res.changes).toContain("Moved agent.tools.allow → tools.allow.");
-    expect(res.changes).toContain("Moved agent.tools.deny → tools.deny.");
-    expect(res.changes).toContain("Moved agent.elevated → tools.elevated.");
-    expect(res.changes).toContain("Moved agent.bash → tools.exec.");
-    expect(res.changes).toContain("Moved agent.sandbox.tools → tools.sandbox.tools.");
-    expect(res.changes).toContain("Moved agent.subagents.tools → tools.subagents.tools.");
-    expect(res.changes).toContain("Moved agent → agents.defaults.");
-    expect(res.config?.agents?.defaults?.model).toEqual({
-      primary: "openai/gpt-5.2",
-      fallbacks: [],
-    });
-    expect(res.config?.tools?.allow).toEqual(["sessions.list"]);
-    expect(res.config?.tools?.deny).toEqual(["danger"]);
-    expect(res.config?.tools?.elevated).toEqual({
-      enabled: true,
-      allowFrom: { discord: ["user:1"] },
-    });
-    expect(res.config?.tools?.exec).toEqual({ timeoutSec: 12 });
-    expect(res.config?.tools?.sandbox?.tools).toEqual({
-      allow: ["browser.open"],
-    });
-    expect(res.config?.tools?.subagents?.tools).toEqual({
-      deny: ["sandbox"],
-    });
-    expect((res.config as { agent?: unknown }).agent).toBeUndefined();
-  });
-  it("migrates tools.bash to tools.exec", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      tools: {
-        bash: { timeoutSec: 12 },
-      },
-    });
-    expect(res.changes).toContain("Moved tools.bash → tools.exec.");
-    expect(res.config?.tools?.exec).toEqual({ timeoutSec: 12 });
-    expect((res.config?.tools as { bash?: unknown } | undefined)?.bash).toBeUndefined();
-  });
+  it.each([
+    {
+      name: "routing.allowFrom",
+      input: { routing: { allowFrom: ["+15555550123"] } },
+      expectedPath: "",
+      expectedMessage: '"routing"',
+    },
+    {
+      name: "routing.groupChat.requireMention",
+      input: { routing: { groupChat: { requireMention: false } } },
+      expectedPath: "",
+      expectedMessage: '"routing"',
+    },
+  ] as const)(
+    "rejects legacy routing key: $name",
+    ({ input, expectedPath, expectedMessage, name }) => {
+      const res = validateConfigObject(input);
+      expect(res.ok, name).toBe(false);
+      if (!res.ok) {
+        expect(res.issues[0]?.path, name).toBe(expectedPath);
+        expect(res.issues[0]?.message, name).toContain(expectedMessage);
+      }
+    },
+  );
+
   it("accepts per-agent tools.elevated overrides", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       tools: {
         elevated: {
@@ -218,187 +66,291 @@ describe("legacy config detection", () => {
     }
   });
   it("rejects telegram.requireMention", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       telegram: { requireMention: true },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path === "telegram.requireMention")).toBe(true);
+      expect(res.issues[0]?.path).toBe("");
+      expect(res.issues[0]?.message).toContain('"telegram"');
+    }
+  });
+  it("rejects channels.telegram.groupMentionsOnly", async () => {
+    const res = validateConfigObject({
+      channels: { telegram: { groupMentionsOnly: true } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly")).toBe(
+        true,
+      );
     }
   });
   it("rejects gateway.token", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       gateway: { token: "legacy-token" },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.token");
+      expect(res.issues[0]?.path).toBe("gateway");
     }
   });
-  it("migrates gateway.token to gateway.auth.token", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      gateway: { token: "legacy-token" },
-    });
-    expect(res.changes).toContain("Moved gateway.token → gateway.auth.token.");
-    expect(res.config?.gateway?.auth?.token).toBe("legacy-token");
-    expect(res.config?.gateway?.auth?.mode).toBe("token");
-    expect((res.config?.gateway as { token?: string })?.token).toBeUndefined();
-  });
-  it("keeps gateway.bind tailnet", async () => {
-    vi.resetModules();
-    const { migrateLegacyConfig, validateConfigObject } = await import("./config.js");
-    const res = migrateLegacyConfig({
-      gateway: { bind: "tailnet" as const },
-    });
-    expect(res.changes).not.toContain("Migrated gateway.bind from 'tailnet' to 'auto'.");
-    expect(res.config).toBeNull();
+  it.each(["0.0.0.0", "::", "127.0.0.1", "localhost", "::1"] as const)(
+    "flags gateway.bind host alias as legacy: %s",
+    (bind) => {
+      const validated = validateConfigObject({ gateway: { bind } });
+      expect(validated.ok, bind).toBe(false);
+      if (!validated.ok) {
+        expect(
+          validated.issues.some((issue) => issue.path === "gateway.bind"),
+          bind,
+        ).toBe(true);
+      }
+    },
+  );
+  it.each([
+    {
+      provider: "telegram",
+      allowFrom: ["123456789"],
+      expectedIssuePath: "channels.telegram.allowFrom",
+    },
+    {
+      provider: "whatsapp",
+      allowFrom: ["+15555550123"],
+      expectedIssuePath: "channels.whatsapp.allowFrom",
+    },
+    {
+      provider: "signal",
+      allowFrom: ["+15555550123"],
+      expectedIssuePath: "channels.signal.allowFrom",
+    },
+    {
+      provider: "imessage",
+      allowFrom: ["+15555550123"],
+      expectedIssuePath: "channels.imessage.allowFrom",
+    },
+  ] as const)(
+    'enforces dmPolicy="open" allowFrom wildcard for $provider',
+    ({ provider, allowFrom, expectedIssuePath }) => {
+      const res = validateConfigObject({
+        channels: {
+          [provider]: { dmPolicy: "open", allowFrom },
+        },
+      });
+      expect(res.ok, provider).toBe(false);
+      if (!res.ok) {
+        expect(res.issues[0]?.path, provider).toBe(expectedIssuePath);
+      }
+    },
+    180_000,
+  );
 
-    const validated = validateConfigObject({ gateway: { bind: "tailnet" as const } });
-    expect(validated.ok).toBe(true);
-    if (validated.ok) {
-      expect(validated.config.gateway?.bind).toBe("tailnet");
-    }
-  });
-  it('rejects telegram.dmPolicy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({
-      channels: { telegram: { dmPolicy: "open", allowFrom: ["123456789"] } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.telegram.allowFrom");
-    }
-  });
-  it('accepts telegram.dmPolicy="open" with allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({
-      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.telegram?.dmPolicy).toBe("open");
-    }
-  });
-  it("defaults telegram.dmPolicy to pairing when telegram section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ channels: { telegram: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.telegram?.dmPolicy).toBe("pairing");
-    }
-  });
-  it("defaults telegram.groupPolicy to allowlist when telegram section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ channels: { telegram: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
-    }
-  });
-  it("defaults telegram.streamMode to partial when telegram section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ channels: { telegram: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.telegram?.streamMode).toBe("partial");
-    }
-  });
-  it('rejects whatsapp.dmPolicy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({
-      channels: {
-        whatsapp: { dmPolicy: "open", allowFrom: ["+15555550123"] },
+  it.each(["telegram", "whatsapp", "signal"] as const)(
+    'accepts dmPolicy="open" with wildcard for %s',
+    (provider) => {
+      const res = validateConfigObject({
+        channels: { [provider]: { dmPolicy: "open", allowFrom: ["*"] } },
+      });
+      expect(res.ok, provider).toBe(true);
+      if (res.ok) {
+        const channel = getChannelConfig(res.config, provider);
+        expect(channel?.dmPolicy, provider).toBe("open");
+      }
+    },
+  );
+
+  it.each(["telegram", "whatsapp", "signal"] as const)(
+    "defaults dm/group policy for configured provider %s",
+    (provider) => {
+      const res = validateConfigObject({ channels: { [provider]: {} } });
+      expect(res.ok, provider).toBe(true);
+      if (res.ok) {
+        const channel = getChannelConfig(res.config, provider);
+        expect(channel?.dmPolicy, provider).toBe("pairing");
+        expect(channel?.groupPolicy, provider).toBe("allowlist");
+      }
+    },
+  );
+  it.each([
+    {
+      name: "top-level off",
+      input: { channels: { telegram: { streamMode: "off" } } },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.telegram?.streaming?.mode).toBe("off");
+        expect(
+          (config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
       },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.whatsapp.allowFrom");
-    }
-  });
-  it('accepts whatsapp.dmPolicy="open" with allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({
-      channels: { whatsapp: { dmPolicy: "open", allowFrom: ["*"] } },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.whatsapp?.dmPolicy).toBe("open");
-    }
-  });
-  it("defaults whatsapp.dmPolicy to pairing when whatsapp section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ channels: { whatsapp: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.whatsapp?.dmPolicy).toBe("pairing");
-    }
-  });
-  it("defaults whatsapp.groupPolicy to allowlist when whatsapp section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ channels: { whatsapp: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.whatsapp?.groupPolicy).toBe("allowlist");
-    }
-  });
-  it('rejects signal.dmPolicy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({
-      channels: { signal: { dmPolicy: "open", allowFrom: ["+15555550123"] } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.signal.allowFrom");
-    }
-  });
-  it('accepts signal.dmPolicy="open" with allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({
-      channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.signal?.dmPolicy).toBe("open");
-    }
-  });
-  it("defaults signal.dmPolicy to pairing when signal section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ channels: { signal: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.signal?.dmPolicy).toBe("pairing");
-    }
-  });
-  it("defaults signal.groupPolicy to allowlist when signal section exists", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ channels: { signal: {} } });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.channels?.signal?.groupPolicy).toBe("allowlist");
-    }
-  });
+    },
+    {
+      name: "top-level block",
+      input: { channels: { telegram: { streamMode: "block" } } },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.telegram?.streaming?.mode).toBe("block");
+        expect(
+          (config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
+      },
+    },
+    {
+      name: "per-account off",
+      input: {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: {
+                streamMode: "off",
+              },
+            },
+          },
+        },
+      },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.telegram?.accounts?.ops?.streaming?.mode).toBe("off");
+        expect(
+          (config.channels?.telegram?.accounts?.ops as Record<string, unknown> | undefined)
+            ?.streamMode,
+        ).toBeUndefined();
+      },
+    },
+  ] as const)(
+    "normalizes telegram legacy streamMode alias during migration: $name",
+    ({ input, assert, name }) => {
+      const res = migrateLegacyConfig(input);
+      expect(res.config, name).not.toBeNull();
+      if (res.config) {
+        assert(res.config);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "boolean streaming=true",
+      input: { channels: { discord: { streaming: true } } },
+      expectedChanges: [
+        "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
+      ],
+      expectedStreaming: "partial",
+    },
+    {
+      name: "streamMode with streaming boolean",
+      input: { channels: { discord: { streaming: false, streamMode: "block" } } },
+      expectedChanges: [
+        "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
+      ],
+      expectedStreaming: "block",
+    },
+  ] as const)(
+    "normalizes discord streaming fields during legacy migration: $name",
+    ({ input, expectedChanges, expectedStreaming, name }) => {
+      const res = migrateLegacyConfig(input);
+      for (const expectedChange of expectedChanges) {
+        expect(res.changes, name).toContain(expectedChange);
+      }
+      expect(res.config?.channels?.discord?.streaming?.mode, name).toBe(expectedStreaming);
+      expect(
+        (res.config?.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
+        name,
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      name: "streaming=true",
+      input: { channels: { discord: { streaming: true } } },
+      expectedStreaming: "partial",
+    },
+    {
+      name: "streaming=false",
+      input: { channels: { discord: { streaming: false } } },
+      expectedStreaming: "off",
+    },
+    {
+      name: "streamMode overrides streaming boolean",
+      input: { channels: { discord: { streamMode: "block", streaming: false } } },
+      expectedStreaming: "block",
+    },
+  ] as const)(
+    "rejects legacy discord streaming fields during validation: $name",
+    ({ input, name }) => {
+      const res = validateConfigObject(input);
+      expect(res.ok, name).toBe(false);
+      if (!res.ok) {
+        expect(res.issues[0]?.path, name).toBe("channels.discord");
+        expect(res.issues[0]?.message, name).toContain(
+          "channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy",
+        );
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "discord account streaming boolean",
+      input: {
+        channels: {
+          discord: {
+            accounts: {
+              work: {
+                streaming: true,
+              },
+            },
+          },
+        },
+      },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.discord?.accounts?.work?.streaming?.mode).toBe("partial");
+        expect(
+          (config.channels?.discord?.accounts?.work as Record<string, unknown> | undefined)
+            ?.streamMode,
+        ).toBeUndefined();
+      },
+    },
+    {
+      name: "slack streamMode alias",
+      input: {
+        channels: {
+          slack: {
+            streamMode: "status_final",
+          },
+        },
+      },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.slack?.streaming?.mode).toBe("progress");
+        expect(
+          (config.channels?.slack as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
+        expect(config.channels?.slack?.streaming?.nativeTransport).toBe(true);
+      },
+    },
+    {
+      name: "slack streaming boolean legacy",
+      input: {
+        channels: {
+          slack: {
+            streaming: false,
+          },
+        },
+      },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.slack?.streaming?.mode).toBe("off");
+        expect(config.channels?.slack?.streaming?.nativeTransport).toBe(false);
+      },
+    },
+  ] as const)(
+    "normalizes account-level discord/slack streaming alias during migration: $name",
+    ({ input, assert, name }) => {
+      const res = migrateLegacyConfig(input);
+      expect(res.config, name).not.toBeNull();
+      if (res.config) {
+        assert(res.config);
+      }
+    },
+  );
+
   it("accepts historyLimit overrides per provider and account", async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       messages: { groupChat: { historyLimit: 12 } },
       channels: {
@@ -423,19 +375,6 @@ describe("legacy config detection", () => {
       expect(res.config.channels?.imessage?.historyLimit).toBe(5);
       expect(res.config.channels?.msteams?.historyLimit).toBe(4);
       expect(res.config.channels?.discord?.historyLimit).toBe(3);
-    }
-  });
-  it('rejects imessage.dmPolicy="open" without allowFrom "*"', async () => {
-    vi.resetModules();
-    const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({
-      channels: {
-        imessage: { dmPolicy: "open", allowFrom: ["+15555550123"] },
-      },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.imessage.allowFrom");
     }
   });
 });

@@ -4,40 +4,43 @@ read_when:
   - Enabling text-to-speech for replies
   - Configuring TTS providers or limits
   - Using /tts commands
+title: "Text-to-Speech (legacy path)"
 ---
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
-It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, MiniMax, or OpenAI.
+It works anywhere OpenClaw can send audio.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
+- **Microsoft** (primary or fallback provider; current bundled implementation uses `node-edge-tts`)
+- **MiniMax** (primary or fallback provider; uses the T2A v2 API)
 - **OpenAI** (primary or fallback provider; also used for summaries)
-- **Edge TTS** (primary or fallback provider; uses `node-edge-tts`, default when no API keys)
 
-### Edge TTS notes
+### Microsoft speech notes
 
-Edge TTS uses Microsoft Edge's online neural TTS service via the `node-edge-tts`
-library. It's a hosted service (not local), uses Microsoft’s endpoints, and does
-not require an API key. `node-edge-tts` exposes speech configuration options and
-output formats, but not all options are supported by the Edge service. citeturn2search0
+The bundled Microsoft speech provider currently uses Microsoft Edge's online
+neural TTS service via the `node-edge-tts` library. It's a hosted service (not
+local), uses Microsoft endpoints, and does not require an API key.
+`node-edge-tts` exposes speech configuration options and output formats, but
+not all options are supported by the service. Legacy config and directive input
+using `edge` still works and is normalized to `microsoft`.
 
-Because Edge TTS is a public web service without a published SLA or quota, treat it
-as best-effort. If you need guaranteed limits and support, use OpenAI or ElevenLabs.
-Microsoft's Speech REST API documents a 10‑minute audio limit per request; Edge TTS
-does not publish limits, so assume similar or lower limits. citeturn0search3
+Because this path is a public web service without a published SLA or quota,
+treat it as best-effort. If you need guaranteed limits and support, use OpenAI
+or ElevenLabs.
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want OpenAI, ElevenLabs, or MiniMax:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
+- `MINIMAX_API_KEY`
 - `OPENAI_API_KEY`
 
-Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
-to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
+Microsoft speech does **not** require an API key.
 
 If multiple providers are configured, the selected provider is used first and the others are fallback options.
 Auto-summary uses the configured `summaryModel` (or `agents.defaults.model.primary`),
@@ -49,6 +52,7 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -57,8 +61,8 @@ so that provider must also be authenticated if you enable summaries.
 No. Auto‑TTS is **off** by default. Enable it in config with
 `messages.tts.auto` or per session with `/tts always` (alias: `/tts on`).
 
-Edge TTS **is** enabled by default once TTS is on, and is used automatically
-when no OpenAI or ElevenLabs API keys are available.
+When `messages.tts.provider` is unset, OpenClaw picks the first configured
+speech provider in registry auto-select order.
 
 ## Config
 
@@ -90,25 +94,28 @@ Full schema is in [Gateway configuration](/gateway/configuration).
       modelOverrides: {
         enabled: true,
       },
-      openai: {
-        apiKey: "openai_api_key",
-        model: "gpt-4o-mini-tts",
-        voice: "alloy",
-      },
-      elevenlabs: {
-        apiKey: "elevenlabs_api_key",
-        baseUrl: "https://api.elevenlabs.io",
-        voiceId: "voice_id",
-        modelId: "eleven_multilingual_v2",
-        seed: 42,
-        applyTextNormalization: "auto",
-        languageCode: "en",
-        voiceSettings: {
-          stability: 0.5,
-          similarityBoost: 0.75,
-          style: 0.0,
-          useSpeakerBoost: true,
-          speed: 1.0,
+      providers: {
+        openai: {
+          apiKey: "openai_api_key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
+        elevenlabs: {
+          apiKey: "elevenlabs_api_key",
+          baseUrl: "https://api.elevenlabs.io",
+          voiceId: "voice_id",
+          modelId: "eleven_multilingual_v2",
+          seed: 42,
+          applyTextNormalization: "auto",
+          languageCode: "en",
+          voiceSettings: {
+            stability: 0.5,
+            similarityBoost: 0.75,
+            style: 0.0,
+            useSpeakerBoost: true,
+            speed: 1.0,
+          },
         },
       },
     },
@@ -116,35 +123,63 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
-### Edge TTS primary (no API key)
+### Microsoft primary (no API key)
 
 ```json5
 {
   messages: {
     tts: {
       auto: "always",
-      provider: "edge",
-      edge: {
-        enabled: true,
-        voice: "en-US-MichelleNeural",
-        lang: "en-US",
-        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-        rate: "+10%",
-        pitch: "-5%",
+      provider: "microsoft",
+      providers: {
+        microsoft: {
+          enabled: true,
+          voice: "en-US-MichelleNeural",
+          lang: "en-US",
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+          rate: "+10%",
+          pitch: "-5%",
+        },
       },
     },
   },
 }
 ```
 
-### Disable Edge TTS
+### MiniMax primary
 
 ```json5
 {
   messages: {
     tts: {
-      edge: {
-        enabled: false,
+      auto: "always",
+      provider: "minimax",
+      providers: {
+        minimax: {
+          apiKey: "minimax_api_key",
+          baseUrl: "https://api.minimax.io",
+          model: "speech-2.8-hd",
+          voiceId: "English_expressive_narrator",
+          speed: 1.0,
+          vol: 1.0,
+          pitch: 0,
+        },
+      },
+    },
+  },
+}
+```
+
+### Disable Microsoft speech
+
+```json5
+{
+  messages: {
+    tts: {
+      providers: {
+        microsoft: {
+          enabled: false,
+        },
       },
     },
   },
@@ -166,7 +201,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
-### Only reply with audio after an inbound voice note
+### Only reply with audio after an inbound voice message
 
 ```json5
 {
@@ -199,37 +234,50 @@ Then run:
 ### Notes on fields
 
 - `auto`: auto‑TTS mode (`off`, `always`, `inbound`, `tagged`).
-  - `inbound` only sends audio after an inbound voice note.
+  - `inbound` only sends audio after an inbound voice message.
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: `"elevenlabs"`, `"openai"`, or `"edge"` (fallback is automatic).
-- If `provider` is **unset**, OpenClaw prefers `openai` (if key), then `elevenlabs` (if key),
-  otherwise `edge`.
+- `provider`: speech provider id such as `"elevenlabs"`, `"microsoft"`, `"minimax"`, or `"openai"` (fallback is automatic).
+- If `provider` is **unset**, OpenClaw uses the first configured speech provider in registry auto-select order.
+- Legacy `provider: "edge"` still works and is normalized to `microsoft`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
   - Accepts `provider/model` or a configured model alias.
 - `modelOverrides`: allow the model to emit TTS directives (on by default).
+  - `allowProvider` defaults to `false` (provider switching is opt-in).
+- `providers.<id>`: provider-owned settings keyed by speech provider id.
+- Legacy direct provider blocks (`messages.tts.openai`, `messages.tts.elevenlabs`, `messages.tts.microsoft`, `messages.tts.edge`) are auto-migrated to `messages.tts.providers.<id>` on load.
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
-- `elevenlabs.baseUrl`: override ElevenLabs API base URL.
-- `elevenlabs.voiceSettings`:
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `MINIMAX_API_KEY`, `OPENAI_API_KEY`).
+- `providers.elevenlabs.baseUrl`: override ElevenLabs API base URL.
+- `providers.openai.baseUrl`: override the OpenAI TTS endpoint.
+  - Resolution order: `messages.tts.providers.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
+  - Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted.
+- `providers.elevenlabs.voiceSettings`:
   - `stability`, `similarityBoost`, `style`: `0..1`
   - `useSpeakerBoost`: `true|false`
   - `speed`: `0.5..2.0` (1.0 = normal)
-- `elevenlabs.applyTextNormalization`: `auto|on|off`
-- `elevenlabs.languageCode`: 2-letter ISO 639-1 (e.g. `en`, `de`)
-- `elevenlabs.seed`: integer `0..4294967295` (best-effort determinism)
-- `edge.enabled`: allow Edge TTS usage (default `true`; no API key).
-- `edge.voice`: Edge neural voice name (e.g. `en-US-MichelleNeural`).
-- `edge.lang`: language code (e.g. `en-US`).
-- `edge.outputFormat`: Edge output format (e.g. `audio-24khz-48kbitrate-mono-mp3`).
-  - See Microsoft Speech output formats for valid values; not all formats are supported by Edge.
-- `edge.rate` / `edge.pitch` / `edge.volume`: percent strings (e.g. `+10%`, `-5%`).
-- `edge.saveSubtitles`: write JSON subtitles alongside the audio file.
-- `edge.proxy`: proxy URL for Edge TTS requests.
-- `edge.timeoutMs`: request timeout override (ms).
+- `providers.elevenlabs.applyTextNormalization`: `auto|on|off`
+- `providers.elevenlabs.languageCode`: 2-letter ISO 639-1 (e.g. `en`, `de`)
+- `providers.elevenlabs.seed`: integer `0..4294967295` (best-effort determinism)
+- `providers.minimax.baseUrl`: override MiniMax API base URL (default `https://api.minimax.io`, env: `MINIMAX_API_HOST`).
+- `providers.minimax.model`: TTS model (default `speech-2.8-hd`, env: `MINIMAX_TTS_MODEL`).
+- `providers.minimax.voiceId`: voice identifier (default `English_expressive_narrator`, env: `MINIMAX_TTS_VOICE_ID`).
+- `providers.minimax.speed`: playback speed `0.5..2.0` (default 1.0).
+- `providers.minimax.vol`: volume `(0, 10]` (default 1.0; must be greater than 0).
+- `providers.minimax.pitch`: pitch shift `-12..12` (default 0).
+- `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
+- `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
+- `providers.microsoft.lang`: language code (e.g. `en-US`).
+- `providers.microsoft.outputFormat`: Microsoft output format (e.g. `audio-24khz-48kbitrate-mono-mp3`).
+  - See Microsoft Speech output formats for valid values; not all formats are supported by the bundled Edge-backed transport.
+- `providers.microsoft.rate` / `providers.microsoft.pitch` / `providers.microsoft.volume`: percent strings (e.g. `+10%`, `-5%`).
+- `providers.microsoft.saveSubtitles`: write JSON subtitles alongside the audio file.
+- `providers.microsoft.proxy`: proxy URL for Microsoft speech requests.
+- `providers.microsoft.timeoutMs`: request timeout override (ms).
+- `edge.*`: legacy alias for the same Microsoft settings.
 
 ## Model-driven overrides (default on)
 
@@ -241,21 +289,25 @@ for a single reply, plus an optional `[[tts:text]]...[[/tts:text]]` block to
 provide expressive tags (laughter, singing cues, etc) that should only appear in
 the audio.
 
+`provider=...` directives are ignored unless `modelOverrides.allowProvider: true`.
+
 Example reply payload:
 
 ```
 Here you go.
 
-[[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE model=eleven_v3 speed=1.1]]
+[[tts:voiceId=pMsXgVXv3BLzUgSXRplE model=eleven_v3 speed=1.1]]
 [[tts:text]](laughs) Read the song once more.[[/tts:text]]
 ```
 
 Available directive keys (when enabled):
 
-- `provider` (`openai` | `elevenlabs` | `edge`)
-- `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
-- `model` (OpenAI TTS model or ElevenLabs model id)
+- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `minimax`, or `microsoft`; requires `allowProvider: true`)
+- `voice` (OpenAI voice) or `voiceId` (ElevenLabs / MiniMax)
+- `model` (OpenAI TTS model, ElevenLabs model id, or MiniMax model)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
+- `vol` / `volume` (MiniMax volume, 0-10)
+- `pitch` (MiniMax pitch, -12 to 12)
 - `applyTextNormalization` (`auto|on|off`)
 - `languageCode` (ISO 639-1)
 - `seed`
@@ -274,7 +326,7 @@ Disable all model overrides:
 }
 ```
 
-Optional allowlist (disable specific overrides while keeping tags enabled):
+Optional allowlist (enable provider switching while keeping other knobs configurable):
 
 ```json5
 {
@@ -282,7 +334,7 @@ Optional allowlist (disable specific overrides while keeping tags enabled):
     tts: {
       modelOverrides: {
         enabled: true,
-        allowProvider: false,
+        allowProvider: true,
         allowSeed: false,
       },
     },
@@ -307,19 +359,19 @@ These override `messages.tts.*` for that host.
 
 ## Output formats (fixed)
 
-- **Telegram**: Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
-  - 48kHz / 64kbps is a good voice-note tradeoff and required for the round bubble.
+- **Feishu / Matrix / Telegram / WhatsApp**: Opus voice message (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
+  - 48kHz / 64kbps is a good voice message tradeoff.
 - **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
-- **Edge TTS**: uses `edge.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
-  - `node-edge-tts` accepts an `outputFormat`, but not all formats are available
-    from the Edge service. citeturn2search0
-  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus). citeturn1search0
+- **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate). Voice-note format not natively supported; use OpenAI or ElevenLabs for guaranteed Opus voice messages.
+- **Microsoft**: uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
+  - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.
+  - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
-    guaranteed Opus voice notes. citeturn1search1
-  - If the configured Edge output format fails, OpenClaw retries with MP3.
+    guaranteed Opus voice messages.
+  - If the configured Microsoft output format fails, OpenClaw retries with MP3.
 
-OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
+OpenAI/ElevenLabs output formats are fixed per channel (see above).
 
 ## Auto-TTS behavior
 
@@ -376,12 +428,17 @@ Notes:
 - `off|always|inbound|tagged` are per‑session toggles (`/tts on` is an alias for `/tts always`).
 - `limit` and `summary` are stored in local prefs, not the main config.
 - `/tts audio` generates a one-off audio reply (does not toggle TTS on).
+- `/tts status` includes fallback visibility for the latest attempt:
+  - success fallback: `Fallback: <primary> -> <used>` plus `Attempts: ...`
+  - failure: `Error: ...` plus `Attempts: ...`
+  - detailed diagnostics: `Attempt details: provider:outcome(reasonCode) latency`
+- OpenAI and ElevenLabs API failures now include parsed provider error detail and request id (when returned by the provider), which is surfaced in TTS errors/logs.
 
 ## Agent tool
 
-The `tts` tool converts text to speech and returns a `MEDIA:` path. When the
-result is Telegram-compatible, the tool includes `[[audio_as_voice]]` so
-Telegram sends a voice bubble.
+The `tts` tool converts text to speech and returns an audio attachment for
+reply delivery. When the channel is Feishu, Matrix, Telegram, or WhatsApp,
+the audio is delivered as a voice message rather than a file attachment.
 
 ## Gateway RPC
 

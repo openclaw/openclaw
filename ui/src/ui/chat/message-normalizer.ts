@@ -2,7 +2,13 @@
  * Message normalization utilities for chat rendering.
  */
 
-import type { NormalizedMessage, MessageContentItem } from "../types/chat-types";
+import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  isToolCallContentType,
+  isToolResultContentType,
+  resolveToolBlockArgs,
+} from "../../../../src/chat/tool-content.js";
+import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
 /**
  * Normalize a raw message object into a consistent structure.
@@ -21,13 +27,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     Array.isArray(contentItems) &&
     contentItems.some((item) => {
       const x = item as Record<string, unknown>;
-      const t = String(x.type ?? "").toLowerCase();
-      return t === "toolresult" || t === "tool_result";
+      return isToolResultContentType(x.type) || isToolCallContentType(x.type);
     });
 
-  const hasToolName =
-    typeof (m as Record<string, unknown>).toolName === "string" ||
-    typeof (m as Record<string, unknown>).tool_name === "string";
+  const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
 
   if (hasToolId || hasToolContent || hasToolName) {
     role = "toolResult";
@@ -43,7 +46,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       type: (item.type as MessageContentItem["type"]) || "text",
       text: item.text as string | undefined,
       name: item.name as string | undefined,
-      args: item.args || item.arguments,
+      args: resolveToolBlockArgs(item),
     }));
   } else if (typeof m.text === "string") {
     content = [{ type: "text", text: m.text }];
@@ -51,8 +54,20 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
   const id = typeof m.id === "string" ? m.id : undefined;
+  const senderLabel =
+    typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
 
-  return { role, content, timestamp, id };
+  // Strip AI-injected metadata prefix blocks from user messages before display.
+  if (role === "user" || role === "User") {
+    content = content.map((item) => {
+      if (item.type === "text" && typeof item.text === "string") {
+        return { ...item, text: stripInboundMetadata(item.text) };
+      }
+      return item;
+    });
+  }
+
+  return { role, content, timestamp, id, senderLabel };
 }
 
 /**
@@ -61,9 +76,15 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
   // Preserve original casing when it's already a core role.
-  if (role === "user" || role === "User") return role;
-  if (role === "assistant") return "assistant";
-  if (role === "system") return "system";
+  if (role === "user" || role === "User") {
+    return role;
+  }
+  if (role === "assistant") {
+    return "assistant";
+  }
+  if (role === "system") {
+    return "system";
+  }
   // Keep tool-related roles distinct so the UI can style/toggle them.
   if (
     lower === "toolresult" ||

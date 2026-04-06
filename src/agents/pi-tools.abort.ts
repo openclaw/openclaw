@@ -1,9 +1,21 @@
+import { copyPluginToolMeta } from "../plugins/tools.js";
+import { bindAbortRelay } from "../utils/fetch-timeout.js";
+import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
 function throwAbortError(): never {
   const err = new Error("Aborted");
   err.name = "AbortError";
   throw err;
+}
+
+/**
+ * Checks if an object is a valid AbortSignal using structural typing.
+ * This is more reliable than `instanceof` across different realms (VM, iframe, etc.)
+ * where the AbortSignal constructor may differ.
+ */
+function isAbortSignal(obj: unknown): obj is AbortSignal {
+  return obj instanceof AbortSignal;
 }
 
 function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
@@ -22,11 +34,12 @@ function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | un
   if (b?.aborted) {
     return b;
   }
-  if (typeof AbortSignal.any === "function") {
-    return AbortSignal.any([a as AbortSignal, b as AbortSignal]);
+  if (typeof AbortSignal.any === "function" && isAbortSignal(a) && isAbortSignal(b)) {
+    return AbortSignal.any([a, b]);
   }
+
   const controller = new AbortController();
-  const onAbort = () => controller.abort();
+  const onAbort = bindAbortRelay(controller);
   a?.addEventListener("abort", onAbort, { once: true });
   b?.addEventListener("abort", onAbort, { once: true });
   return controller.signal;
@@ -43,7 +56,7 @@ export function wrapToolWithAbortSignal(
   if (!execute) {
     return tool;
   }
-  return {
+  const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const combined = combineAbortSignals(signal, abortSignal);
@@ -53,4 +66,7 @@ export function wrapToolWithAbortSignal(
       return await execute(toolCallId, params, combined, onUpdate);
     },
   };
+  copyPluginToolMeta(tool, wrappedTool);
+  copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+  return wrappedTool;
 }

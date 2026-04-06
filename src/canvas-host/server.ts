@@ -1,15 +1,18 @@
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import type { Socket } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
-
+import {
+  clearTimeout as clearNativeTimeout,
+  setTimeout as scheduleNativeTimeout,
+} from "node:timers";
 import chokidar from "chokidar";
 import { type WebSocket, WebSocketServer } from "ws";
+import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
@@ -19,6 +22,9 @@ import {
   handleA2uiHttpRequest,
   injectCanvasLiveReload,
 } from "./a2ui.js";
+import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
+
+type ChokidarWatch = typeof import("chokidar").watch;
 
 export type CanvasHostOpts = {
   runtime: RuntimeEnv;
@@ -27,6 +33,8 @@ export type CanvasHostOpts = {
   listenHost?: string;
   allowInTests?: boolean;
   liveReload?: boolean;
+  watchFactory?: typeof chokidar.watch;
+  webSocketServerClass?: typeof WebSocketServer;
 };
 
 export type CanvasHostServerOpts = CanvasHostOpts & {
@@ -46,6 +54,8 @@ export type CanvasHostHandlerOpts = {
   basePath?: string;
   allowInTests?: boolean;
   liveReload?: boolean;
+  watchFactory?: typeof chokidar.watch;
+  webSocketServerClass?: typeof WebSocketServer;
 };
 
 export type CanvasHostHandler = {
@@ -111,11 +121,18 @@ function defaultIndexHTML() {
         typeof window.openclawCanvasA2UIAction.postMessage === "function")
     );
   const hasHelper = () => typeof window.openclawSendUserAction === "function";
-  statusEl.innerHTML =
-    "Bridge: " +
-    (hasHelper() ? "<span class='ok'>ready</span>" : "<span class='bad'>missing</span>") +
-    " · iOS=" + (hasIOS() ? "yes" : "no") +
-    " · Android=" + (hasAndroid() ? "yes" : "no");
+  const helperReady = hasHelper();
+  statusEl.textContent = "";
+  statusEl.appendChild(document.createTextNode("Bridge: "));
+  const bridgeStatus = document.createElement("span");
+  bridgeStatus.className = helperReady ? "ok" : "bad";
+  bridgeStatus.textContent = helperReady ? "ready" : "missing";
+  statusEl.appendChild(bridgeStatus);
+  statusEl.appendChild(
+    document.createTextNode(
+      " · iOS=" + (hasIOS() ? "yes" : "no") + " · Android=" + (hasAndroid() ? "yes" : "no"),
+    ),
+  );
 
   const onStatus = (ev) => {
     const d = ev && ev.detail || {};
@@ -148,50 +165,6 @@ function defaultIndexHTML() {
 })();
 </script>
 `;
-}
-
-function normalizeUrlPath(rawPath: string): string {
-  const decoded = decodeURIComponent(rawPath || "/");
-  const normalized = path.posix.normalize(decoded);
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
-}
-
-async function resolveFilePath(rootReal: string, urlPath: string) {
-  const normalized = normalizeUrlPath(urlPath);
-  const rel = normalized.replace(/^\/+/, "");
-  if (rel.split("/").some((p) => p === "..")) {
-    return null;
-  }
-
-  const tryOpen = async (relative: string) => {
-    try {
-      return await openFileWithinRoot({ rootDir: rootReal, relativePath: relative });
-    } catch (err) {
-      if (err instanceof SafeOpenError) {
-        return null;
-      }
-      throw err;
-    }
-  };
-
-  if (normalized.endsWith("/")) {
-    return await tryOpen(path.posix.join(rel, "index.html"));
-  }
-
-  const candidate = path.join(rootReal, rel);
-  try {
-    const st = await fs.lstat(candidate);
-    if (st.isSymbolicLink()) {
-      return null;
-    }
-    if (st.isDirectory()) {
-      return await tryOpen(path.posix.join(rel, "index.html"));
-    }
-  } catch {
-    // ignore
-  }
-
-  return await tryOpen(rel);
 }
 
 function isDisabledByEnv() {
@@ -236,7 +209,7 @@ async function prepareCanvasRoot(rootDir: string) {
 }
 
 function resolveDefaultCanvasRoot(): string {
-  const candidates = [path.join(os.homedir(), ".openclaw", "canvas")];
+  const candidates = [path.join(resolveStateDir(), "canvas")];
   const existing = candidates.find((dir) => {
     try {
       return fsSync.statSync(dir).isDirectory();
@@ -245,6 +218,25 @@ function resolveDefaultCanvasRoot(): string {
     }
   });
   return existing ?? candidates[0];
+}
+
+function resolveDefaultWatchFactory(): ChokidarWatch {
+  const importedWatch = (chokidar as { watch?: ChokidarWatch } | undefined)?.watch;
+  if (typeof importedWatch === "function") {
+    return importedWatch.bind(chokidar);
+  }
+
+  const require = createRequire(import.meta.url);
+  const runtime = require("chokidar") as
+    | { watch?: ChokidarWatch; default?: { watch?: ChokidarWatch } }
+    | undefined;
+  if (runtime && typeof runtime.watch === "function") {
+    return runtime.watch.bind(runtime);
+  }
+  if (runtime?.default && typeof runtime.default.watch === "function") {
+    return runtime.default.watch.bind(runtime.default);
+  }
+  throw new Error("chokidar.watch unavailable");
 }
 
 export async function createCanvasHostHandler(
@@ -265,7 +257,12 @@ export async function createCanvasHostHandler(
   const rootReal = await prepareCanvasRoot(rootDir);
 
   const liveReload = opts.liveReload !== false;
-  const wss = liveReload ? new WebSocketServer({ noServer: true }) : null;
+  const testMode = opts.allowInTests === true;
+  const reloadDebounceMs = testMode ? 12 : 75;
+  const writeStabilityThresholdMs = testMode ? 12 : 75;
+  const writePollIntervalMs = testMode ? 5 : 10;
+  const WebSocketServerClass = opts.webSocketServerClass ?? WebSocketServer;
+  const wss = liveReload ? new WebSocketServerClass({ noServer: true }) : null;
   const sockets = new Set<WebSocket>();
   if (wss) {
     wss.on("connection", (ws) => {
@@ -289,21 +286,27 @@ export async function createCanvasHostHandler(
   };
   const scheduleReload = () => {
     if (debounce) {
-      clearTimeout(debounce);
+      clearNativeTimeout(debounce);
     }
-    debounce = setTimeout(() => {
+    debounce = scheduleNativeTimeout(() => {
       debounce = null;
       broadcastReload();
-    }, 75);
-    debounce.unref?.();
+    }, reloadDebounceMs);
+    if (!testMode) {
+      debounce.unref?.();
+    }
   };
 
   let watcherClosed = false;
+  const watchFactory = opts.watchFactory ?? resolveDefaultWatchFactory();
   const watcher = liveReload
-    ? chokidar.watch(rootReal, {
+    ? watchFactory(rootReal, {
         ignoreInitial: true,
-        awaitWriteFinish: { stabilityThreshold: 75, pollInterval: 10 },
-        usePolling: opts.allowInTests === true,
+        awaitWriteFinish: {
+          stabilityThreshold: writeStabilityThresholdMs,
+          pollInterval: writePollIntervalMs,
+        },
+        usePolling: testMode,
         ignored: [
           /(^|[\\/])\../, // dotfiles
           /(^|[\\/])node_modules([\\/]|$)/,
@@ -366,7 +369,7 @@ export async function createCanvasHostHandler(
         return true;
       }
 
-      const opened = await resolveFilePath(rootReal, urlPath);
+      const opened = await resolveFileWithinRoot(rootReal, urlPath);
       if (!opened) {
         if (urlPath === "/" || urlPath.endsWith("/")) {
           res.statusCode = 404;
@@ -423,10 +426,17 @@ export async function createCanvasHostHandler(
     handleUpgrade,
     close: async () => {
       if (debounce) {
-        clearTimeout(debounce);
+        clearNativeTimeout(debounce);
       }
       watcherClosed = true;
       await watcher?.close().catch(() => {});
+      for (const ws of sockets) {
+        try {
+          ws.terminate?.();
+        } catch {
+          // ignore
+        }
+      }
       if (wss) {
         await new Promise<void>((resolve) => wss.close(() => resolve()));
       }
@@ -447,10 +457,12 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
       basePath: CANVAS_HOST_PATH,
       allowInTests: opts.allowInTests,
       liveReload: opts.liveReload,
+      watchFactory: opts.watchFactory,
+      webSocketServerClass: opts.webSocketServerClass,
     }));
   const ownsHandler = opts.ownsHandler ?? opts.handler === undefined;
 
-  const bindHost = opts.listenHost?.trim() || "0.0.0.0";
+  const bindHost = opts.listenHost?.trim() || "127.0.0.1";
   const server: Server = http.createServer((req, res) => {
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
       return;

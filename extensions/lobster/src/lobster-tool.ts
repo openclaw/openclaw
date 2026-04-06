@@ -1,178 +1,177 @@
 import { Type } from "@sinclair/typebox";
-import { spawn } from "node:child_process";
-import path from "node:path";
+import type { OpenClawPluginApi } from "../runtime-api.js";
+import {
+  createEmbeddedLobsterRunner,
+  resolveLobsterCwd,
+  type LobsterRunner,
+  type LobsterRunnerParams,
+} from "./lobster-runner.js";
+import { resumeManagedLobsterFlow, runManagedLobsterFlow } from "./lobster-taskflow.js";
 
-import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+type BoundTaskFlow = ReturnType<
+  NonNullable<OpenClawPluginApi["runtime"]>["taskFlow"]["bindSession"]
+>;
 
-type LobsterEnvelope =
+type JsonLike =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonLike[]
   | {
-      ok: true;
-      status: "ok" | "needs_approval" | "cancelled";
-      output: unknown[];
-      requiresApproval: null | {
-        type: "approval_request";
-        prompt: string;
-        items: unknown[];
-        resumeToken?: string;
-      };
-    }
-  | {
-      ok: false;
-      error: { type?: string; message: string };
+      [key: string]: JsonLike;
     };
 
-function resolveExecutablePath(lobsterPathRaw: string | undefined) {
-  const lobsterPath = lobsterPathRaw?.trim() || "lobster";
-  if (lobsterPath !== "lobster" && !path.isAbsolute(lobsterPath)) {
-    throw new Error("lobsterPath must be an absolute path (or omit to use PATH)");
+type LobsterToolOptions = {
+  runner?: LobsterRunner;
+  taskFlow?: BoundTaskFlow;
+};
+
+type ManagedFlowRunParams = {
+  controllerId: string;
+  goal: string;
+  currentStep?: string;
+  waitingStep?: string;
+  stateJson?: JsonLike;
+};
+
+type ManagedFlowResumeParams = {
+  flowId: string;
+  expectedRevision: number;
+  currentStep?: string;
+  waitingStep?: string;
+};
+
+function readOptionalTrimmedString(value: unknown, fieldName: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
   }
-  return lobsterPath;
+  if (typeof value !== "string") {
+    throw new Error(`${fieldName} must be a string`);
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
-function isWindowsSpawnEINVAL(err: unknown) {
-  if (!err || typeof err !== "object") {
-    return false;
+function readOptionalNumber(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
   }
-  const code = (err as { code?: unknown }).code;
-  return code === "EINVAL";
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${fieldName} must be an integer`);
+  }
+  return value;
 }
 
-async function runLobsterSubprocessOnce(
-  params: {
-    execPath: string;
-    argv: string[];
-    cwd: string;
-    timeoutMs: number;
-    maxStdoutBytes: number;
-  },
-  useShell: boolean,
-) {
-  const { execPath, argv, cwd } = params;
-  const timeoutMs = Math.max(200, params.timeoutMs);
-  const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
-
-  const env = { ...process.env, LOBSTER_MODE: "tool" } as Record<string, string | undefined>;
-  const nodeOptions = env.NODE_OPTIONS ?? "";
-  if (nodeOptions.includes("--inspect")) {
-    delete env.NODE_OPTIONS;
+function readOptionalBoolean(value: unknown, fieldName: string): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
   }
-
-  return await new Promise<{ stdout: string }>((resolve, reject) => {
-    const child = spawn(execPath, argv, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env,
-      shell: useShell,
-      windowsHide: useShell ? true : undefined,
-    });
-
-    let stdout = "";
-    let stdoutBytes = 0;
-    let stderr = "";
-
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-
-    child.stdout?.on("data", (chunk) => {
-      const str = String(chunk);
-      stdoutBytes += Buffer.byteLength(str, "utf8");
-      if (stdoutBytes > maxStdoutBytes) {
-        try {
-          child.kill("SIGKILL");
-        } finally {
-          reject(new Error("lobster output exceeded maxStdoutBytes"));
-        }
-        return;
-      }
-      stdout += str;
-    });
-
-    child.stderr?.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } finally {
-        reject(new Error("lobster subprocess timed out"));
-      }
-    }, timeoutMs);
-
-    child.once("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`lobster failed (${code ?? "?"}): ${stderr.trim() || stdout.trim()}`));
-        return;
-      }
-      resolve({ stdout });
-    });
-  });
+  if (typeof value !== "boolean") {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
 }
 
-async function runLobsterSubprocess(params: {
-  execPath: string;
-  argv: string[];
-  cwd: string;
-  timeoutMs: number;
-  maxStdoutBytes: number;
-}) {
+function parseOptionalFlowStateJson(value: unknown): JsonLike | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error("flowStateJson must be a JSON string");
+  }
   try {
-    return await runLobsterSubprocessOnce(params, false);
-  } catch (err) {
-    if (process.platform === "win32" && isWindowsSpawnEINVAL(err)) {
-      return await runLobsterSubprocessOnce(params, true);
-    }
-    throw err;
+    return JSON.parse(value) as JsonLike;
+  } catch {
+    throw new Error("flowStateJson must be valid JSON");
   }
 }
 
-function parseEnvelope(stdout: string): LobsterEnvelope {
-  const trimmed = stdout.trim();
+function parseRunFlowParams(params: Record<string, unknown>): ManagedFlowRunParams | null {
+  const controllerId = readOptionalTrimmedString(params.flowControllerId, "flowControllerId");
+  const goal = readOptionalTrimmedString(params.flowGoal, "flowGoal");
+  const currentStep = readOptionalTrimmedString(params.flowCurrentStep, "flowCurrentStep");
+  const waitingStep = readOptionalTrimmedString(params.flowWaitingStep, "flowWaitingStep");
+  const stateJson = parseOptionalFlowStateJson(params.flowStateJson);
+  const resumeFlowId = readOptionalTrimmedString(params.flowId, "flowId");
+  const resumeRevision = readOptionalNumber(params.flowExpectedRevision, "flowExpectedRevision");
 
-  const tryParse = (input: string) => {
-    try {
-      return JSON.parse(input) as unknown;
-    } catch {
-      return undefined;
-    }
+  const hasRunFields =
+    controllerId !== undefined ||
+    goal !== undefined ||
+    currentStep !== undefined ||
+    waitingStep !== undefined ||
+    stateJson !== undefined;
+
+  if (!hasRunFields) {
+    return null;
+  }
+  if (resumeFlowId !== undefined || resumeRevision !== undefined) {
+    throw new Error("run action does not accept flowId or flowExpectedRevision");
+  }
+  if (!controllerId) {
+    throw new Error("flowControllerId required when using managed TaskFlow run mode");
+  }
+  if (!goal) {
+    throw new Error("flowGoal required when using managed TaskFlow run mode");
+  }
+  return {
+    controllerId,
+    goal,
+    ...(currentStep ? { currentStep } : {}),
+    ...(waitingStep ? { waitingStep } : {}),
+    ...(stateJson !== undefined ? { stateJson } : {}),
   };
-
-  let parsed: unknown = tryParse(trimmed);
-
-  // Some environments can leak extra stdout (e.g. warnings/logs) before the
-  // final JSON envelope. Be tolerant and parse the last JSON-looking suffix.
-  if (parsed === undefined) {
-    const suffixMatch = trimmed.match(/({[\s\S]*}|\[[\s\S]*])\s*$/);
-    if (suffixMatch?.[1]) {
-      parsed = tryParse(suffixMatch[1]);
-    }
-  }
-
-  if (parsed === undefined) {
-    throw new Error("lobster returned invalid JSON");
-  }
-
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("lobster returned invalid JSON envelope");
-  }
-
-  const ok = (parsed as { ok?: unknown }).ok;
-  if (ok === true || ok === false) {
-    return parsed as LobsterEnvelope;
-  }
-
-  throw new Error("lobster returned invalid JSON envelope");
 }
 
-export function createLobsterTool(api: OpenClawPluginApi) {
+function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResumeParams | null {
+  const flowId = readOptionalTrimmedString(params.flowId, "flowId");
+  const expectedRevision = readOptionalNumber(params.flowExpectedRevision, "flowExpectedRevision");
+  const currentStep = readOptionalTrimmedString(params.flowCurrentStep, "flowCurrentStep");
+  const waitingStep = readOptionalTrimmedString(params.flowWaitingStep, "flowWaitingStep");
+  const token = readOptionalTrimmedString(params.token, "token");
+  const approve = readOptionalBoolean(params.approve, "approve");
+  const runControllerId = readOptionalTrimmedString(params.flowControllerId, "flowControllerId");
+  const runGoal = readOptionalTrimmedString(params.flowGoal, "flowGoal");
+  const stateJson = params.flowStateJson;
+
+  const hasResumeFields =
+    flowId !== undefined ||
+    expectedRevision !== undefined ||
+    currentStep !== undefined ||
+    waitingStep !== undefined;
+
+  if (!hasResumeFields) {
+    return null;
+  }
+  if (runControllerId !== undefined || runGoal !== undefined || stateJson !== undefined) {
+    throw new Error("resume action does not accept flowControllerId, flowGoal, or flowStateJson");
+  }
+  if (!flowId) {
+    throw new Error("flowId required when using managed TaskFlow resume mode");
+  }
+  if (expectedRevision === undefined) {
+    throw new Error("flowExpectedRevision required when using managed TaskFlow resume mode");
+  }
+  if (!token) {
+    throw new Error("token required when using managed TaskFlow resume mode");
+  }
+  if (approve === undefined) {
+    throw new Error("approve required when using managed TaskFlow resume mode");
+  }
+  return {
+    flowId,
+    expectedRevision,
+    ...(currentStep ? { currentStep } : {}),
+    ...(waitingStep ? { waitingStep } : {}),
+  };
+}
+
+export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolOptions) {
+  const runner = options?.runner ?? createEmbeddedLobsterRunner();
   return {
     name: "lobster",
+    label: "Lobster Workflow",
     description:
       "Run Lobster pipelines as a local-first workflow runtime (typed JSON envelope + resumable approvals).",
     parameters: Type.Object({
@@ -182,67 +181,119 @@ export function createLobsterTool(api: OpenClawPluginApi) {
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),
       approve: Type.Optional(Type.Boolean()),
-      lobsterPath: Type.Optional(Type.String()),
-      cwd: Type.Optional(Type.String()),
+      cwd: Type.Optional(
+        Type.String({
+          description:
+            "Relative working directory (optional). Must stay within the gateway working directory.",
+        }),
+      ),
       timeoutMs: Type.Optional(Type.Number()),
       maxStdoutBytes: Type.Optional(Type.Number()),
+      flowControllerId: Type.Optional(Type.String()),
+      flowGoal: Type.Optional(Type.String()),
+      flowStateJson: Type.Optional(Type.String()),
+      flowId: Type.Optional(Type.String()),
+      flowExpectedRevision: Type.Optional(Type.Number()),
+      flowCurrentStep: Type.Optional(Type.String()),
+      flowWaitingStep: Type.Optional(Type.String()),
     }),
     async execute(_id: string, params: Record<string, unknown>) {
       const action = typeof params.action === "string" ? params.action.trim() : "";
       if (!action) {
         throw new Error("action required");
       }
+      if (action !== "run" && action !== "resume") {
+        throw new Error(`Unknown action: ${action}`);
+      }
 
-      const execPath = resolveExecutablePath(
-        typeof params.lobsterPath === "string" ? params.lobsterPath : undefined,
-      );
-      const cwd =
-        typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : process.cwd();
+      const cwd = resolveLobsterCwd(params.cwd);
       const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 20_000;
       const maxStdoutBytes =
         typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
-
-      const argv = (() => {
-        if (action === "run") {
-          const pipeline = typeof params.pipeline === "string" ? params.pipeline : "";
-          if (!pipeline.trim()) {
-            throw new Error("pipeline required");
-          }
-          const argv = ["run", "--mode", "tool", pipeline];
-          const argsJson = typeof params.argsJson === "string" ? params.argsJson : "";
-          if (argsJson.trim()) {
-            argv.push("--args-json", argsJson);
-          }
-          return argv;
-        }
-        if (action === "resume") {
-          const token = typeof params.token === "string" ? params.token : "";
-          if (!token.trim()) {
-            throw new Error("token required");
-          }
-          const approve = params.approve;
-          if (typeof approve !== "boolean") {
-            throw new Error("approve required");
-          }
-          return ["resume", "--token", token, "--approve", approve ? "yes" : "no"];
-        }
-        throw new Error(`Unknown action: ${action}`);
-      })();
 
       if (api.runtime?.version && api.logger?.debug) {
         api.logger.debug(`lobster plugin runtime=${api.runtime.version}`);
       }
 
-      const { stdout } = await runLobsterSubprocess({
-        execPath,
-        argv,
+      const runnerParams: LobsterRunnerParams = {
+        action,
+        ...(typeof params.pipeline === "string" ? { pipeline: params.pipeline } : {}),
+        ...(typeof params.argsJson === "string" ? { argsJson: params.argsJson } : {}),
+        ...(typeof params.token === "string" ? { token: params.token } : {}),
+        ...(typeof params.approve === "boolean" ? { approve: params.approve } : {}),
         cwd,
         timeoutMs,
         maxStdoutBytes,
-      });
+      };
 
-      const envelope = parseEnvelope(stdout);
+      const taskFlow = options?.taskFlow;
+      if (action === "run") {
+        const flowParams = parseRunFlowParams(params);
+        if (flowParams) {
+          if (!taskFlow) {
+            throw new Error("Managed TaskFlow run mode requires a bound taskFlow runtime");
+          }
+          const result = await runManagedLobsterFlow({
+            taskFlow,
+            runner,
+            runnerParams,
+            controllerId: flowParams.controllerId,
+            goal: flowParams.goal,
+            ...(flowParams.stateJson !== undefined ? { stateJson: flowParams.stateJson } : {}),
+            ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
+            ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
+          });
+          if (!result.ok) {
+            throw result.error;
+          }
+          const details = {
+            ...result.envelope,
+            flow: result.flow,
+            mutation: result.mutation,
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
+            details,
+          };
+        }
+      } else {
+        const flowParams = parseResumeFlowParams(params);
+        if (flowParams) {
+          if (!taskFlow) {
+            throw new Error("Managed TaskFlow resume mode requires a bound taskFlow runtime");
+          }
+          const result = await resumeManagedLobsterFlow({
+            taskFlow,
+            runner,
+            runnerParams: runnerParams as LobsterRunnerParams & {
+              action: "resume";
+              token: string;
+              approve: boolean;
+            },
+            flowId: flowParams.flowId,
+            expectedRevision: flowParams.expectedRevision,
+            ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
+            ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
+          });
+          if (!result.ok) {
+            throw result.error;
+          }
+          const details = {
+            ...result.envelope,
+            flow: result.flow,
+            mutation: result.mutation,
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
+            details,
+          };
+        }
+      }
 
+      const envelope = await runner.run(runnerParams);
+      if (!envelope.ok) {
+        throw new Error(envelope.error.message);
+      }
       return {
         content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }],
         details: envelope,

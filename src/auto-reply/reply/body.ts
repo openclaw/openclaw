@@ -1,6 +1,14 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
-import { setAbortMemory } from "./abort.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { setAbortMemory } from "./abort-primitives.js";
+
+let sessionStoreRuntimePromise: Promise<
+  typeof import("../../config/sessions/store.runtime.js")
+> | null = null;
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
 
 export async function applySessionHints(params: {
   baseBody: string;
@@ -10,7 +18,6 @@ export async function applySessionHints(params: {
   sessionKey?: string;
   storePath?: string;
   abortKey?: string;
-  messageId?: string;
 }): Promise<string> {
   let prefixedBodyBase = params.baseBody;
   const abortedHint = params.abortedLastRun
@@ -24,6 +31,7 @@ export async function applySessionHints(params: {
       params.sessionStore[params.sessionKey] = params.sessionEntry;
       if (params.storePath) {
         const sessionKey = params.sessionKey;
+        const { updateSessionStore } = await loadSessionStoreRuntime();
         await updateSessionStore(params.storePath, (store) => {
           const entry = store[sessionKey] ?? params.sessionEntry;
           if (!entry) {
@@ -39,11 +47,6 @@ export async function applySessionHints(params: {
     } else if (params.abortKey) {
       setAbortMemory(params.abortKey, false);
     }
-  }
-
-  const messageIdHint = params.messageId?.trim() ? `[message_id: ${params.messageId.trim()}]` : "";
-  if (messageIdHint) {
-    prefixedBodyBase = `${prefixedBodyBase}\n${messageIdHint}`;
   }
 
   return prefixedBodyBase;

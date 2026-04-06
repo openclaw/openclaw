@@ -1,10 +1,15 @@
 export type { MessagingToolSend } from "./pi-embedded-messaging.js";
 export { compactEmbeddedPiSession } from "./pi-embedded-runner/compact.js";
-export { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner/extra-params.js";
+export {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExtraParams,
+  resolvePreparedExtraParams,
+} from "./pi-embedded-runner/extra-params.js";
 
-export { applyGoogleTurnOrderingFix } from "./pi-embedded-runner/google.js";
 export {
   getDmHistoryLimitFromSessionKey,
+  getHistoryLimitFromSessionKey,
   limitHistoryTurns,
 } from "./pi-embedded-runner/history.js";
 export { resolveEmbeddedSessionLane } from "./pi-embedded-runner/lanes.js";
@@ -14,6 +19,7 @@ export {
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
   queueEmbeddedPiMessage,
+  resolveActiveEmbeddedRunSessionId,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded-runner/runs.js";
 export { buildEmbeddedSandboxInfo } from "./pi-embedded-runner/sandbox-info.js";

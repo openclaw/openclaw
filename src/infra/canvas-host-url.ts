@@ -1,3 +1,5 @@
+import { isLoopbackHost } from "../gateway/net.js";
+
 type HostSource = string | null | undefined;
 
 type CanvasHostUrlParams = {
@@ -7,23 +9,6 @@ type CanvasHostUrlParams = {
   forwardedProto?: HostSource | HostSource[];
   localAddress?: HostSource;
   scheme?: "http" | "https";
-};
-
-const isLoopbackHost = (value: string) => {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (normalized === "localhost") {
-    return true;
-  }
-  if (normalized === "::1") {
-    return true;
-  }
-  if (normalized === "0.0.0.0" || normalized === "::") {
-    return true;
-  }
-  return normalized.startsWith("127.");
 };
 
 const normalizeHost = (value: HostSource, rejectLoopback: boolean) => {
@@ -40,14 +25,25 @@ const normalizeHost = (value: HostSource, rejectLoopback: boolean) => {
   return trimmed;
 };
 
-const parseHostHeader = (value: HostSource) => {
+type ParsedHostHeader = {
+  host: string;
+  port?: number;
+};
+
+const parseHostHeader = (value: HostSource): ParsedHostHeader => {
   if (!value) {
-    return "";
+    return { host: "" };
   }
   try {
-    return new URL(`http://${String(value).trim()}`).hostname;
+    const parsed = new URL(`http://${String(value).trim()}`);
+    const portRaw = parsed.port.trim();
+    const port = portRaw ? Number.parseInt(portRaw, 10) : undefined;
+    return {
+      host: parsed.hostname,
+      port: Number.isFinite(port) ? port : undefined,
+    };
   } catch {
-    return "";
+    return { host: "" };
   }
 };
 
@@ -69,13 +65,29 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
     (parseForwardedProto(params.forwardedProto)?.trim() === "https" ? "https" : "http");
 
   const override = normalizeHost(params.hostOverride, true);
-  const requestHost = normalizeHost(parseHostHeader(params.requestHost), !!override);
+  const parsedRequestHost = parseHostHeader(params.requestHost);
+  const requestHost = normalizeHost(parsedRequestHost.host, !!override);
   const localAddress = normalizeHost(params.localAddress, Boolean(override || requestHost));
 
   const host = override || requestHost || localAddress;
   if (!host) {
     return undefined;
   }
+
+  // When the websocket is proxied over HTTPS (for example Tailscale Serve), the gateway's
+  // internal listener still runs on 18789. In that case, expose the public port instead of
+  // advertising the internal one back to clients.
+  let exposedPort = port;
+  if (!override && requestHost && port === 18789) {
+    if (parsedRequestHost.port && parsedRequestHost.port > 0) {
+      exposedPort = parsedRequestHost.port;
+    } else if (scheme === "https") {
+      exposedPort = 443;
+    } else if (scheme === "http") {
+      exposedPort = 80;
+    }
+  }
+
   const formatted = host.includes(":") ? `[${host}]` : host;
-  return `${scheme}://${formatted}:${port}`;
+  return `${scheme}://${formatted}:${exposedPort}`;
 }

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import { shortenHomePath } from "../utils.js";
 

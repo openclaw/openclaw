@@ -9,9 +9,13 @@ export type ReplyReferencePlanner = {
   hasReplied(): boolean;
 };
 
+export function isSingleUseReplyToMode(mode: ReplyToMode): boolean {
+  return mode === "first" || mode === "batched";
+}
+
 export function createReplyReferencePlanner(options: {
   replyToMode: ReplyToMode;
-  /** Existing thread/reference id (always used when present). */
+  /** Existing thread/reference id (preferred when allowed by replyToMode). */
   existingId?: string;
   /** Id to start a new thread/reference when allowed (e.g., parent message id). */
   startId?: string;
@@ -29,25 +33,22 @@ export function createReplyReferencePlanner(options: {
     if (!allowReference) {
       return undefined;
     }
-    if (existingId) {
-      hasReplied = true;
-      return existingId;
-    }
-    if (!startId) {
+    if (options.replyToMode === "off") {
       return undefined;
     }
-    if (options.replyToMode === "off") {
+    const id = existingId ?? startId;
+    if (!id) {
       return undefined;
     }
     if (options.replyToMode === "all") {
       hasReplied = true;
-      return startId;
+      return id;
     }
-    if (!hasReplied) {
-      hasReplied = true;
-      return startId;
+    if (isSingleUseReplyToMode(options.replyToMode) && hasReplied) {
+      return undefined;
     }
-    return undefined;
+    hasReplied = true;
+    return id;
   };
 
   const markSent = () => {

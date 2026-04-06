@@ -39,6 +39,14 @@ export function normalizeOptionalAgentId(raw: unknown) {
   return normalizeAgentId(trimmed);
 }
 
+export function normalizeOptionalSessionKey(raw: unknown) {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed || undefined;
+}
+
 export function inferLegacyName(job: {
   schedule?: { kind?: unknown; everyMs?: unknown; expr?: unknown };
   payload?: { kind?: unknown; text?: unknown; message?: unknown };

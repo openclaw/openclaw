@@ -1,4 +1,5 @@
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -18,24 +19,47 @@ export async function dashboardCommand(
   options: DashboardOptions = {},
 ) {
   const snapshot = await readConfigFileSnapshot();
-  const cfg = snapshot.valid ? snapshot.config : {};
+  const cfg = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const port = resolveGatewayPort(cfg);
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
-  const token = cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
+  const resolvedToken = await resolveGatewayAuthToken({
+    cfg,
+    env: process.env,
+    envFallback: "always",
+  });
+  const token = resolvedToken.token ?? "";
 
+  // LAN URLs fail secure-context checks in browsers.
+  // Coerce only lan->loopback and preserve other bind modes.
   const links = resolveControlUiLinks({
     port,
-    bind,
+    bind: bind === "lan" ? "loopback" : bind,
     customBindHost,
     basePath,
   });
-  const authedUrl = token ? `${links.httpUrl}?token=${encodeURIComponent(token)}` : links.httpUrl;
+  // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
+  const includeTokenInUrl = token.length > 0 && !resolvedToken.secretRefConfigured;
+  // Prefer URL fragment to avoid leaking auth tokens via query params.
+  const dashboardUrl = includeTokenInUrl
+    ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
+    : links.httpUrl;
 
-  runtime.log(`Dashboard URL: ${authedUrl}`);
+  runtime.log(`Dashboard URL: ${dashboardUrl}`);
+  if (resolvedToken.secretRefConfigured && token) {
+    runtime.log(
+      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
+    );
+  }
+  if (resolvedToken.unresolvedRefReason) {
+    runtime.log(`Token auto-auth unavailable: ${resolvedToken.unresolvedRefReason}`);
+    runtime.log(
+      "Set OPENCLAW_GATEWAY_TOKEN in this shell or resolve your secret provider, then rerun `openclaw dashboard`.",
+    );
+  }
 
-  const copied = await copyToClipboard(authedUrl).catch(() => false);
+  const copied = await copyToClipboard(dashboardUrl).catch(() => false);
   runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
 
   let opened = false;
@@ -43,13 +67,13 @@ export async function dashboardCommand(
   if (!options.noOpen) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      opened = await openUrl(authedUrl);
+      opened = await openUrl(dashboardUrl);
     }
     if (!opened) {
       hint = formatControlUiSshHint({
         port,
         basePath,
-        token: token || undefined,
+        token: includeTokenInUrl ? token || undefined : undefined,
       });
     }
   } else {

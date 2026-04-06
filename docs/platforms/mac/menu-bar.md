@@ -2,6 +2,7 @@
 summary: "Menu bar status logic and what is surfaced to users"
 read_when:
   - Tweaking mac menu UI or status logic
+title: "Menu Bar"
 ---
 
 # Menu Bar Status Logic

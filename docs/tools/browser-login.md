@@ -3,6 +3,7 @@ summary: "Manual logins for browser automation + X/Twitter posting"
 read_when:
   - You need to log into sites for browser automation
   - You want to post updates to X/Twitter
+title: "Browser Login"
 ---
 
 # Browser login + X/Twitter posting
@@ -19,6 +20,12 @@ Back to the main browser docs: [Browser](/tools/browser).
 
 OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange‑tinted UI). This is separate from your daily browser profile.
 
+For agent browser tool calls:
+
+- Default choice: the agent should use its isolated `openclaw` browser.
+- Use `profile="user"` only when existing logged-in sessions matter and the user is at the computer to click/approve any attach prompt.
+- If you have multiple user-browser profiles, specify the profile explicitly instead of guessing.
+
 Two easy ways to access it:
 
 1. **Ask the agent to open the browser** and then log in yourself.
@@ -33,8 +40,7 @@ If you have multiple profiles, pass `--browser-profile <name>` (the default is `
 
 ## X/Twitter: recommended flow
 
-- **Read/search/threads:** use the **bird** CLI skill (no browser, stable).
-  - Repo: https://github.com/steipete/bird
+- **Read/search/threads:** use the **host** browser (manual login).
 - **Post updates:** use the **host** browser (manual login).
 
 ## Sandboxing + host browser access

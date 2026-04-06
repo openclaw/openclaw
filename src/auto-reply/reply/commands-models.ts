@@ -1,18 +1,131 @@
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   normalizeProviderId,
-  resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { ReplyPayload } from "../types.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
+
+export type ModelsProviderData = {
+  byProvider: Map<string, Set<string>>;
+  providers: string[];
+  resolvedDefault: { provider: string; model: string };
+  /** Map from provider/model to human-readable display name (when different from model ID). */
+  modelNames: Map<string, string>;
+};
+
+/**
+ * Build provider/model data from config and catalog.
+ * Exported for reuse by callback handlers.
+ */
+export async function buildModelsProviderData(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): Promise<ModelsProviderData> {
+  const resolvedDefault = resolveDefaultModelForAgent({
+    cfg,
+    agentId,
+  });
+
+  const catalog = await loadModelCatalog({ config: cfg });
+  const allowed = buildAllowedModelSet({
+    cfg,
+    catalog,
+    defaultProvider: resolvedDefault.provider,
+    defaultModel: resolvedDefault.model,
+    agentId,
+  });
+
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: resolvedDefault.provider,
+  });
+
+  const byProvider = new Map<string, Set<string>>();
+  const add = (p: string, m: string) => {
+    const key = normalizeProviderId(p);
+    const set = byProvider.get(key) ?? new Set<string>();
+    set.add(m);
+    byProvider.set(key, set);
+  };
+
+  const addRawModelRef = (raw?: string) => {
+    const trimmed = raw?.trim();
+    if (!trimmed) {
+      return;
+    }
+    const resolved = resolveModelRefFromString({
+      raw: trimmed,
+      defaultProvider: resolvedDefault.provider,
+      aliasIndex,
+    });
+    if (!resolved) {
+      return;
+    }
+    add(resolved.ref.provider, resolved.ref.model);
+  };
+
+  const addModelConfigEntries = () => {
+    const modelConfig = cfg.agents?.defaults?.model;
+    if (typeof modelConfig === "string") {
+      addRawModelRef(modelConfig);
+    } else if (modelConfig && typeof modelConfig === "object") {
+      addRawModelRef(modelConfig.primary);
+      for (const fallback of modelConfig.fallbacks ?? []) {
+        addRawModelRef(fallback);
+      }
+    }
+
+    const imageConfig = cfg.agents?.defaults?.imageModel;
+    if (typeof imageConfig === "string") {
+      addRawModelRef(imageConfig);
+    } else if (imageConfig && typeof imageConfig === "object") {
+      addRawModelRef(imageConfig.primary);
+      for (const fallback of imageConfig.fallbacks ?? []) {
+        addRawModelRef(fallback);
+      }
+    }
+  };
+
+  for (const entry of allowed.allowedCatalog) {
+    add(entry.provider, entry.id);
+  }
+
+  // Include config-only allowlist keys that aren't in the curated catalog.
+  for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+    addRawModelRef(raw);
+  }
+
+  // Ensure configured defaults/fallbacks/image models show up even when the
+  // curated catalog doesn't know about them (custom providers, dev builds, etc.).
+  add(resolvedDefault.provider, resolvedDefault.model);
+  addModelConfigEntries();
+
+  const providers = [...byProvider.keys()].toSorted();
+
+  // Build a provider-scoped model display-name map so surfaces can show
+  // human-readable names without colliding across providers that share IDs.
+  const modelNames = new Map<string, string>();
+  for (const entry of catalog) {
+    if (entry.name && entry.name !== entry.id) {
+      modelNames.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, entry.name);
+    }
+  }
+
+  return { byProvider, providers, resolvedDefault, modelNames };
+}
 
 function formatProviderLine(params: { provider: string; count: number }): string {
   return `- ${params.provider} (${params.count})`;
@@ -75,9 +188,48 @@ function parseModelsArgs(raw: string): {
   };
 }
 
+function resolveProviderLabel(params: {
+  provider: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  sessionEntry?: SessionEntry;
+}): string {
+  const authLabel = resolveModelAuthLabel({
+    provider: params.provider,
+    cfg: params.cfg,
+    sessionEntry: params.sessionEntry,
+    agentDir: params.agentDir,
+  });
+  if (!authLabel || authLabel === "unknown") {
+    return params.provider;
+  }
+  return `${params.provider} · 🔑 ${authLabel}`;
+}
+
+export function formatModelsAvailableHeader(params: {
+  provider: string;
+  total: number;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  sessionEntry?: SessionEntry;
+}): string {
+  const providerLabel = resolveProviderLabel({
+    provider: params.provider,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    sessionEntry: params.sessionEntry,
+  });
+  return `Models (${providerLabel}) — ${params.total} available`;
+}
+
 export async function resolveModelsCommandReply(params: {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
+  surface?: string;
+  currentModel?: string;
+  agentId?: string;
+  agentDir?: string;
+  sessionEntry?: SessionEntry;
 }): Promise<ReplyPayload | null> {
   const body = params.commandBodyNormalized.trim();
   if (!body.startsWith("/models")) {
@@ -87,88 +239,28 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
-  const resolvedDefault = resolveConfiguredModelRef({
-    cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+  const { byProvider, providers, modelNames } = await buildModelsProviderData(
+    params.cfg,
+    params.agentId,
+  );
+  const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
 
-  const catalog = await loadModelCatalog({ config: params.cfg });
-  const allowed = buildAllowedModelSet({
-    cfg: params.cfg,
-    catalog,
-    defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault.model,
-  });
-
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: resolvedDefault.provider,
-  });
-
-  const byProvider = new Map<string, Set<string>>();
-  const add = (p: string, m: string) => {
-    const key = normalizeProviderId(p);
-    const set = byProvider.get(key) ?? new Set<string>();
-    set.add(m);
-    byProvider.set(key, set);
-  };
-
-  const addRawModelRef = (raw?: string) => {
-    const trimmed = raw?.trim();
-    if (!trimmed) {
-      return;
-    }
-    const resolved = resolveModelRefFromString({
-      raw: trimmed,
-      defaultProvider: resolvedDefault.provider,
-      aliasIndex,
-    });
-    if (!resolved) {
-      return;
-    }
-    add(resolved.ref.provider, resolved.ref.model);
-  };
-
-  const addModelConfigEntries = () => {
-    const modelConfig = params.cfg.agents?.defaults?.model;
-    if (typeof modelConfig === "string") {
-      addRawModelRef(modelConfig);
-    } else if (modelConfig && typeof modelConfig === "object") {
-      addRawModelRef(modelConfig.primary);
-      for (const fallback of modelConfig.fallbacks ?? []) {
-        addRawModelRef(fallback);
-      }
-    }
-
-    const imageConfig = params.cfg.agents?.defaults?.imageModel;
-    if (typeof imageConfig === "string") {
-      addRawModelRef(imageConfig);
-    } else if (imageConfig && typeof imageConfig === "object") {
-      addRawModelRef(imageConfig.primary);
-      for (const fallback of imageConfig.fallbacks ?? []) {
-        addRawModelRef(fallback);
-      }
-    }
-  };
-
-  for (const entry of allowed.allowedCatalog) {
-    add(entry.provider, entry.id);
-  }
-
-  // Include config-only allowlist keys that aren't in the curated catalog.
-  for (const raw of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
-    addRawModelRef(raw);
-  }
-
-  // Ensure configured defaults/fallbacks/image models show up even when the
-  // curated catalog doesn't know about them (custom providers, dev builds, etc.).
-  add(resolvedDefault.provider, resolvedDefault.model);
-  addModelConfigEntries();
-
-  const providers = [...byProvider.keys()].toSorted();
-
+  // Provider list (no provider specified)
   if (!provider) {
+    const providerInfos = providers.map((p) => ({
+      id: p,
+      count: byProvider.get(p)?.size ?? 0,
+    }));
+    const channelData = commandPlugin?.commands?.buildModelsProviderChannelData?.({
+      providers: providerInfos,
+    });
+    if (channelData) {
+      return {
+        text: "Select a provider:",
+        channelData,
+      };
+    }
+
     const lines: string[] = [
       "Providers:",
       ...providers.map((p) =>
@@ -195,15 +287,47 @@ export async function resolveModelsCommandReply(params: {
 
   const models = [...(byProvider.get(provider) ?? new Set<string>())].toSorted();
   const total = models.length;
+  const providerLabel = resolveProviderLabel({
+    provider,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    sessionEntry: params.sessionEntry,
+  });
 
   if (total === 0) {
     const lines: string[] = [
-      `Models (${provider}) — none`,
+      `Models (${providerLabel}) — none`,
       "",
       "Browse: /models",
       "Switch: /model <provider/model>",
     ];
     return { text: lines.join("\n") };
+  }
+
+  const interactivePageSize = 8;
+  const interactiveTotalPages = Math.max(1, Math.ceil(total / interactivePageSize));
+  const interactivePage = Math.max(1, Math.min(page, interactiveTotalPages));
+  const interactiveChannelData = commandPlugin?.commands?.buildModelsListChannelData?.({
+    provider,
+    models,
+    currentModel: params.currentModel,
+    currentPage: interactivePage,
+    totalPages: interactiveTotalPages,
+    pageSize: interactivePageSize,
+    modelNames,
+  });
+  if (interactiveChannelData) {
+    const text = formatModelsAvailableHeader({
+      provider,
+      total,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      sessionEntry: params.sessionEntry,
+    });
+    return {
+      text,
+      channelData: interactiveChannelData,
+    };
   }
 
   const effectivePageSize = all ? total : pageSize;
@@ -224,7 +348,7 @@ export async function resolveModelsCommandReply(params: {
   const endIndexExclusive = Math.min(total, startIndex + effectivePageSize);
   const pageModels = models.slice(startIndex, endIndexExclusive);
 
-  const header = `Models (${provider}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`;
+  const header = `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`;
 
   const lines: string[] = [header];
   for (const id of pageModels) {
@@ -247,10 +371,31 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   if (!allowTextCommands) {
     return null;
   }
+  const commandBodyNormalized = params.command.commandBodyNormalized.trim();
+  if (!commandBodyNormalized.startsWith("/models")) {
+    return null;
+  }
+  const unauthorized = rejectUnauthorizedCommand(params, "/models");
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  const modelsAgentId =
+    params.agentId ??
+    resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+    });
+  const modelsAgentDir = resolveAgentDir(params.cfg, modelsAgentId);
 
   const reply = await resolveModelsCommandReply({
     cfg: params.cfg,
-    commandBodyNormalized: params.command.commandBodyNormalized,
+    commandBodyNormalized,
+    surface: params.ctx.Surface,
+    currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
+    agentId: modelsAgentId,
+    agentDir: modelsAgentDir,
+    sessionEntry: params.sessionEntry,
   });
   if (!reply) {
     return null;

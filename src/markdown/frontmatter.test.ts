@@ -1,6 +1,5 @@
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
-
 import { parseFrontmatterBlock } from "./frontmatter.js";
 
 describe("parseFrontmatterBlock", () => {
@@ -67,6 +66,35 @@ metadata:
     expect(JSON.parse(result.tags ?? "[]")).toEqual(["alpha", "beta"]);
     const parsed = JSON5.parse(result.metadata ?? "");
     expect(parsed.openclaw?.events).toEqual(["command:new"]);
+  });
+
+  it("preserves inline description values containing colons", () => {
+    const content = `---
+name: sample-skill
+description: Use anime style IMPORTANT: Must be kawaii
+---`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.description).toBe("Use anime style IMPORTANT: Must be kawaii");
+  });
+
+  it("does not replace YAML block scalars with block indicators", () => {
+    const content = `---
+name: sample-skill
+description: |-
+  {json-like text}
+---`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.description).toBe("{json-like text}");
+  });
+
+  it("keeps nested YAML mappings as structured JSON", () => {
+    const content = `---
+name: sample-skill
+metadata:
+  openclaw: true
+---`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.metadata).toBe('{"openclaw":true}');
   });
 
   it("returns empty when frontmatter is missing", () => {

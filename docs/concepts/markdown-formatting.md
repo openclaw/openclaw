@@ -4,6 +4,7 @@ read_when:
   - You are changing markdown formatting or chunking for outbound channels
   - You are adding a new channel formatter or style mapping
   - You are debugging formatting regressions across channels
+title: "Markdown Formatting"
 ---
 
 # Markdown formatting
@@ -56,7 +57,7 @@ IR (schematic):
 ## Where it is used
 
 - Slack, Telegram, and Signal outbound adapters render from the IR.
-- Other channels (WhatsApp, iMessage, MS Teams, Discord) still use plain text or
+- Other channels (WhatsApp, iMessage, Microsoft Teams, Discord) still use plain text or
   their own formatting rules, with Markdown table conversion applied before
   chunking when enabled.
 

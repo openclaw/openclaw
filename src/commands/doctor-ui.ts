@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  resolveControlUiDistIndexHealth,
+  resolveControlUiDistIndexPathForRoot,
+} from "../infra/control-ui-assets.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -21,7 +25,11 @@ export async function maybeRepairUiProtocolFreshness(
   }
 
   const schemaPath = path.join(root, "src/gateway/protocol/schema.ts");
-  const uiIndexPath = path.join(root, "dist/control-ui/index.html");
+  const uiHealth = await resolveControlUiDistIndexHealth({
+    root,
+    argv1: process.argv[1],
+  });
+  const uiIndexPath = uiHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(root);
 
   try {
     const [schemaStats, uiStats] = await Promise.all([
@@ -41,7 +49,7 @@ export async function maybeRepairUiProtocolFreshness(
         return;
       }
 
-      const shouldRepair = await prompter.confirmRepair({
+      const shouldRepair = await prompter.confirmAutoFix({
         message: "Build Control UI assets now?",
         initialValue: true,
       });
@@ -99,7 +107,7 @@ export async function maybeRepairUiProtocolFreshness(
           "UI Freshness",
         );
 
-        const shouldRepair = await prompter.confirmAggressive({
+        const shouldRepair = await prompter.confirmAggressiveAutoFix({
           message: "Rebuild UI now? (Detected protocol mismatch requiring update)",
           initialValue: true,
         });

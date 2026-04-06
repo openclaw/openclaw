@@ -1,4 +1,4 @@
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { loadModelCatalog, type ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   modelKey,
@@ -9,10 +9,9 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
-import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
-import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
+import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
 
 type ResetModelResult = {
   selection?: ModelDirectiveSelection;
@@ -88,6 +87,7 @@ function applySelectionToSession(params: {
 
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
@@ -99,6 +99,7 @@ export async function applyResetModelOverride(params: {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
+  modelCatalog?: ModelCatalogEntry[];
 }): Promise<ResetModelResult> {
   if (!params.resetTriggered) {
     return {};
@@ -113,12 +114,13 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const catalog = params.modelCatalog ?? (await loadModelCatalog({ config: params.cfg }));
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
   });
   const allowedModelKeys = allowed.allowedKeys;
   if (allowedModelKeys.size === 0) {
@@ -184,10 +186,7 @@ export async function applyResetModelOverride(params: {
   }
 
   const cleanedBody = tokens.slice(consumed).join(" ").trim();
-  params.sessionCtx.BodyStripped = formatInboundBodyWithSenderMeta({
-    ctx: params.ctx,
-    body: cleanedBody,
-  });
+  params.sessionCtx.BodyStripped = cleanedBody;
   params.sessionCtx.BodyForCommands = cleanedBody;
 
   applySelectionToSession({

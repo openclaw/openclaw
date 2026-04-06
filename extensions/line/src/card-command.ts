@@ -1,4 +1,5 @@
-import type { LineChannelData, OpenClawPluginApi, ReplyPayload } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   createActionCard,
   createImageCard,
@@ -7,7 +8,8 @@ import {
   createReceiptCard,
   type CardAction,
   type ListItem,
-} from "openclaw/plugin-sdk";
+} from "./flex-templates.js";
+import type { LineChannelData } from "./types.js";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]
 

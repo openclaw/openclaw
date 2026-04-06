@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { findNormalizedProviderValue } from "./provider-id.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 16_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 32_000;
@@ -22,33 +23,37 @@ export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
+  modelContextTokens?: number;
   modelContextWindow?: number;
   defaultTokens: number;
 }): ContextWindowInfo {
-  const fromModel = normalizePositiveInt(params.modelContextWindow);
-  if (fromModel) {
-    return { tokens: fromModel, source: "model" };
-  }
-
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
-      | Record<string, { models?: Array<{ id?: string; contextWindow?: number }> }>
+      | Record<
+          string,
+          { models?: Array<{ id?: string; contextTokens?: number; contextWindow?: number }> }
+        >
       | undefined;
-    const providerEntry = providers?.[params.provider];
+    const providerEntry = findNormalizedProviderValue(providers, params.provider);
     const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
     const match = models.find((m) => m?.id === params.modelId);
-    return normalizePositiveInt(match?.contextWindow);
+    return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
   })();
-  if (fromModelsConfig) {
-    return { tokens: fromModelsConfig, source: "modelsConfig" };
+  const fromModel =
+    normalizePositiveInt(params.modelContextTokens) ??
+    normalizePositiveInt(params.modelContextWindow);
+  const baseInfo = fromModelsConfig
+    ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
+    : fromModel
+      ? { tokens: fromModel, source: "model" as const }
+      : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
+
+  const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
+  if (capTokens && capTokens < baseInfo.tokens) {
+    return { tokens: capTokens, source: "agentContextTokens" };
   }
 
-  const fromAgentConfig = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
-  if (fromAgentConfig) {
-    return { tokens: fromAgentConfig, source: "agentContextTokens" };
-  }
-
-  return { tokens: Math.floor(params.defaultTokens), source: "default" };
+  return baseInfo;
 }
 
 export type ContextWindowGuardResult = ContextWindowInfo & {

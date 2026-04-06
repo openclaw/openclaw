@@ -24,9 +24,9 @@ describe("extractModelDirective", () => {
     });
 
     it("extracts /model with provider/model format", () => {
-      const result = extractModelDirective("/model anthropic/claude-opus-4-5");
+      const result = extractModelDirective("/model anthropic/claude-opus-4-6");
       expect(result.hasDirective).toBe(true);
-      expect(result.rawModel).toBe("anthropic/claude-opus-4-5");
+      expect(result.rawModel).toBe("anthropic/claude-opus-4-6");
     });
 
     it("extracts /model with profile override", () => {
@@ -34,6 +34,34 @@ describe("extractModelDirective", () => {
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("gpt-5");
       expect(result.rawProfile).toBe("myprofile");
+    });
+
+    it("keeps OpenRouter preset paths that include @ in the model name", () => {
+      const result = extractModelDirective("/model openrouter/@preset/kimi-2-5");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("openrouter/@preset/kimi-2-5");
+      expect(result.rawProfile).toBeUndefined();
+    });
+
+    it("still allows profile overrides after OpenRouter preset paths", () => {
+      const result = extractModelDirective("/model openrouter/@preset/kimi-2-5@work");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("openrouter/@preset/kimi-2-5");
+      expect(result.rawProfile).toBe("work");
+    });
+
+    it("keeps Cloudflare @cf path segments inside model ids", () => {
+      const result = extractModelDirective("/model openai/@cf/openai/gpt-oss-20b");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("openai/@cf/openai/gpt-oss-20b");
+      expect(result.rawProfile).toBeUndefined();
+    });
+
+    it("allows profile overrides after Cloudflare @cf path segments", () => {
+      const result = extractModelDirective("/model openai/@cf/openai/gpt-oss-20b@cf:default");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("openai/@cf/openai/gpt-oss-20b");
+      expect(result.rawProfile).toBe("cf:default");
     });
 
     it("returns no directive for plain text", () => {

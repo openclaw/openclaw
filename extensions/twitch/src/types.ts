@@ -8,23 +8,21 @@
 import type {
   ChannelAccountSnapshot,
   ChannelCapabilities,
+  ChannelGatewayContext,
   ChannelLogSink,
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMeta,
-} from "../../../src/channels/plugins/types.core.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
-import type {
-  ChannelGatewayContext,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
+  ChannelPlugin,
   ChannelResolveKind,
   ChannelResolveResult,
   ChannelStatusAdapter,
-} from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { OutboundDeliveryResult } from "../../../src/infra/outbound/deliver.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+  OpenClawConfig,
+  OutboundDeliveryResult,
+  RuntimeEnv,
+} from "../runtime-api.js";
 
 // ============================================================================
 // Twitch-Specific Types
@@ -55,6 +53,8 @@ export interface TwitchAccountConfig {
   allowedRoles?: TwitchRole[];
   /** Require @mention to trigger bot responses */
   requireMention?: boolean;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
   /** Twitch client secret (required for token refresh via RefreshingAuthProvider) */
   clientSecret?: string;
   /** Refresh token (required for automatic token refresh) */
@@ -132,9 +132,9 @@ export type {
   OutboundDeliveryResult,
 };
 
+import type { z } from "openclaw/plugin-sdk/zod";
 // Import and re-export the schema type
 import type { TwitchConfigSchema } from "./config-schema.js";
-import type { z } from "zod";
 export type TwitchConfig = z.infer<typeof TwitchConfigSchema>;
 
 export type { OpenClawConfig };

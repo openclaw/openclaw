@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 export type NodeSession = {
   nodeId: string;
   connId: string;
   client: GatewayWsClient;
+  clientId?: string;
+  clientMode?: string;
   displayName?: string;
   platform?: string;
   version?: string;
@@ -60,6 +61,8 @@ export class NodeRegistry {
       nodeId,
       connId: client.connId,
       client,
+      clientId: connect.client.id,
+      clientMode: connect.client.mode,
       displayName: connect.client.displayName,
       platform: connect.client.platform,
       version: connect.client.version,

@@ -1,32 +1,63 @@
+import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runRegisteredCli } from "../test-utils/command-runner.js";
+import { registerModelsCli } from "./models-cli.js";
 
-const githubCopilotLoginCommand = vi.fn();
-const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
+const mocks = vi.hoisted(() => ({
+  modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
+  noopAsync: vi.fn(async () => undefined),
+  modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
+}));
 
-vi.mock("../commands/models.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../commands/models.js")>("../commands/models.js");
+const { modelsStatusCommand, modelsAuthLoginCommand } = mocks;
 
-  return {
-    ...actual,
-    githubCopilotLoginCommand,
-    modelsStatusCommand,
-  };
-});
+vi.mock("../commands/models.js", () => ({
+  modelsStatusCommand: mocks.modelsStatusCommand,
+  modelsAliasesAddCommand: mocks.noopAsync,
+  modelsAliasesListCommand: mocks.noopAsync,
+  modelsAliasesRemoveCommand: mocks.noopAsync,
+  modelsAuthAddCommand: mocks.noopAsync,
+  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+  modelsAuthOrderClearCommand: mocks.noopAsync,
+  modelsAuthOrderGetCommand: mocks.noopAsync,
+  modelsAuthOrderSetCommand: mocks.noopAsync,
+  modelsAuthPasteTokenCommand: mocks.noopAsync,
+  modelsAuthSetupTokenCommand: mocks.noopAsync,
+  modelsFallbacksAddCommand: mocks.noopAsync,
+  modelsFallbacksClearCommand: mocks.noopAsync,
+  modelsFallbacksListCommand: mocks.noopAsync,
+  modelsFallbacksRemoveCommand: mocks.noopAsync,
+  modelsImageFallbacksAddCommand: mocks.noopAsync,
+  modelsImageFallbacksClearCommand: mocks.noopAsync,
+  modelsImageFallbacksListCommand: mocks.noopAsync,
+  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+  modelsListCommand: mocks.noopAsync,
+  modelsScanCommand: mocks.noopAsync,
+  modelsSetCommand: mocks.noopAsync,
+  modelsSetImageCommand: mocks.noopAsync,
+}));
 
 describe("models cli", () => {
   beforeEach(() => {
-    githubCopilotLoginCommand.mockClear();
+    modelsAuthLoginCommand.mockClear();
     modelsStatusCommand.mockClear();
   });
 
-  it("registers github-copilot login command", { timeout: 60_000 }, async () => {
-    const { Command } = await import("commander");
-    const { registerModelsCli } = await import("./models-cli.js");
-
+  function createProgram() {
     const program = new Command();
     registerModelsCli(program);
+    return program;
+  }
 
+  async function runModelsCommand(args: string[]) {
+    await runRegisteredCli({
+      register: registerModelsCli as (program: Command) => void,
+      argv: args,
+    });
+  }
+
+  it("registers github-copilot login command", async () => {
+    const program = createProgram();
     const models = program.commands.find((cmd) => cmd.name() === "models");
     expect(models).toBeTruthy();
 
@@ -40,37 +71,22 @@ describe("models cli", () => {
       from: "user",
     });
 
-    expect(githubCopilotLoginCommand).toHaveBeenCalledTimes(1);
-    expect(githubCopilotLoginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ yes: true }),
+    expect(modelsAuthLoginCommand).toHaveBeenCalledTimes(1);
+    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        method: "device",
+        yes: true,
+      }),
       expect.any(Object),
     );
   });
 
-  it("passes --agent to models status", async () => {
-    const { Command } = await import("commander");
-    const { registerModelsCli } = await import("./models-cli.js");
-
-    const program = new Command();
-    registerModelsCli(program);
-
-    await program.parseAsync(["models", "status", "--agent", "poe"], { from: "user" });
-
-    expect(modelsStatusCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: "poe" }),
-      expect.any(Object),
-    );
-  });
-
-  it("passes parent --agent to models status", async () => {
-    const { Command } = await import("commander");
-    const { registerModelsCli } = await import("./models-cli.js");
-
-    const program = new Command();
-    registerModelsCli(program);
-
-    await program.parseAsync(["models", "--agent", "poe", "status"], { from: "user" });
-
+  it.each([
+    { label: "status flag", args: ["models", "status", "--agent", "poe"] },
+    { label: "parent flag", args: ["models", "--agent", "poe", "status"] },
+  ])("passes --agent to models status ($label)", async ({ args }) => {
+    await runModelsCommand(args);
     expect(modelsStatusCommand).toHaveBeenCalledWith(
       expect.objectContaining({ agent: "poe" }),
       expect.any(Object),
@@ -78,11 +94,12 @@ describe("models cli", () => {
   });
 
   it("shows help for models auth without error exit", async () => {
-    const { Command } = await import("commander");
-    const { registerModelsCli } = await import("./models-cli.js");
-
     const program = new Command();
     program.exitOverride();
+    program.configureOutput({
+      writeOut: () => {},
+      writeErr: () => {},
+    });
     registerModelsCli(program);
 
     try {

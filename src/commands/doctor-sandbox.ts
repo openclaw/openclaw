@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
@@ -78,8 +77,11 @@ async function dockerImageExists(image: string): Promise<boolean> {
   try {
     await runExec("docker", ["image", "inspect", image], { timeoutMs: 5_000 });
     return true;
-  } catch (error: any) {
-    const stderr = error?.stderr || error?.message || "";
+  } catch (error) {
+    const stderr =
+      (error as { stderr: string } | undefined)?.stderr ||
+      (error as { message: string } | undefined)?.message ||
+      "";
     if (String(stderr).includes("No such image")) {
       return false;
     }
@@ -90,6 +92,11 @@ async function dockerImageExists(image: string): Promise<boolean> {
 function resolveSandboxDockerImage(cfg: OpenClawConfig): string {
   const image = cfg.agents?.defaults?.sandbox?.docker?.image?.trim();
   return image ? image : DEFAULT_SANDBOX_IMAGE;
+}
+
+function resolveSandboxBackend(cfg: OpenClawConfig): string {
+  const backend = cfg.agents?.defaults?.sandbox?.backend?.trim();
+  return backend || "docker";
 }
 
 function resolveSandboxBrowserImage(cfg: OpenClawConfig): string {
@@ -159,7 +166,7 @@ async function handleMissingSandboxImage(
 
   let built = false;
   if (params.buildScript) {
-    const build = await prompter.confirmSkipInNonInteractive({
+    const build = await prompter.confirmRuntimeRepair({
       message: `Build ${params.kind} sandbox image now?`,
       initialValue: true,
     });
@@ -183,10 +190,29 @@ export async function maybeRepairSandboxImages(
   if (!sandbox || mode === "off") {
     return cfg;
   }
+  const backend = resolveSandboxBackend(cfg);
+  if (backend !== "docker") {
+    if (sandbox.browser?.enabled) {
+      note(
+        `Sandbox backend "${backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
+        "Sandbox",
+      );
+    }
+    return cfg;
+  }
 
   const dockerAvailable = await isDockerAvailable();
   if (!dockerAvailable) {
-    note("Docker not available; skipping sandbox image checks.", "Sandbox");
+    const lines = [
+      `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
+      "Docker is required for sandbox mode to function.",
+      "Isolated sessions (cron jobs, sub-agents) will fail without Docker.",
+      "",
+      "Options:",
+      "- Install Docker and restart the gateway",
+      "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+    ];
+    note(lines.join("\n"), "Sandbox");
     return cfg;
   }
 
@@ -250,7 +276,6 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
 
     const scope = resolveSandboxScope({
       scope: agentSandbox.scope ?? globalSandbox?.scope,
-      perSession: agentSandbox.perSession ?? globalSandbox?.perSession,
     });
 
     if (scope !== "shared") {

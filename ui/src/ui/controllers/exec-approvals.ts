@@ -1,5 +1,5 @@
-import type { GatewayBrowserClient } from "../gateway";
-import { cloneConfigObject, removePathValue, setPathValue } from "./config/form-utils";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import { cloneConfigObject, removePathValue, setPathValue } from "./config/form-utils.ts";
 
 export type ExecApprovalsDefaults = {
   security?: string;
@@ -56,7 +56,9 @@ function resolveExecApprovalsRpc(target?: ExecApprovalsTarget | null): {
     return { method: "exec.approvals.get", params: {} };
   }
   const nodeId = target.nodeId.trim();
-  if (!nodeId) return null;
+  if (!nodeId) {
+    return null;
+  }
   return { method: "exec.approvals.node.get", params: { nodeId } };
 }
 
@@ -68,7 +70,9 @@ function resolveExecApprovalsSaveRpc(
     return { method: "exec.approvals.set", params };
   }
   const nodeId = target.nodeId.trim();
-  if (!nodeId) return null;
+  if (!nodeId) {
+    return null;
+  }
   return { method: "exec.approvals.node.set", params: { ...params, nodeId } };
 }
 
@@ -76,8 +80,12 @@ export async function loadExecApprovals(
   state: ExecApprovalsState,
   target?: ExecApprovalsTarget | null,
 ) {
-  if (!state.client || !state.connected) return;
-  if (state.execApprovalsLoading) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.execApprovalsLoading) {
+    return;
+  }
   state.execApprovalsLoading = true;
   state.lastError = null;
   try {
@@ -86,7 +94,7 @@ export async function loadExecApprovals(
       state.lastError = "Select a node before loading exec approvals.";
       return;
     }
-    const res = (await state.client.request(rpc.method, rpc.params)) as ExecApprovalsSnapshot;
+    const res = await state.client.request<ExecApprovalsSnapshot>(rpc.method, rpc.params);
     applyExecApprovalsSnapshot(state, res);
   } catch (err) {
     state.lastError = String(err);
@@ -109,7 +117,9 @@ export async function saveExecApprovals(
   state: ExecApprovalsState,
   target?: ExecApprovalsTarget | null,
 ) {
-  if (!state.client || !state.connected) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
   state.execApprovalsSaving = true;
   state.lastError = null;
   try {

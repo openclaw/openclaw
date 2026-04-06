@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
+import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
+import {
+  createAsyncLock,
+  pruneExpiredPending,
+  readJsonFile,
+  reconcilePendingPairingRequests,
+  resolvePairingPaths,
+  writeJsonAtomic,
+} from "./pairing-files.js";
+import { rejectPendingPairingRequest } from "./pairing-pending.js";
+import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
-export type NodePairingPendingRequest = {
-  requestId: string;
+export type NodeDeclaredSurface = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -17,33 +25,34 @@ export type NodePairingPendingRequest = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   remoteIp?: string;
+};
+
+export type NodeApprovedSurface = NodeDeclaredSurface;
+
+export type NodePairingRequestInput = NodeDeclaredSurface & {
   silent?: boolean;
-  isRepair?: boolean;
+};
+
+export type NodePairingPendingRequest = NodePairingRequestInput & {
+  requestId: string;
+  silent?: boolean;
   ts: number;
 };
 
-export type NodePairingPairedNode = {
-  nodeId: string;
+export type NodePairingPendingEntry = NodePairingPendingRequest & {
+  requiredApproveScopes: NodeApprovalScope[];
+};
+
+export type NodePairingPairedNode = NodeApprovedSurface & {
   token: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  caps?: string[];
-  commands?: string[];
   bins?: string[];
-  permissions?: Record<string, boolean>;
-  remoteIp?: string;
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
 };
 
 export type NodePairingList = {
-  pending: NodePairingPendingRequest[];
+  pending: NodePairingPendingEntry[];
   paired: NodePairingPairedNode[];
 };
 
@@ -53,89 +62,101 @@ type NodePairingStateFile = {
 };
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
+const OPERATOR_ROLE = "operator";
 
-function resolvePaths(baseDir?: string) {
-  const root = baseDir ?? resolveStateDir();
-  const dir = path.join(root, "nodes");
+const withLock = createAsyncLock();
+
+function normalizeStringList(values?: string[]): string[] | undefined {
+  if (!Array.isArray(values)) {
+    return undefined;
+  }
+  const normalized = values.map((value) => value.trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized : [];
+}
+
+function buildPendingNodePairingRequest(params: {
+  requestId?: string;
+  req: NodePairingRequestInput;
+}): NodePairingPendingRequest {
   return {
-    dir,
-    pendingPath: path.join(dir, "pending.json"),
-    pairedPath: path.join(dir, "paired.json"),
+    requestId: params.requestId ?? randomUUID(),
+    nodeId: params.req.nodeId,
+    displayName: params.req.displayName,
+    platform: params.req.platform,
+    version: params.req.version,
+    coreVersion: params.req.coreVersion,
+    uiVersion: params.req.uiVersion,
+    deviceFamily: params.req.deviceFamily,
+    modelIdentifier: params.req.modelIdentifier,
+    caps: normalizeStringList(params.req.caps),
+    commands: normalizeStringList(params.req.commands),
+    permissions: params.req.permissions,
+    remoteIp: params.req.remoteIp,
+    silent: params.req.silent,
+    ts: Date.now(),
   };
 }
 
-async function readJSON<T>(filePath: string): Promise<T | null> {
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
+function refreshPendingNodePairingRequest(
+  existing: NodePairingPendingRequest,
+  incoming: NodePairingRequestInput,
+): NodePairingPendingRequest {
+  return {
+    ...existing,
+    displayName: incoming.displayName ?? existing.displayName,
+    platform: incoming.platform ?? existing.platform,
+    version: incoming.version ?? existing.version,
+    coreVersion: incoming.coreVersion ?? existing.coreVersion,
+    uiVersion: incoming.uiVersion ?? existing.uiVersion,
+    deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
+    modelIdentifier: incoming.modelIdentifier ?? existing.modelIdentifier,
+    caps: normalizeStringList(incoming.caps) ?? existing.caps,
+    commands: normalizeStringList(incoming.commands) ?? existing.commands,
+    permissions: incoming.permissions ?? existing.permissions,
+    remoteIp: incoming.remoteIp ?? existing.remoteIp,
+    // Preserve interactive visibility if either request needs attention.
+    silent: Boolean(existing.silent && incoming.silent),
+    ts: Date.now(),
+  };
 }
 
-async function writeJSONAtomic(filePath: string, value: unknown) {
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
-  const tmp = `${filePath}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(value, null, 2), "utf8");
-  try {
-    await fs.chmod(tmp, 0o600);
-  } catch {
-    // best-effort; ignore on platforms without chmod
-  }
-  await fs.rename(tmp, filePath);
-  try {
-    await fs.chmod(filePath, 0o600);
-  } catch {
-    // best-effort; ignore on platforms without chmod
-  }
+function resolveNodeApprovalRequiredScopes(
+  pending: NodePairingPendingRequest,
+): NodeApprovalScope[] {
+  const commands = Array.isArray(pending.commands) ? pending.commands : [];
+  return resolveNodePairApprovalScopes(commands);
 }
 
-function pruneExpiredPending(
-  pendingById: Record<string, NodePairingPendingRequest>,
-  nowMs: number,
-) {
-  for (const [id, req] of Object.entries(pendingById)) {
-    if (nowMs - req.ts > PENDING_TTL_MS) {
-      delete pendingById[id];
-    }
-  }
+function toPendingNodePairingEntry(pending: NodePairingPendingRequest): NodePairingPendingEntry {
+  return {
+    ...pending,
+    requiredApproveScopes: resolveNodeApprovalRequiredScopes(pending),
+  };
 }
 
-let lock: Promise<void> = Promise.resolve();
-async function withLock<T>(fn: () => Promise<T>): Promise<T> {
-  const prev = lock;
-  let release: (() => void) | undefined;
-  lock = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await prev;
-  try {
-    return await fn();
-  } finally {
-    release?.();
-  }
-}
+type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNode };
+type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
+type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 
 async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
-  const { pendingPath, pairedPath } = resolvePaths(baseDir);
+  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
   const [pending, paired] = await Promise.all([
-    readJSON<Record<string, NodePairingPendingRequest>>(pendingPath),
-    readJSON<Record<string, NodePairingPairedNode>>(pairedPath),
+    readJsonFile<Record<string, NodePairingPendingRequest>>(pendingPath),
+    readJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
   ]);
   const state: NodePairingStateFile = {
     pendingById: pending ?? {},
     pairedByNodeId: paired ?? {},
   };
-  pruneExpiredPending(state.pendingById, Date.now());
+  pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;
 }
 
 async function persistState(state: NodePairingStateFile, baseDir?: string) {
-  const { pendingPath, pairedPath } = resolvePaths(baseDir);
+  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
   await Promise.all([
-    writeJSONAtomic(pendingPath, state.pendingById),
-    writeJSONAtomic(pairedPath, state.pairedByNodeId),
+    writeJsonAtomic(pendingPath, state.pendingById),
+    writeJsonAtomic(pairedPath, state.pairedByNodeId),
   ]);
 }
 
@@ -144,12 +165,14 @@ function normalizeNodeId(nodeId: string) {
 }
 
 function newToken() {
-  return randomUUID().replaceAll("-", "");
+  return generatePairingToken();
 }
 
 export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
   const state = await loadState(baseDir);
-  const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
+  const pending = Object.values(state.pendingById)
+    .toSorted((a, b) => b.ts - a.ts)
+    .map(toPendingNodePairingEntry);
   const paired = Object.values(state.pairedByNodeId).toSorted(
     (a, b) => b.approvedAtMs - a.approvedAtMs,
   );
@@ -165,7 +188,7 @@ export async function getPairedNode(
 }
 
 export async function requestNodePairing(
-  req: Omit<NodePairingPendingRequest, "requestId" | "ts" | "isRepair">,
+  req: NodePairingRequestInput,
   baseDir?: string,
 ): Promise<{
   status: "pending";
@@ -178,46 +201,51 @@ export async function requestNodePairing(
     if (!nodeId) {
       throw new Error("nodeId required");
     }
-
-    const existing = Object.values(state.pendingById).find((p) => p.nodeId === nodeId);
-    if (existing) {
-      return { status: "pending", request: existing, created: false };
-    }
-
-    const isRepair = Boolean(state.pairedByNodeId[nodeId]);
-    const request: NodePairingPendingRequest = {
-      requestId: randomUUID(),
-      nodeId,
-      displayName: req.displayName,
-      platform: req.platform,
-      version: req.version,
-      coreVersion: req.coreVersion,
-      uiVersion: req.uiVersion,
-      deviceFamily: req.deviceFamily,
-      modelIdentifier: req.modelIdentifier,
-      caps: req.caps,
-      commands: req.commands,
-      permissions: req.permissions,
-      remoteIp: req.remoteIp,
-      silent: req.silent,
-      isRepair,
-      ts: Date.now(),
-    };
-    state.pendingById[request.requestId] = request;
-    await persistState(state, baseDir);
-    return { status: "pending", request, created: true };
+    const pendingForNode = Object.values(state.pendingById)
+      .filter((pending) => pending.nodeId === nodeId)
+      .toSorted((left, right) => right.ts - left.ts);
+    return await reconcilePendingPairingRequests({
+      pendingById: state.pendingById,
+      existing: pendingForNode,
+      incoming: {
+        ...req,
+        nodeId,
+      },
+      canRefreshSingle: () => true,
+      refreshSingle: (existing, incoming) => refreshPendingNodePairingRequest(existing, incoming),
+      buildReplacement: ({ existing, incoming }) =>
+        buildPendingNodePairingRequest({
+          req: {
+            ...incoming,
+            silent: Boolean(
+              incoming.silent && existing.every((pending) => pending.silent === true),
+            ),
+          },
+        }),
+      persist: async () => await persistState(state, baseDir),
+    });
   });
 }
 
 export async function approveNodePairing(
   requestId: string,
+  options: { callerScopes?: readonly string[] },
   baseDir?: string,
-): Promise<{ requestId: string; node: NodePairingPairedNode } | null> {
+): Promise<ApproveNodePairingResult> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pending = state.pendingById[requestId];
     if (!pending) {
       return null;
+    }
+    const requiredScopes = resolveNodeApprovalRequiredScopes(pending);
+    const missingScope = resolveMissingRequestedScope({
+      role: OPERATOR_ROLE,
+      requestedScopes: requiredScopes,
+      allowedScopes: options.callerScopes ?? [],
+    });
+    if (missingScope) {
+      return { status: "forbidden", missingScope };
     }
 
     const now = Date.now();
@@ -252,14 +280,17 @@ export async function rejectNodePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; nodeId: string } | null> {
   return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
-      return null;
-    }
-    delete state.pendingById[requestId];
-    await persistState(state, baseDir);
-    return { requestId, nodeId: pending.nodeId };
+    return await rejectPendingPairingRequest<
+      NodePairingPendingRequest,
+      NodePairingStateFile,
+      "nodeId"
+    >({
+      requestId,
+      idKey: "nodeId",
+      loadState: () => loadState(baseDir),
+      persistState: (state) => persistState(state, baseDir),
+      getId: (pending: NodePairingPendingRequest) => pending.nodeId,
+    });
   });
 }
 
@@ -274,7 +305,7 @@ export async function verifyNodeToken(
   if (!node) {
     return { ok: false };
   }
-  return node.token === token ? { ok: true, node } : { ok: false };
+  return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
 }
 
 export async function updatePairedNodeMetadata(

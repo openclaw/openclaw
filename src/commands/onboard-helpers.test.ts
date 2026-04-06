@@ -1,21 +1,29 @@
+import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import {
   normalizeGatewayTokenInput,
   openUrl,
+  probeGatewayReachable,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
+  validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  runCommandWithTimeout: vi.fn(async () => ({
+  runCommandWithTimeout: vi.fn<
+    (
+      argv: string[],
+      options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
+    ) => Promise<{ stdout: string; stderr: string; code: number; signal: null; killed: boolean }>
+  >(async () => ({
     stdout: "",
     stderr: "",
     code: 0,
     signal: null,
     killed: false,
   })),
-  pickPrimaryTailnetIPv4: vi.fn(() => undefined),
+  pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
+  probeGateway: vi.fn(),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -26,7 +34,12 @@ vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
 
+vi.mock("../gateway/probe.js", () => ({
+  probeGateway: mocks.probeGateway,
+}));
+
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
@@ -64,6 +77,62 @@ describe("resolveBrowserOpenCommand", () => {
     expect(resolved.argv).toEqual(["cmd", "/c", "start", ""]);
     expect(resolved.quoteUrl).toBe(true);
     platformSpy.mockRestore();
+  });
+});
+
+describe("probeGatewayReachable", () => {
+  it("uses a hello-only probe for onboarding reachability", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: true,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 42,
+      error: null,
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await probeGatewayReachable({
+      url: "ws://127.0.0.1:18789",
+      token: "tok_test",
+      timeoutMs: 2500,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mocks.probeGateway).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 2500,
+      auth: {
+        token: "tok_test",
+        password: undefined,
+      },
+      detailLevel: "none",
+    });
+  });
+
+  it("returns the probe error detail on failure", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "connect failed: timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await probeGatewayReachable({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      detail: "connect failed: timeout",
+    });
   });
 });
 
@@ -107,6 +176,34 @@ describe("resolveControlUiLinks", () => {
     expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
     expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
   });
+
+  it("falls back to loopback for tailnet bind when interface discovery throws", () => {
+    mocks.pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    const links = resolveControlUiLinks({
+      port: 18789,
+      bind: "tailnet",
+    });
+
+    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+  });
+
+  it("falls back to loopback for LAN bind when interface discovery throws", () => {
+    vi.spyOn(os, "networkInterfaces").mockImplementationOnce(() => {
+      throw new Error("uv_interface_addresses failed");
+    });
+
+    const links = resolveControlUiLinks({
+      port: 18789,
+      bind: "lan",
+    });
+
+    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+  });
 });
 
 describe("normalizeGatewayTokenInput", () => {
@@ -121,5 +218,30 @@ describe("normalizeGatewayTokenInput", () => {
 
   it("returns empty string for non-string input", () => {
     expect(normalizeGatewayTokenInput(123)).toBe("");
+  });
+
+  it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
+    expect(normalizeGatewayTokenInput("undefined")).toBe("");
+    expect(normalizeGatewayTokenInput("null")).toBe("");
+  });
+});
+
+describe("validateGatewayPasswordInput", () => {
+  it("requires a non-empty password", () => {
+    expect(validateGatewayPasswordInput("")).toBe("Required");
+    expect(validateGatewayPasswordInput("   ")).toBe("Required");
+  });
+
+  it("rejects literal string coercion artifacts", () => {
+    expect(validateGatewayPasswordInput("undefined")).toBe(
+      'Cannot be the literal string "undefined" or "null"',
+    );
+    expect(validateGatewayPasswordInput("null")).toBe(
+      'Cannot be the literal string "undefined" or "null"',
+    );
+  });
+
+  it("accepts a normal password", () => {
+    expect(validateGatewayPasswordInput(" secret ")).toBeUndefined();
   });
 });

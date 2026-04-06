@@ -1,9 +1,9 @@
+import type { BaseProbeResult } from "./runtime-api.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { buildBlueBubblesApiUrl, blueBubblesFetchWithTimeout } from "./types.js";
 
-export type BlueBubblesProbe = {
-  ok: boolean;
+export type BlueBubblesProbe = BaseProbeResult & {
   status?: number | null;
-  error?: string | null;
 };
 
 export type BlueBubblesServerInfo = {
@@ -16,7 +16,9 @@ export type BlueBubblesServerInfo = {
   computer_id?: string;
 };
 
-/** Cache server info by account ID to avoid repeated API calls */
+/** Cache server info by account ID to avoid repeated API calls.
+ * Size-capped to prevent unbounded growth (#4948). */
+const MAX_SERVER_INFO_CACHE_SIZE = 64;
 const serverInfoCache = new Map<string, { info: BlueBubblesServerInfo; expires: number }>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -33,9 +35,10 @@ export async function fetchBlueBubblesServerInfo(params: {
   password?: string | null;
   accountId?: string;
   timeoutMs?: number;
+  allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesServerInfo | null> {
-  const baseUrl = params.baseUrl?.trim();
-  const password = params.password?.trim();
+  const baseUrl = normalizeSecretInputString(params.baseUrl);
+  const password = normalizeSecretInputString(params.password);
   if (!baseUrl || !password) {
     return null;
   }
@@ -46,9 +49,15 @@ export async function fetchBlueBubblesServerInfo(params: {
     return cached.info;
   }
 
+  const ssrfPolicy = params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
   const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/server/info", password });
   try {
-    const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, params.timeoutMs ?? 5000);
+    const res = await blueBubblesFetchWithTimeout(
+      url,
+      { method: "GET" },
+      params.timeoutMs ?? 5000,
+      ssrfPolicy,
+    );
     if (!res.ok) {
       return null;
     }
@@ -56,6 +65,13 @@ export async function fetchBlueBubblesServerInfo(params: {
     const data = payload?.data as BlueBubblesServerInfo | undefined;
     if (data) {
       serverInfoCache.set(cacheKey, { info: data, expires: Date.now() + CACHE_TTL_MS });
+      // Evict oldest entries if cache exceeds max size
+      if (serverInfoCache.size > MAX_SERVER_INFO_CACHE_SIZE) {
+        const oldest = serverInfoCache.keys().next().value;
+        if (oldest !== undefined) {
+          serverInfoCache.delete(oldest);
+        }
+      }
     }
     return data ?? null;
   } catch {
@@ -64,7 +80,7 @@ export async function fetchBlueBubblesServerInfo(params: {
 }
 
 /**
- * Get cached server info synchronously (for use in listActions).
+ * Get cached server info synchronously (for use in describeMessageTool).
  * Returns null if not cached or expired.
  */
 export function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesServerInfo | null {
@@ -74,6 +90,26 @@ export function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesS
     return cached.info;
   }
   return null;
+}
+
+/**
+ * Read cached private API capability for a BlueBubbles account.
+ * Returns null when capability is unknown (for example, before first probe).
+ */
+export function getCachedBlueBubblesPrivateApiStatus(accountId?: string): boolean | null {
+  const info = getCachedBlueBubblesServerInfo(accountId);
+  if (!info || typeof info.private_api !== "boolean") {
+    return null;
+  }
+  return info.private_api;
+}
+
+export function isBlueBubblesPrivateApiStatusEnabled(status: boolean | null): boolean {
+  return status === true;
+}
+
+export function isBlueBubblesPrivateApiEnabled(accountId?: string): boolean {
+  return isBlueBubblesPrivateApiStatusEnabled(getCachedBlueBubblesPrivateApiStatus(accountId));
 }
 
 /**
@@ -109,18 +145,25 @@ export async function probeBlueBubbles(params: {
   baseUrl?: string | null;
   password?: string | null;
   timeoutMs?: number;
+  allowPrivateNetwork?: boolean;
 }): Promise<BlueBubblesProbe> {
-  const baseUrl = params.baseUrl?.trim();
-  const password = params.password?.trim();
+  const baseUrl = normalizeSecretInputString(params.baseUrl);
+  const password = normalizeSecretInputString(params.password);
   if (!baseUrl) {
     return { ok: false, error: "serverUrl not configured" };
   }
   if (!password) {
     return { ok: false, error: "password not configured" };
   }
+  const probeSsrfPolicy = params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
   const url = buildBlueBubblesApiUrl({ baseUrl, path: "/api/v1/ping", password });
   try {
-    const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, params.timeoutMs);
+    const res = await blueBubblesFetchWithTimeout(
+      url,
+      { method: "GET" },
+      params.timeoutMs,
+      probeSsrfPolicy,
+    );
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }

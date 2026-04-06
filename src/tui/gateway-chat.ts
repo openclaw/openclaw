@@ -1,14 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { loadConfig, resolveGatewayPort } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
+import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
+import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";
+import {
+  buildGatewayConnectionDetails,
+  ensureExplicitGatewayAuth,
+  resolveExplicitGatewayAuth,
+} from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
+import { isLoopbackHost } from "../gateway/net.js";
+import { GATEWAY_CLIENT_CAPS } from "../gateway/protocol/client-info.js";
 import {
   type HelloOk,
   PROTOCOL_VERSION,
   type SessionsListParams,
+  type SessionsPatchResult,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
+import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
 export type GatewayConnectionOptions = {
   url?: string;
@@ -22,6 +33,7 @@ export type ChatSendOptions = {
   thinking?: string;
   deliver?: boolean;
   timeoutMs?: number;
+  runId?: string;
 };
 
 export type GatewayEvent = {
@@ -29,6 +41,23 @@ export type GatewayEvent = {
   payload?: unknown;
   seq?: number;
 };
+
+type ResolvedGatewayConnection = {
+  url: string;
+  token?: string;
+  password?: string;
+  allowInsecureLocalOperatorUi?: boolean;
+};
+
+function throwGatewayAuthResolutionError(reason: string): never {
+  throw new Error(
+    [
+      reason,
+      "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass --token/--password,",
+      "or resolve the configured secret provider for this credential.",
+    ].join("\n"),
+  );
+}
 
 export type GatewaySessionList = {
   ts: number;
@@ -39,40 +68,46 @@ export type GatewaySessionList = {
     modelProvider?: string | null;
     contextTokens?: number | null;
   };
-  sessions: Array<{
-    key: string;
-    sessionId?: string;
-    updatedAt?: number | null;
-    thinkingLevel?: string;
-    verboseLevel?: string;
-    reasoningLevel?: string;
-    sendPolicy?: string;
-    model?: string;
-    contextTokens?: number | null;
-    inputTokens?: number | null;
-    outputTokens?: number | null;
-    totalTokens?: number | null;
-    responseUsage?: "on" | "off" | "tokens" | "full";
-    modelProvider?: string;
-    label?: string;
-    displayName?: string;
-    provider?: string;
-    groupChannel?: string;
-    space?: string;
-    subject?: string;
-    chatType?: string;
-    lastProvider?: string;
-    lastTo?: string;
-    lastAccountId?: string;
-    derivedTitle?: string;
-    lastMessagePreview?: string;
-  }>;
+  sessions: Array<
+    Pick<
+      SessionInfo,
+      | "thinkingLevel"
+      | "fastMode"
+      | "verboseLevel"
+      | "reasoningLevel"
+      | "model"
+      | "contextTokens"
+      | "inputTokens"
+      | "outputTokens"
+      | "totalTokens"
+      | "modelProvider"
+      | "displayName"
+    > & {
+      key: string;
+      sessionId?: string;
+      updatedAt?: number | null;
+      fastMode?: boolean;
+      sendPolicy?: string;
+      responseUsage?: ResponseUsageMode;
+      label?: string;
+      provider?: string;
+      groupChannel?: string;
+      space?: string;
+      subject?: string;
+      chatType?: string;
+      lastProvider?: string;
+      lastTo?: string;
+      lastAccountId?: string;
+      derivedTitle?: string;
+      lastMessagePreview?: string;
+    }
+  >;
 };
 
 export type GatewayAgentsList = {
   defaultId: string;
   mainKey: string;
-  scope: "per-sender" | "global";
+  scope: SessionScope;
   agents: Array<{
     id: string;
     name?: string;
@@ -99,23 +134,24 @@ export class GatewayChatClient {
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 
-  constructor(opts: GatewayConnectionOptions) {
-    const resolved = resolveGatewayConnection(opts);
-    this.connection = resolved;
+  constructor(connection: ResolvedGatewayConnection) {
+    this.connection = connection;
 
     this.readyPromise = new Promise((resolve) => {
       this.resolveReady = resolve;
     });
 
     this.client = new GatewayClient({
-      url: resolved.url,
-      token: resolved.token,
-      password: resolved.password,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      url: connection.url,
+      token: connection.token,
+      password: connection.password,
+      clientName: GATEWAY_CLIENT_NAMES.TUI,
       clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
+      deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
+      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       instanceId: randomUUID(),
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -132,12 +168,21 @@ export class GatewayChatClient {
         });
       },
       onClose: (_code, reason) => {
+        // Reset so waitForReady() blocks again until the next successful reconnect.
+        this.readyPromise = new Promise((resolve) => {
+          this.resolveReady = resolve;
+        });
         this.onDisconnected?.(reason);
       },
       onGap: (info) => {
         this.onGap?.(info);
       },
     });
+  }
+
+  static async connect(opts: GatewayConnectionOptions): Promise<GatewayChatClient> {
+    const connection = await resolveGatewayConnection(opts);
+    return new GatewayChatClient(connection);
   }
 
   start() {
@@ -153,7 +198,7 @@ export class GatewayChatClient {
   }
 
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
-    const runId = randomUUID();
+    const runId = opts.runId ?? randomUUID();
     await this.client.request("chat.send", {
       sessionKey: opts.sessionKey,
       message: opts.message,
@@ -195,12 +240,15 @@ export class GatewayChatClient {
     return await this.client.request<GatewayAgentsList>("agents.list", {});
   }
 
-  async patchSession(opts: SessionsPatchParams) {
-    return await this.client.request("sessions.patch", opts);
+  async patchSession(opts: SessionsPatchParams): Promise<SessionsPatchResult> {
+    return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
-  async resetSession(key: string) {
-    return await this.client.request("sessions.reset", { key });
+  async resetSession(key: string, reason?: "new" | "reset") {
+    return await this.client.request("sessions.reset", {
+      key,
+      ...(reason ? { reason } : {}),
+    });
   }
 
   async getStatus() {
@@ -213,41 +261,99 @@ export class GatewayChatClient {
   }
 }
 
-export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
+export async function resolveGatewayConnection(
+  opts: GatewayConnectionOptions,
+): Promise<ResolvedGatewayConnection> {
   const config = loadConfig();
+  const env = process.env;
+  const gatewayAuthMode = config.gateway?.auth?.mode;
   const isRemoteMode = config.gateway?.mode === "remote";
-  const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const authToken = config.gateway?.auth?.token;
 
-  const localPort = resolveGatewayPort(config);
-  const url =
-    (typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined) ||
-    (typeof remote?.url === "string" && remote.url.trim().length > 0
-      ? remote.url.trim()
-      : undefined) ||
-    `ws://127.0.0.1:${localPort}`;
+  const urlOverride =
+    typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
+  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
+  ensureExplicitGatewayAuth({
+    urlOverride,
+    urlOverrideSource: "cli",
+    explicitAuth,
+    errorHint: "Fix: pass --token or --password when using --url.",
+  });
+  const url = buildGatewayConnectionDetails({
+    config,
+    ...(urlOverride ? { url: urlOverride } : {}),
+  }).url;
+  const allowInsecureLocalOperatorUi = (() => {
+    if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
+      return false;
+    }
+    try {
+      return isLoopbackHost(new URL(url).hostname);
+    } catch {
+      return false;
+    }
+  })();
 
-  const token =
-    (typeof opts.token === "string" && opts.token.trim().length > 0
-      ? opts.token.trim()
-      : undefined) ||
-    (isRemoteMode
-      ? typeof remote?.token === "string" && remote.token.trim().length > 0
-        ? remote.token.trim()
-        : undefined
-      : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-        (typeof authToken === "string" && authToken.trim().length > 0
-          ? authToken.trim()
-          : undefined));
+  if (urlOverride) {
+    return {
+      url,
+      token: explicitAuth.token,
+      password: explicitAuth.password,
+      allowInsecureLocalOperatorUi,
+    };
+  }
 
-  const password =
-    (typeof opts.password === "string" && opts.password.trim().length > 0
-      ? opts.password.trim()
-      : undefined) ||
-    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    (typeof remote?.password === "string" && remote.password.trim().length > 0
-      ? remote.password.trim()
-      : undefined);
+  if (isRemoteMode) {
+    const resolved = await resolveGatewayInteractiveSurfaceAuth({
+      config,
+      env,
+      explicitAuth,
+      surface: "remote",
+    });
+    if (resolved.failureReason) {
+      throwGatewayAuthResolutionError(resolved.failureReason);
+    }
+    return {
+      url,
+      token: resolved.token,
+      password: resolved.password,
+      allowInsecureLocalOperatorUi: false,
+    };
+  }
 
-  return { url, token, password };
+  if (gatewayAuthMode === "none" || gatewayAuthMode === "trusted-proxy") {
+    const resolved = await resolveGatewayInteractiveSurfaceAuth({
+      config,
+      env,
+      explicitAuth,
+      surface: "local",
+    });
+    return {
+      url,
+      token: resolved.token,
+      password: resolved.password,
+      allowInsecureLocalOperatorUi,
+    };
+  }
+
+  try {
+    assertExplicitGatewayAuthModeWhenBothConfigured(config);
+  } catch (err) {
+    throwGatewayAuthResolutionError(err instanceof Error ? err.message : String(err));
+  }
+
+  const resolved = await resolveGatewayInteractiveSurfaceAuth({
+    config,
+    env,
+    explicitAuth,
+    surface: "local",
+  });
+  if (resolved.failureReason) {
+    throwGatewayAuthResolutionError(resolved.failureReason);
+  }
+  return {
+    url,
+    token: resolved.token,
+    password: resolved.password,
+    allowInsecureLocalOperatorUi,
+  };
 }

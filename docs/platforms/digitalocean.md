@@ -3,6 +3,7 @@ summary: "OpenClaw on DigitalOcean (simple paid VPS option)"
 read_when:
   - Setting up OpenClaw on DigitalOcean
   - Looking for cheap VPS hosting for OpenClaw
+title: "DigitalOcean (Platform)"
 ---
 
 # OpenClaw on DigitalOcean
@@ -26,7 +27,7 @@ If you want a $0/month option and don’t mind ARM + provider-specific setup, se
 **Picking a provider:**
 
 - DigitalOcean: simplest UX + predictable setup (this guide)
-- Hetzner: good price/perf (see [Hetzner guide](/platforms/hetzner))
+- Hetzner: good price/perf (see [Hetzner guide](/install/hetzner))
 - Oracle Cloud: can be $0/month, but is more finicky and ARM-only (see [Oracle guide](/platforms/oracle))
 
 ---
@@ -38,6 +39,10 @@ If you want a $0/month option and don’t mind ARM + provider-specific setup, se
 - ~20 minutes
 
 ## 1) Create a Droplet
+
+<Warning>
+Use a clean base image (Ubuntu 24.04 LTS). Avoid third-party Marketplace 1-click images unless you have reviewed their startup scripts and firewall defaults.
+</Warning>
 
 1. Log into [DigitalOcean](https://cloud.digitalocean.com/)
 2. Click **Create → Droplets**
@@ -61,12 +66,12 @@ ssh root@YOUR_DROPLET_IP
 # Update system
 apt update && apt upgrade -y
 
-# Install Node.js 22
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+# Install Node.js 24
+curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
 apt install -y nodejs
 
 # Install OpenClaw
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 
 # Verify
 openclaw --version
@@ -127,8 +132,8 @@ Open: `https://<magicdns>/`
 
 Notes:
 
-- Serve keeps the Gateway loopback-only and authenticates via Tailscale identity headers.
-- To require token/password instead, set `gateway.auth.allowTailscale: false` or use `gateway.auth.mode: "password"`.
+- Serve keeps the Gateway loopback-only and authenticates Control UI/WebSocket traffic via Tailscale identity headers (tokenless auth assumes trusted gateway host; HTTP APIs do not use those Tailscale headers and instead follow the gateway's normal HTTP auth mode).
+- To require explicit shared-secret credentials instead, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
 
 **Option C: Tailnet bind (no Serve)**
 
@@ -193,13 +198,13 @@ htop
 
 All state lives in:
 
-- `~/.openclaw/` — config, credentials, session data
+- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data
 - `~/.openclaw/workspace/` — workspace (SOUL.md, memory, etc.)
 
 These survive reboots. Back them up periodically:
 
 ```bash
-tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
+openclaw backup create
 ```
 
 ---
@@ -226,12 +231,12 @@ For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips
 
 ## Troubleshooting
 
-### Gateway won't start
+### Gateway will not start
 
 ```bash
 openclaw gateway status
 openclaw doctor --non-interactive
-journalctl -u openclaw --no-pager -n 50
+journalctl --user -u openclaw-gateway.service --no-pager -n 50
 ```
 
 ### Port already in use
@@ -255,7 +260,7 @@ free -h
 
 ## See Also
 
-- [Hetzner guide](/platforms/hetzner) — cheaper, more powerful
+- [Hetzner guide](/install/hetzner) — cheaper, more powerful
 - [Docker install](/install/docker) — containerized setup
 - [Tailscale](/gateway/tailscale) — secure remote access
 - [Configuration](/gateway/configuration) — full config reference

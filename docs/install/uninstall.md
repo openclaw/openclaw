@@ -3,6 +3,7 @@ summary: "Uninstall OpenClaw completely (CLI, service, state, workspace)"
 read_when:
   - You want to remove OpenClaw from a machine
   - The gateway service is still running after uninstall
+title: "Uninstall"
 ---
 
 # Uninstall
@@ -80,14 +81,14 @@ Use this if the gateway service keeps running but `openclaw` is missing.
 
 ### macOS (launchd)
 
-Default label is `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.openclaw.*` may still exist):
+Default label is `ai.openclaw.gateway` (or `ai.openclaw.<profile>`; legacy `com.openclaw.*` may still exist):
 
 ```bash
-launchctl bootout gui/$UID/bot.molt.gateway
-rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
+launchctl bootout gui/$UID/ai.openclaw.gateway
+rm -f ~/Library/LaunchAgents/ai.openclaw.gateway.plist
 ```
 
-If you used a profile, replace the label and plist name with `bot.molt.<profile>`. Remove any legacy `com.openclaw.*` plists if present.
+If you used a profile, replace the label and plist name with `ai.openclaw.<profile>`. Remove any legacy `com.openclaw.*` plists if present.
 
 ### Linux (systemd user unit)
 
@@ -115,7 +116,7 @@ If you used a profile, delete the matching task name and `~\.openclaw-<profile>\
 
 ### Normal install (install.sh / npm / pnpm / bun)
 
-If you used `https://openclaw.bot/install.sh` or `install.ps1`, the CLI was installed with `npm install -g openclaw@latest`.
+If you used `https://openclaw.ai/install.sh` or `install.ps1`, the CLI was installed with `npm install -g openclaw@latest`.
 Remove it with `npm rm -g openclaw` (or `pnpm remove -g` / `bun remove -g` if you installed that way).
 
 ### Source checkout (git clone)

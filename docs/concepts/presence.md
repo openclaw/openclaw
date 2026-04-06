@@ -4,6 +4,7 @@ read_when:
   - Debugging the Instances tab
   - Investigating duplicate or stale instance rows
   - Changing gateway WS connect or system-event beacons
+title: "Presence"
 ---
 
 # Presence
@@ -44,7 +45,7 @@ even before any clients connect.
 Every WS client begins with a `connect` request. On successful handshake the
 Gateway upserts a presence entry for that connection.
 
-#### Why one‑off CLI commands don’t show up
+#### Why one-off CLI commands do not show up
 
 The CLI often connects for short, one‑off commands. To avoid spamming the
 Instances list, `client.mode === "cli"` is **not** turned into a presence entry.

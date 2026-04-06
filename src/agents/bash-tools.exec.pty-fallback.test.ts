@@ -1,31 +1,40 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
 
-import { resetProcessRegistryForTests } from "./bash-process-registry";
+vi.mock("@lydell/node-pty", () => ({
+  spawn: () => {
+    const err = new Error("spawn EBADF");
+    (err as NodeJS.ErrnoException).code = "EBADF";
+    throw err;
+  },
+}));
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ createExecTool } = await import("./bash-tools.exec.js"));
+  ({ resetProcessRegistryForTests } = await import("./bash-process-registry.js"));
+});
 
 afterEach(() => {
   resetProcessRegistryForTests();
-  vi.resetModules();
   vi.clearAllMocks();
 });
 
 test("exec falls back when PTY spawn fails", async () => {
-  vi.doMock("@lydell/node-pty", () => ({
-    spawn: () => {
-      const err = new Error("spawn EBADF");
-      (err as NodeJS.ErrnoException).code = "EBADF";
-      throw err;
-    },
-  }));
-
-  const { createExecTool } = await import("./bash-tools.exec");
-  const tool = createExecTool({ allowBackground: false });
+  const tool = createExecTool({
+    allowBackground: false,
+    host: "gateway",
+    security: "full",
+    ask: "off",
+  });
   const result = await tool.execute("toolcall", {
     command: "printf ok",
     pty: true,
   });
 
   expect(result.details.status).toBe("completed");
-  const text = result.content?.[0]?.text ?? "";
+  const text = result.content?.find((item) => item.type === "text")?.text ?? "";
   expect(text).toContain("ok");
   expect(text).toContain("PTY spawn failed");
 });

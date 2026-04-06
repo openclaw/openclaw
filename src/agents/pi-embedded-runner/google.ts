@@ -1,23 +1,48 @@
 import { EventEmitter } from "node:events";
-
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-
+import type { TSchema } from "@sinclair/typebox";
+import type { OpenClawConfig } from "../../config/config.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
+  normalizeProviderToolSchemasWithPlugin,
+  sanitizeProviderReplayHistoryWithPlugin,
+  validateProviderReplayTurnsWithPlugin,
+} from "../../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
+import {
+  hasInterSessionUserProvenance,
+  normalizeInputProvenance,
+} from "../../sessions/input-provenance.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import {
+  downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
   isCompactionFailureError,
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  validateAnthropicTurns,
+  validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
-import { log } from "./logger.js";
-import { describeUnknownError } from "./utils.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
+import {
+  sanitizeToolCallInputs,
+  stripToolResultDetails,
+  sanitizeToolUseResultPairing,
+} from "../session-transcript-repair.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import {
+  makeZeroUsageSnapshot,
+  normalizeUsage,
+  type AssistantUsageSnapshot,
+  type UsageLike,
+} from "../usage.js";
+import { log } from "./logger.js";
+import { dropThinkingBlocks } from "./thinking.js";
+import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
 const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
@@ -42,83 +67,259 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "minProperties",
   "maxProperties",
 ]);
-const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
-function isValidAntigravitySignature(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
+const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
+
+function buildInterSessionPrefix(message: AgentMessage): string {
+  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  if (!provenance) {
+    return INTER_SESSION_PREFIX_BASE;
   }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
+  const details = [
+    provenance.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
+    provenance.sourceChannel ? `sourceChannel=${provenance.sourceChannel}` : undefined,
+    provenance.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
+  ].filter(Boolean);
+  if (details.length === 0) {
+    return INTER_SESSION_PREFIX_BASE;
   }
-  if (trimmed.length % 4 !== 0) {
-    return false;
-  }
-  return ANTIGRAVITY_SIGNATURE_RE.test(trimmed);
+  return `${INTER_SESSION_PREFIX_BASE} ${details.join(" ")}`;
 }
 
-function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
   for (const msg of messages) {
-    if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
+    if (!hasInterSessionUserProvenance(msg as { role?: unknown; provenance?: unknown })) {
       out.push(msg);
       continue;
     }
-    const assistant = msg;
-    if (!Array.isArray(assistant.content)) {
-      out.push(msg);
-      continue;
-    }
-    type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
-    const nextContent: AssistantContentBlock[] = [];
-    let contentChanged = false;
-    for (const block of assistant.content) {
-      if (
-        !block ||
-        typeof block !== "object" ||
-        (block as { type?: unknown }).type !== "thinking"
-      ) {
-        nextContent.push(block);
+    const prefix = buildInterSessionPrefix(msg);
+    const user = msg as Extract<AgentMessage, { role: "user" }>;
+    if (typeof user.content === "string") {
+      if (user.content.startsWith(prefix)) {
+        out.push(msg);
         continue;
       }
-      const rec = block as {
-        thinkingSignature?: unknown;
-        signature?: unknown;
-        thought_signature?: unknown;
-        thoughtSignature?: unknown;
+      touched = true;
+      out.push({
+        ...(msg as unknown as Record<string, unknown>),
+        content: `${prefix}\n${user.content}`,
+      } as AgentMessage);
+      continue;
+    }
+    if (!Array.isArray(user.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const textIndex = user.content.findIndex(
+      (block) =>
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    );
+
+    if (textIndex >= 0) {
+      const existing = user.content[textIndex] as { type: "text"; text: string };
+      if (existing.text.startsWith(prefix)) {
+        out.push(msg);
+        continue;
+      }
+      const nextContent = [...user.content];
+      nextContent[textIndex] = {
+        ...existing,
+        text: `${prefix}\n${existing.text}`,
       };
-      const candidate =
-        rec.thinkingSignature ?? rec.signature ?? rec.thought_signature ?? rec.thoughtSignature;
-      if (!isValidAntigravitySignature(candidate)) {
-        contentChanged = true;
-        continue;
-      }
-      if (rec.thinkingSignature !== candidate) {
-        const nextBlock = {
-          ...(block as unknown as Record<string, unknown>),
-          thinkingSignature: candidate,
-        } as AssistantContentBlock;
-        nextContent.push(nextBlock);
-        contentChanged = true;
-      } else {
-        nextContent.push(block);
-      }
-    }
-    if (contentChanged) {
       touched = true;
-    }
-    if (nextContent.length === 0) {
-      touched = true;
+      out.push({
+        ...(msg as unknown as Record<string, unknown>),
+        content: nextContent,
+      } as AgentMessage);
       continue;
     }
-    out.push(contentChanged ? { ...assistant, content: nextContent } : msg);
+
+    touched = true;
+    out.push({
+      ...(msg as unknown as Record<string, unknown>),
+      content: [{ type: "text", text: prefix }, ...user.content],
+    } as AgentMessage);
   }
   return touched ? out : messages;
 }
 
-function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
+function parseMessageTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
+  let latestCompactionSummaryIndex = -1;
+  let latestCompactionTimestamp: number | null = null;
+  for (let i = 0; i < messages.length; i += 1) {
+    const entry = messages[i];
+    if (entry?.role !== "compactionSummary") {
+      continue;
+    }
+    latestCompactionSummaryIndex = i;
+    latestCompactionTimestamp = parseMessageTimestamp(
+      (entry as { timestamp?: unknown }).timestamp ?? null,
+    );
+  }
+  if (latestCompactionSummaryIndex === -1) {
+    return messages;
+  }
+
+  const out = [...messages];
+  let touched = false;
+  for (let i = 0; i < out.length; i += 1) {
+    const candidate = out[i] as
+      | (AgentMessage & { usage?: unknown; timestamp?: unknown })
+      | undefined;
+    if (!candidate || candidate.role !== "assistant") {
+      continue;
+    }
+    if (!candidate.usage || typeof candidate.usage !== "object") {
+      continue;
+    }
+
+    const messageTimestamp = parseMessageTimestamp(candidate.timestamp);
+    const staleByTimestamp =
+      latestCompactionTimestamp !== null &&
+      messageTimestamp !== null &&
+      messageTimestamp <= latestCompactionTimestamp;
+    const staleByLegacyOrdering = i < latestCompactionSummaryIndex;
+    if (!staleByTimestamp && !staleByLegacyOrdering) {
+      continue;
+    }
+
+    // pi-coding-agent expects assistant usage to always be present during context
+    // accounting. Keep stale snapshots structurally valid, but zeroed out.
+    const candidateRecord = candidate as unknown as Record<string, unknown>;
+    out[i] = {
+      ...candidateRecord,
+      usage: makeZeroUsageSnapshot(),
+    } as unknown as AgentMessage;
+    touched = true;
+  }
+  return touched ? out : messages;
+}
+
+function normalizeAssistantUsageSnapshot(usage: unknown) {
+  const normalized = normalizeUsage((usage ?? undefined) as UsageLike | undefined);
+  if (!normalized) {
+    return makeZeroUsageSnapshot();
+  }
+  const input = normalized.input ?? 0;
+  const output = normalized.output ?? 0;
+  const cacheRead = normalized.cacheRead ?? 0;
+  const cacheWrite = normalized.cacheWrite ?? 0;
+  const totalTokens = normalized.total ?? input + output + cacheRead + cacheWrite;
+  const cost = normalizeAssistantUsageCost(usage);
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    ...(cost ? { cost } : {}),
+  };
+}
+
+function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["cost"] | undefined {
+  const base = makeZeroUsageSnapshot().cost;
+  if (!usage || typeof usage !== "object") {
+    return undefined;
+  }
+  const rawCost = (usage as { cost?: unknown }).cost;
+  if (!rawCost || typeof rawCost !== "object") {
+    return undefined;
+  }
+  const cost = rawCost as Record<string, unknown>;
+  const inputRaw = toFiniteCostNumber(cost.input);
+  const outputRaw = toFiniteCostNumber(cost.output);
+  const cacheReadRaw = toFiniteCostNumber(cost.cacheRead);
+  const cacheWriteRaw = toFiniteCostNumber(cost.cacheWrite);
+  const totalRaw = toFiniteCostNumber(cost.total);
+  if (
+    inputRaw === undefined &&
+    outputRaw === undefined &&
+    cacheReadRaw === undefined &&
+    cacheWriteRaw === undefined &&
+    totalRaw === undefined
+  ) {
+    return undefined;
+  }
+  const input = inputRaw ?? base.input;
+  const output = outputRaw ?? base.output;
+  const cacheRead = cacheReadRaw ?? base.cacheRead;
+  const cacheWrite = cacheWriteRaw ?? base.cacheWrite;
+  const total = totalRaw ?? input + output + cacheRead + cacheWrite;
+  return { input, output, cacheRead, cacheWrite, total };
+}
+
+function toFiniteCostNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+
+  let touched = false;
+  const out = [...messages];
+  for (let i = 0; i < out.length; i += 1) {
+    const message = out[i] as (AgentMessage & { role?: unknown; usage?: unknown }) | undefined;
+    if (!message || message.role !== "assistant") {
+      continue;
+    }
+    const normalizedUsage = normalizeAssistantUsageSnapshot(message.usage);
+    const usageCost =
+      message.usage && typeof message.usage === "object"
+        ? (message.usage as { cost?: unknown }).cost
+        : undefined;
+    const normalizedCost = normalizedUsage.cost;
+    if (
+      message.usage &&
+      typeof message.usage === "object" &&
+      (message.usage as { input?: unknown }).input === normalizedUsage.input &&
+      (message.usage as { output?: unknown }).output === normalizedUsage.output &&
+      (message.usage as { cacheRead?: unknown }).cacheRead === normalizedUsage.cacheRead &&
+      (message.usage as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cacheWrite &&
+      (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens &&
+      ((normalizedCost &&
+        usageCost &&
+        typeof usageCost === "object" &&
+        (usageCost as { input?: unknown }).input === normalizedCost.input &&
+        (usageCost as { output?: unknown }).output === normalizedCost.output &&
+        (usageCost as { cacheRead?: unknown }).cacheRead === normalizedCost.cacheRead &&
+        (usageCost as { cacheWrite?: unknown }).cacheWrite === normalizedCost.cacheWrite &&
+        (usageCost as { total?: unknown }).total === normalizedCost.total) ||
+        (!normalizedCost && usageCost === undefined))
+    ) {
+      continue;
+    }
+    out[i] = {
+      ...(message as unknown as Record<string, unknown>),
+      usage: normalizedUsage,
+    } as AgentMessage;
+    touched = true;
+  }
+
+  return touched ? out : messages;
+}
+
+export function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
@@ -158,8 +359,39 @@ export function sanitizeToolsForGoogle<
 >(params: {
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
 }): AgentTool<TSchemaType, TResult>[] {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+  const provider = params.provider.trim();
+  const pluginNormalized = normalizeProviderToolSchemasWithPlugin({
+    provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    context: {
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      provider,
+      modelId: params.modelId,
+      modelApi: params.modelApi,
+      model: params.model,
+      tools: params.tools as unknown as AnyAgentTool[],
+    },
+  });
+  if (Array.isArray(pluginNormalized)) {
+    return pluginNormalized as AgentTool<TSchemaType, TResult>[];
+  }
+
+  // Cloud Code Assist uses the OpenAPI 3.03 `parameters` field for both Gemini
+  // AND Claude models.  This field does not support JSON Schema keywords such as
+  // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
+  // for every provider that routes through this path.
+  if (provider !== "google") {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -175,8 +407,17 @@ export function sanitizeToolsForGoogle<
   });
 }
 
-export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: string }) {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+export function logToolSchemasForGoogle(params: {
+  tools: AgentTool[];
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  modelId?: string;
+  modelApi?: string | null;
+  model?: ProviderRuntimeModel;
+}) {
+  if (params.provider.trim() !== "google") {
     return;
   }
   const toolNames = params.tools.map((tool, index) => `${index}:${tool.name}`);
@@ -326,6 +567,11 @@ export async function sanitizeSessionHistory(params: {
   modelApi?: string | null;
   modelId?: string;
   provider?: string;
+  allowedToolNames?: Iterable<string>;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  model?: ProviderRuntimeModel;
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
@@ -337,23 +583,45 @@ export async function sanitizeSessionHistory(params: {
       modelApi: params.modelApi,
       provider: params.provider,
       modelId: params.modelId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      model: params.model,
     });
-  const sanitizedImages = await sanitizeSessionMessagesImages(params.messages, "session:history", {
-    sanitizeMode: policy.sanitizeMode,
-    sanitizeToolCallIds: policy.sanitizeToolCallIds,
-    toolCallIdMode: policy.toolCallIdMode,
-    preserveSignatures: policy.preserveSignatures,
-    sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
-  });
-  const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
-    ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
+  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
+  const sanitizedImages = await sanitizeSessionMessagesImages(
+    withInterSessionMarkers,
+    "session:history",
+    {
+      sanitizeMode: policy.sanitizeMode,
+      sanitizeToolCallIds: policy.sanitizeToolCallIds,
+      toolCallIdMode: policy.toolCallIdMode,
+      preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+      preserveSignatures: policy.preserveSignatures,
+      sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
+      ...resolveImageSanitizationLimits(params.config),
+    },
+  );
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
+  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+    allowedToolNames: params.allowedToolNames,
+  });
   const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedThinking)
-    : sanitizedThinking;
+    ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
+        erroredAssistantResultPolicy: "drop",
+      })
+    : sanitizedToolCalls;
+  const sanitizedToolResults = stripToolResultDetails(repairedTools);
+  const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
+    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults),
+  );
 
   const isOpenAIResponsesApi =
-    params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
+    params.modelApi === "openai-responses" ||
+    params.modelApi === "openai-codex-responses" ||
+    params.modelApi === "azure-openai-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
   const modelChanged = priorSnapshot
@@ -364,10 +632,34 @@ export async function sanitizeSessionHistory(params: {
         modelId: params.modelId,
       })
     : false;
-  const sanitizedOpenAI =
-    isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(repairedTools)
-      : repairedTools;
+  const sanitizedOpenAI = isOpenAIResponsesApi
+    ? downgradeOpenAIFunctionCallReasoningPairs(
+        downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage),
+      )
+    : sanitizedCompactionUsage;
+  const provider = params.provider?.trim();
+  const providerSanitized =
+    provider && provider.length > 0
+      ? await sanitizeProviderReplayHistoryWithPlugin({
+          provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          context: {
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+            provider,
+            modelId: params.modelId,
+            modelApi: params.modelApi,
+            model: params.model,
+            sessionId: params.sessionId,
+            messages: sanitizedOpenAI,
+            allowedToolNames: params.allowedToolNames,
+          },
+        })
+      : undefined;
+  const sanitizedWithProvider = providerSanitized ?? sanitizedOpenAI;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -379,13 +671,75 @@ export async function sanitizeSessionHistory(params: {
   }
 
   if (!policy.applyGoogleTurnOrdering) {
-    return sanitizedOpenAI;
+    return sanitizedWithProvider;
   }
 
-  return applyGoogleTurnOrderingFix({
-    messages: sanitizedOpenAI,
-    modelApi: params.modelApi,
-    sessionManager: params.sessionManager,
-    sessionId: params.sessionId,
-  }).messages;
+  // Google models use the full wrapper with logging and session markers.
+  if (isGoogleModelApi(params.modelApi)) {
+    return applyGoogleTurnOrderingFix({
+      messages: sanitizedWithProvider,
+      modelApi: params.modelApi,
+      sessionManager: params.sessionManager,
+      sessionId: params.sessionId,
+    }).messages;
+  }
+
+  // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
+  // conversations that start with an assistant turn (e.g. delivery-mirror
+  // messages after /new).  Apply the same ordering fix without the
+  // Google-specific session markers.  See #38962.
+  return sanitizeGoogleTurnOrdering(sanitizedWithProvider);
+}
+
+export async function validateReplayTurns(params: {
+  messages: AgentMessage[];
+  modelApi?: string | null;
+  modelId?: string;
+  provider?: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  model?: ProviderRuntimeModel;
+  sessionId?: string;
+  policy?: TranscriptPolicy;
+}): Promise<AgentMessage[]> {
+  const policy =
+    params.policy ??
+    resolveTranscriptPolicy({
+      modelApi: params.modelApi,
+      provider: params.provider,
+      modelId: params.modelId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      model: params.model,
+    });
+  const provider = params.provider?.trim();
+  if (provider) {
+    const providerValidated = await validateProviderReplayTurnsWithPlugin({
+      provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      context: {
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        provider,
+        modelId: params.modelId,
+        modelApi: params.modelApi,
+        model: params.model,
+        sessionId: params.sessionId,
+        messages: params.messages,
+      },
+    });
+    if (providerValidated) {
+      return providerValidated;
+    }
+  }
+
+  const validatedGemini = policy.validateGeminiTurns
+    ? validateGeminiTurns(params.messages)
+    : params.messages;
+  return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
 }

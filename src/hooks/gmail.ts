@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-
 import {
   type OpenClawConfig,
   DEFAULT_GATEWAY_PORT,

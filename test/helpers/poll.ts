@@ -1,11 +1,9 @@
+import { sleep } from "../../src/utils.js";
+
 export type PollOptions = {
   timeoutMs?: number;
   intervalMs?: number;
 };
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
 
 export async function pollUntil<T>(
   fn: () => Promise<T | null | undefined>,

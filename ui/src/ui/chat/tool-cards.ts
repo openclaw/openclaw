@@ -1,12 +1,16 @@
 import { html, nothing } from "lit";
-
-import { formatToolDetail, resolveToolDisplay } from "../tool-display";
-import { icons } from "../icons";
-import type { ToolCard } from "../types/chat-types";
-import { TOOL_INLINE_THRESHOLD } from "./constants";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers";
-import { isToolResultMessage } from "./message-normalizer";
-import { extractTextCached } from "./message-extract";
+import {
+  isToolCallContentType,
+  isToolResultContentType,
+  resolveToolBlockArgs,
+} from "../../../../src/chat/tool-content.js";
+import { icons } from "../icons.ts";
+import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
+import type { ToolCard } from "../types/chat-types.ts";
+import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
+import { extractTextCached } from "./message-extract.ts";
+import { isToolResultMessage } from "./message-normalizer.ts";
+import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -14,22 +18,22 @@ export function extractToolCards(message: unknown): ToolCard[] {
   const cards: ToolCard[] = [];
 
   for (const item of content) {
-    const kind = String(item.type ?? "").toLowerCase();
     const isToolCall =
-      ["toolcall", "tool_call", "tooluse", "tool_use"].includes(kind) ||
-      (typeof item.name === "string" && item.arguments != null);
+      isToolCallContentType(item.type) ||
+      (typeof item.name === "string" && resolveToolBlockArgs(item) != null);
     if (isToolCall) {
       cards.push({
         kind: "call",
         name: (item.name as string) ?? "tool",
-        args: coerceArgs(item.arguments ?? item.args),
+        args: coerceArgs(resolveToolBlockArgs(item)),
       });
     }
   }
 
   for (const item of content) {
-    const kind = String(item.type ?? "").toLowerCase();
-    if (kind !== "toolresult" && kind !== "tool_result") continue;
+    if (!isToolResultContentType(item.type)) {
+      continue;
+    }
     const text = extractToolText(item);
     const name = typeof item.name === "string" ? item.name : "tool";
     cards.push({ kind: "result", name, text });
@@ -77,56 +81,58 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
       @click=${handleClick}
       role=${canClick ? "button" : nothing}
       tabindex=${canClick ? "0" : nothing}
-      @keydown=${
-        canClick
-          ? (e: KeyboardEvent) => {
-              if (e.key !== "Enter" && e.key !== " ") return;
-              e.preventDefault();
-              handleClick?.();
+      @keydown=${canClick
+        ? (e: KeyboardEvent) => {
+            if (e.key !== "Enter" && e.key !== " ") {
+              return;
             }
-          : nothing
-      }
+            e.preventDefault();
+            handleClick?.();
+          }
+        : nothing}
     >
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
           <span class="chat-tool-card__icon">${icons[display.icon]}</span>
           <span>${display.label}</span>
         </div>
-        ${
-          canClick
-            ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
-            : nothing
-        }
-        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
+        ${canClick
+          ? html`<span class="chat-tool-card__action"
+              >${hasText ? "View" : ""} ${icons.check}</span
+            >`
+          : nothing}
+        ${isEmpty && !canClick
+          ? html`<span class="chat-tool-card__status">${icons.check}</span>`
+          : nothing}
       </div>
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-      ${
-        isEmpty
-          ? html`
-              <div class="chat-tool-card__status-text muted">Completed</div>
-            `
-          : nothing
-      }
-      ${
-        showCollapsed
-          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
-          : nothing
-      }
+      ${isEmpty ? html` <div class="chat-tool-card__status-text muted">Completed</div> ` : nothing}
+      ${showCollapsed
+        ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
+        : nothing}
       ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
     </div>
   `;
 }
 
 function normalizeContent(content: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(content)) return [];
+  if (!Array.isArray(content)) {
+    return [];
+  }
   return content.filter(Boolean) as Array<Record<string, unknown>>;
 }
 
 function coerceArgs(value: unknown): unknown {
-  if (typeof value !== "string") return value;
+  if (typeof value !== "string") {
+    return value;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return value;
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return value;
+  if (!trimmed) {
+    return value;
+  }
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return value;
+  }
   try {
     return JSON.parse(trimmed);
   } catch {
@@ -135,7 +141,11 @@ function coerceArgs(value: unknown): unknown {
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
-  if (typeof item.text === "string") return item.text;
-  if (typeof item.content === "string") return item.content;
+  if (typeof item.text === "string") {
+    return item.text;
+  }
+  if (typeof item.content === "string") {
+    return item.content;
+  }
   return undefined;
 }

@@ -1,5 +1,9 @@
+import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { generateSecureInt } from "../../infra/secure-random.js";
+import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
@@ -34,15 +38,13 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   if (max <= min) {
     return min;
   }
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  return min + generateSecureInt(max - min + 1);
 }
-
-/** Sleep for a given number of milliseconds. */
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   /** Static context for response prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
   /** Dynamic context provider for response prefix template interpolation.
@@ -58,14 +60,19 @@ export type ReplyDispatcherOptions = {
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
+  typingCallbacks?: TypingCallbacks;
   onReplyStart?: () => Promise<void> | void;
   onIdle?: () => void;
+  /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
+  onCleanup?: () => void;
 };
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReplyDispatcher;
-  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController">;
+  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup">;
   markDispatchIdle: () => void;
+  /** Signal that the model run is complete so the typing controller can stop. */
+  markRunComplete: () => void;
 };
 
 export type ReplyDispatcher = {
@@ -74,11 +81,17 @@ export type ReplyDispatcher = {
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
+  getFailedCounts: () => Record<ReplyDispatchKind, number>;
+  markComplete: () => void;
 };
 
 type NormalizeReplyPayloadInternalOptions = Pick<
   ReplyDispatcherOptions,
-  "responsePrefix" | "responsePrefixContext" | "responsePrefixContextProvider" | "onHeartbeatStrip"
+  | "responsePrefix"
+  | "responsePrefixContext"
+  | "responsePrefixContextProvider"
+  | "onHeartbeatStrip"
+  | "transformReplyPayload"
 > & {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -94,6 +107,7 @@ function normalizeReplyPayloadInternal(
     responsePrefix: opts.responsePrefix,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
+    transformReplyPayload: opts.transformReplyPayload,
     onSkip: opts.onSkip,
   });
 }
@@ -101,7 +115,10 @@ function normalizeReplyPayloadInternal(
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
-  let pending = 0;
+  // Start with pending=1 as a "reservation" to prevent premature gateway restart.
+  // This is decremented when markComplete() is called to signal no more replies will come.
+  let pending = 1;
+  let completeCalled = false;
   // Track whether we've sent a block reply (for human delay - skip delay on first block).
   let sentFirstBlock = false;
   // Serialize outbound replies to preserve tool/block/final order.
@@ -110,12 +127,24 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const failedCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
+
+  // Register this dispatcher globally for gateway restart coordination.
+  const { unregister } = registerDispatcher({
+    pending: () => pending,
+    waitForIdle: () => sendChain,
+  });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
+      transformReplyPayload: options.transformReplyPayload,
       onHeartbeatStrip: options.onHeartbeatStrip,
       onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
     });
@@ -140,18 +169,50 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
+        // Safe: deliver is called inside an async .then() callback, so even a synchronous
+        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
       })
       .catch((err) => {
+        failedCounts[kind] += 1;
         options.onError?.(err, { kind });
       })
       .finally(() => {
         pending -= 1;
+        // Clear reservation if:
+        // 1. pending is now 1 (just the reservation left)
+        // 2. markComplete has been called
+        // 3. No more replies will be enqueued
+        if (pending === 1 && completeCalled) {
+          pending -= 1; // Clear the reservation
+        }
         if (pending === 0) {
+          // Unregister from global tracking when idle.
+          unregister();
           options.onIdle?.();
         }
       });
     return true;
+  };
+
+  const markComplete = () => {
+    if (completeCalled) {
+      return;
+    }
+    completeCalled = true;
+    // If no replies were enqueued (pending is still 1 = just the reservation),
+    // schedule clearing the reservation after current microtasks complete.
+    // This gives any in-flight enqueue() calls a chance to increment pending.
+    void Promise.resolve().then(() => {
+      if (pending === 1 && completeCalled) {
+        // Still just the reservation, no replies were enqueued
+        pending -= 1;
+        if (pending === 0) {
+          unregister();
+          options.onIdle?.();
+        }
+      }
+    });
   };
 
   return {
@@ -160,33 +221,42 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getFailedCounts: () => ({ ...failedCounts }),
+    markComplete,
   };
 }
 
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { onReplyStart, onIdle, ...dispatcherOptions } = options;
+  const { typingCallbacks, onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
+  const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
+  const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
+  const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: () => {
       typingController?.markDispatchIdle();
-      onIdle?.();
+      resolvedOnIdle?.();
     },
   });
 
   return {
     dispatcher,
     replyOptions: {
-      onReplyStart,
+      onReplyStart: resolvedOnReplyStart,
+      onTypingCleanup: resolvedOnCleanup,
       onTypingController: (typing) => {
         typingController = typing;
       },
     },
     markDispatchIdle: () => {
       typingController?.markDispatchIdle();
-      onIdle?.();
+      resolvedOnIdle?.();
+    },
+    markRunComplete: () => {
+      typingController?.markRunComplete();
     },
   };
 }

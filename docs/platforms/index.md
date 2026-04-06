@@ -3,6 +3,7 @@ summary: "Platform support overview (Gateway + companion apps)"
 read_when:
   - Looking for OS support or install paths
   - Deciding where to run the Gateway
+title: "Platforms"
 ---
 
 # Platforms
@@ -25,10 +26,11 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 ## VPS & hosting
 
 - VPS hub: [VPS hosting](/vps)
-- Fly.io: [Fly.io](/platforms/fly)
-- Hetzner (Docker): [Hetzner](/platforms/hetzner)
-- GCP (Compute Engine): [GCP](/platforms/gcp)
-- exe.dev (VM + HTTPS proxy): [exe.dev](/platforms/exe-dev)
+- Fly.io: [Fly.io](/install/fly)
+- Hetzner (Docker): [Hetzner](/install/hetzner)
+- GCP (Compute Engine): [GCP](/install/gcp)
+- Azure (Linux VM): [Azure](/install/azure)
+- exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
 
 ## Common links
 
@@ -48,5 +50,6 @@ Use one of these (all supported):
 
 The service target depends on OS:
 
-- macOS: LaunchAgent (`bot.molt.gateway` or `bot.molt.<profile>`; legacy `com.openclaw.*`)
+- macOS: LaunchAgent (`ai.openclaw.gateway` or `ai.openclaw.<profile>`; legacy `com.openclaw.*`)
 - Linux/WSL2: systemd user service (`openclaw-gateway[-<profile>].service`)
+- Native Windows: Scheduled Task (`OpenClaw Gateway` or `OpenClaw Gateway (<profile>)`), with a per-user Startup-folder login item fallback if task creation is denied

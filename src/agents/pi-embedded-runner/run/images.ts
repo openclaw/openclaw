@@ -1,31 +1,70 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import type { ImageContent } from "@mariozechner/pi-ai";
-
-import { assertSandboxPath } from "../../sandbox-paths.js";
-import { sanitizeImageBlocks } from "../../tool-images.js";
-import { extractTextFromMessage } from "../../../tui/tui-formatters.js";
-import { loadWebMedia } from "../../../web/media.js";
+import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
+import { loadWebMedia } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
+import type { ImageSanitizationLimits } from "../../image-sanitization.js";
+import {
+  createSandboxBridgeReadFile,
+  resolveSandboxedBridgeMediaPath,
+} from "../../sandbox-media-paths.js";
+import { assertSandboxPath } from "../../sandbox-paths.js";
+import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
+import { sanitizeImageBlocks } from "../../tool-images.js";
 import { log } from "../logger.js";
 
 /**
  * Common image file extensions for detection.
  */
-const IMAGE_EXTENSIONS = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".bmp",
-  ".tiff",
-  ".tif",
-  ".heic",
-  ".heif",
-]);
+const IMAGE_EXTENSION_NAMES = [
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "tiff",
+  "tif",
+  "heic",
+  "heif",
+] as const;
+const IMAGE_EXTENSIONS = new Set(IMAGE_EXTENSION_NAMES.map((ext) => `.${ext}`));
+const IMAGE_EXTENSION_PATTERN = IMAGE_EXTENSION_NAMES.join("|");
+const MEDIA_ATTACHED_PATH_REGEX_SOURCE =
+  "^\\s*(.+?\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\s*(?:\\(|$|\\|)";
+const MESSAGE_IMAGE_REGEX_SOURCE =
+  "\\[Image:\\s*source:\\s*([^\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + "))\\]";
+const FILE_URL_REGEX_SOURCE = "file://[^\\s<>\"'`\\]]+\\.(?:" + IMAGE_EXTENSION_PATTERN + ")";
+const PATH_REGEX_SOURCE =
+  "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
+
+/**
+ * Matches the opaque media URI written by the Gateway's claim-check offload:
+ *   media://inbound/<uuid-or-id>
+ *
+ * Uses an exclusion-based character class rather than a whitelist so that
+ * Unicode filenames (e.g. Chinese characters) preserved by sanitizeFilename
+ * in store.ts are matched correctly.
+ *
+ * Explicitly excluded from the ID segment:
+ *   ]      — closes the surrounding [media attached: ...] bracket
+ *   \s     — any whitespace (space, newline, tab) — terminates the token
+ *   /      — forward slash path separator (traversal prevention)
+ *   \      — back slash path separator (traversal prevention)
+ *   \x00   — null byte (path injection prevention)
+ *
+ * resolveMediaBufferPath applies its own guards against these characters, but
+ * excluding them here provides defence-in-depth at the parsing layer.
+ *
+ * Example valid IDs:
+ *   "1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
+ *   "photo---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
+ *   "图片---1c77ce17-20b9-4546-be64-6e36a9adcb2c.png"
+ */
+// eslint-disable-next-line no-control-regex
+const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s/\\\x00]+)/;
 
 /**
  * Result of detecting an image reference in text.
@@ -33,12 +72,10 @@ const IMAGE_EXTENSIONS = new Set([
 export interface DetectedImageRef {
   /** The raw matched string from the prompt */
   raw: string;
-  /** The type of reference (path or url) */
-  type: "path" | "url";
-  /** The resolved/normalized path or URL */
+  /** The type of reference */
+  type: "path" | "media-uri";
+  /** The resolved/normalized path, or the raw media URI for media-uri type */
   resolved: string;
-  /** Index of the message this ref was found in (for history images) */
-  messageIndex?: number;
 }
 
 /**
@@ -49,11 +86,119 @@ function isImageExtension(filePath: string): boolean {
   return IMAGE_EXTENSIONS.has(ext);
 }
 
+function normalizeRefForDedupe(raw: string): string {
+  return process.platform === "win32" ? raw.toLowerCase() : raw;
+}
+
+export function mergePromptAttachmentImages(params: {
+  imageOrder?: PromptImageOrderEntry[];
+  existingImages?: ImageContent[];
+  offloadedImages?: Array<ImageContent | null>;
+  promptRefImages?: ImageContent[];
+}): ImageContent[] {
+  const promptImages: ImageContent[] = [];
+  const existingImages = params.existingImages ?? [];
+  const offloadedImages = params.offloadedImages ?? [];
+
+  if (params.imageOrder && params.imageOrder.length > 0) {
+    let inlineIndex = 0;
+    let offloadedIndex = 0;
+    for (const entry of params.imageOrder) {
+      if (entry === "inline") {
+        const image = existingImages[inlineIndex++];
+        if (image) {
+          promptImages.push(image);
+        }
+        continue;
+      }
+      const image = offloadedImages[offloadedIndex++];
+      if (image) {
+        promptImages.push(image);
+      }
+    }
+    while (inlineIndex < existingImages.length) {
+      promptImages.push(existingImages[inlineIndex++]);
+    }
+    while (offloadedIndex < offloadedImages.length) {
+      const image = offloadedImages[offloadedIndex++];
+      if (image) {
+        promptImages.push(image);
+      }
+    }
+  } else {
+    promptImages.push(...existingImages);
+    for (const image of offloadedImages) {
+      if (image) {
+        promptImages.push(image);
+      }
+    }
+  }
+
+  promptImages.push(...(params.promptRefImages ?? []));
+  return promptImages;
+}
+
+function extractTrailingAttachmentMediaUris(prompt: string, count: number): string[] {
+  if (count <= 0) {
+    return [];
+  }
+
+  const lines = prompt.split(/\r?\n/);
+  const uris: string[] = [];
+  for (let index = lines.length - 1; index >= 0 && uris.length < count; index--) {
+    const line = lines[index]?.trim();
+    if (!line || line.includes("\0")) {
+      break;
+    }
+    const match = line.match(/^\[media attached:\s*(media:\/\/inbound\/[^\]\s/\\]+)\]$/);
+    if (!match?.[1]) {
+      break;
+    }
+    uris.unshift(match[1]);
+  }
+  return uris;
+}
+
+export function splitPromptAndAttachmentRefs(params: {
+  prompt: string;
+  refs: DetectedImageRef[];
+  imageOrder?: PromptImageOrderEntry[];
+}): {
+  promptRefs: DetectedImageRef[];
+  attachmentRefs: DetectedImageRef[];
+} {
+  const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
+  if (offloadedCount === 0) {
+    return { promptRefs: params.refs, attachmentRefs: [] };
+  }
+
+  const attachmentUris = new Set(extractTrailingAttachmentMediaUris(params.prompt, offloadedCount));
+  if (attachmentUris.size === 0) {
+    return { promptRefs: params.refs, attachmentRefs: [] };
+  }
+
+  const promptRefs: DetectedImageRef[] = [];
+  const attachmentRefs: DetectedImageRef[] = [];
+  for (const ref of params.refs) {
+    if (ref.type === "media-uri" && attachmentUris.has(ref.resolved)) {
+      attachmentRefs.push(ref);
+      continue;
+    }
+    promptRefs.push(ref);
+  }
+  return { promptRefs, attachmentRefs };
+}
+
 async function sanitizeImagesWithLog(
   images: ImageContent[],
   label: string,
+  imageSanitization?: ImageSanitizationLimits,
 ): Promise<ImageContent[]> {
-  const { images: sanitized, dropped } = await sanitizeImageBlocks(images, label);
+  const { images: sanitized, dropped } = await sanitizeImageBlocks(
+    images,
+    label,
+    imageSanitization,
+  );
   if (dropped > 0) {
     log.warn(`Native image: dropped ${dropped} image(s) after sanitization (${label}).`);
   }
@@ -69,6 +214,7 @@ async function sanitizeImagesWithLog(
  * - Home paths: ~/Pictures/screenshot.png
  * - file:// URLs: file:///path/to/image.png
  * - Message attachments: [Image: source: /path/to/image.jpg]
+ * - Gateway claim-check URIs: [media attached: media://inbound/<id>]
  *
  * @param prompt The user prompt text to scan
  * @returns Array of detected image references
@@ -80,7 +226,8 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Helper to add a path ref
   const addPathRef = (raw: string) => {
     const trimmed = raw.trim();
-    if (!trimmed || seen.has(trimmed.toLowerCase())) {
+    const dedupeKey = normalizeRefForDedupe(trimmed);
+    if (!trimmed || seen.has(dedupeKey)) {
       return;
     }
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
@@ -89,7 +236,12 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     if (!isImageExtension(trimmed)) {
       return;
     }
-    seen.add(trimmed.toLowerCase());
+    try {
+      assertNoWindowsNetworkPath(trimmed, "Image path");
+    } catch {
+      return;
+    }
+    seen.add(dedupeKey);
     const resolved = trimmed.startsWith("~") ? resolveUserPath(trimmed) : trimmed;
     refs.push({ raw: trimmed, type: "path", resolved });
   };
@@ -98,6 +250,10 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Each bracket = ONE file. The | separates path from URL, not multiple files.
   // Multi-file format uses separate brackets on separate lines.
   const mediaAttachedPattern = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
+  const mediaAttachedPathPattern = new RegExp(MEDIA_ATTACHED_PATH_REGEX_SOURCE, "i");
+  const messageImagePattern = new RegExp(MESSAGE_IMAGE_REGEX_SOURCE, "gi");
+  const fileUrlPattern = new RegExp(FILE_URL_REGEX_SOURCE, "gi");
+  const pathPattern = new RegExp(PATH_REGEX_SOURCE, "gi");
   let match: RegExpExecArray | null;
   while ((match = mediaAttachedPattern.exec(prompt)) !== null) {
     const content = match[1];
@@ -107,21 +263,31 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
       continue;
     }
 
+    // Check for a Gateway claim-check URI first (media://inbound/<id>).
+    // This must be tested before the extension-based path regex because the
+    // URI has no file extension suffix in its base form.
+    const mediaUriMatch = content.match(MEDIA_URI_REGEX);
+    if (mediaUriMatch) {
+      const uri = `media://inbound/${mediaUriMatch[1]}`;
+      const dedupeKey = normalizeRefForDedupe(uri);
+      if (!seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
+        refs.push({ raw: uri, type: "media-uri", resolved: uri });
+      }
+      continue;
+    }
+
     // Extract path before the (mime/type) or | delimiter
     // Format is: path (type) | url  OR  just: path (type)
     // Path may contain spaces (e.g., "ChatGPT Image Apr 21.png")
     // Use non-greedy .+? to stop at first image extension
-    const pathMatch = content.match(
-      /^\s*(.+?\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif))\s*(?:\(|$|\|)/i,
-    );
+    const pathMatch = content.match(mediaAttachedPathPattern);
     if (pathMatch?.[1]) {
       addPathRef(pathMatch[1].trim());
     }
   }
 
   // Pattern for [Image: source: /path/...] format from messaging systems
-  const messageImagePattern =
-    /\[Image:\s*source:\s*([^\]]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif))\]/gi;
   while ((match = messageImagePattern.exec(prompt)) !== null) {
     const raw = match[1]?.trim();
     if (raw) {
@@ -132,16 +298,16 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Remote HTTP(S) URLs are intentionally ignored. Native image injection is local-only.
 
   // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
-  const fileUrlPattern = /file:\/\/[^\s<>"'`\]]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif)/gi;
   while ((match = fileUrlPattern.exec(prompt)) !== null) {
     const raw = match[0];
-    if (seen.has(raw.toLowerCase())) {
+    const dedupeKey = normalizeRefForDedupe(raw);
+    if (seen.has(dedupeKey)) {
       continue;
     }
-    seen.add(raw.toLowerCase());
+    seen.add(dedupeKey);
     // Use fileURLToPath for proper handling (e.g., file://localhost/path)
     try {
-      const resolved = fileURLToPath(raw);
+      const resolved = safeFileURLToPath(raw);
       refs.push({ raw, type: "path", resolved });
     } catch {
       // Skip malformed file:// URLs
@@ -154,8 +320,6 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // - ./relative/path.ext
   // - ../parent/path.ext
   // - ~/home/path.ext
-  const pathPattern =
-    /(?:^|\s|["'`(])((\.\.?\/|[~/])[^\s"'`()[\]]*\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif))/gi;
   while ((match = pathPattern.exec(prompt)) !== null) {
     // Use capture group 1 (the path without delimiter prefix); skip if undefined
     if (match[1]) {
@@ -167,7 +331,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
 }
 
 /**
- * Loads an image from a file path or URL and returns it as ImageContent.
+ * Loads an image from a file path and returns it as ImageContent.
  *
  * @param ref The detected image reference
  * @param workspaceDir The current workspace directory for resolving relative paths
@@ -179,59 +343,89 @@ export async function loadImageFromRef(
   workspaceDir: string,
   options?: {
     maxBytes?: number;
-    /** If set, enforce that file paths are within this sandbox root */
-    sandboxRoot?: string;
+    workspaceOnly?: boolean;
+    sandbox?: { root: string; bridge: SandboxFsBridge };
   },
 ): Promise<ImageContent | null> {
+  // Handle Gateway claim-check URIs (media://inbound/<id>).
+  // These are written by the Gateway's offload path and point to files that
+  // the Gateway has already validated and persisted. They are intentionally
+  // exempt from workspaceOnly checks because they live in the media store
+  // managed by the Gateway, not in the agent workspace.
+  if (ref.type === "media-uri") {
+    const uriMatch = ref.resolved.match(MEDIA_URI_REGEX);
+    if (!uriMatch) {
+      log.debug(`Native image: malformed media URI, skipping: ${ref.resolved}`);
+      return null;
+    }
+    const mediaId = uriMatch[1];
+    try {
+      // resolveMediaBufferPath accepts the media ID (with optional extension
+      // and original-filename prefix) and returns the absolute path of the
+      // persisted file. It applies its own guards against path traversal,
+      // symlinks, and null bytes.
+      const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
+      const media = await loadWebMedia(physicalPath, {
+        maxBytes: options?.maxBytes,
+        localRoots: [getMediaDir()],
+      });
+      if (media.kind !== "image") {
+        log.debug(`Native image: media store entry is not an image: ${mediaId}`);
+        return null;
+      }
+      const mimeType = media.contentType ?? "image/jpeg";
+      const data = media.buffer.toString("base64");
+      log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
+      return { type: "image", data, mimeType };
+    } catch (err) {
+      log.debug(
+        `Native image: failed to load media-uri ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
   try {
     let targetPath = ref.resolved;
 
-    // Remote URL loading is disabled (local-only).
-    if (ref.type === "url") {
-      log.debug(`Native image: rejecting remote URL (local-only): ${ref.resolved}`);
-      return null;
-    }
-
-    // For file paths, resolve relative to the appropriate root:
-    // - When sandbox is enabled, resolve relative to sandboxRoot for security
-    // - Otherwise, resolve relative to workspaceDir
-    // Note: ref.resolved may already be absolute (e.g., after ~ expansion in detectImageReferences),
-    // in which case we skip relative resolution.
-    if (ref.type === "path" && !path.isAbsolute(targetPath)) {
-      const resolveRoot = options?.sandboxRoot ?? workspaceDir;
-      targetPath = path.resolve(resolveRoot, targetPath);
-    }
-
-    // Enforce sandbox restrictions if sandboxRoot is set
-    if (ref.type === "path" && options?.sandboxRoot) {
+    // Resolve paths relative to sandbox or workspace as needed
+    if (options?.sandbox) {
       try {
-        const validated = await assertSandboxPath({
-          filePath: targetPath,
-          cwd: options.sandboxRoot,
-          root: options.sandboxRoot,
+        const resolved = await resolveSandboxedBridgeMediaPath({
+          sandbox: {
+            root: options.sandbox.root,
+            bridge: options.sandbox.bridge,
+            workspaceOnly: options.workspaceOnly,
+          },
+          mediaPath: targetPath,
         });
-        targetPath = validated.resolved;
+        targetPath = resolved.resolved;
       } catch (err) {
-        // Log the actual error for debugging (sandbox violation or other path error)
         log.debug(
           `Native image: sandbox validation failed for ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
         );
         return null;
       }
+    } else if (!path.isAbsolute(targetPath)) {
+      targetPath = path.resolve(workspaceDir, targetPath);
     }
-
-    // Check file exists for local paths
-    if (ref.type === "path") {
-      try {
-        await fs.stat(targetPath);
-      } catch {
-        log.debug(`Native image: file not found: ${targetPath}`);
-        return null;
-      }
+    if (options?.workspaceOnly && !options?.sandbox) {
+      const root = options?.sandbox?.root ?? workspaceDir;
+      await assertSandboxPath({
+        filePath: targetPath,
+        cwd: root,
+        root,
+      });
     }
 
     // loadWebMedia handles local file paths (including file:// URLs)
-    const media = await loadWebMedia(targetPath, options?.maxBytes);
+    const media = options?.sandbox
+      ? await loadWebMedia(targetPath, {
+          maxBytes: options.maxBytes,
+          sandboxValidated: true,
+          readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
+        })
+      : await loadWebMedia(targetPath, options?.maxBytes);
 
     if (media.kind !== "image") {
       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
@@ -264,95 +458,28 @@ export function modelSupportsImages(model: { input?: string[] }): boolean {
 }
 
 /**
- * Extracts image references from conversation history messages.
- * Scans user messages for image paths/URLs that can be loaded.
- * Each ref includes the messageIndex so images can be injected at their original location.
- *
- * Note: Global deduplication is intentional - if the same image appears in multiple
- * messages, we only inject it at the FIRST occurrence. This is sufficient because:
- * 1. The model sees all message content including the image
- * 2. Later references to "the image" or "that picture" will work since it's in context
- * 3. Injecting duplicates would waste tokens and potentially hit size limits
- */
-function detectImagesFromHistory(messages: unknown[]): DetectedImageRef[] {
-  const allRefs: DetectedImageRef[] = [];
-  const seen = new Set<string>();
-
-  const messageHasImageContent = (msg: unknown): boolean => {
-    if (!msg || typeof msg !== "object") {
-      return false;
-    }
-    const content = (msg as { content?: unknown }).content;
-    if (!Array.isArray(content)) {
-      return false;
-    }
-    return content.some(
-      (part) =>
-        part != null && typeof part === "object" && (part as { type?: string }).type === "image",
-    );
-  };
-
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object") {
-      continue;
-    }
-    const message = msg as { role?: string };
-    // Only scan user messages for image references
-    if (message.role !== "user") {
-      continue;
-    }
-    // Skip if message already has image content (prevents reloading each turn)
-    if (messageHasImageContent(msg)) {
-      continue;
-    }
-
-    const text = extractTextFromMessage(msg);
-    if (!text) {
-      continue;
-    }
-
-    const refs = detectImageReferences(text);
-    for (const ref of refs) {
-      const key = ref.resolved.toLowerCase();
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      allRefs.push({ ...ref, messageIndex: i });
-    }
-  }
-
-  return allRefs;
-}
-
-/**
  * Detects and loads images referenced in a prompt for models with vision capability.
  *
  * This function scans the prompt for image references (file paths and URLs),
  * loads them, and returns them as ImageContent array ready to be passed to
  * the model's prompt method.
  *
- * Also scans conversation history for images from previous turns and returns
- * them mapped by message index so they can be injected at their original location.
- *
  * @param params Configuration for image detection and loading
- * @returns Object with loaded images for current prompt and history images by message index
+ * @returns Object with loaded images for current prompt only
  */
 export async function detectAndLoadPromptImages(params: {
   prompt: string;
   workspaceDir: string;
   model: { input?: string[] };
   existingImages?: ImageContent[];
-  historyMessages?: unknown[];
+  imageOrder?: PromptImageOrderEntry[];
   maxBytes?: number;
-  /** If set, enforce that file paths are within this sandbox root */
-  sandboxRoot?: string;
+  maxDimensionPx?: number;
+  workspaceOnly?: boolean;
+  sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
   images: ImageContent[];
-  /** Images from history messages, keyed by message index */
-  historyImagesByIndex: Map<number, ImageContent[]>;
   detectedRefs: DetectedImageRef[];
   loadedCount: number;
   skippedCount: number;
@@ -361,7 +488,6 @@ export async function detectAndLoadPromptImages(params: {
   if (!modelSupportsImages(params.model)) {
     return {
       images: [],
-      historyImagesByIndex: new Map(),
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
@@ -369,60 +495,37 @@ export async function detectAndLoadPromptImages(params: {
   }
 
   // Detect images from current prompt
-  const promptRefs = detectImageReferences(params.prompt);
-
-  // Detect images from conversation history (with message indices)
-  const historyRefs = params.historyMessages ? detectImagesFromHistory(params.historyMessages) : [];
-
-  // Deduplicate: if an image is in the current prompt, don't also load it from history.
-  // Current prompt images are passed via the `images` parameter to prompt(), while history
-  // images are injected into their original message positions. We don't want the same
-  // image loaded and sent twice (wasting tokens and potentially causing confusion).
-  const seenPaths = new Set(promptRefs.map((r) => r.resolved.toLowerCase()));
-  const uniqueHistoryRefs = historyRefs.filter((r) => !seenPaths.has(r.resolved.toLowerCase()));
-
-  const allRefs = [...promptRefs, ...uniqueHistoryRefs];
+  const allRefs = detectImageReferences(params.prompt);
 
   if (allRefs.length === 0) {
     return {
       images: params.existingImages ?? [],
-      historyImagesByIndex: new Map(),
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
     };
   }
 
-  log.debug(
-    `Native image: detected ${allRefs.length} image refs (${promptRefs.length} in prompt, ${uniqueHistoryRefs.length} in history)`,
-  );
-
-  // Load images for current prompt
-  const promptImages: ImageContent[] = [...(params.existingImages ?? [])];
-  // Load images for history, grouped by message index
-  const historyImagesByIndex = new Map<number, ImageContent[]>();
+  log.debug(`Native image: detected ${allRefs.length} image refs in prompt`);
+  const { promptRefs, attachmentRefs } = splitPromptAndAttachmentRefs({
+    prompt: params.prompt,
+    refs: allRefs,
+    imageOrder: params.imageOrder,
+  });
+  const promptRefImages: ImageContent[] = [];
+  const offloadedImages: Array<ImageContent | null> = [];
 
   let loadedCount = 0;
   let skippedCount = 0;
 
-  for (const ref of allRefs) {
+  for (const ref of promptRefs) {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
-      sandboxRoot: params.sandboxRoot,
+      workspaceOnly: params.workspaceOnly,
+      sandbox: params.sandbox,
     });
     if (image) {
-      if (ref.messageIndex !== undefined) {
-        // History image - add to the appropriate message index
-        const existing = historyImagesByIndex.get(ref.messageIndex);
-        if (existing) {
-          existing.push(image);
-        } else {
-          historyImagesByIndex.set(ref.messageIndex, [image]);
-        }
-      } else {
-        // Current prompt image
-        promptImages.push(image);
-      }
+      promptRefImages.push(image);
       loadedCount++;
       log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     } else {
@@ -430,18 +533,39 @@ export async function detectAndLoadPromptImages(params: {
     }
   }
 
-  const sanitizedPromptImages = await sanitizeImagesWithLog(promptImages, "prompt:images");
-  const sanitizedHistoryImagesByIndex = new Map<number, ImageContent[]>();
-  for (const [index, images] of historyImagesByIndex) {
-    const sanitized = await sanitizeImagesWithLog(images, `history:images:${index}`);
-    if (sanitized.length > 0) {
-      sanitizedHistoryImagesByIndex.set(index, sanitized);
+  for (const ref of attachmentRefs) {
+    const image = await loadImageFromRef(ref, params.workspaceDir, {
+      maxBytes: params.maxBytes,
+      workspaceOnly: params.workspaceOnly,
+      sandbox: params.sandbox,
+    });
+    offloadedImages.push(image);
+    if (image) {
+      loadedCount++;
+      log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
+    } else {
+      skippedCount++;
     }
   }
 
+  const promptImages = mergePromptAttachmentImages({
+    imageOrder: params.imageOrder,
+    existingImages: params.existingImages,
+    offloadedImages,
+    promptRefImages,
+  });
+
+  const imageSanitization: ImageSanitizationLimits = {
+    maxDimensionPx: params.maxDimensionPx,
+  };
+  const sanitizedPromptImages = await sanitizeImagesWithLog(
+    promptImages,
+    "prompt:images",
+    imageSanitization,
+  );
+
   return {
     images: sanitizedPromptImages,
-    historyImagesByIndex: sanitizedHistoryImagesByIndex,
     detectedRefs: allRefs,
     loadedCount,
     skippedCount,
