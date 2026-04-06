@@ -29,8 +29,13 @@ function loadFromFile(): {
   try {
     const raw = fs.readFileSync(REGISTRY_PATH, "utf-8");
     const parsed: RegistryFile = JSON.parse(raw);
-    const components = new Map(Object.entries(parsed.components ?? {}));
-    const modals = new Map(Object.entries(parsed.modals ?? {}));
+    const now = Date.now();
+    const components = new Map(
+      Object.entries(parsed.components ?? {}).filter(([, entry]) => !isExpired(entry, now)),
+    );
+    const modals = new Map(
+      Object.entries(parsed.modals ?? {}).filter(([, entry]) => !isExpired(entry, now)),
+    );
     return { components, modals };
   } catch {
     // ENOENT or corrupt file — start fresh.
@@ -38,17 +43,17 @@ function loadFromFile(): {
   }
 }
 
-function saveToFile(): void {
+async function saveToFile(): Promise<void> {
   try {
-    fs.mkdirSync(REGISTRY_DIR, { recursive: true });
+    await fs.promises.mkdir(REGISTRY_DIR, { recursive: true });
     const data: RegistryFile = {
       components: Object.fromEntries(componentEntries),
       modals: Object.fromEntries(modalEntries),
     };
     const json = JSON.stringify(data, null, 2);
     const tmp = `${REGISTRY_PATH}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, json, "utf-8");
-    fs.renameSync(tmp, REGISTRY_PATH);
+    await fs.promises.writeFile(tmp, json, "utf-8");
+    await fs.promises.rename(tmp, REGISTRY_PATH);
   } catch {
     // Best-effort — don't crash the bot if disk write fails.
   }
@@ -121,7 +126,7 @@ export function registerDiscordComponentEntries(params: {
     );
     modalEntries.set(modal.id, normalized);
   }
-  saveToFile();
+  saveToFile().catch(() => {});
 }
 
 export function resolveDiscordComponentEntry(params: {
@@ -136,12 +141,12 @@ export function resolveDiscordComponentEntry(params: {
   const now = Date.now();
   if (isExpired(entry, now)) {
     componentEntries.delete(params.id);
-    saveToFile();
+    saveToFile().catch(() => {});
     return null;
   }
   if (params.consume !== false) {
     componentEntries.delete(params.id);
-    saveToFile();
+    saveToFile().catch(() => {});
   }
   return entry;
 }
@@ -158,12 +163,12 @@ export function resolveDiscordModalEntry(params: {
   const now = Date.now();
   if (isExpired(entry, now)) {
     modalEntries.delete(params.id);
-    saveToFile();
+    saveToFile().catch(() => {});
     return null;
   }
   if (params.consume !== false) {
     modalEntries.delete(params.id);
-    saveToFile();
+    saveToFile().catch(() => {});
   }
   return entry;
 }
@@ -171,10 +176,6 @@ export function resolveDiscordModalEntry(params: {
 export function clearDiscordComponentEntries(): void {
   componentEntries.clear();
   modalEntries.clear();
-  cacheLoaded = false;
-  try {
-    fs.unlinkSync(REGISTRY_PATH);
-  } catch {
-    // File may not exist.
-  }
+  cacheLoaded = true;
+  saveToFile().catch(() => {});
 }
