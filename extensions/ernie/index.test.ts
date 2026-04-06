@@ -1,11 +1,11 @@
-import { resolveProviderPluginChoice } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
+import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import erniePlugin from "./index.js";
 
 describe("ernie provider plugin", () => {
-  it("registers ERNIE with api-key auth wizard metadata", () => {
-    const provider = registerSingleProviderPlugin(erniePlugin);
+  it("registers ERNIE with api-key auth wizard metadata", async () => {
+    const provider = await registerSingleProviderPlugin(erniePlugin);
     const resolved = resolveProviderPluginChoice({
       providers: [provider],
       choice: "ernie-api-key",
@@ -21,7 +21,7 @@ describe("ernie provider plugin", () => {
   });
 
   it("builds the static ERNIE model catalog", async () => {
-    const provider = registerSingleProviderPlugin(erniePlugin);
+    const provider = await registerSingleProviderPlugin(erniePlugin);
     expect(provider.catalog).toBeDefined();
 
     const catalog = await provider.catalog!.run({

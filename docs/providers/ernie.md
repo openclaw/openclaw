@@ -104,7 +104,7 @@ Add to your `~/.openclaw/config.json`:
 
 ```bash
 # Specify ERNIE model
-openclaw chat --model ernie/ernie-5.0-thinking-preview
+openclaw agent --model ernie/ernie-5.0-thinking-preview
 ```
 
 ### Send a Single Message
