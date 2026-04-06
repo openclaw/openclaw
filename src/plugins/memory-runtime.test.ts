@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveRuntimePluginRegistryMock = vi.fn((_options: unknown): unknown => undefined);
-const applyPluginAutoEnableMock = vi.fn((_params: { config: unknown }): unknown => undefined);
+const applyPluginAutoEnableMock = vi.fn<(params: { config: unknown; env?: unknown }) => unknown>();
 const getMemoryRuntimeMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn(
   (_config: unknown, _agentId: unknown): unknown => undefined,
@@ -9,7 +9,8 @@ const resolveAgentWorkspaceDirMock = vi.fn(
 const resolveDefaultAgentIdMock = vi.fn((_config: unknown) => "default");
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (params: { config: unknown }) => applyPluginAutoEnableMock(params),
+  applyPluginAutoEnable: (params: { config: unknown; env?: unknown }) =>
+    applyPluginAutoEnableMock(params),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({

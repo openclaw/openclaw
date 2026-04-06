@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.fn();
-const applyPluginAutoEnableMock = vi.fn((_params: { config: unknown }): unknown => undefined);
+const applyPluginAutoEnableMock = vi.fn<(params: { config: unknown; env?: unknown }) => unknown>();
 const resolveAgentWorkspaceDirMock = vi.fn(
   (_config: unknown, _agentId: unknown): string => "/resolved-workspace",
 );
@@ -15,7 +15,8 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (params: { config: unknown }) => applyPluginAutoEnableMock(params),
+  applyPluginAutoEnable: (params: { config: unknown; env?: unknown }) =>
+    applyPluginAutoEnableMock(params),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({

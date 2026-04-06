@@ -1,12 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadOpenClawPluginsMock = vi.fn((_options: unknown): unknown => undefined);
-const getActivePluginRegistryMock = vi.fn();
+const getActivePluginRegistryMock = vi.fn<() => unknown>(() => undefined);
 const resolveConfiguredChannelPluginIdsMock = vi.fn(
   (_options: unknown): string[] | undefined => undefined,
 );
 const resolveChannelPluginIdsMock = vi.fn((_options: unknown): string[] | undefined => undefined);
-const applyPluginAutoEnableMock = vi.fn((_params: { config: unknown }): unknown => undefined);
+const applyPluginAutoEnableMock = vi.fn<(params: { config: unknown; env?: unknown }) => unknown>();
 const resolveAgentWorkspaceDirMock = vi.fn(
   (_config: unknown, _agentId: unknown): string => "/resolved-workspace",
 );
@@ -30,7 +30,8 @@ vi.mock("../channel-plugin-ids.js", () => ({
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (params: { config: unknown }) => applyPluginAutoEnableMock(params),
+  applyPluginAutoEnable: (params: { config: unknown; env?: unknown }) =>
+    applyPluginAutoEnableMock(params),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
