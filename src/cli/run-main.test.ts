@@ -6,6 +6,7 @@ import {
   shouldRegisterPrimarySubcommand,
   shouldSkipPluginCommandRegistration,
   shouldUseRootHelpFastPath,
+  shouldUseSubcommandHelpFastPath,
 } from "./run-main.js";
 
 describe("rewriteUpdateFlagArgv", () => {
@@ -135,6 +136,21 @@ describe("shouldUseRootHelpFastPath", () => {
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
+  });
+});
+
+describe("shouldUseSubcommandHelpFastPath", () => {
+  it("uses the fast path for built-in and plugin subcommand help", () => {
+    expect(shouldUseSubcommandHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(true);
+    expect(shouldUseSubcommandHelpFastPath(["node", "openclaw", "memory", "--help"])).toBe(true);
+  });
+
+  it("does not use the fast path for root help or regular command runs", () => {
+    expect(shouldUseSubcommandHelpFastPath(["node", "openclaw", "--help"])).toBe(false);
+    expect(shouldUseSubcommandHelpFastPath(["node", "openclaw", "status"])).toBe(false);
+    expect(shouldUseSubcommandHelpFastPath(["node", "openclaw", "--profile", "work"])).toBe(
+      false,
+    );
   });
 });
 
