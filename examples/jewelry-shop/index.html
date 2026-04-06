@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Elegant Jewelry Collection</title>
+    <link rel="stylesheet" href="public/styles.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>✨ Elegant Jewelry</h1>
+            <nav>
+                <a href="index.html">Home</a>
+                <a href="#products">Products</a>
+                <a href="#" id="cart-link">Cart (<span id="cart-count">0</span>)</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <h2>Timeless Elegance, Modern Style</h2>
+            <p>Discover our curated collection of exquisite jewelry pieces</p>
+        </section>
+
+        <section id="products" class="products">
+            <h2>Our Collection</h2>
+            <div class="product-grid">
+                <div class="product-card" data-id="1" data-name="Diamond Solitaire Ring" data-price="1499.99">
+                    <div class="product-image">💍</div>
+                    <h3>Diamond Solitaire Ring</h3>
+                    <p class="description">Classic 14K white gold ring with brilliant-cut diamond</p>
+                    <p class="price">$1,499.99</p>
+                    <button class="add-to-cart">Add to Cart</button>
+                </div>
+
+                <div class="product-card" data-id="2" data-name="Pearl Necklace" data-price="899.99">
+                    <div class="product-image">📿</div>
+                    <h3>Pearl Necklace</h3>
+                    <p class="description">Elegant freshwater pearl strand necklace</p>
+                    <p class="price">$899.99</p>
+                    <button class="add-to-cart">Add to Cart</button>
+                </div>
+
+                <div class="product-card" data-id="3" data-name="Gold Bracelet" data-price="749.99">
+                    <div class="product-image">⚜️</div>
+                    <h3>Gold Bracelet</h3>
+                    <p class="description">Stunning 18K yellow gold link bracelet</p>
+                    <p class="price">$749.99</p>
+                    <button class="add-to-cart">Add to Cart</button>
+                </div>
+
+                <div class="product-card" data-id="4" data-name="Sapphire Earrings" data-price="1249.99">
+                    <div class="product-image">💎</div>
+                    <h3>Sapphire Earrings</h3>
+                    <p class="description">Brilliant blue sapphire stud earrings in platinum</p>
+                    <p class="price">$1,249.99</p>
+                    <button class="add-to-cart">Add to Cart</button>
+                </div>
+
+                <div class="product-card" data-id="5" data-name="Emerald Pendant" data-price="1099.99">
+                    <div class="product-image">💚</div>
+                    <h3>Emerald Pendant</h3>
+                    <p class="description">Exquisite emerald pendant with diamond accents</p>
+                    <p class="price">$1,099.99</p>
+                    <button class="add-to-cart">Add to Cart</button>
+                </div>
+
+                <div class="product-card" data-id="6" data-name="Ruby Tennis Bracelet" data-price="1899.99">
+                    <div class="product-image">❤️</div>
+                    <h3>Ruby Tennis Bracelet</h3>
+                    <p class="description">Dazzling ruby and diamond tennis bracelet</p>
+                    <p class="price">$1,899.99</p>
+                    <button class="add-to-cart">Add to Cart</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="cart-section" class="cart-section" style="display: none;">
+            <h2>Shopping Cart</h2>
+            <div id="cart-items"></div>
+            <div class="cart-total">
+                <h3>Total: $<span id="cart-total">0.00</span></h3>
+                <button id="checkout-btn" class="checkout-btn">Proceed to Checkout</button>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 Elegant Jewelry. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="src/app.js"></script>
+</body>
+</html>

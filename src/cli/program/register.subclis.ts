@@ -303,6 +303,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "memes",
+    description: "Sovereign memes about data freedom and user control",
+    register: async (program) => {
+      const mod = await import("../memes-cli.js");
+      mod.registerMemesCli(program);
+    },
+  },
+  {
     name: "update",
     description: "Update OpenClaw and inspect update channel status",
     hasSubcommands: true,

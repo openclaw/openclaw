@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Checkout - Elegant Jewelry</title>
+    <link rel="stylesheet" href="public/styles.css">
+    <!-- Stripe.js - Load from Stripe CDN -->
+    <script src="https://js.stripe.com/v3/"></script>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>✨ Elegant Jewelry</h1>
+            <nav>
+                <a href="index.html">Home</a>
+                <a href="index.html#products">Products</a>
+                <a href="#" id="cart-link">Cart (<span id="cart-count">0</span>)</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="checkout-container">
+            <div class="checkout-left">
+                <h2>Order Summary</h2>
+                <div id="order-summary"></div>
+                <div class="order-total">
+                    <h3>Total: $<span id="order-total">0.00</span></h3>
+                </div>
+            </div>
+
+            <div class="checkout-right">
+                <h2>Payment Information</h2>
+                <div class="stripe-info">
+                    <p class="info-message">
+                        <strong>🔒 Secure Payment with Stripe</strong><br>
+                        Your payment information is encrypted and secure.
+                    </p>
+                </div>
+
+                <form id="payment-form">
+                    <div class="form-section">
+                        <h3>Billing Details</h3>
+                        <div class="form-group">
+                            <label for="name">Full Name</label>
+                            <input type="text" id="name" name="name" required placeholder="John Doe">
+                        </div>
+                        <div class="form-group">
+                            <label for="email">Email</label>
+                            <input type="email" id="email" name="email" required placeholder="john@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="address">Address</label>
+                            <input type="text" id="address" name="address" required placeholder="123 Main St">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="city">City</label>
+                                <input type="text" id="city" name="city" required placeholder="New York">
+                            </div>
+                            <div class="form-group">
+                                <label for="zip">ZIP Code</label>
+                                <input type="text" id="zip" name="zip" required placeholder="10001">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <h3>Payment Details</h3>
+                        <!-- Stripe Elements will be inserted here -->
+                        <div class="form-group">
+                            <label for="card-element">Card Information</label>
+                            <div id="card-element" class="stripe-element">
+                                <!-- Stripe Card Element will be mounted here -->
+                            </div>
+                            <div id="card-errors" class="error-message" role="alert"></div>
+                        </div>
+                    </div>
+
+                    <button type="submit" id="submit-payment" class="pay-button">
+                        <span id="button-text">Pay Now</span>
+                        <span id="spinner" class="spinner" style="display: none;"></span>
+                    </button>
+
+                    <div id="payment-message" class="payment-message"></div>
+                </form>
+
+                <div class="security-note">
+                    <p>
+                        <strong>Security Note:</strong> All payment processing is handled securely by Stripe.
+                        We never store your card information on our servers.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 Elegant Jewelry. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="src/checkout.js"></script>
+</body>
+</html>
