@@ -95,6 +95,9 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
   return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
+// Normalize a dangerous flag path using the mapping's id field (if present) so that
+// reordering an existing dangerous mapping does not look like a newly enabled flag,
+// while still detecting when a new mapping identity gains a dangerous flag.
 function normalizeDangerousConfigFlag(flag: string, config: Record<string, unknown>): string {
   return flag.replace(/^(hooks\.mappings)\[(\d+)\]/, (_, prefix: string, indexStr: string) => {
     const index = parseInt(indexStr, 10);
@@ -121,6 +124,15 @@ function collectNewlyEnabledDangerousConfigFlags(
   for (const flag of collectEnabledInsecureOrDangerousFlags(currentConfig as OpenClawConfig)) {
     const normalizedFlag = normalizeDangerousConfigFlag(flag, currentConfig);
     currentFlagCounts.set(normalizedFlag, (currentFlagCounts.get(normalizedFlag) ?? 0) + 1);
+  }
+  // Honor the legacy tools.bash.applyPatch.workspaceOnly alias in the baseline so that
+  // canonicalizing an already-dangerous legacy config to tools.exec.* is not treated as
+  // a newly enabled dangerous flag.
+  if (getValueAtPath(currentConfig, "tools.exec.applyPatch.workspaceOnly") === false) {
+    const key = "tools.exec.applyPatch.workspaceOnly=false";
+    if (!currentFlagCounts.has(key)) {
+      currentFlagCounts.set(key, 1);
+    }
   }
   const seenNextFlagCounts = new Map<string, number>();
   const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig).filter(
