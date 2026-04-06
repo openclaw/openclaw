@@ -433,8 +433,12 @@ describe("tool descriptions", () => {
     expect(execTool.description).not.toContain("use cron instead");
     expect(processTool.description).not.toContain("scheduled follow-ups");
     expect(execTool.description).toContain("otherwise use process to confirm completion");
-    expect(processTool.description).toContain("completion confirmation when automatic completion wake is unavailable");
-    expect(processTool.description).toContain("Use write/send-keys/submit/paste/kill for input or intervention.");
+    expect(processTool.description).toContain(
+      "completion confirmation when automatic completion wake is unavailable",
+    );
+    expect(processTool.description).toContain(
+      "Use write/send-keys/submit/paste/kill for input or intervention.",
+    );
   });
 });
 
@@ -559,12 +563,12 @@ describe("exec notifyOnExit", () => {
       wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
     );
     try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
       await expect
         .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
         .toMatchObject({
-          reason: `exec:${sessionId}:exit`,
+          reason: "exec-event",
           sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
         });
     } finally {
@@ -579,12 +583,12 @@ describe("exec notifyOnExit", () => {
       wakeHandler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0],
     );
     try {
-      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
+      const _sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
       await expect
         .poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS)
         .toEqual({
-          reason: `exec:${sessionId}:exit`,
+          reason: "exec-event",
         });
     } finally {
       dispose();
@@ -674,4 +678,35 @@ describe("applyPathPrepend with case-insensitive PATH key", () => {
     expect("PATH" in env).toBe(false);
     expect("Path" in env).toBe(false);
   });
+});
+
+describe("exec backgrounded onUpdate suppression", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it(
+    "does not invoke onUpdate after the session is backgrounded",
+    async () => {
+      const onUpdateSpy = vi.fn();
+      const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+      const command = joinCommands([shellEcho("before"), yieldDelayCmd, shellEcho("after")]);
+      const result = await tool.execute(
+        nextCallId(),
+        { command, background: true },
+        undefined,
+        onUpdateSpy,
+      );
+
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+      const sessionId = requireSessionId(result.details as { sessionId?: string });
+      const callsBeforeBackground = onUpdateSpy.mock.calls.length;
+      await expect
+        .poll(() => {
+          const finished = getFinishedSession(sessionId);
+          return Boolean(finished);
+        }, BACKGROUND_POLL_OPTIONS)
+        .toBe(true);
+      expect(onUpdateSpy.mock.calls.length).toBe(callsBeforeBackground);
+    },
+    isWin ? 15_000 : 5_000,
+  );
 });

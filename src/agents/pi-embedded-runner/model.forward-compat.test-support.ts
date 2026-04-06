@@ -4,7 +4,7 @@ export function buildForwardCompatTemplate(params: {
   id: string;
   name: string;
   provider: string;
-  api: "anthropic-messages" | "google-gemini-cli" | "openai-completions" | "openai-responses";
+  api: "anthropic-messages" | "google-generative-ai" | "openai-completions" | "openai-responses";
   baseUrl: string;
   reasoning?: boolean;
   input?: readonly ["text"] | readonly ["text", "image"];

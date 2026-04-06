@@ -1,5 +1,5 @@
 ---
-summary: "Model authentication: OAuth, API keys, and Claude CLI reuse"
+summary: "Model authentication: OAuth, API keys, and legacy Anthropic setup-token"
 read_when:
   - Debugging model auth or OAuth expiry
   - Documenting authentication or credential storage
@@ -9,7 +9,7 @@ title: "Authentication"
 # Authentication (Model Providers)
 
 <Note>
-This page covers **model provider** authentication (API keys, OAuth, Claude CLI reuse). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+This page covers **model provider** authentication (API keys, OAuth, and legacy Anthropic setup-token). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 </Note>
 
 OpenClaw supports OAuth and API keys for model providers. For always-on gateway
@@ -26,8 +26,9 @@ For credential eligibility/reason-code rules used by `models status --probe`, se
 
 If you’re running a long-lived gateway, start with an API key for your chosen
 provider.
-For Anthropic specifically, API key auth is the safe path. Claude CLI reuse is
-the other supported subscription-style setup path.
+For Anthropic specifically, API key auth is the safe path. Anthropic
+subscription-style auth inside OpenClaw is the legacy setup-token path and
+should be treated as an **Extra Usage** path, not a plan-limits path.
 
 1. Create an API key in your provider console.
 2. Put it on the **gateway host** (the machine running `openclaw gateway`).
@@ -68,8 +69,9 @@ OpenClaw users that the **OpenClaw** Claude-login path counts as third-party
 harness usage and requires **Extra Usage** billed separately from the
 subscription.
 
-For the clearest setup path, use an Anthropic API key or migrate to Claude CLI
-on the gateway host.
+For the clearest setup path, use an Anthropic API key. If you must keep a
+subscription-style Anthropic path in OpenClaw, use the legacy setup-token path
+with the expectation that Anthropic treats it as **Extra Usage**.
 
 Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 
@@ -108,41 +110,17 @@ Notes:
 Optional ops scripts (systemd/Termux) are documented here:
 [Auth monitoring scripts](/help/scripts#auth-monitoring-scripts)
 
-## Anthropic: Claude CLI migration
+## Anthropic note
 
-If Claude CLI is already installed and signed in on the gateway host, you can
-switch an existing Anthropic setup over to the CLI backend. This is a
-supported OpenClaw migration path for reusing a local Claude CLI login on that
-host.
+The Anthropic `claude-cli` backend was removed.
 
-Prerequisites:
-
-- `claude` installed on the gateway host
-- Claude CLI already signed in there with `claude auth login`
-
-```bash
-openclaw models auth login --provider anthropic --method cli --set-default
-```
-
-This keeps your existing Anthropic auth profiles for rollback, but changes the
-default model selection to `claude-cli/...` and adds matching Claude CLI
-allowlist entries under `agents.defaults.models`.
-
-Verify:
-
-```bash
-openclaw models status
-```
-
-Onboarding shortcut:
-
-```bash
-openclaw onboard --auth-choice anthropic-cli
-```
-
-Interactive `openclaw onboard` and `openclaw configure` still prefer Claude CLI
-for Anthropic, but Anthropic setup-token is available again as a
-legacy/manual path and should be used with the Extra Usage billing expectation.
+- Use Anthropic API keys for Anthropic traffic in OpenClaw.
+- Anthropic setup-token remains a legacy/manual path and should be used with
+  the Extra Usage billing expectation Anthropic communicated to OpenClaw users.
+- `openclaw doctor` now detects stale removed Anthropic Claude CLI state. If
+  stored credential bytes still exist, doctor converts them back into
+  Anthropic token/OAuth profiles. If not, doctor removes the stale Claude CLI
+  config and points you to API key or setup-token recovery.
 
 ## Checking model auth status
 
@@ -198,8 +176,8 @@ to one model id rather than the whole provider profile.
 
 ### "No credentials found"
 
-If the Anthropic profile is missing, migrate that setup to Claude CLI or an API
-key on the **gateway host**, then re-check:
+If the Anthropic profile is missing, configure an Anthropic API key on the
+**gateway host** or set up the legacy Anthropic setup-token path, then re-check:
 
 ```bash
 openclaw models status
@@ -208,11 +186,16 @@ openclaw models status
 ### Token expiring/expired
 
 Run `openclaw models status` to confirm which profile is expiring. If a legacy
-Anthropic token profile is missing or expired, migrate that setup to Claude CLI
-or an API key.
+Anthropic token profile is missing or expired, refresh that setup via
+setup-token or migrate to an Anthropic API key.
 
-## Claude CLI requirements
+If the machine still has stale removed Anthropic Claude CLI state from older
+builds, run:
 
-Only needed for the Anthropic Claude CLI reuse path:
+```bash
+openclaw doctor --yes
+```
 
-- Claude Code CLI installed (`claude` command available)
+Doctor converts `anthropic:claude-cli` back to Anthropic token/OAuth when the
+stored credential bytes still exist. Otherwise it removes stale Claude CLI
+profile/config/model refs and leaves the next-step guidance.

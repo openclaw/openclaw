@@ -122,7 +122,6 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry` |
     | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers |
     | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers |
-    | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth-runtime` | Runtime API-key resolution helpers for provider plugins |
     | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers |
     | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
@@ -198,7 +197,7 @@ explicitly promotes one as public.
     | `plugin-sdk/json-store` | Small JSON state read/write helpers |
     | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
-    | `plugin-sdk/acp-runtime` | ACP runtime/session helpers |
+    | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/agent-config-primitives` | Narrow agent runtime config-schema primitives |
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
     | `plugin-sdk/dangerous-name-runtime` | Dangerous-name matching resolution helpers |
@@ -224,6 +223,7 @@ explicitly promotes one as public.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
+    | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio helper exports |
     | `plugin-sdk/text-runtime` | Shared text/markdown/logging helpers such as assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
@@ -233,6 +233,8 @@ explicitly promotes one as public.
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
+    | `plugin-sdk/music-generation` | Music generation provider/request/result types |
+    | `plugin-sdk/music-generation-core` | Shared music-generation types, failover helpers, provider lookup, and model-ref parsing |
     | `plugin-sdk/video-generation` | Video generation provider/request/result types |
     | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
@@ -254,17 +256,24 @@ explicitly promotes one as public.
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
     | `plugin-sdk/memory-core-host-query` | Memory host query helpers |
     | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers |
+    | `plugin-sdk/memory-core-host-events` | Memory host event journal helpers |
     | `plugin-sdk/memory-core-host-status` | Memory host status helpers |
     | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
+    | `plugin-sdk/memory-host-core` | Vendor-neutral alias for memory host core runtime helpers |
+    | `plugin-sdk/memory-host-events` | Vendor-neutral alias for memory host event journal helpers |
+    | `plugin-sdk/memory-host-files` | Vendor-neutral alias for memory host file/runtime helpers |
+    | `plugin-sdk/memory-host-markdown` | Shared managed-markdown helpers for memory-adjacent plugins |
+    | `plugin-sdk/memory-host-search` | Active memory runtime facade for search-manager access |
+    | `plugin-sdk/memory-host-status` | Vendor-neutral alias for memory host status helpers |
     | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helper surface |
   </Accordion>
 
   <Accordion title="Reserved bundled-helper subpaths">
-    | Family | Current generated subpaths | Intended use |
+    | Family | Current subpaths | Intended use |
     | --- | --- | --- |
-    | Browser | `plugin-sdk/browser`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-support` | Bundled browser plugin maintenance and compatibility |
+    | Browser | `plugin-sdk/browser-cdp`, `plugin-sdk/browser-config-runtime`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-control-auth`, `plugin-sdk/browser-node-runtime`, `plugin-sdk/browser-profiles`, `plugin-sdk/browser-security-runtime`, `plugin-sdk/browser-setup-tools`, `plugin-sdk/browser-support` | Bundled browser plugin support helpers (`browser-support` remains the compatibility barrel) |
     | Matrix | `plugin-sdk/matrix`, `plugin-sdk/matrix-helper`, `plugin-sdk/matrix-runtime-heavy`, `plugin-sdk/matrix-runtime-shared`, `plugin-sdk/matrix-runtime-surface`, `plugin-sdk/matrix-surface`, `plugin-sdk/matrix-thread-bindings` | Bundled Matrix helper/runtime surface |
     | Line | `plugin-sdk/line`, `plugin-sdk/line-core`, `plugin-sdk/line-runtime`, `plugin-sdk/line-surface` | Bundled LINE helper/runtime surface |
     | IRC | `plugin-sdk/irc`, `plugin-sdk/irc-surface` | Bundled IRC helper surface |
@@ -283,13 +292,13 @@ methods:
 | Method                                           | What it registers                |
 | ------------------------------------------------ | -------------------------------- |
 | `api.registerProvider(...)`                      | Text inference (LLM)             |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend      |
 | `api.registerChannel(...)`                       | Messaging channel                |
 | `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis   |
 | `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription |
 | `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions   |
 | `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis       |
 | `api.registerImageGenerationProvider(...)`       | Image generation                 |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                 |
 | `api.registerVideoGenerationProvider(...)`       | Video generation                 |
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider      |
 | `api.registerWebSearchProvider(...)`             | Web search                       |
@@ -303,14 +312,16 @@ methods:
 
 ### Infrastructure
 
-| Method                                         | What it registers     |
-| ---------------------------------------------- | --------------------- |
-| `api.registerHook(events, handler, opts?)`     | Event hook            |
-| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint |
-| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method    |
-| `api.registerCli(registrar, opts?)`            | CLI subcommand        |
-| `api.registerService(service)`                 | Background service    |
-| `api.registerInteractiveHandler(registration)` | Interactive handler   |
+| Method                                         | What it registers                       |
+| ---------------------------------------------- | --------------------------------------- |
+| `api.registerHook(events, handler, opts?)`     | Event hook                              |
+| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint                   |
+| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
+| `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
+| `api.registerService(service)`                 | Background service                      |
+| `api.registerInteractiveHandler(registration)` | Interactive handler                     |
+| `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
+| `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
 Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
 `update.*`) always stay `operator.admin`, even if a plugin tries to assign a
@@ -351,18 +362,6 @@ Use `commands` by itself only when you do not need lazy root CLI registration.
 That eager compatibility path remains supported, but it does not install
 descriptor-backed placeholders for parse-time lazy loading.
 
-### CLI backend registration
-
-`api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `claude-cli` or `codex-cli`.
-
-- The backend `id` becomes the provider prefix in model refs like `claude-cli/opus`.
-- The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
-- User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
-  plugin default before running the CLI.
-- Use `normalizeConfig` when a backend needs compatibility rewrites after merge
-  (for example normalizing old flag shapes).
-
 ### Exclusive slots
 
 | Method                                     | What it registers                     |
@@ -400,6 +399,7 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 - `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
 - `before_install`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_install`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
+- `reply_dispatch`: returning `{ handled: true, ... }` is terminal. Once any handler claims dispatch, lower-priority handlers and the default model dispatch path are skipped.
 - `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
 

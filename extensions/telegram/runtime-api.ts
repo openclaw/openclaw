@@ -83,6 +83,7 @@ export {
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./src/thread-bindings.js";
 export { resolveTelegramToken } from "./src/token.js";
+export { setTelegramRuntime } from "./src/runtime.js";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 export type TelegramAccountConfig = NonNullable<

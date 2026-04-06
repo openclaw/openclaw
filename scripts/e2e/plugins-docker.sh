@@ -908,8 +908,6 @@ if (!inspect.gatewayMethods.includes("demo.marketplace.shortcut.v2")) {
 console.log("ok");
 NODE
 
-echo "Running bundle MCP CLI-agent e2e..."
-pnpm exec vitest run --config vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
 EOF
 
 echo "OK"

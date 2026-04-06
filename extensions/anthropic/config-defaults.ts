@@ -12,7 +12,7 @@ function resolveAnthropicDefaultAuthMode(
     ([, profile]) => profile?.provider === "anthropic",
   );
 
-  const order = config.auth?.order?.anthropic ?? [];
+  const order = [...(config.auth?.order?.anthropic ?? [])];
   for (const profileId of order) {
     const entry = profiles[profileId];
     if (!entry || entry.provider !== "anthropic") {
@@ -26,7 +26,9 @@ function resolveAnthropicDefaultAuthMode(
     }
   }
 
-  const hasApiKey = anthropicProfiles.some(([, profile]) => profile?.mode === "api_key");
+  const hasApiKey = anthropicProfiles.some(
+    ([, profile]) => profile?.provider === "anthropic" && profile?.mode === "api_key",
+  );
   const hasOauth = anthropicProfiles.some(
     ([, profile]) => profile?.mode === "oauth" || profile?.mode === "token",
   );

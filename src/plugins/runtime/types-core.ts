@@ -79,12 +79,16 @@ export type PluginRuntimeCore = {
     transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
   };
   imageGeneration: {
-    generate: typeof import("../../plugin-sdk/image-generation-runtime.js").generateImage;
-    listProviders: typeof import("../../plugin-sdk/image-generation-runtime.js").listRuntimeImageGenerationProviders;
+    generate: typeof import("../../image-generation/runtime.js").generateImage;
+    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
   };
   videoGeneration: {
     generate: typeof import("../../video-generation/runtime.js").generateVideo;
     listProviders: typeof import("../../video-generation/runtime.js").listRuntimeVideoGenerationProviders;
+  };
+  musicGeneration: {
+    generate: typeof import("../../music-generation/runtime.js").generateMusic;
+    listProviders: typeof import("../../music-generation/runtime.js").listRuntimeMusicGenerationProviders;
   };
   webSearch: {
     listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;

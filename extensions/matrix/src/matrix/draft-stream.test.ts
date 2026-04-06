@@ -69,7 +69,7 @@ describe("createMatrixDraftStream", () => {
     vi.useRealTimers();
   });
 
-  it("sends a new message on first update", async () => {
+  it("sends a normal text preview on first partial update", async () => {
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
@@ -80,14 +80,36 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.text",
+    });
     expect(stream.eventId()).toBe("$evt1");
   });
 
-  it("edits the message on subsequent updates", async () => {
+  it("sends quiet preview notices when quiet mode is enabled", async () => {
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+    });
+    expect(sendMessageMock.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
+  });
+
+  it("edits the message on subsequent quiet updates", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
     });
 
     stream.update("Hello");
@@ -102,13 +124,18 @@ describe("createMatrixDraftStream", () => {
 
     // First call = initial send, second call = edit (both go through sendMessage)
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageMock.mock.calls[1]?.[1]).toMatchObject({
+      msgtype: "m.notice",
+      "m.new_content": { msgtype: "m.notice" },
+    });
   });
 
-  it("coalesces rapid updates within throttle window", async () => {
+  it("coalesces rapid quiet updates within throttle window", async () => {
     const stream = createMatrixDraftStream({
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
     });
 
     stream.update("A");
@@ -122,6 +149,11 @@ describe("createMatrixDraftStream", () => {
     expect(sendMessageMock.mock.calls[0][1]).toMatchObject({ body: "A" });
     // Edit uses "* <text>" prefix per Matrix m.replace spec.
     expect(sendMessageMock.mock.calls[1][1]).toMatchObject({ body: "* ABC" });
+    expect(sendMessageMock.mock.calls[0][1]).toMatchObject({ msgtype: "m.notice" });
+    expect(sendMessageMock.mock.calls[1][1]).toMatchObject({
+      msgtype: "m.notice",
+      "m.new_content": { msgtype: "m.notice" },
+    });
   });
 
   it("skips no-op updates", async () => {
@@ -178,6 +210,7 @@ describe("createMatrixDraftStream", () => {
       roomId: "!room:test",
       client,
       cfg: {} as import("../types.js").CoreConfig,
+      mode: "quiet",
     });
 
     stream.update("Block 1");
@@ -296,7 +329,6 @@ describe("createMatrixDraftStream", () => {
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(stream.eventId()).toBeUndefined();
-    expect(stream.mustDeliverFinalNormally()).toBe(true);
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("preview exceeded single-event limit"),
     );
@@ -317,7 +349,6 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).not.toHaveBeenCalled();
-    expect(stream.mustDeliverFinalNormally()).toBe(true);
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("preview exceeded single-event limit"),
     );

@@ -90,6 +90,7 @@ if ((${#auth_files[@]} > 0)); then
   for auth_file in "${auth_files[@]}"; do
     [ -n "$auth_file" ] || continue
     if [ -f "/host-auth-files/$auth_file" ]; then
+      mkdir -p "$(dirname "$HOME/$auth_file")"
       cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
       chmod u+rw "$HOME/$auth_file" || true
     fi
@@ -100,20 +101,9 @@ cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
-tar -C /src \
-  --exclude=.git \
-  --exclude=node_modules \
-  --exclude=dist \
-  --exclude=ui/dist \
-  --exclude=ui/node_modules \
-  -cf - . | tar -C "$tmp_dir" -xf -
-ln -s /app/node_modules "$tmp_dir/node_modules"
-ln -s /app/dist "$tmp_dir/dist"
-if [ -d /app/dist-runtime/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist-runtime/extensions
-elif [ -d /app/dist/extensions ]; then
-  export OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
-fi
+source /app/scripts/lib/live-docker-stage.sh
+openclaw_live_stage_source_tree "$tmp_dir"
+openclaw_live_link_runtime_tree "$tmp_dir"
 cd "$tmp_dir"
 pnpm test:live:gateway-profiles
 EOF

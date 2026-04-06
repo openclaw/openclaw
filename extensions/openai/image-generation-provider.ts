@@ -1,4 +1,5 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -49,6 +50,11 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     label: "OpenAI",
     defaultModel: DEFAULT_OPENAI_IMAGE_MODEL,
     models: [DEFAULT_OPENAI_IMAGE_MODEL],
+    isConfigured: ({ agentDir }) =>
+      isProviderApiKeyConfigured({
+        provider: "openai",
+        agentDir,
+      }),
     capabilities: {
       generate: {
         maxCount: 4,
@@ -84,7 +90,6 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: resolveOpenAIBaseUrl(req.cfg),
           defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },

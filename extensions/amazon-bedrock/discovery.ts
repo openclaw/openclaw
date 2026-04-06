@@ -2,6 +2,8 @@ import {
   BedrockClient,
   ListFoundationModelsCommand,
   type ListFoundationModelsCommandOutput,
+  ListInferenceProfilesCommand,
+  type ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -25,6 +27,10 @@ const DEFAULT_COST = {
 
 type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelSummaries"]>[number];
 
+type InferenceProfileSummary = NonNullable<
+  ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
+>[number];
+
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
   value?: ModelDefinitionConfig[];
@@ -33,6 +39,10 @@ type BedrockDiscoveryCacheEntry = {
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
 let hasLoggedBedrockError = false;
+
+// ---------------------------------------------------------------------------
+// Helper utilities
+// ---------------------------------------------------------------------------
 
 function normalizeProviderFilter(filter?: string[]): string[] {
   if (!filter || filter.length === 0) {
@@ -96,6 +106,10 @@ function resolveDefaultMaxTokens(config?: BedrockDiscoveryConfig): number {
   return value > 0 ? value : DEFAULT_MAX_TOKENS;
 }
 
+// ---------------------------------------------------------------------------
+// Foundation model helpers
+// ---------------------------------------------------------------------------
+
 function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): boolean {
   if (filter.length === 0) {
     return true;
@@ -144,6 +158,117 @@ function toModelDefinition(
     maxTokens: defaults.maxTokens,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Inference profile helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the base foundation model ID from an inference profile.
+ *
+ * System-defined profiles use a region prefix:
+ *   "us.anthropic.claude-sonnet-4-6" → "anthropic.claude-sonnet-4-6"
+ *
+ * Application profiles carry the model ARN in their models[] array:
+ *   models[0].modelArn = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-6"
+ *   → "anthropic.claude-sonnet-4-6"
+ */
+function resolveBaseModelId(profile: InferenceProfileSummary): string | undefined {
+  const firstArn = profile.models?.[0]?.modelArn;
+  if (firstArn) {
+    const arnMatch = /foundation-model\/(.+)$/.exec(firstArn);
+    if (arnMatch) return arnMatch[1];
+  }
+  if (profile.type === "SYSTEM_DEFINED") {
+    const id = profile.inferenceProfileId ?? "";
+    const prefixMatch = /^(?:us|eu|ap|jp|global)\.(.+)$/i.exec(id);
+    if (prefixMatch) return prefixMatch[1];
+  }
+  return undefined;
+}
+
+/**
+ * Fetch raw inference profile summaries from the Bedrock control plane.
+ * Handles pagination. Best-effort: silently returns empty array if IAM lacks
+ * bedrock:ListInferenceProfiles permission.
+ */
+async function fetchInferenceProfileSummaries(
+  client: BedrockClient,
+): Promise<InferenceProfileSummary[]> {
+  try {
+    const profiles: InferenceProfileSummary[] = [];
+    let nextToken: string | undefined;
+    do {
+      const response: ListInferenceProfilesCommandOutput = await client.send(
+        new ListInferenceProfilesCommand({ nextToken }),
+      );
+      for (const summary of response.inferenceProfileSummaries ?? []) {
+        profiles.push(summary);
+      }
+      nextToken = response.nextToken;
+    } while (nextToken);
+    return profiles;
+  } catch (error) {
+    log.debug?.("Skipping inference profile discovery", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
+/**
+ * Convert raw inference profile summaries into model definitions.
+ *
+ * Each profile inherits capabilities (modalities, reasoning, context window,
+ * cost) from its underlying foundation model. This ensures that
+ * "us.anthropic.claude-sonnet-4-6" has the same capabilities as
+ * "anthropic.claude-sonnet-4-6" — including image input, reasoning support,
+ * and token limits.
+ *
+ * When the foundation model isn't found in the map (e.g. the model is only
+ * available via inference profiles in this region), safe defaults are used.
+ */
+function resolveInferenceProfiles(
+  profiles: InferenceProfileSummary[],
+  defaults: { contextWindow: number; maxTokens: number },
+  providerFilter: string[],
+  foundationModels: Map<string, ModelDefinitionConfig>,
+): ModelDefinitionConfig[] {
+  const discovered: ModelDefinitionConfig[] = [];
+  for (const profile of profiles) {
+    if (!profile.inferenceProfileId?.trim()) continue;
+    if (profile.status !== "ACTIVE") continue;
+
+    // Apply provider filter: check if any of the underlying models match.
+    if (providerFilter.length > 0) {
+      const models = profile.models ?? [];
+      const matchesFilter = models.some((m) => {
+        const provider = m.modelArn?.split("/")?.[1]?.split(".")?.[0];
+        return provider ? providerFilter.includes(provider.toLowerCase()) : false;
+      });
+      if (!matchesFilter) continue;
+    }
+
+    // Look up the underlying foundation model to inherit its capabilities.
+    const baseModelId = resolveBaseModelId(profile);
+    const baseModel = baseModelId ? foundationModels.get(baseModelId.toLowerCase()) : undefined;
+
+    discovered.push({
+      id: profile.inferenceProfileId,
+      name: profile.inferenceProfileName?.trim() || profile.inferenceProfileId,
+      reasoning: baseModel?.reasoning ?? false,
+      input: baseModel?.input ?? ["text"],
+      cost: baseModel?.cost ?? DEFAULT_COST,
+      contextWindow: baseModel?.contextWindow ?? defaults.contextWindow,
+      maxTokens: baseModel?.maxTokens ?? defaults.maxTokens,
+    });
+  }
+  return discovered;
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
 export function resetBedrockDiscoveryCacheForTest(): void {
   discoveryCache.clear();
@@ -194,20 +319,56 @@ export async function discoverBedrockModels(params: {
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
-    const response = await client.send(new ListFoundationModelsCommand({}));
+    // Discover foundation models and inference profiles in parallel.
+    // Both API calls are independent, but we need the foundation model data
+    // to resolve inference profile capabilities — so we fetch in parallel,
+    // then build the lookup map before processing profiles.
+    const [foundationResponse, profileSummaries] = await Promise.all([
+      client.send(new ListFoundationModelsCommand({})),
+      fetchInferenceProfileSummaries(client),
+    ]);
+
     const discovered: ModelDefinitionConfig[] = [];
-    for (const summary of response.modelSummaries ?? []) {
+    const seenIds = new Set<string>();
+    const foundationModels = new Map<string, ModelDefinitionConfig>();
+
+    // Foundation models first — build both the results list and the lookup map.
+    for (const summary of foundationResponse.modelSummaries ?? []) {
       if (!shouldIncludeSummary(summary, providerFilter)) {
         continue;
       }
-      discovered.push(
-        toModelDefinition(summary, {
-          contextWindow: defaultContextWindow,
-          maxTokens: defaultMaxTokens,
-        }),
-      );
+      const def = toModelDefinition(summary, {
+        contextWindow: defaultContextWindow,
+        maxTokens: defaultMaxTokens,
+      });
+      discovered.push(def);
+      seenIds.add(def.id.toLowerCase());
+      foundationModels.set(def.id.toLowerCase(), def);
     }
-    return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
+
+    // Merge inference profiles — inherit capabilities from foundation models.
+    const inferenceProfiles = resolveInferenceProfiles(
+      profileSummaries,
+      { contextWindow: defaultContextWindow, maxTokens: defaultMaxTokens },
+      providerFilter,
+      foundationModels,
+    );
+    for (const profile of inferenceProfiles) {
+      if (!seenIds.has(profile.id.toLowerCase())) {
+        discovered.push(profile);
+        seenIds.add(profile.id.toLowerCase());
+      }
+    }
+
+    // Sort: global cross-region profiles first (recommended for most users —
+    // better capacity, automatic failover, no data sovereignty constraints),
+    // then remaining profiles/models alphabetically.
+    return discovered.toSorted((a, b) => {
+      const aGlobal = a.id.startsWith("global.") ? 0 : 1;
+      const bGlobal = b.id.startsWith("global.") ? 0 : 1;
+      if (aGlobal !== bGlobal) return aGlobal - bGlobal;
+      return a.name.localeCompare(b.name);
+    });
   })();
 
   if (refreshIntervalSeconds > 0) {
@@ -242,10 +403,15 @@ export async function discoverBedrockModels(params: {
 
 export async function resolveImplicitBedrockProvider(params: {
   config?: { models?: { bedrockDiscovery?: BedrockDiscoveryConfig } };
+  pluginConfig?: { discovery?: BedrockDiscoveryConfig };
   env?: NodeJS.ProcessEnv;
+  clientFactory?: (region: string) => BedrockClient;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
-  const discoveryConfig = params.config?.models?.bedrockDiscovery;
+  const discoveryConfig = {
+    ...(params.config?.models?.bedrockDiscovery ?? {}),
+    ...(params.pluginConfig?.discovery ?? {}),
+  };
   const enabled = discoveryConfig?.enabled;
   const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
   if (enabled === false) {
@@ -259,6 +425,7 @@ export async function resolveImplicitBedrockProvider(params: {
   const models = await discoverBedrockModels({
     region,
     config: discoveryConfig,
+    clientFactory: params.clientFactory,
   });
   if (models.length === 0) {
     return null;

@@ -1,5 +1,12 @@
 import { resolveStateDir } from "../../config/paths.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
+import {
+  generateImage as generateRuntimeImage,
+  listRuntimeImageGenerationProviders,
+} from "../../image-generation/runtime.js";
+import {
+  generateMusic as generateRuntimeMusic,
+  listRuntimeMusicGenerationProviders,
+} from "../../music-generation/runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
@@ -56,26 +63,10 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
   };
 }
 
-type RuntimeImageGenerationModule = Pick<
-  typeof import("../../plugin-sdk/image-generation-runtime.js"),
-  "generateImage" | "listRuntimeImageGenerationProviders"
->;
-let cachedRuntimeImageGenerationModule: RuntimeImageGenerationModule | null = null;
-
-function loadRuntimeImageGenerationModule(): RuntimeImageGenerationModule {
-  cachedRuntimeImageGenerationModule ??=
-    loadBundledPluginPublicSurfaceModuleSync<RuntimeImageGenerationModule>({
-      dirName: "image-generation-core",
-      artifactBasename: "runtime-api.js",
-    });
-  return cachedRuntimeImageGenerationModule;
-}
-
 function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
   return {
-    generate: (params) => loadRuntimeImageGenerationModule().generateImage(params),
-    listProviders: (params) =>
-      loadRuntimeImageGenerationModule().listRuntimeImageGenerationProviders(params),
+    generate: (params) => generateRuntimeImage(params),
+    listProviders: (params) => listRuntimeImageGenerationProviders(params),
   };
 }
 
@@ -83,6 +74,13 @@ function createRuntimeVideoGeneration(): PluginRuntime["videoGeneration"] {
   return {
     generate: (params) => generateRuntimeVideo(params),
     listProviders: (params) => listRuntimeVideoGenerationProviders(params),
+  };
+}
+
+function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
+  return {
+    generate: (params) => generateRuntimeMusic(params),
+    listProviders: (params) => listRuntimeMusicGenerationProviders(params),
   };
 }
 
@@ -224,12 +222,24 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     taskFlow,
   } satisfies Omit<
     PluginRuntime,
-    "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration" | "videoGeneration"
+    | "tts"
+    | "mediaUnderstanding"
+    | "stt"
+    | "modelAuth"
+    | "imageGeneration"
+    | "videoGeneration"
+    | "musicGeneration"
   > &
     Partial<
       Pick<
         PluginRuntime,
-        "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration" | "videoGeneration"
+        | "tts"
+        | "mediaUnderstanding"
+        | "stt"
+        | "modelAuth"
+        | "imageGeneration"
+        | "videoGeneration"
+        | "musicGeneration"
       >
     >;
 
@@ -241,6 +251,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
+  defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
 
   return runtime as PluginRuntime;
 }

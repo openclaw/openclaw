@@ -4,7 +4,7 @@ import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   isPrivateNetworkOptInEnabled,
-  ssrfPolicyFromAllowPrivateNetwork,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveMatrixAccountStringValues } from "../auth-precedence.js";
 import { getMatrixScopedEnvVarNames } from "../env-vars.js";
@@ -193,7 +193,10 @@ function buildMatrixNetworkFields(params: {
   }
   return {
     ...(params.allowPrivateNetwork
-      ? { allowPrivateNetwork: true, ssrfPolicy: ssrfPolicyFromAllowPrivateNetwork(true) }
+      ? {
+          allowPrivateNetwork: true,
+          ssrfPolicy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
+        }
       : {}),
     ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
   };
@@ -276,9 +279,10 @@ export function resolveMatrixConfigForAccount(
     accountInitialSyncLimit ?? clampMatrixInitialSyncLimit(matrix.initialSyncLimit);
   const encryption =
     typeof account.encryption === "boolean" ? account.encryption : (matrix.encryption ?? false);
-  const allowPrivateNetwork = isPrivateNetworkOptInEnabled(account) || isPrivateNetworkOptInEnabled(matrix)
-    ? true
-    : undefined;
+  const allowPrivateNetwork =
+    isPrivateNetworkOptInEnabled(account) || isPrivateNetworkOptInEnabled(matrix)
+      ? true
+      : undefined;
 
   return {
     homeserver: resolvedStrings.homeserver,

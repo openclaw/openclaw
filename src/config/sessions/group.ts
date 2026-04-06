@@ -1,5 +1,5 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { listBootstrapChannelPlugins } from "../../channels/plugins/bootstrap-registry.js";
+import { listChannelPlugins } from "../../channels/plugins/registry.js";
 import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
@@ -11,7 +11,7 @@ type LegacyGroupSessionSurface = {
 };
 
 function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
-  for (const plugin of listBootstrapChannelPlugins()) {
+  for (const plugin of listChannelPlugins()) {
     const resolved = (
       plugin.messaging as LegacyGroupSessionSurface | undefined
     )?.resolveLegacyGroupSessionKey?.(ctx);
