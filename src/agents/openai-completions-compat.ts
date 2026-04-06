@@ -53,6 +53,8 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "cerebras-native" ||
     endpointClass === "chutes-native" ||
     endpointClass === "deepseek-native" ||
+    endpointClass === "google-generative-ai" ||
+    endpointClass === "google-vertex" ||
     endpointClass === "mistral-public" ||
     endpointClass === "opencode-native" ||
     endpointClass === "xai-native" ||
