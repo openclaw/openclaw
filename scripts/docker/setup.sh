@@ -114,6 +114,30 @@ config_path_exists() {
   if [[ ! -f "$config_path" ]]; then
     return 1
   fi
+  if command -v node >/dev/null 2>&1; then
+    node - "$config_path" "$path" "$ROOT_DIR" <<'NODE'
+const fs = require("node:fs");
+const vm = require("node:vm");
+const configPath = process.argv[2];
+const parts = process.argv[3].split(".");
+try {
+  const source = fs.readFileSync(configPath, "utf8");
+  let current = vm.runInNewContext(`(${source})`, Object.create(null), {
+    timeout: 1000,
+  });
+  for (const part of parts) {
+    if (!current || typeof current !== "object" || !(part in current)) {
+      process.exit(1);
+    }
+    current = current[part];
+  }
+  process.exit(0);
+} catch {
+  process.exit(1);
+}
+NODE
+    return $?
+  fi
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$config_path" "$path" <<'PY'
 import json
@@ -134,26 +158,6 @@ for part in path:
 
 raise SystemExit(0)
 PY
-    return $?
-  fi
-  if command -v node >/dev/null 2>&1; then
-    node - "$config_path" "$path" <<'NODE'
-const fs = require("node:fs");
-const configPath = process.argv[2];
-const parts = process.argv[3].split(".");
-try {
-  let current = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  for (const part of parts) {
-    if (!current || typeof current !== "object" || !(part in current)) {
-      process.exit(1);
-    }
-    current = current[part];
-  }
-  process.exit(0);
-} catch {
-  process.exit(1);
-}
-NODE
     return $?
   fi
   return 1

@@ -343,13 +343,15 @@ describe("scripts/docker/setup.sh", () => {
     await mkdir(configDir, { recursive: true });
     await writeFile(
       join(configDir, "openclaw.json"),
-      JSON.stringify({
+      `{
+        // JSON5 syntax should still count as explicitly configured.
         browser: {
           enabled: false,
           headless: false,
           executablePath: "/custom/browser",
         },
-      }),
+      }
+      `,
     );
 
     const result = runDockerSetup(activeSandbox, {
