@@ -60,6 +60,12 @@ start_awake() {
   read -r -a flags <<<"$KEEPAWAKE_FLAGS"
   caffeinate "${flags[@]}" >/dev/null 2>&1 &
   pid="$!"
+  sleep 0.2
+  if ! is_caffeinate_pid "$pid"; then
+    rm -f "$PID_FILE"
+    echo "Failed to start keep-awake (caffeinate exited immediately)." >&2
+    exit 1
+  fi
   echo "$pid" >"$PID_FILE"
   echo "keep-awake on (pid $pid, flags: $KEEPAWAKE_FLAGS)"
 }

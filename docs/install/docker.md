@@ -359,7 +359,8 @@ scripts/migrate/backup-openclaw.sh \
 ### 2) Transfer the archive to the target host
 
 Copy the archive and checksum file to the new machine using your normal secure
-transfer method.
+transfer method. `restore-openclaw.sh` expects the companion `.sha256` file to
+sit next to the archive.
 
 ### 3) Restore on the target host
 

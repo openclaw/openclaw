@@ -62,12 +62,13 @@ PY
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO_ROOT="$ROOT_DIR"
-ENV_FILE="$ROOT_DIR/.env"
+ENV_FILE=""
 ARCHIVE_PATH=""
 CONFIG_DIR=""
 WORKSPACE_DIR=""
 APPLY_ENV=0
 STOP_FIRST=1
+ENV_FILE_EXPLICIT=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -81,6 +82,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --env-file)
       ENV_FILE="$2"
+      ENV_FILE_EXPLICIT=1
       shift 2
       ;;
     --config-dir)
@@ -119,13 +121,21 @@ require_cmd date
 
 ARCHIVE_PATH="$(resolve_abs_path "$ARCHIVE_PATH")"
 REPO_ROOT="$(resolve_abs_path "$REPO_ROOT")"
+if [[ $ENV_FILE_EXPLICIT -eq 0 ]]; then
+  ENV_FILE="$REPO_ROOT/.env"
+fi
 ENV_FILE="$(resolve_abs_path "$ENV_FILE")"
 
 [[ -f "$ARCHIVE_PATH" ]] || fail "Archive not found: $ARCHIVE_PATH"
 [[ -d "$REPO_ROOT" ]] || fail "Repo root does not exist: $REPO_ROOT"
+[[ -f "${ARCHIVE_PATH}.sha256" ]] || fail "Archive checksum file not found: ${ARCHIVE_PATH}.sha256"
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
+
+archive_checksum="$(awk 'NR == 1 { print $1 }' "${ARCHIVE_PATH}.sha256")"
+[[ -n "$archive_checksum" ]] || fail "Archive checksum file is invalid: ${ARCHIVE_PATH}.sha256"
+printf '%s  %s\n' "$archive_checksum" "$ARCHIVE_PATH" | shasum -a 256 -c -
 
 echo "==> Extracting archive"
 tar -xzf "$ARCHIVE_PATH" -C "$tmpdir"

@@ -61,11 +61,13 @@ PY
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO_ROOT="$ROOT_DIR"
-ENV_FILE="$ROOT_DIR/.env"
+ENV_FILE=""
 CONFIG_DIR=""
 WORKSPACE_DIR=""
-OUTPUT_DIR="$ROOT_DIR/backups"
+OUTPUT_DIR=""
 BACKUP_NAME=""
+ENV_FILE_EXPLICIT=0
+OUTPUT_DIR_EXPLICIT=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -75,6 +77,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --env-file)
       ENV_FILE="$2"
+      ENV_FILE_EXPLICIT=1
       shift 2
       ;;
     --config-dir)
@@ -87,6 +90,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output-dir)
       OUTPUT_DIR="$2"
+      OUTPUT_DIR_EXPLICIT=1
       shift 2
       ;;
     --name)
@@ -111,6 +115,12 @@ require_cmd date
 require_cmd uname
 
 REPO_ROOT="$(resolve_abs_path "$REPO_ROOT")"
+if [[ $ENV_FILE_EXPLICIT -eq 0 ]]; then
+  ENV_FILE="$REPO_ROOT/.env"
+fi
+if [[ $OUTPUT_DIR_EXPLICIT -eq 0 ]]; then
+  OUTPUT_DIR="$REPO_ROOT/backups"
+fi
 ENV_FILE="$(resolve_abs_path "$ENV_FILE")"
 OUTPUT_DIR="$(resolve_abs_path "$OUTPUT_DIR")"
 
@@ -197,7 +207,10 @@ archive_path="$OUTPUT_DIR/${BACKUP_NAME}.tar.gz"
   cd "$stage"
   tar -czf "$archive_path" .
 )
-shasum -a 256 "$archive_path" > "${archive_path}.sha256"
+(
+  cd "$OUTPUT_DIR"
+  shasum -a 256 "$(basename "$archive_path")" > "$(basename "$archive_path").sha256"
+)
 
 echo
 echo "Backup created:"
