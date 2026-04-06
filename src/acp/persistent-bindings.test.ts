@@ -1034,6 +1034,64 @@ describe("resetAcpSessionInPlace", () => {
     expect(managerMocks.updateSessionRuntimeOptions).not.toHaveBeenCalled();
   });
 
+  it("recreates the bound session on the next ensure after an in-place reset", async () => {
+    const cfg = createCfgWithBindings([
+      createDiscordBinding({
+        agentId: "claude",
+        conversationId: "9373ab192b2317f4",
+        acp: {
+          backend: "acpx",
+        },
+      }),
+    ]);
+    const sessionKey = buildConfiguredAcpSessionKey({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "9373ab192b2317f4",
+      agentId: "claude",
+      mode: "persistent",
+      backend: "acpx",
+    });
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      acp: {
+        agent: "claude",
+        mode: "persistent",
+        backend: "acpx",
+      },
+    });
+
+    const resetResult = await persistentBindings.resetAcpSessionInPlace({
+      cfg,
+      sessionKey,
+      reason: "reset",
+    });
+
+    expect(resetResult).toEqual({ ok: true });
+    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+
+    const spec = persistentBindingsResolveModule.resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg,
+      sessionKey,
+    });
+    expect(spec).toBeTruthy();
+    managerMocks.resolveSession.mockReturnValueOnce({ kind: "none" });
+
+    const ensured = await persistentBindings.ensureConfiguredAcpBindingSession({
+      cfg,
+      spec: spec!,
+    });
+
+    expect(ensured).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.initializeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agent: "claude",
+        mode: "persistent",
+        backendId: "acpx",
+      }),
+    );
+  });
+
   it("does not eagerly reinitialize harness agent sessions during in-place reset", async () => {
     const cfg = {
       ...baseCfg,
