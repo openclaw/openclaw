@@ -127,6 +127,8 @@ describe("isBillingErrorMessage", () => {
         "Insufficient USD or Diem balance to complete request. Visit https://venice.ai/settings/api to add credits.",
         "This model requires more credits to use",
         "This endpoint require more credits",
+        "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+        "Extra usage is required for long context requests.",
       ],
       expected: true,
     },
@@ -214,6 +216,20 @@ describe("isBillingErrorMessage", () => {
       "402 Payment Required: The account associated with this API key has reached its maximum allowed monthly spending limit.";
     expect(isBillingErrorMessage(sample)).toBe(true);
     expect(classifyFailoverReason(sample)).toBe("billing");
+  });
+
+  it("classifies Anthropic extra-usage exhaustion variants as billing", () => {
+    const samples = [
+      "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+      "Extra usage is required for long context requests.",
+      '{"type":"error","error":{"type":"invalid_request_error","message":"You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}',
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Extra usage is required for long context requests."}}',
+    ];
+
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample, { provider: "anthropic" })).toBe("billing");
+    }
   });
 });
 
