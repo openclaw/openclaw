@@ -220,6 +220,90 @@ describe("send", () => {
       expect(result).toBe("iMessage;-;+15551234567");
     });
 
+    it("prefers iMessage over SMS when both chats exist for the same handle", async () => {
+      // Both chats exist; we should never silently downgrade to SMS.
+      const result = await resolveHandleTargetGuid([
+        {
+          guid: "SMS;-;+15551234567",
+          participants: [{ address: "+15551234567" }],
+        },
+        {
+          guid: "iMessage;-;+15551234567",
+          participants: [{ address: "+15551234567" }],
+        },
+      ]);
+
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
+    it("prefers iMessage over SMS even when SMS appears first", async () => {
+      const result = await resolveHandleTargetGuid([
+        {
+          guid: "SMS;-;+15551234567",
+          participants: [{ address: "+15551234567" }],
+        },
+        {
+          guid: "iMessage;-;+15559999999",
+          participants: [{ address: "+15559999999" }],
+        },
+        {
+          guid: "iMessage;-;+15551234567",
+          participants: [{ address: "+15551234567" }],
+        },
+      ]);
+
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
+    it("falls back to SMS when no iMessage chat exists for the handle", async () => {
+      // First page: SMS-only DM. Second page: empty (stops pagination).
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "SMS;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("SMS;-;+15551234567");
+    });
+
+    it("prefers iMessage over SMS via participant match", async () => {
+      const result = await resolveHandleTargetGuid([
+        {
+          guid: "SMS;-;alt-handle",
+          participants: [{ address: "+15551234567" }],
+        },
+        {
+          guid: "iMessage;-;alt-handle",
+          participants: [{ address: "+15551234567" }],
+        },
+      ]);
+
+      expect(result).toBe("iMessage;-;alt-handle");
+    });
+
     it("returns null when handle only exists in group chat (not DM)", async () => {
       // This is the critical fix: if a phone number only exists as a participant in a group chat
       // (no direct DM chat), we should NOT send to that group. Return null instead.

@@ -248,7 +248,13 @@ export async function resolveChatGuidForTarget(params: {
     params.target.kind === "chat_identifier" ? params.target.chatIdentifier : null;
 
   const limit = 500;
-  let participantMatch: string | null = null;
+  // When matching by handle, prefer iMessage over SMS. A user may have both
+  // an `iMessage;-;<handle>` and `SMS;-;<handle>` chat; we should never silently
+  // downgrade to SMS when an iMessage chat exists for the same handle.
+  let directHandleIMessageMatch: string | null = null;
+  let directHandleSmsMatch: string | null = null;
+  let participantIMessageMatch: string | null = null;
+  let participantSmsMatch: string | null = null;
   for (let offset = 0; offset < 5000; offset += limit) {
     const chats = await queryChats({
       baseUrl: params.baseUrl,
@@ -299,10 +305,21 @@ export async function resolveChatGuidForTarget(params: {
       if (normalizedHandle) {
         const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
-        if (directHandle && directHandle === normalizedHandle) {
-          return guid;
+        if (directHandle && directHandle === normalizedHandle && guid) {
+          // Prefer iMessage over SMS. If this chat is iMessage we can return
+          // immediately; if it is SMS we remember it as a fallback and keep
+          // scanning in case an iMessage chat for the same handle exists.
+          if (guid.startsWith("iMessage;-;")) {
+            return guid;
+          }
+          if (guid.startsWith("SMS;-;") && !directHandleSmsMatch) {
+            directHandleSmsMatch = guid;
+          } else if (!directHandleIMessageMatch && !directHandleSmsMatch) {
+            // Unknown service; treat as a last-resort direct match.
+            directHandleIMessageMatch = guid;
+          }
         }
-        if (!participantMatch && guid) {
+        if (guid && !participantIMessageMatch) {
           // Only consider DM chats (`;-;` separator) as participant matches.
           // Group chats (`;+;` separator) should never match when searching by handle/phone.
           // This prevents routing "send to +1234567890" to a group chat that contains that number.
@@ -312,14 +329,30 @@ export async function resolveChatGuidForTarget(params: {
               normalizeBlueBubblesHandle(entry),
             );
             if (participants.includes(normalizedHandle)) {
-              participantMatch = guid;
+              if (guid.startsWith("iMessage;-;")) {
+                participantIMessageMatch = guid;
+              } else if (guid.startsWith("SMS;-;") && !participantSmsMatch) {
+                participantSmsMatch = guid;
+              } else if (!participantSmsMatch) {
+                participantSmsMatch = guid;
+              }
             }
           }
         }
       }
     }
+    // If we already found an iMessage direct or participant match we can stop
+    // scanning further pages; any later SMS chat would still lose out.
+    if (directHandleIMessageMatch || participantIMessageMatch) {
+      break;
+    }
   }
-  return participantMatch;
+  return (
+    directHandleIMessageMatch ??
+    participantIMessageMatch ??
+    directHandleSmsMatch ??
+    participantSmsMatch
+  );
 }
 
 /**
