@@ -1,77 +1,65 @@
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
-  buildSessionAsyncTaskStatusDetails,
-  findActiveSessionTask,
-} from "./session-async-task-status.js";
+  buildActiveMediaGenerationTaskPromptContextForSession,
+  buildMediaGenerationTaskStatusDetails,
+  buildMediaGenerationTaskStatusText,
+  findActiveMediaGenerationTaskForSession,
+  getMediaGenerationTaskProviderId,
+  isActiveMediaGenerationTask,
+} from "./media-generation-task-status-shared.js";
 
 export const VIDEO_GENERATION_TASK_KIND = "video_generation";
 const VIDEO_GENERATION_SOURCE_PREFIX = "video_generate";
 
 export function isActiveVideoGenerationTask(task: TaskRecord): boolean {
-  return (
-    task.runtime === "cli" &&
-    task.scopeKind === "session" &&
-    task.taskKind === VIDEO_GENERATION_TASK_KIND &&
-    (task.status === "queued" || task.status === "running")
-  );
+  return isActiveMediaGenerationTask({
+    task,
+    taskKind: VIDEO_GENERATION_TASK_KIND,
+  });
 }
 
 export function getVideoGenerationTaskProviderId(task: TaskRecord): string | undefined {
-  const sourceId = task.sourceId?.trim() ?? "";
-  if (!sourceId.startsWith(`${VIDEO_GENERATION_SOURCE_PREFIX}:`)) {
-    return undefined;
-  }
-  const providerId = sourceId.slice(`${VIDEO_GENERATION_SOURCE_PREFIX}:`.length).trim();
-  return providerId || undefined;
+  return getMediaGenerationTaskProviderId(task, VIDEO_GENERATION_SOURCE_PREFIX);
 }
 
 export function findActiveVideoGenerationTaskForSession(sessionKey?: string): TaskRecord | null {
-  return findActiveSessionTask({
+  return findActiveMediaGenerationTaskForSession({
     sessionKey,
-    runtime: "cli",
     taskKind: VIDEO_GENERATION_TASK_KIND,
-    sourceIdPrefix: VIDEO_GENERATION_SOURCE_PREFIX,
+    sourcePrefix: VIDEO_GENERATION_SOURCE_PREFIX,
   });
 }
 
 export function buildVideoGenerationTaskStatusDetails(task: TaskRecord): Record<string, unknown> {
-  const provider = getVideoGenerationTaskProviderId(task);
-  return {
-    ...buildSessionAsyncTaskStatusDetails(task),
-    ...(provider ? { provider } : {}),
-  };
+  return buildMediaGenerationTaskStatusDetails({
+    task,
+    sourcePrefix: VIDEO_GENERATION_SOURCE_PREFIX,
+  });
 }
 
 export function buildVideoGenerationTaskStatusText(
   task: TaskRecord,
   params?: { duplicateGuard?: boolean },
 ): string {
-  const provider = getVideoGenerationTaskProviderId(task);
-  const lines = [
-    `Video generation task ${task.taskId} is already ${task.status}${provider ? ` with ${provider}` : ""}.`,
-    task.progressSummary ? `Progress: ${task.progressSummary}.` : null,
-    params?.duplicateGuard
-      ? "Do not call video_generate again for this request. Wait for the completion event; I will post the finished video here."
-      : "Wait for the completion event; I will post the finished video here when it's ready.",
-  ].filter((entry): entry is string => Boolean(entry));
-  return lines.join("\n");
+  return buildMediaGenerationTaskStatusText({
+    task,
+    sourcePrefix: VIDEO_GENERATION_SOURCE_PREFIX,
+    nounLabel: "Video generation",
+    toolName: "video_generate",
+    completionLabel: "video",
+    duplicateGuard: params?.duplicateGuard,
+  });
 }
 
 export function buildActiveVideoGenerationTaskPromptContextForSession(
   sessionKey?: string,
 ): string | undefined {
-  const task = findActiveVideoGenerationTaskForSession(sessionKey);
-  if (!task) {
-    return undefined;
-  }
-  const provider = getVideoGenerationTaskProviderId(task);
-  const lines = [
-    "An active video generation background task already exists for this session.",
-    `Task ${task.taskId} is currently ${task.status}${provider ? ` via ${provider}` : ""}.`,
-    task.progressSummary ? `Current progress: ${task.progressSummary}.` : null,
-    "Do not call `video_generate` again for the same request while that task is queued or running.",
-    'If the user asks for progress or whether the work is async, explain the active task state or call `video_generate` with `action:"status"` instead of starting a new generation.',
-    "Only start a new `video_generate` call if the user clearly asks for a different/new video.",
-  ].filter((entry): entry is string => Boolean(entry));
-  return lines.join("\n");
+  return buildActiveMediaGenerationTaskPromptContextForSession({
+    sessionKey,
+    taskKind: VIDEO_GENERATION_TASK_KIND,
+    sourcePrefix: VIDEO_GENERATION_SOURCE_PREFIX,
+    nounLabel: "Video generation",
+    toolName: "video_generate",
+    completionLabel: "videos",
+  });
 }
