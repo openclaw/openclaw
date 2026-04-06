@@ -173,7 +173,7 @@ Fallback: SSH tunnel.
 ssh -N -L 18789:127.0.0.1:18789 user@host
 ```
 
-Then connect clients to `ws://127.0.0.1:18789` locally.
+Then connect clients locally to `ws://127.0.0.1:18789`.
 
 <Warning>
 SSH tunnels do not bypass gateway auth. For shared-secret auth, clients still
@@ -347,7 +347,7 @@ Events are not replayed. On sequence gaps, refresh state (`health`, `system-pres
 | `Gateway start blocked: set gateway.mode=local`                | Config set to remote mode, or local-mode stamp is missing from a damaged config |
 | `unauthorized` during connect                                  | Auth mismatch between client and gateway                                        |
 
-For full symptom-first diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooting).
+For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooting).
 
 ## Safety guarantees
 
