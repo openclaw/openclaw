@@ -19,16 +19,16 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
+  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  sanitizeChatHistoryMessages,
+} from "./server-methods/chat.js";
+import {
   attachOpenClawTranscriptMeta,
   readSessionMessages,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
-import {
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  sanitizeChatHistoryMessages,
-} from "./server-methods/chat.js";
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
@@ -248,7 +248,13 @@ export async function handleSessionHistoryHttpRequest(
     : new Set<string>();
 
   let sentHistory = history;
-  let rawTranscriptSeq = resolveMessageSeq(sentHistory.items.at(-1)) ?? 0;
+  // Initialize rawTranscriptSeq from the raw transcript's last __openclaw.seq
+  // value, not the sanitized history tail, so seq numbering stays correct even
+  // when sanitization drops messages (e.g. silent replies).
+  const rawMessages = entry?.sessionId
+    ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
+    : [];
+  let rawTranscriptSeq = resolveMessageSeq(rawMessages.at(-1)) ?? rawMessages.length;
   setSseHeaders(res);
   res.write("retry: 1000\n\n");
   sseWrite(res, "history", {
@@ -296,6 +302,8 @@ export async function handleSessionHistoryHttpRequest(
         return;
       }
     }
+    // Bounded SSE history refreshes: apply sanitizeChatHistoryMessages before
+    // pagination, consistent with the unbounded path.
     sentHistory = paginateSessionMessages(
       sanitizeChatHistoryMessages(
         readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile),
