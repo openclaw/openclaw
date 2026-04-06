@@ -39,6 +39,9 @@ type QaSuiteEnvironment = {
   alternateModel: string;
 };
 
+const QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3RQQkAMAzAwPg33Wnos+wgBo40dboAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAC+Azy47PDiI4pA2wAAAABJRU5ErkJggg==";
+
 type QaSkillStatusEntry = {
   name?: string;
   eligible?: boolean;
@@ -538,6 +541,11 @@ async function runAgentPrompt(
     provider?: string;
     model?: string;
     timeoutMs?: number;
+    attachments?: Array<{
+      mimeType: string;
+      fileName: string;
+      content: string;
+    }>;
   },
 ) {
   const target = params.to ?? "dm:qa-operator";
@@ -556,6 +564,7 @@ async function runAgentPrompt(
       ...(params.threadId ? { threadId: params.threadId } : {}),
       ...(params.provider ? { provider: params.provider } : {}),
       ...(params.model ? { model: params.model } : {}),
+      ...(params.attachments ? { attachments: params.attachments } : {}),
     },
     {
       timeoutMs: params.timeoutMs ?? 30_000,
@@ -1479,6 +1488,55 @@ When the user asks for the hot install marker exactly, reply with exactly: HOT-I
                   );
                 });
                 return `${outbound.text}\nIMAGE_PROMPT:${generated.prompt ?? ""}`;
+              }
+              return outbound.text;
+            },
+          },
+        ]),
+    ],
+    [
+      "image-understanding-attachment",
+      async () =>
+        await runScenario("Image understanding from attachment", [
+          {
+            name: "describes an attached image in one short sentence",
+            run: async () => {
+              await reset();
+              await runAgentPrompt(env, {
+                sessionKey: "agent:qa:image-understanding",
+                message:
+                  "Image understanding check: describe the attached image in one short sentence.",
+                attachments: [
+                  {
+                    mimeType: "image/png",
+                    fileName: "red-top-blue-bottom.png",
+                    content: QA_IMAGE_UNDERSTANDING_PNG_BASE64,
+                  },
+                ],
+                timeoutMs: liveTurnTimeoutMs(env, 45_000),
+              });
+              const outbound = await waitForOutboundMessage(
+                state,
+                (candidate) => candidate.conversation.id === "qa-operator",
+                liveTurnTimeoutMs(env, 45_000),
+              );
+              const lower = outbound.text.toLowerCase();
+              if (!lower.includes("red") || !lower.includes("blue")) {
+                throw new Error(`missing expected colors in image description: ${outbound.text}`);
+              }
+              if (env.mock) {
+                const mockBaseUrl = env.mock.baseUrl;
+                const requests = await fetchJson<
+                  Array<{ prompt?: string; imageInputCount?: number; model?: string }>
+                >(`${mockBaseUrl}/debug/requests`);
+                const imageRequest = requests.find((request) =>
+                  String(request.prompt ?? "").includes("Image understanding check"),
+                );
+                if ((imageRequest?.imageInputCount ?? 0) < 1) {
+                  throw new Error(
+                    `expected at least one input image, got ${String(imageRequest?.imageInputCount ?? 0)}`,
+                  );
+                }
               }
               return outbound.text;
             },
