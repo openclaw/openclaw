@@ -1,7 +1,10 @@
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
+
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
