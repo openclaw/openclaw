@@ -202,12 +202,14 @@ export async function checkPathGuardStrict(
           return minimatch(normalizedRealPath, rewrittenPattern, {
             dot: true,
             magicalBraces: true,
+            nocase: process.platform === "win32",
           });
         } catch {
           // Fallback: if prefix cannot be canonicalized (non-existent), match against the raw pattern.
           return minimatch(normalizedRealPath, normalizedEntryPattern, {
             dot: true,
             magicalBraces: true,
+            nocase: process.platform === "win32",
           });
         }
       }
