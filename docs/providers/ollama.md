@@ -372,6 +372,65 @@ ps aux | grep ollama
 ollama serve
 ```
 
+### Model prints raw JSON or fenced code blocks instead of running tools
+
+If you see responses like:
+
+```text
+~~~json
+{"name":"bash","arguments":{"command":"ls -la"}}
+~~~
+```
+
+or plain-text tool JSON in the chat, check these first:
+
+1. Confirm you are using the **native Ollama API** URL with no `/v1` suffix.
+2. Confirm the provider entry uses `api: "ollama"` instead of `openai-completions`.
+3. Retest with a model family that is known to behave better for tool calling.
+4. Reduce the prompt and tool list temporarily to rule out context pressure.
+
+Recommended checks:
+
+```bash
+openclaw models list
+curl http://127.0.0.1:11434/api/tags
+```
+
+Then inspect your config and make sure the Ollama provider looks like:
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+      },
+    },
+  },
+}
+```
+
+If you intentionally use `http://host:11434/v1`, OpenClaw is talking to the OpenAI-compatible surface instead of native Ollama. That mode is fine for some proxy setups, but tool calling is less reliable there.
+
+### Tool calling works on one model but not another
+
+OpenClaw can send the same tool schema to different Ollama-hosted models and still get very different behavior back.
+
+When comparing local models, check:
+
+- whether the model actually emits native `tool_calls`
+- whether the model writes markdown or pseudo-JSON before the tool call
+- whether the model has enough context window for your system prompt and tool schema
+- whether the model is a small / heavily quantized variant that is brittle under long prompts
+
+Practical operator advice:
+
+- prefer the native Ollama API over OpenAI-compatible mode when you care about tool use
+- prefer larger or less aggressively quantized checkpoints for multi-tool agents
+- keep explicit `contextWindow` values realistic if you override model metadata manually
+- validate new local model families with a simple one-tool prompt before using them in a larger agent stack
+
 ## See Also
 
 - [Model Providers](/concepts/model-providers) - Overview of all providers
