@@ -14,7 +14,7 @@ const {
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: Boolean(params.allowPrivateNetwork ?? params.baseUrl?.trim()),
+    allowPrivateNetwork: Boolean(params.allowPrivateNetwork),
     headers: new Headers(params.defaultHeaders),
     dispatcherPolicy: undefined,
   })),
@@ -40,7 +40,7 @@ describe("openai image generation provider", () => {
     resolveProviderHttpRequestConfigMock.mockClear();
   });
 
-  it("allows explicit local baseUrl overrides for image requests", async () => {
+  it("does not auto-allow local baseUrl overrides for image requests", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
@@ -75,7 +75,7 @@ describe("openai image generation provider", () => {
     expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "http://127.0.0.1:44080/v1/images/generations",
-        allowPrivateNetwork: true,
+        allowPrivateNetwork: false,
       }),
     );
     expect(result.images).toHaveLength(1);
