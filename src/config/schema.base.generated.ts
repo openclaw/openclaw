@@ -3019,6 +3019,60 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              videoGenerationModel: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      primary: {
+                        type: "string",
+                        title: "Video Generation Model",
+                        description:
+                          "Optional video-generation model (provider/model) used by the shared video generation capability.",
+                      },
+                      fallbacks: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Video Generation Model Fallbacks",
+                        description: "Ordered fallback video-generation models (provider/model).",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              musicGenerationModel: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      primary: {
+                        type: "string",
+                        title: "Music Generation Model",
+                        description:
+                          "Optional music-generation model (provider/model) used by the shared music generation capability.",
+                      },
+                      fallbacks: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Music Generation Model Fallbacks",
+                        description: "Ordered fallback music-generation models (provider/model).",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -4651,6 +4705,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                  },
+                  allowAgents: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
                   },
                   maxSpawnDepth: {
                     description:
