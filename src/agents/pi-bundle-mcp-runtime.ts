@@ -229,6 +229,9 @@ export function createSessionMcpRuntime(params: {
                 ) {
                   await resolved.transport.finishAuth(code);
                 }
+                if (resolved.transport instanceof SSEClientTransport) {
+                  await client.close().catch(() => {});
+                }
                 await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
               } else {
                 void callbackPromise?.catch(() => {});

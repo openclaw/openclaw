@@ -12,20 +12,28 @@ const closeMock = vi.hoisted(() => vi.fn());
 const finishAuthMock = vi.hoisted(() => vi.fn());
 const terminateSessionMock = vi.hoisted(() => vi.fn());
 
-const { UnauthorizedError, FakeStreamableHTTPClientTransport } = vi.hoisted(() => {
-  class MockUnauthorizedError extends Error {}
+const { UnauthorizedError, FakeStreamableHTTPClientTransport, FakeSSEClientTransport } = vi.hoisted(
+  () => {
+    class MockUnauthorizedError extends Error {}
 
-  class MockStreamableHTTPClientTransport {
-    finishAuth = finishAuthMock;
-    close = closeMock;
-    terminateSession = terminateSessionMock;
-  }
+    class MockStreamableHTTPClientTransport {
+      finishAuth = finishAuthMock;
+      close = closeMock;
+      terminateSession = terminateSessionMock;
+    }
 
-  return {
-    UnauthorizedError: MockUnauthorizedError,
-    FakeStreamableHTTPClientTransport: MockStreamableHTTPClientTransport,
-  };
-});
+    class MockSSEClientTransport {
+      finishAuth = finishAuthMock;
+      close = closeMock;
+    }
+
+    return {
+      UnauthorizedError: MockUnauthorizedError,
+      FakeStreamableHTTPClientTransport: MockStreamableHTTPClientTransport,
+      FakeSSEClientTransport: MockSSEClientTransport,
+    };
+  },
+);
 
 vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
   UnauthorizedError,
@@ -45,7 +53,7 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: class {},
+  SSEClientTransport: FakeSSEClientTransport,
 }));
 
 vi.mock("./embedded-pi-mcp.js", () => ({
@@ -80,8 +88,11 @@ describe("createSessionMcpRuntime OAuth", () => {
     connectMock.mockReset();
     listToolsMock.mockReset();
     closeMock.mockReset();
+    closeMock.mockResolvedValue(undefined);
     finishAuthMock.mockReset();
+    finishAuthMock.mockResolvedValue(undefined);
     terminateSessionMock.mockReset();
+    terminateSessionMock.mockResolvedValue(undefined);
 
     loadEmbeddedPiMcpConfigMock.mockReturnValue({
       diagnostics: [],
@@ -153,6 +164,35 @@ describe("createSessionMcpRuntime OAuth", () => {
     expect(finishAuthMock).toHaveBeenCalledWith("oauth-code");
     expect(catalog.tools).toHaveLength(1);
     expect(catalog.tools[0]?.toolName).toBe("remote_tool");
+
+    await runtime.dispose();
+  });
+
+  it("closes the client before retrying an OAuth SSE connection", async () => {
+    const transport = new FakeSSEClientTransport();
+    resolveMcpTransportMock.mockReturnValue({
+      transport,
+      description: "https://mcp.example.com/sse",
+      transportType: "sse",
+      connectionTimeoutMs: 5_000,
+      auth: "oauth",
+    });
+    connectMock
+      .mockRejectedValueOnce(new UnauthorizedError("Unauthorized"))
+      .mockResolvedValueOnce(undefined);
+
+    const runtime = createSessionMcpRuntime({
+      sessionId: "oauth-sse-session",
+      workspaceDir: "/tmp/openclaw-oauth-runtime",
+    });
+
+    await runtime.getCatalog();
+
+    expect(finishAuthMock).toHaveBeenCalledWith("oauth-code");
+    expect(closeMock).toHaveBeenCalled();
+    expect(closeMock.mock.invocationCallOrder[0]).toBeLessThan(
+      connectMock.mock.invocationCallOrder[1],
+    );
 
     await runtime.dispose();
   });
