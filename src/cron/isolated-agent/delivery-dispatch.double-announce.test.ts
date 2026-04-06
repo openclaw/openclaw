@@ -113,8 +113,13 @@ function makeBaseParams(overrides: {
   runSessionId?: string;
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
+  deliveryConfig?: { mode: "announce"; channel?: "last" | "telegram"; to?: string };
+  resolvedDeliveryMode?: "explicit" | "implicit";
 }) {
-  const resolvedDelivery = makeResolvedDelivery();
+  const resolvedDelivery = {
+    ...makeResolvedDelivery(),
+    mode: overrides.resolvedDeliveryMode ?? "explicit",
+  } satisfies Extract<DeliveryTargetResolution, { ok: true }>;
   return {
     cfg: {} as never,
     cfgWithAgentDefaults: {} as never,
@@ -125,6 +130,7 @@ function makeBaseParams(overrides: {
       sessionTarget: overrides.sessionTarget ?? "isolated",
       deleteAfterRun: false,
       payload: { kind: "agentTurn", message: "hello" },
+      ...(overrides.deliveryConfig ? { delivery: overrides.deliveryConfig } : {}),
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
@@ -278,11 +284,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     ).toBe(false);
   });
 
-  it("queues main-session awareness for isolated cron jobs after delivery", async () => {
+  it("queues main-session awareness for isolated cron jobs with explicit delivery targets", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
 
-    const params = makeBaseParams({ synthesizedText: "Morning briefing complete." });
+    const params = makeBaseParams({
+      synthesizedText: "Morning briefing complete.",
+      deliveryConfig: { mode: "announce", channel: "telegram", to: "123456" },
+    });
     const state = await dispatchCronDelivery(params);
 
     expect(state.result).toBeUndefined();
@@ -293,6 +302,24 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:run-123:telegram::123456:",
     });
+  });
+
+  it("skips main-session awareness for isolated cron jobs using implicit last-target delivery", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Implicit delivery should stay isolated.",
+      deliveryConfig: { mode: "announce", channel: "last" },
+      resolvedDeliveryMode: "implicit",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("keeps the cron run successful when awareness queueing throws after delivery", async () => {

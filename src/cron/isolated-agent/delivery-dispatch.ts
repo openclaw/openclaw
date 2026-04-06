@@ -234,10 +234,50 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
-function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
-  // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs keep
-  // their existing behavior, and best-effort sends may only partially deliver.
-  return job.sessionTarget === "isolated" && !deliveryBestEffort;
+function hasExplicitCronAwarenessTarget(
+  job: CronJob,
+  delivery: SuccessfulDeliveryTarget,
+): boolean {
+  if (delivery.mode === "explicit") {
+    return true;
+  }
+  const configuredDelivery = job.delivery;
+  if (
+    !configuredDelivery ||
+    configuredDelivery.mode === "none" ||
+    configuredDelivery.mode === "webhook"
+  ) {
+    return false;
+  }
+  const configuredChannel =
+    typeof configuredDelivery.channel === "string"
+      ? configuredDelivery.channel.trim().toLowerCase()
+      : undefined;
+  if (configuredChannel && configuredChannel !== "last") {
+    return true;
+  }
+  if (typeof configuredDelivery.to === "string" && configuredDelivery.to.trim()) {
+    return true;
+  }
+  if (typeof configuredDelivery.accountId === "string" && configuredDelivery.accountId.trim()) {
+    return true;
+  }
+  return configuredDelivery.threadId != null && String(configuredDelivery.threadId).trim() !== "";
+}
+
+function shouldQueueCronAwareness(
+  job: CronJob,
+  delivery: SuccessfulDeliveryTarget,
+  deliveryBestEffort: boolean,
+): boolean {
+  // Keep issue #52136 scoped to isolated runs with an explicit delivery
+  // target. Default isolated announce delivery should not mirror text back
+  // into the main session, or isolated jobs silently accumulate there.
+  return (
+    job.sessionTarget === "isolated" &&
+    !deliveryBestEffort &&
+    hasExplicitCronAwarenessTarget(job, delivery)
+  );
 }
 
 function resolveCronAwarenessMainSessionKey(params: {
@@ -526,7 +566,7 @@ export async function dispatchCronDelivery(
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
-      if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
+      if (delivered && shouldQueueCronAwareness(params.job, delivery, params.deliveryBestEffort)) {
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
