@@ -479,3 +479,32 @@ describe("discordPlugin groups", () => {
     ).toEqual({ allow: ["message.channel"] });
   });
 });
+
+describe("discordPlugin messaging.parseExplicitTarget", () => {
+  function parseExplicitTarget(raw: string) {
+    const fn = discordPlugin.messaging?.parseExplicitTarget;
+    if (!fn) {
+      throw new Error("Expected discordPlugin.messaging.parseExplicitTarget to be defined");
+    }
+    return fn({ raw });
+  }
+
+  it("preserves user: prefix instead of returning bare numeric id", () => {
+    const result = parseExplicitTarget("user:148297000000000000");
+    expect(result).toEqual({ to: "user:148297000000000000", chatType: "direct" });
+  });
+
+  it("preserves channel: prefix for channel targets", () => {
+    const result = parseExplicitTarget("channel:555000000000000000");
+    expect(result).toEqual({ to: "channel:555000000000000000", chatType: "channel" });
+  });
+
+  it("defaults bare numeric id to channel", () => {
+    const result = parseExplicitTarget("123456789000000000");
+    expect(result).toEqual({ to: "channel:123456789000000000", chatType: "channel" });
+  });
+
+  it("returns null for invalid targets", () => {
+    expect(parseExplicitTarget("@bob")).toBeNull();
+  });
+});
