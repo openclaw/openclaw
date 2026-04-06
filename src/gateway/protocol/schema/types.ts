@@ -43,6 +43,7 @@ export type SessionsPreviewParams = SchemaType<"SessionsPreviewParams">;
 export type SessionsResolveParams = SchemaType<"SessionsResolveParams">;
 export type SessionsCreateParams = SchemaType<"SessionsCreateParams">;
 export type SessionsSendParams = SchemaType<"SessionsSendParams">;
+export type SessionsStartParams = SchemaType<"SessionsStartParams">;
 export type SessionsMessagesSubscribeParams = SchemaType<"SessionsMessagesSubscribeParams">;
 export type SessionsMessagesUnsubscribeParams = SchemaType<"SessionsMessagesUnsubscribeParams">;
 export type SessionsAbortParams = SchemaType<"SessionsAbortParams">;

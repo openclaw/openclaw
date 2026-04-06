@@ -184,3 +184,15 @@ export const SessionsUsageParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const SessionsStartParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    /**
+     * If true, forces a new session even if one already exists.
+     * Use when the existing session is suspected to have crashed due to context overflow.
+     */
+    force: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
