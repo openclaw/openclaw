@@ -21,40 +21,20 @@ export function normalizeMessageActionInput(params: {
   const inferredChannel =
     explicitChannel || normalizeMessageChannel(toolContext?.currentChannelProvider) || "";
 
-  const explicitTarget =
-    typeof normalizedArgs.target === "string" ? normalizedArgs.target.trim() : "";
   const hasLegacyTargetFields =
     typeof normalizedArgs.to === "string" || typeof normalizedArgs.channelId === "string";
-  const hasLegacyTarget =
-    (typeof normalizedArgs.to === "string" && normalizedArgs.to.trim().length > 0) ||
-    (typeof normalizedArgs.channelId === "string" && normalizedArgs.channelId.trim().length > 0);
-
-  if (explicitTarget && hasLegacyTargetFields) {
-    delete normalizedArgs.to;
-    delete normalizedArgs.channelId;
+  if (actionRequiresTarget(action) && hasLegacyTargetFields) {
+    throw new Error("Use `target` instead of `to`/`channelId`.");
   }
 
   if (
-    !explicitTarget &&
-    !hasLegacyTarget &&
+    action !== "read" &&
     actionRequiresTarget(action) &&
     !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
   ) {
     const inferredTarget = toolContext?.currentChannelId?.trim();
     if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
-    }
-  }
-
-  if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
-    const legacyTo = typeof normalizedArgs.to === "string" ? normalizedArgs.to.trim() : "";
-    const legacyChannelId =
-      typeof normalizedArgs.channelId === "string" ? normalizedArgs.channelId.trim() : "";
-    const legacyTarget = legacyTo || legacyChannelId;
-    if (legacyTarget) {
-      normalizedArgs.target = legacyTarget;
-      delete normalizedArgs.to;
-      delete normalizedArgs.channelId;
     }
   }
 

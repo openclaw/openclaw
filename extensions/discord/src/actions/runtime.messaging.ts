@@ -40,6 +40,7 @@ import {
 } from "../send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../targets.js";
+import { logDebug, logWarn } from "../../../../src/logger.js";
 
 export const discordMessagingActionRuntime = {
   createThreadDiscord,
@@ -73,6 +74,127 @@ function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, 
     !Array.isArray(value) &&
     Object.keys(value as Record<string, unknown>).length > 0,
   );
+}
+
+const DISCORD_READ_DEFAULT_LIMIT = 20;
+const DISCORD_READ_MAX_LIMIT = 100;
+const DISCORD_READ_TEXT_LIMIT = 500;
+const DISCORD_READ_WARN_CHARS = 10_000;
+
+type DiscordReadDetailMode = "compact" | "raw";
+
+type DiscordCompactMessage = {
+  id: string;
+  timestampUtc?: string;
+  sender: string;
+  text: string;
+};
+
+function readDiscordReadDetailMode(params: Record<string, unknown>): DiscordReadDetailMode {
+  const detail = readStringParam(params, "detail");
+  if (!detail) {
+    return "compact";
+  }
+  if (detail === "compact" || detail === "raw") {
+    return detail;
+  }
+  throw new Error("detail must be compact or raw");
+}
+
+function clampDiscordReadLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DISCORD_READ_DEFAULT_LIMIT;
+  }
+  return Math.min(Math.max(Math.floor(value), 1), DISCORD_READ_MAX_LIMIT);
+}
+
+function truncateDiscordReadText(value: string): string {
+  if (value.length <= DISCORD_READ_TEXT_LIMIT) {
+    return value;
+  }
+  return `${value.slice(0, DISCORD_READ_TEXT_LIMIT - 1)}…`;
+}
+
+function readDiscordSender(message: Record<string, unknown>): string {
+  const member = message.member;
+  if (member && typeof member === "object") {
+    const nick = (member as { nick?: unknown }).nick;
+    if (typeof nick === "string" && nick.trim()) {
+      return nick.trim();
+    }
+  }
+  const author = message.author;
+  if (author && typeof author === "object") {
+    const globalName = (author as { global_name?: unknown }).global_name;
+    if (typeof globalName === "string" && globalName.trim()) {
+      return globalName.trim();
+    }
+    const username = (author as { username?: unknown }).username;
+    if (typeof username === "string" && username.trim()) {
+      return username.trim();
+    }
+    const id = (author as { id?: unknown }).id;
+    if (typeof id === "string" && id.trim()) {
+      return id.trim();
+    }
+  }
+  return "unknown";
+}
+
+function compactDiscordMessage(message: Record<string, unknown>): DiscordCompactMessage {
+  const text = typeof message.content === "string" ? message.content.trim() : "";
+  return {
+    id: typeof message.id === "string" ? message.id : "",
+    timestampUtc:
+      typeof message.timestampUtc === "string"
+        ? message.timestampUtc
+        : typeof message.timestamp === "string"
+          ? message.timestamp
+          : undefined,
+    sender: readDiscordSender(message),
+    text: truncateDiscordReadText(text || "[non-text content omitted]"),
+  };
+}
+
+function orderDiscordMessagesOldestFirst<T extends { timestampUtc?: string; id?: string }>(
+  messages: T[],
+): T[] {
+  return [...messages].toSorted((left, right) => {
+    const leftTime = left.timestampUtc ? Date.parse(left.timestampUtc) : Number.NaN;
+    const rightTime = right.timestampUtc ? Date.parse(right.timestampUtc) : Number.NaN;
+    const leftHasTime = Number.isFinite(leftTime);
+    const rightHasTime = Number.isFinite(rightTime);
+    if (leftHasTime && rightHasTime && leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+    if (leftHasTime !== rightHasTime) {
+      return leftHasTime ? -1 : 1;
+    }
+    return String(left.id ?? "").localeCompare(String(right.id ?? ""));
+  });
+}
+
+function logDiscordReadDiagnostics(params: {
+  requestedTarget: string;
+  resolvedTarget: string;
+  detail: DiscordReadDetailMode;
+  limit: number;
+  returnedMessages: number;
+  chars: number;
+}) {
+  const summary = JSON.stringify({
+    requestedTarget: params.requestedTarget,
+    resolvedTarget: params.resolvedTarget,
+    provider: "discord",
+    detail: params.detail,
+    limit: params.limit,
+    returnedMessages: params.returnedMessages,
+    chars: params.chars,
+  });
+  logDebug(`discord-read ${summary}`);
+  if (params.chars > DISCORD_READ_WARN_CHARS) {
+    logWarn(`discord-read large-payload ${summary}`);
+  }
 }
 
 function parseDiscordMessageLink(link: string) {
@@ -275,8 +397,13 @@ export async function handleDiscordMessagingAction(
         throw new Error("Discord message reads are disabled.");
       }
       const channelId = resolveChannelId();
+      const requestedTarget = readStringParam(params, "channelId", {
+        required: true,
+      });
+      const detail = readDiscordReadDetailMode(params);
+      const limit = clampDiscordReadLimit(readNumberParam(params, "limit"));
       const query = {
-        limit: readNumberParam(params, "limit"),
+        limit,
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
         around: readStringParam(params, "around"),
@@ -287,10 +414,33 @@ export async function handleDiscordMessagingAction(
             accountId,
           })
         : await discordMessagingActionRuntime.readMessagesDiscord(channelId, query, cfgOptions);
-      return jsonResult({
-        ok: true,
-        messages: messages.map((message) => normalizeMessage(message)),
+      const normalizedMessages = messages.map((message) => normalizeMessage(message));
+      const payload =
+        detail === "raw"
+          ? {
+              ok: true,
+              messages: normalizedMessages,
+            }
+          : {
+              ok: true,
+              messages: orderDiscordMessagesOldestFirst(
+                normalizedMessages
+                  .filter(
+                    (message): message is Record<string, unknown> =>
+                      Boolean(message) && typeof message === "object",
+                  )
+                  .map((message) => compactDiscordMessage(message)),
+              ),
+            };
+      logDiscordReadDiagnostics({
+        requestedTarget,
+        resolvedTarget: channelId,
+        detail,
+        limit,
+        returnedMessages: payload.messages.length,
+        chars: JSON.stringify(payload).length,
       });
+      return jsonResult(payload);
     }
     case "sendMessage": {
       if (!isActionEnabled("messages")) {

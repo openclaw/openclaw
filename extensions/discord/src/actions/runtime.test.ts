@@ -246,7 +246,18 @@ describe("handleDiscordMessagingAction", () => {
 
   it("adds normalized timestamps to readMessages payloads", async () => {
     readMessagesDiscord.mockResolvedValueOnce([
-      { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
+      {
+        id: "2",
+        timestamp: "2026-01-15T10:05:00.000Z",
+        content: "second",
+        author: { username: "Beta" },
+      },
+      {
+        id: "1",
+        timestamp: "2026-01-15T10:00:00.000Z",
+        content: "first",
+        author: { username: "Alpha" },
+      },
     ] as never);
 
     const result = await handleDiscordMessagingAction(
@@ -255,12 +266,100 @@ describe("handleDiscordMessagingAction", () => {
       enableAllActions,
     );
     const payload = result.details as {
-      messages: Array<{ timestampMs?: number; timestampUtc?: string }>;
+      messages: Array<{ id: string; timestampUtc?: string; sender: string; text: string }>;
     };
 
-    const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
-    expect(payload.messages[0].timestampMs).toBe(expectedMs);
-    expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+    expect(readMessagesDiscord).toHaveBeenCalledWith(
+      "C1",
+      {
+        limit: 20,
+        before: undefined,
+        after: undefined,
+        around: undefined,
+      },
+      {},
+    );
+    expect(payload.messages).toEqual([
+      {
+        id: "1",
+        timestampUtc: "2026-01-15T10:00:00.000Z",
+        sender: "Alpha",
+        text: "first",
+      },
+      {
+        id: "2",
+        timestampUtc: "2026-01-15T10:05:00.000Z",
+        sender: "Beta",
+        text: "second",
+      },
+    ]);
+  });
+
+  it("returns raw Discord read payloads when detail=raw", async () => {
+    readMessagesDiscord.mockResolvedValueOnce([
+      {
+        id: "1",
+        timestamp: "2026-01-15T10:00:00.000Z",
+        content: "hello",
+        author: { username: "Alpha" },
+      },
+    ] as never);
+
+    const result = await handleDiscordMessagingAction(
+      "readMessages",
+      { channelId: "C1", detail: "raw", limit: 50 },
+      enableAllActions,
+    );
+    const payload = result.details as {
+      messages: Array<{
+        timestampMs?: number;
+        timestampUtc?: string;
+        author?: { username?: string };
+      }>;
+    };
+
+    expect(readMessagesDiscord).toHaveBeenCalledWith(
+      "C1",
+      {
+        limit: 50,
+        before: undefined,
+        after: undefined,
+        around: undefined,
+      },
+      {},
+    );
+    expect(payload.messages[0].timestampMs).toBe(Date.parse("2026-01-15T10:00:00.000Z"));
+    expect(payload.messages[0].author?.username).toBe("Alpha");
+  });
+
+  it("truncates long non-text Discord reads into compact placeholders", async () => {
+    readMessagesDiscord.mockResolvedValueOnce([
+      {
+        id: "1",
+        timestamp: "2026-01-15T10:00:00.000Z",
+        content: "",
+        author: { username: "Alpha" },
+      },
+      {
+        id: "2",
+        timestamp: "2026-01-15T10:01:00.000Z",
+        content: "x".repeat(700),
+        author: { username: "Beta" },
+      },
+    ] as never);
+
+    const result = await handleDiscordMessagingAction(
+      "readMessages",
+      { channelId: "C1" },
+      enableAllActions,
+    );
+    const payload = result.details as {
+      messages: Array<{ text: string }>;
+    };
+
+    expect(payload.messages[0].text).toBe("[non-text content omitted]");
+    expect(payload.messages[1].text).toHaveLength(500);
+    expect(payload.messages[1].text.endsWith("…")).toBe(true);
   });
 
   it("threads provided cfg into readMessages calls", async () => {

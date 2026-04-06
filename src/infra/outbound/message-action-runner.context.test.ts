@@ -236,15 +236,6 @@ describe("runMessageAction context isolation", () => {
       toolContext: { currentChannelId: "C12345678" },
     },
     {
-      name: "accepts legacy to parameter for send",
-      cfg: slackConfig,
-      actionParams: {
-        channel: "slack",
-        to: "#C12345678",
-        message: "hi",
-      },
-    },
-    {
       name: "defaults to current channel when target is omitted",
       cfg: slackConfig,
       actionParams: {
@@ -284,6 +275,19 @@ describe("runMessageAction context isolation", () => {
     });
 
     expect(result.kind).toBe("send");
+  });
+
+  it("rejects legacy to parameter for send", async () => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          to: "#C12345678",
+          message: "hi",
+        },
+      }),
+    ).rejects.toThrow(/Use `target` instead of `to`\/`channelId`/);
   });
 
   it.each([
@@ -389,32 +393,6 @@ describe("runMessageAction context isolation", () => {
       expectedKind: "send",
       expectedChannel: "slack",
     },
-    {
-      name: "falls back to tool-context provider when channel param is an id",
-      cfg: slackConfig,
-      action: "send" as const,
-      actionParams: {
-        channel: "C12345678",
-        target: "#C12345678",
-        message: "hi",
-      },
-      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
-      expectedKind: "send",
-      expectedChannel: "slack",
-    },
-    {
-      name: "falls back to tool-context provider for broadcast channel ids",
-      cfg: slackConfig,
-      action: "broadcast" as const,
-      actionParams: {
-        targets: ["channel:C12345678"],
-        channel: "C12345678",
-        message: "hi",
-      },
-      toolContext: { currentChannelProvider: "slack" },
-      expectedKind: "broadcast",
-      expectedChannel: "slack",
-    },
   ])("$name", async ({ cfg, action, actionParams, toolContext, expectedKind, expectedChannel }) => {
     const result = await runDryAction({
       cfg,
@@ -425,6 +403,38 @@ describe("runMessageAction context isolation", () => {
 
     expect(result.kind).toBe(expectedKind);
     expect(result.channel).toBe(expectedChannel);
+  });
+
+  it.each([
+    {
+      name: "send when channel param is a target-like id",
+      action: "send" as const,
+      actionParams: {
+        channel: "C12345678",
+        target: "#C12345678",
+        message: "hi",
+      },
+      toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+    },
+    {
+      name: "broadcast when channel param is a target-like id",
+      action: "broadcast" as const,
+      actionParams: {
+        targets: ["channel:C12345678"],
+        channel: "C12345678",
+        message: "hi",
+      },
+      toolContext: { currentChannelProvider: "slack" },
+    },
+  ])("rejects $name", async ({ action, actionParams, toolContext }) => {
+    await expect(
+      runDryAction({
+        cfg: slackConfig,
+        action,
+        actionParams,
+        toolContext,
+      }),
+    ).rejects.toThrow(/Use `target` for channel\/user\/thread ids or names/);
   });
 
   it.each([

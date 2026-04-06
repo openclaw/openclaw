@@ -52,6 +52,28 @@ function resolveAvailableKnownChannel(params: {
     : undefined;
 }
 
+function looksLikeTargetValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    /^[0-9]{6,}$/.test(trimmed) ||
+    /^[a-z][0-9]{6,}$/i.test(trimmed) ||
+    trimmed.startsWith("channel:") ||
+    trimmed.startsWith("<#") ||
+    trimmed.startsWith("#") ||
+    trimmed.startsWith("@")
+  );
+}
+
+function formatUnknownChannelError(value: string): string {
+  if (looksLikeTargetValue(value)) {
+    return `Unknown channel provider: ${value}. Use \`target\` for channel/user/thread ids or names; \`channel\` selects the provider (for example \`discord\`).`;
+  }
+  return `Unknown channel provider: ${value}`;
+}
+
 function isAccountEnabled(account: unknown): boolean {
   if (!account || typeof account !== "object") {
     return true;
@@ -153,25 +175,14 @@ export async function resolveMessageChannelSelection(params: {
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
+    if (!isKnownChannel(normalized)) {
+      throw new Error(formatUnknownChannelError(String(normalized)));
+    }
     const availableExplicit = resolveAvailableKnownChannel({
       cfg: params.cfg,
       value: normalized,
     });
     if (!availableExplicit) {
-      const fallback = resolveAvailableKnownChannel({
-        cfg: params.cfg,
-        value: params.fallbackChannel,
-      });
-      if (fallback) {
-        return {
-          channel: fallback,
-          configured: [],
-          source: "tool-context-fallback",
-        };
-      }
-      if (!isKnownChannel(normalized)) {
-        throw new Error(`Unknown channel: ${String(normalized)}`);
-      }
       throw new Error(`Channel is unavailable: ${String(normalized)}`);
     }
     return {
