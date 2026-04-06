@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 
 const forwardedArgs = [];
 let quietOverride;
@@ -24,17 +24,54 @@ const env = {
   OPENCLAW_LIVE_TEST_QUIET: quietOverride ?? process.env.OPENCLAW_LIVE_TEST_QUIET ?? "1",
 };
 
-const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const child = spawn(
-  command,
-  ["exec", "vitest", "run", "--config", "vitest.live.config.ts", ...forwardedArgs],
-  {
-    stdio: "inherit",
-    env,
-  },
-);
+function parsePositiveInt(value, fallback) {
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const heartbeatMs = parsePositiveInt(process.env.OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS, 20_000);
+const startedAt = Date.now();
+let lastOutputAt = startedAt;
+
+const child = spawnPnpmRunner({
+  stdio: ["inherit", "pipe", "pipe"],
+  pnpmArgs: ["exec", "vitest", "run", "--config", "vitest.live.config.ts", ...forwardedArgs],
+  env,
+});
+
+const noteOutput = () => {
+  lastOutputAt = Date.now();
+};
+
+child.stdout?.on("data", (chunk) => {
+  noteOutput();
+  process.stdout.write(chunk);
+});
+
+child.stderr?.on("data", (chunk) => {
+  noteOutput();
+  process.stderr.write(chunk);
+});
+
+const heartbeat = setInterval(() => {
+  const now = Date.now();
+  if (now - lastOutputAt < heartbeatMs) {
+    return;
+  }
+  const elapsedSec = Math.max(1, Math.round((now - startedAt) / 1_000));
+  const quietSec = Math.max(1, Math.round((now - lastOutputAt) / 1_000));
+  process.stderr.write(
+    `[test:live] still running (${elapsedSec}s elapsed, ${quietSec}s since last output)\n`,
+  );
+  lastOutputAt = now;
+}, heartbeatMs);
+heartbeat.unref?.();
 
 child.on("exit", (code, signal) => {
+  clearInterval(heartbeat);
   if (signal) {
     process.kill(process.pid, signal);
     return;
@@ -43,6 +80,7 @@ child.on("exit", (code, signal) => {
 });
 
 child.on("error", (error) => {
+  clearInterval(heartbeat);
   console.error(error);
   process.exit(1);
 });

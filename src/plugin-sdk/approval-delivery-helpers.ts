@@ -18,6 +18,7 @@ type ApprovalAdapterParams = {
 
 type DeliverySuppressionParams = {
   cfg: OpenClawConfig;
+  approvalKind: ApprovalKind;
   target: { channel: string; accountId?: string | null };
   request: { request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null } };
 };
@@ -49,6 +50,7 @@ type ApproverRestrictedNativeApprovalParams = {
     request: NativeApprovalRequest;
   }) => NativeApprovalTarget[] | Promise<NativeApprovalTarget[]>;
   notifyOriginWhenDmOnly?: boolean;
+  describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
 };
 
 function buildApproverRestrictedNativeApprovalCapability(
@@ -92,9 +94,10 @@ function buildApproverRestrictedNativeApprovalCapability(
       accountId?: string | null;
       action: "approve";
     }) =>
-      params.hasApprovers({ cfg, accountId }) && params.isNativeDeliveryEnabled({ cfg, accountId })
+      params.hasApprovers({ cfg, accountId })
         ? ({ kind: "enabled" } as const)
         : ({ kind: "disabled" } as const),
+    describeExecApprovalSetup: params.describeExecApprovalSetup,
     approvals: {
       delivery: {
         hasConfiguredDmRoute: ({ cfg }: { cfg: OpenClawConfig }) =>
@@ -168,11 +171,15 @@ export function createApproverRestrictedNativeApprovalAdapter(
 export function createChannelApprovalCapability(params: {
   authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
   getActionAvailabilityState?: ChannelApprovalCapability["getActionAvailabilityState"];
+  resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
+  describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
   approvals?: Pick<ChannelApprovalCapability, "delivery" | "render" | "native">;
 }): ChannelApprovalCapability {
   return {
     authorizeActorAction: params.authorizeActorAction,
     getActionAvailabilityState: params.getActionAvailabilityState,
+    resolveApproveCommandBehavior: params.resolveApproveCommandBehavior,
+    describeExecApprovalSetup: params.describeExecApprovalSetup,
     delivery: params.approvals?.delivery,
     render: params.approvals?.render,
     native: params.approvals?.native,
@@ -183,19 +190,23 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
   auth: {
     authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
     getActionAvailabilityState?: ChannelApprovalCapability["getActionAvailabilityState"];
+    resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
   };
   delivery: ChannelApprovalCapability["delivery"];
   render: ChannelApprovalCapability["render"];
   native: ChannelApprovalCapability["native"];
+  describeExecApprovalSetup: ChannelApprovalCapability["describeExecApprovalSetup"];
 } {
   return {
     auth: {
       authorizeActorAction: capability.authorizeActorAction,
       getActionAvailabilityState: capability.getActionAvailabilityState,
+      resolveApproveCommandBehavior: capability.resolveApproveCommandBehavior,
     },
     delivery: capability.delivery,
     render: capability.render,
     native: capability.native,
+    describeExecApprovalSetup: capability.describeExecApprovalSetup,
   };
 }
 

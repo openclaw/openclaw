@@ -1,15 +1,16 @@
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { ircPlugin } from "./src/channel.js";
-import { setIrcRuntime } from "./src/runtime.js";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { ircPlugin } from "./src/channel.js";
-export { setIrcRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "irc",
   name: "IRC",
   description: "IRC channel plugin",
-  plugin: ircPlugin as ChannelPlugin,
-  setRuntime: setIrcRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "ircPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setIrcRuntime",
+  },
 });

@@ -39,6 +39,12 @@ describe("syncPluginVersions", () => {
         install: {
           minHostVersion: ">=2026.3.30",
         },
+        compat: {
+          pluginApi: ">=2026.3.30",
+        },
+        build: {
+          openclawVersion: "2026.3.30",
+        },
       },
     });
 
@@ -53,6 +59,12 @@ describe("syncPluginVersions", () => {
         install?: {
           minHostVersion?: string;
         };
+        compat?: {
+          pluginApi?: string;
+        };
+        build?: {
+          openclawVersion?: string;
+        };
       };
     };
 
@@ -61,5 +73,7 @@ describe("syncPluginVersions", () => {
     expect(updatedPackage.devDependencies?.openclaw).toBe("workspace:*");
     expect(updatedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
     expect(updatedPackage.openclaw?.install?.minHostVersion).toBe(">=2026.4.1");
+    expect(updatedPackage.openclaw?.compat?.pluginApi).toBe(">=2026.4.1");
+    expect(updatedPackage.openclaw?.build?.openclawVersion).toBe("2026.4.1");
   });
 });

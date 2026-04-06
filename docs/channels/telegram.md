@@ -121,6 +121,10 @@ Token resolution order is account-aware. In practice, config values win over env
 
     For one-owner bots, prefer `dmPolicy: "allowlist"` with explicit numeric `allowFrom` IDs to keep access policy durable in config (instead of depending on previous pairing approvals).
 
+    Common confusion: DM pairing approval does not mean "this sender is authorized everywhere".
+    Pairing grants DM access only. Group sender authorization still comes from explicit config allowlists.
+    If you want "I am authorized once and both DMs and group commands work", put your numeric Telegram user ID in `channels.telegram.allowFrom`.
+
     ### Finding your Telegram user ID
 
     Safer (no third-party bot):
@@ -159,6 +163,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Non-numeric entries are ignored for sender authorization.
     Security boundary (`2026.2.25+`): group sender auth does **not** inherit DM pairing-store approvals.
     Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
+    If `groupAllowFrom` is unset, Telegram falls back to config `allowFrom`, not the pairing store.
+    Practical pattern for one-owner bots: set your user ID in `channels.telegram.allowFrom`, leave `groupAllowFrom` unset, and allow the target groups under `channels.telegram.groups`.
     Runtime note: if `channels.telegram` is completely missing, runtime defaults to fail-closed `groupPolicy="allowlist"` unless `channels.defaults.groupPolicy` is explicitly set.
 
     Example: allow any member in one specific group:
@@ -351,6 +357,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `/pair approve <requestId>` for explicit approval
        - `/pair approve` when there is only one pending request
        - `/pair approve latest` for most recent
+
+    The setup code carries a short-lived bootstrap token. Built-in bootstrap handoff keeps the primary node token at `scopes: []`; any handed-off operator token stays bounded to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`. Bootstrap scope checks are role-prefixed, so that operator allowlist only satisfies operator requests; non-operator roles still need scopes under their own role prefix.
 
     If a device retries with changed auth details (for example role/scopes/public key), the previous pending request is superseded and the new request uses a different `requestId`. Re-run `/pair pending` before approving.
 
@@ -759,6 +767,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound Telegram media size.
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies).
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
+    - reply/quote/forward supplemental context is currently passed as received.
+    - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
     - DM history controls:
       - `channels.telegram.dmHistoryLimit`
       - `channels.telegram.dms["<user_id>"].historyLimit`
@@ -810,9 +820,12 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `channels.telegram.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`
 
-    Approvers must be numeric Telegram user IDs. Telegram becomes an exec approval client when `enabled` is true and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's numeric owner config (`allowFrom` and direct-message `defaultTo`). Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
+    Approvers must be numeric Telegram user IDs. Telegram auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's numeric owner config (`allowFrom` and direct-message `defaultTo`). Set `enabled: false` to disable Telegram as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
 
     Telegram also renders the shared approval buttons used by other chat channels. The native Telegram adapter mainly adds approver DM routing, channel/topic fanout, and typing hints before delivery.
+    When those buttons are present, they are the primary approval UX; OpenClaw
+    should only include a manual `/approve` command when the tool result says
+    chat approvals are unavailable or manual approval is the only path.
 
     Delivery rules:
 
@@ -821,6 +834,16 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `target: "both"` sends to approver DMs and the originating chat/topic
 
     Only resolved approvers can approve or deny. Non-approvers cannot use `/approve` and cannot use Telegram approval buttons.
+
+    Approval resolution behavior:
+
+    - IDs prefixed with `plugin:` always resolve through plugin approvals.
+    - Other approval IDs try `exec.approval.resolve` first.
+    - If Telegram is also authorized for plugin approvals and the gateway says
+      the exec approval is unknown/expired, Telegram retries once through
+      `plugin.approval.resolve`.
+    - Real exec approval denials/errors do not silently fall through to plugin
+      approval resolution.
 
     Channel delivery shows the command text in the chat, so only enable `channel` or `both` in trusted groups/topics. When the prompt lands in a forum topic, OpenClaw preserves the topic for both the approval prompt and the post-approval follow-up. Exec approvals expire after 30 minutes by default.
 
@@ -912,6 +935,33 @@ channels:
       autoSelectFamily: false
 ```
 
+    - RFC 2544 benchmark-range answers (`198.18.0.0/15`) are already allowed
+      for Telegram media downloads by default. If a trusted fake-IP or
+      transparent proxy rewrites `api.telegram.org` to some other
+      private/internal/special-use address during media downloads, you can opt
+      in to the Telegram-only bypass:
+
+```yaml
+channels:
+  telegram:
+    network:
+      dangerouslyAllowPrivateNetwork: true
+```
+
+    - The same opt-in is available per account at
+      `channels.telegram.accounts.<accountId>.network.dangerouslyAllowPrivateNetwork`.
+    - If your proxy resolves Telegram media hosts into `198.18.x.x`, leave the
+      dangerous flag off first. Telegram media already allows the RFC 2544
+      benchmark range by default.
+
+    <Warning>
+      `channels.telegram.network.dangerouslyAllowPrivateNetwork` weakens Telegram
+      media SSRF protections. Use it only for trusted operator-controlled proxy
+      environments such as Clash, Mihomo, or Surge fake-IP routing when they
+      synthesize private or special-use answers outside the RFC 2544 benchmark
+      range. Leave it off for normal public internet Telegram access.
+    </Warning>
+
     - Environment overrides (temporary):
       - `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1`
       - `OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY=1`
@@ -978,6 +1028,7 @@ Primary reference:
 - `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
 - `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.
+- `channels.telegram.network.dangerouslyAllowPrivateNetwork`: dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve `api.telegram.org` to private/internal/special-use addresses outside the default RFC 2544 benchmark-range allowance.
 - `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
 - `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
 - `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
@@ -1004,7 +1055,7 @@ Telegram-specific high-signal fields:
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
-- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
+- media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker`
 - reactions: `reactionNotifications`, `reactionLevel`

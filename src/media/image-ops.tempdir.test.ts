@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { getImageMetadata } from "./image-ops.js";
 
 describe("image-ops temp dir", () => {
   let createdTempDir = "";
@@ -18,11 +19,9 @@ describe("image-ops temp dir", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_IMAGE_BACKEND;
     vi.restoreAllMocks();
-    vi.resetModules();
   });
 
   it("creates sips temp dirs under the secured OpenClaw tmp root", async () => {
-    const { getImageMetadata } = await import("./image-ops.js");
     const secureRoot = resolvePreferredOpenClawTmpDir();
 
     await getImageMetadata(Buffer.from("image"));
