@@ -38,6 +38,8 @@ export type ExtensionChannelConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
   dmPolicy?: string;
+  /** When true, DMs from authorized senders require a mention-pattern match to trigger a reply. */
+  dmRequireMention?: boolean;
   groupPolicy?: GroupPolicy;
   contextVisibility?: ContextVisibilityMode;
   healthMonitor?: ChannelHealthMonitorConfig;

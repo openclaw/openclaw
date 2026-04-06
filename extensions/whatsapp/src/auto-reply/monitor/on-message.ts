@@ -7,11 +7,13 @@ import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import { normalizeE164 } from "../../text-runtime.js";
 import { loadConfig } from "../config.runtime.js";
 import type { MentionConfig } from "../mentions.js";
+import { buildMentionConfig, debugMention } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
 import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
 import { applyGroupGating } from "./group-gating.js";
+import { resolveMentionGating } from "./group-gating.runtime.js";
 import { updateLastRouteInBackground } from "./last-route.js";
 import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
@@ -29,7 +31,12 @@ export function createWebOnMessageHandler(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<(typeof import("openclaw/plugin-sdk/runtime-env"))["getChildLogger"]>;
   baseMentionConfig: MentionConfig;
-  account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
+  account: {
+    authDir?: string;
+    accountId?: string;
+    selfChatMode?: boolean;
+    dmRequireMention?: boolean;
+  };
 }) {
   const processForRoute = async (
     msg: WebInboundMsg,
@@ -65,8 +72,9 @@ export function createWebOnMessageHandler(params: {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
+    const freshCfg = loadConfig();
     const route = resolveAgentRoute({
-      cfg: loadConfig(),
+      cfg: freshCfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
@@ -152,6 +160,33 @@ export function createWebOnMessageHandler(params: {
         if (normalized) {
           msg.sender = { ...(msg.sender ?? {}), e164: normalized };
           msg.senderE164 = normalized;
+        }
+      }
+
+      // DM trigger gating: when dmRequireMention is enabled, only process DMs
+      // that match one of the configured mentionPatterns.
+      // NOTE: patterns currently resolve from agents[*].groupChat.mentionPatterns
+      // (or agent identity name/emoji as fallback). A dedicated dmMentionPatterns
+      // resolution path may be added in a follow-up.
+      if (params.account.dmRequireMention) {
+        const mentionConfig = buildMentionConfig(freshCfg, route.agentId);
+        if (mentionConfig.mentionRegexes.length === 0) {
+          // No patterns configured — allow DM through to avoid silent suppression.
+          logVerbose(
+            "dmRequireMention enabled but no mentionPatterns configured; allowing DM through",
+          );
+        } else {
+          const mentionDebug = debugMention(msg, mentionConfig, params.account.authDir);
+          const mentionGate = resolveMentionGating({
+            requireMention: true,
+            canDetectMention: true,
+            wasMentioned: mentionDebug.wasMentioned,
+          });
+          if (mentionGate.shouldSkip) {
+            logVerbose(`Skipping DM (no mention detected, dmRequireMention enabled): ${msg.body}`);
+            return;
+          }
+          msg.wasMentioned = mentionGate.effectiveWasMentioned;
         }
       }
     }
