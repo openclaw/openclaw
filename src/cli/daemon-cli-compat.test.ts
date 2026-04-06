@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveLegacyDaemonCliAccessors } from "./daemon-cli-compat.js";
+import {
+  resolveAliasedExportAccessor,
+  resolveLegacyDaemonCliAccessors,
+  resolveLegacyDaemonCliRegisterAccessor,
+} from "./daemon-cli-compat.js";
 
 describe("resolveLegacyDaemonCliAccessors", () => {
   it("resolves aliased daemon-cli exports from a bundled chunk", () => {
@@ -38,5 +42,23 @@ describe("resolveLegacyDaemonCliAccessors", () => {
     `;
 
     expect(resolveLegacyDaemonCliAccessors(bundle)).toBeNull();
+  });
+
+  it("resolves the register accessor even when daemon actions are split into other bundles", () => {
+    const bundle = `
+      export { registerDaemonCli as t };
+    `;
+
+    expect(resolveLegacyDaemonCliRegisterAccessor(bundle)).toBe("t");
+  });
+
+  it("resolves a direct aliased export accessor from a non-daemon helper bundle", () => {
+    const bundle = `
+      export { runDaemonInstall as a, runDaemonRestart as t };
+    `;
+
+    expect(resolveAliasedExportAccessor(bundle, "runDaemonRestart")).toBe("t");
+    expect(resolveAliasedExportAccessor(bundle, "runDaemonInstall")).toBe("a");
+    expect(resolveAliasedExportAccessor(bundle, "runDaemonStatus")).toBeNull();
   });
 });

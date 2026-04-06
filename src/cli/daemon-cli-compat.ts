@@ -52,9 +52,14 @@ function findRegisterContainerSymbol(bundleSource: string): string | null {
   return bundleSource.match(REGISTER_CONTAINER_RE)?.[1] ?? null;
 }
 
-export function resolveLegacyDaemonCliAccessors(
+export function resolveAliasedExportAccessor(
   bundleSource: string,
-): LegacyDaemonCliAccessors | null {
+  exportName: LegacyDaemonCliExport,
+): string | null {
+  return parseExportAliases(bundleSource)?.get(exportName) ?? null;
+}
+
+export function resolveLegacyDaemonCliRegisterAccessor(bundleSource: string): string | null {
   const aliases = parseExportAliases(bundleSource);
   if (!aliases) {
     return null;
@@ -63,21 +68,28 @@ export function resolveLegacyDaemonCliAccessors(
   const registerContainer = findRegisterContainerSymbol(bundleSource);
   const registerContainerAlias = registerContainer ? aliases.get(registerContainer) : undefined;
   const registerDirectAlias = aliases.get("registerDaemonCli");
+  if (registerContainerAlias) {
+    return `${registerContainerAlias}.registerDaemonCli`;
+  }
+  return registerDirectAlias ?? null;
+}
 
-  const runDaemonInstall = aliases.get("runDaemonInstall");
-  const runDaemonRestart = aliases.get("runDaemonRestart");
-  const runDaemonStart = aliases.get("runDaemonStart");
-  const runDaemonStatus = aliases.get("runDaemonStatus");
-  const runDaemonStop = aliases.get("runDaemonStop");
-  const runDaemonUninstall = aliases.get("runDaemonUninstall");
-  if (!(registerContainerAlias || registerDirectAlias) || !runDaemonRestart) {
+export function resolveLegacyDaemonCliAccessors(
+  bundleSource: string,
+): LegacyDaemonCliAccessors | null {
+  const registerDaemonCli = resolveLegacyDaemonCliRegisterAccessor(bundleSource);
+  const runDaemonInstall = resolveAliasedExportAccessor(bundleSource, "runDaemonInstall");
+  const runDaemonRestart = resolveAliasedExportAccessor(bundleSource, "runDaemonRestart");
+  const runDaemonStart = resolveAliasedExportAccessor(bundleSource, "runDaemonStart");
+  const runDaemonStatus = resolveAliasedExportAccessor(bundleSource, "runDaemonStatus");
+  const runDaemonStop = resolveAliasedExportAccessor(bundleSource, "runDaemonStop");
+  const runDaemonUninstall = resolveAliasedExportAccessor(bundleSource, "runDaemonUninstall");
+  if (!registerDaemonCli || !runDaemonRestart) {
     return null;
   }
 
   const accessors: LegacyDaemonCliAccessors = {
-    registerDaemonCli: registerContainerAlias
-      ? `${registerContainerAlias}.registerDaemonCli`
-      : registerDirectAlias!,
+    registerDaemonCli,
     runDaemonRestart,
   };
   if (runDaemonInstall) {

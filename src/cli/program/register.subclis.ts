@@ -83,6 +83,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "live",
+    description: "Manage the live/draft workflow boundary for local + Telegram runtime",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../live-cli.js");
+      mod.registerLiveCli(program);
+    },
+  },
+  {
     name: "system",
     description: "System events, heartbeat, and presence",
     hasSubcommands: true,

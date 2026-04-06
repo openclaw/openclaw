@@ -14,6 +14,11 @@ export const SUB_CLI_DESCRIPTORS = [
   { name: "daemon", description: "Gateway service (legacy alias)", hasSubcommands: true },
   { name: "logs", description: "Tail gateway file logs via RPC", hasSubcommands: false },
   {
+    name: "live",
+    description: "Manage the live/draft workflow boundary for local + Telegram runtime",
+    hasSubcommands: true,
+  },
+  {
     name: "system",
     description: "System events, heartbeat, and presence",
     hasSubcommands: true,
