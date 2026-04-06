@@ -28,6 +28,9 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/models\/[^\s]+ is not found/i.test(msg)) {
     return true;
   }
+  if (/model/i.test(msg) && /does not exist/i.test(msg)) {
+    return true;
+  }
   if (/does not exist or you do not have access/i.test(msg)) {
     return true;
   }
