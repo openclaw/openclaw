@@ -191,15 +191,17 @@ export async function runCli(argv: string[] = process.argv) {
     });
     if (!shouldSkipPluginRegistration) {
       // Register plugin CLI commands before parsing
-      const { registerPluginCliCommands } = await import("../plugins/cli.js");
-      const { loadValidatedConfigForPluginRegistration } =
-        await import("./program/register.subclis.js");
-      const config = await loadValidatedConfigForPluginRegistration();
-      if (config) {
-        await registerPluginCliCommands(program, config, undefined, undefined, {
+      const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
+      const config = await registerPluginCliCommandsFromValidatedConfig(
+        program,
+        undefined,
+        undefined,
+        {
           mode: "lazy",
           primary,
-        });
+        },
+      );
+      if (config) {
         if (primary && !program.commands.some((command) => command.name() === primary)) {
           const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
           if (missingPluginCommandMessage) {
