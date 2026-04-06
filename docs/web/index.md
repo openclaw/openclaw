@@ -14,7 +14,7 @@ The Gateway serves a small **browser Control UI** (Vite + Lit) from the same por
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
 Capabilities live in [Control UI](/web/control-ui).
-This page focuses on bind modes, security, and web-facing surfaces.
+This page focuses on bind models, security, and web-facing surfaces.
 
 ## Webhooks
 
