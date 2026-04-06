@@ -23,6 +23,7 @@ export const BLOCKED_HOST_PATHS = [
   "/sys",
   "/dev",
   "/boot",
+  "/root",
   // Directories that commonly contain (or alias) the Docker socket.
   "/run",
   "/var/run",
@@ -371,7 +372,4 @@ export function validateSandboxSecurity(
   });
   validateSeccompProfile(cfg.seccompProfile);
   validateApparmorProfile(cfg.apparmorProfile);
-  // Admin-configured env vars are all intentional — bypass the blocklist.
-  const forceAllowKeys = cfg.env ? new Set(Object.keys(cfg.env)) : undefined;
-  validateEnvVars(cfg.env, { forceAllowKeys });
 }

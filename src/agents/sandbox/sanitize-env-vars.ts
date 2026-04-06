@@ -80,12 +80,13 @@ export function sanitizeEnvVars(
       continue;
     }
 
-    if (!forceAllowKeys?.has(key) && matchesAnyPattern(key, blockedPatterns)) {
+    const isForced = forceAllowKeys?.has(key) ?? false;
+    if (!isForced && matchesAnyPattern(key, blockedPatterns)) {
       blocked.push(key);
       continue;
     }
 
-    if (options.strictMode && !matchesAnyPattern(key, allowedPatterns)) {
+    if (!isForced && options.strictMode && !matchesAnyPattern(key, allowedPatterns)) {
       blocked.push(key);
       continue;
     }
