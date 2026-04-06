@@ -8,7 +8,7 @@ export type AgentInternalEventType = "task_completion";
 
 export type AgentTaskCompletionInternalEvent = {
   type: "task_completion";
-  source: "subagent" | "cron" | "video_generation";
+  source: "subagent" | "cron" | "video_generation" | "music_generation";
   childSessionKey: string;
   childSessionId?: string;
   announceType: string;
