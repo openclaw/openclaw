@@ -2,6 +2,7 @@ export type TranslationMap = { [key: string]: string | TranslationMap };
 
 export type Locale =
   | "en"
+  | "sv"
   | "zh-CN"
   | "zh-TW"
   | "pt-BR"
