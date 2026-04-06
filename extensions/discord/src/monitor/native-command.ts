@@ -342,7 +342,9 @@ function buildDiscordCommandOptions(params: {
 
 function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
   const normalized = commandName.trim().toLowerCase();
-  return normalized === "acp" || normalized === "new" || normalized === "reset";
+  // Recovery slash commands still need configured ACP readiness so stale dead
+  // bindings are recreated before /new or /reset dispatches through them.
+  return normalized === "acp";
 }
 
 function resolveDiscordNativeGroupDmAccess(params: {

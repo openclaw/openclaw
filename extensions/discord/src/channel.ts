@@ -164,6 +164,15 @@ function resolveDiscordAttachedOutboundTarget(params: {
   return threadId ? `channel:${threadId}` : params.to;
 }
 
+function shouldTreatDiscordDeliveredTextAsVisible(params: {
+  kind: "tool" | "block" | "final";
+  text?: string;
+}): boolean {
+  return (
+    params.kind === "block" && typeof params.text === "string" && params.text.trim().length > 0
+  );
+}
+
 function resolveRuntimeDiscordMessageActions() {
   try {
     return getDiscordRuntime().channel?.discord?.messageActions ?? null;
@@ -842,6 +851,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         chunker: null,
         textChunkLimit: 2000,
         pollMaxOptions: 10,
+        shouldTreatDeliveredTextAsVisible: shouldTreatDiscordDeliveredTextAsVisible,
         shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
           shouldSuppressLocalDiscordExecApprovalPrompt({
             cfg,

@@ -17,6 +17,10 @@ function sessionMatchesConfiguredBinding(params: {
   spec: ConfiguredAcpBindingSpec;
   meta: SessionAcpMeta;
 }): boolean {
+  if (params.meta.state === "error") {
+    return false;
+  }
+
   const desiredAgent = (params.spec.acpAgentId ?? params.spec.agentId).trim().toLowerCase();
   const currentAgent = (params.meta.agent ?? "").trim().toLowerCase();
   if (!currentAgent || currentAgent !== desiredAgent) {
@@ -186,6 +190,7 @@ export async function resetAcpSessionInPlace(params: {
       cfg: params.cfg,
       sessionKey,
       reason: `${params.reason}-in-place-reset`,
+      discardPersistentState: true,
       clearMeta: false,
       allowBackendUnavailable: true,
       requireAcpSession: false,

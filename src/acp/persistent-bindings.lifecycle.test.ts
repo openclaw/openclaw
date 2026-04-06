@@ -81,6 +81,7 @@ describe("resetAcpSessionInPlace", () => {
     expect(managerMocks.closeSession).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey,
+        discardPersistentState: true,
         clearMeta: false,
       }),
     );
