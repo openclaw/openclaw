@@ -75,11 +75,6 @@ function resolveRegistryPluginModuleLocation(params: {
 }): { modulePath: string; boundaryRoot: string } | null {
   const { config } = getFacadeBoundaryResolvedConfig();
   const registry = loadPluginManifestRegistry({ config, cache: true }).plugins;
-  // Use tiered matching so exact basename/id matches are always preferred over
-  // loose channel matches.  A plugin that merely declares `channels: ["line"]`
-  // must never shadow the actual LINE plugin whose id is `"line"`.  Within each
-  // tier we iterate all matching records so that a stale first match (e.g. a
-  // bundled root that lost its artifact) does not shadow a later valid record.
   const tiers: Array<(plugin: (typeof registry)[number]) => boolean> = [
     (plugin) => plugin.id === params.dirName,
     (plugin) => path.basename(plugin.rootDir) === params.dirName,
@@ -90,7 +85,6 @@ function resolveRegistryPluginModuleLocation(params: {
   for (const matchFn of tiers) {
     for (const record of registry.filter(matchFn)) {
       const rootDir = path.resolve(record.rootDir);
-      // Check for the built artifact first, then probe source extensions.
       const builtCandidate = path.join(rootDir, artifactBasename);
       if (fs.existsSync(builtCandidate)) {
         return { modulePath: builtCandidate, boundaryRoot: rootDir };
@@ -134,8 +128,6 @@ function resolveFacadeModuleLocation(params: {
             : OPENCLAW_PACKAGE_ROOT,
       };
     }
-    // Bundled directory did not contain the module; fall through to the
-    // registry-based lookup so globally-installed plugins are reachable.
     return resolveRegistryPluginModuleLocation(params);
   }
   const modulePath = resolveBundledPluginPublicSurfacePath({
@@ -153,8 +145,6 @@ function resolveFacadeModuleLocation(params: {
           : OPENCLAW_PACKAGE_ROOT,
     };
   }
-  // Bundled directory did not contain the module; fall through to the
-  // registry-based lookup so globally-installed plugins are reachable.
   return resolveRegistryPluginModuleLocation(params);
 }
 
@@ -245,12 +235,6 @@ function resolveBundledPluginManifestRecord(params: {
     }
   }
 
-  // Fallback: match by plugin id first (most semantically precise), then by
-  // rootDir basename, then by declared channel id (loosest).  Globally-installed
-  // plugins may have a rootDir whose basename differs from the facade dirName
-  // (e.g. encoded scoped package names), and duplicate-resolution may have
-  // replaced the bundled record with a global one whose rootDir no longer sits
-  // under the bundled plugins directory.
   return (
     registry.find((plugin) => plugin.id === params.dirName) ??
     registry.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ??

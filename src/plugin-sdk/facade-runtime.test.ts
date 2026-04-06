@@ -267,15 +267,9 @@ describe("plugin-sdk facade runtime", () => {
   });
 
   it("resolves a globally-installed plugin whose rootDir basename matches the dirName", () => {
-    // Simulate a global-only installation: the bundled plugins directory does
-    // NOT contain the target plugin, but a global extensions directory does.
-    // The facade module location resolver should fall through to the registry-
-    // based lookup and find the module inside the global rootDir.
     const emptyBundled = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-facade-empty-bundled-"));
     tempDirs.push(emptyBundled);
 
-    // Create a state dir whose "extensions" sub-directory acts as the global
-    // plugin root (resolveConfigDir(env) + "/extensions").
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-facade-state-"));
     tempDirs.push(stateDir);
     const lineDir = path.join(stateDir, "extensions", "line");
@@ -285,8 +279,6 @@ describe("plugin-sdk facade runtime", () => {
       'export const marker = "global-line";\n',
       "utf8",
     );
-    // Discovery reads package.json (not openclaw.plugin.json) and looks for
-    // the "openclaw" key to resolve extension entries.
     fs.writeFileSync(
       path.join(lineDir, "package.json"),
       JSON.stringify({
@@ -299,8 +291,6 @@ describe("plugin-sdk facade runtime", () => {
       }),
       "utf8",
     );
-    // The plugin manifest (openclaw.plugin.json) is loaded separately by the
-    // registry builder to populate id, channels, etc.
     fs.writeFileSync(
       path.join(lineDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -326,8 +316,6 @@ describe("plugin-sdk facade runtime", () => {
       },
     });
 
-    // The plugin should be resolvable via the registry fallback even though
-    // the bundled plugins directory is empty.
     expect(
       canLoadActivatedBundledPluginPublicSurface({
         dirName: "line",
@@ -337,16 +325,11 @@ describe("plugin-sdk facade runtime", () => {
   });
 
   it("resolves a globally-installed plugin with an encoded scoped rootDir basename", () => {
-    // When a scoped package like @openclaw/line is installed globally, its
-    // directory name is encoded (e.g. "@openclaw+line").  The rootDir basename
-    // no longer matches the facade dirName "line", so the resolver must fall
-    // back to matching by plugin.id or plugin.channels.
     const emptyBundled = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-facade-empty-bundled-"));
     tempDirs.push(emptyBundled);
 
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-facade-state-"));
     tempDirs.push(stateDir);
-    // Use the encoded scoped package directory name.
     const encodedDir = path.join(stateDir, "extensions", "@openclaw+line");
     fs.mkdirSync(encodedDir, { recursive: true });
     fs.writeFileSync(
@@ -391,8 +374,6 @@ describe("plugin-sdk facade runtime", () => {
       },
     });
 
-    // The plugin.id fallback must resolve the plugin even though
-    // path.basename(rootDir) is "@openclaw+line", not "line".
     expect(
       canLoadActivatedBundledPluginPublicSurface({
         dirName: "line",
