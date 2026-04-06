@@ -9,6 +9,7 @@
  */
 import type { CopilotSession, SessionEvent } from "@github/copilot-sdk";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { createOpenClawTools } from "../openclaw-tools.js";
 import { resolveSessionLane, resolveGlobalLane } from "../pi-embedded-runner/lanes.js";
 import type { RunEmbeddedPiAgentParams } from "../pi-embedded-runner/run/params.js";
 import type { EmbeddedPiRunResult } from "../pi-embedded-runner/types.js";
@@ -19,6 +20,7 @@ import {
   handleSessionEvent,
   type RunCallbacks,
 } from "./events.js";
+import { bridgeTools } from "./tool-bridge.js";
 
 // ── Session cache ──────────────────────────────────────────────────────────
 
@@ -93,6 +95,30 @@ async function runCopilotAgentInner(
     onAgentEvent: params.onAgentEvent,
   };
 
+  // ── Resolve OpenClaw custom tools ──
+
+  const openclawTools = params.disableTools
+    ? []
+    : createOpenClawTools({
+        agentSessionKey: params.sessionKey,
+        agentAccountId: params.agentAccountId,
+        agentTo: params.messageTo,
+        agentThreadId: params.messageThreadId,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        currentChannelId: params.currentChannelId,
+        currentThreadTs: params.currentThreadTs,
+        currentMessageId: params.currentMessageId,
+        replyToMode: params.replyToMode,
+        hasRepliedRef: params.hasRepliedRef,
+        requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+        disableMessageTool: params.disableMessageTool,
+        senderIsOwner: params.senderIsOwner,
+        disablePluginTools: false,
+        sessionId: params.sessionId,
+      });
+  const sdkTools = bridgeTools(openclawTools);
+
   // ── Obtain or create a CopilotSession ──
 
   let session: CopilotSession;
@@ -110,6 +136,7 @@ async function runCopilotAgentInner(
         model,
         streaming: true,
         workingDirectory: params.workspaceDir,
+        tools: sdkTools.length > 0 ? sdkTools : undefined,
         systemMessage: params.extraSystemPrompt
           ? {
               mode: "append" as const,
@@ -127,6 +154,7 @@ async function runCopilotAgentInner(
         model,
         streaming: true,
         workingDirectory: params.workspaceDir,
+        tools: sdkTools.length > 0 ? sdkTools : undefined,
       });
       _sessionCache.set(cacheKey, session.sessionId);
     } else {
@@ -195,6 +223,7 @@ async function runCopilotAgentInner(
           model,
           streaming: true,
           workingDirectory: params.workspaceDir,
+          tools: sdkTools.length > 0 ? sdkTools : undefined,
         });
         _sessionCache.set(cacheKey, fresh.sessionId);
         acc.sessionId = fresh.sessionId;
