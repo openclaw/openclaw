@@ -91,8 +91,10 @@ type BuildManager = "pnpm" | "bun" | "npm";
 type ResolvedBuildManager = {
   manager: BuildManager;
   fallback: boolean;
+  preferred: BuildManager;
   env?: NodeJS.ProcessEnv;
   cleanup?: () => Promise<void>;
+  requiredPreferredMissing?: boolean;
 };
 
 const DEFAULT_TIMEOUT_MS = 20 * 60_000;
@@ -375,10 +377,13 @@ async function resolveAvailableManager(
   root: string,
   timeoutMs: number,
   baseEnv?: NodeJS.ProcessEnv,
+  opts?: {
+    requirePreferred?: boolean;
+  },
 ): Promise<ResolvedBuildManager> {
   const preferred = await detectPackageManager(root);
   if (preferred === "pnpm" && (await ensurePnpmAvailable(runCommand, timeoutMs, baseEnv))) {
-    return { manager: "pnpm", fallback: false };
+    return { manager: "pnpm", fallback: false, preferred };
   }
   if (preferred === "pnpm" && (await isManagerAvailable(runCommand, "npm", timeoutMs, baseEnv))) {
     const pnpmBootstrap = await bootstrapPnpmViaNpm({
@@ -390,17 +395,26 @@ async function resolveAvailableManager(
       return {
         manager: "pnpm",
         fallback: false,
+        preferred,
         env: pnpmBootstrap.env,
         cleanup: pnpmBootstrap.cleanup,
       };
     }
   }
+  if (preferred === "pnpm" && opts?.requirePreferred) {
+    return {
+      manager: "pnpm",
+      fallback: false,
+      preferred,
+      requiredPreferredMissing: true,
+    };
+  }
   for (const manager of managerPreferenceOrder(preferred)) {
     if (await isManagerAvailable(runCommand, manager, timeoutMs, baseEnv)) {
-      return { manager, fallback: manager !== preferred };
+      return { manager, fallback: manager !== preferred, preferred };
     }
   }
-  return { manager: "npm", fallback: preferred !== "npm" };
+  return { manager: "npm", fallback: preferred !== "npm", preferred };
 }
 
 type RunStepOptions = {
@@ -720,7 +734,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         gitRoot,
         timeoutMs,
         defaultCommandEnv,
+        { requirePreferred: true },
       );
+      if (manager.requiredPreferredMissing) {
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: "required-manager-unavailable",
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
       const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-preflight-"));
       const worktreeDir = path.join(preflightRoot, "worktree");
       const worktreeStep = await runStep(
@@ -909,7 +935,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       gitRoot,
       timeoutMs,
       defaultCommandEnv,
+      { requirePreferred: true },
     );
+    if (manager.requiredPreferredMissing) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "required-manager-unavailable",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
     try {
       const depsStep = await runStep(
         step(
