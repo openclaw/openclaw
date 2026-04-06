@@ -18,7 +18,7 @@ export default defineBundledChannelEntry({
   description: "Mattermost channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./src/channel.js",
     exportName: "mattermostPlugin",
   },
   runtime: {

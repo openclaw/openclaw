@@ -41,10 +41,9 @@ const sendMessageMatrixMock = vi.hoisted(() =>
     roomId: to.replace(/^room:/, ""),
   })),
 );
-const matrixRuntimeApiModuleId = new URL(
-  "../../../../extensions/matrix/runtime-api.js",
-  import.meta.url,
-).href;
+const matrixRuntimeApiModuleId = vi.hoisted(
+  () => new URL("../../../../extensions/matrix/runtime-api.js", import.meta.url).href,
+);
 
 const lineContractApi = await importBundledChannelContractArtifact<{
   listLineAccountIds: () => string[];
