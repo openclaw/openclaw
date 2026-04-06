@@ -684,7 +684,7 @@ export async function writeConfigDocBaselineArtifacts(params?: {
   // Write the hash file (tracked in git)
   writeFileAtomic(hashPath, nextHashContent);
 
-  // Write full JSON artifacts locally (gitignored, useful for inspection)
+  // Write the tracked schema artifact and local-only baseline JSON files.
   for (const key of Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>) {
     writeFileAtomic(jsonPaths[key], rendered.json[key]);
   }

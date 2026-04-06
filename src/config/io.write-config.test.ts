@@ -225,10 +225,12 @@ describe("config io write", () => {
 
       await io.writeConfigFile({ gateway: { mode: "local" } });
 
+      const rawPersisted = await fs.readFile(configPath, "utf-8");
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         $schema?: string;
       };
       expect(persisted.$schema).toBe(PUBLIC_CONFIG_SCHEMA_URL);
+      expect(rawPersisted.indexOf('"$schema"')).toBeLessThan(rawPersisted.indexOf('"gateway"'));
     });
   });
 

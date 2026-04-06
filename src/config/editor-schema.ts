@@ -26,8 +26,9 @@ export function withDefaultPublicConfigSchemaRef(config: OpenClawConfig): OpenCl
   if (hasNonEmptySchemaRef(config.$schema)) {
     return config;
   }
+  const { $schema: _unused, ...rest } = config;
   return {
-    ...config,
     $schema: PUBLIC_CONFIG_SCHEMA_URL,
+    ...rest,
   };
 }
