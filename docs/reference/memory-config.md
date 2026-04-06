@@ -377,6 +377,15 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under
 | `sessions.retentionDays` | `number`  | --       | Transcript retention                         |
 | `sessions.exportDir`     | `string`  | --       | Export directory                             |
 
+OpenClaw prefers the current QMD collection and MCP query shapes, but keeps
+older QMD releases working by falling back to legacy `--mask` collection flags
+and older MCP tool names when needed.
+
+QMD model overrides stay on the QMD side, not OpenClaw config. If you need to
+override QMD's models globally, set environment variables such as
+`QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway
+runtime environment.
+
 ### Update schedule
 
 | Key                       | Type      | Default | Description                           |
