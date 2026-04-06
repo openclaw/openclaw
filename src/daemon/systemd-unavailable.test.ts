@@ -36,4 +36,13 @@ describe("classifySystemdUnavailableDetail", () => {
   it("returns null for unrelated details", () => {
     expect(classifySystemdUnavailableDetail("permission denied")).toBeNull();
   });
+
+  it("does not treat permission-denied bus failures as missing user-bus state", () => {
+    expect(
+      isSystemdUserBusUnavailableDetail("Failed to connect to bus: Permission denied"),
+    ).toBe(false);
+    expect(
+      classifySystemdUnavailableDetail("systemctl --user unavailable: Failed to connect to bus: Permission denied"),
+    ).toBeNull();
+  });
 });
