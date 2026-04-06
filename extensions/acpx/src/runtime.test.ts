@@ -84,7 +84,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         resolve: () => "codex",
         list: () => ["codex"],
       },
-      permissionMode: "default",
+      permissionMode: "approve-reads",
     });
 
     const wrappedStore = mocks.state.capturedStore;
@@ -128,7 +128,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         resolve: () => "codex",
         list: () => ["codex"],
       },
-      permissionMode: "default",
+      permissionMode: "approve-reads",
     });
 
     const wrappedStore = mocks.state.capturedStore;

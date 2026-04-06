@@ -112,9 +112,9 @@ export function defineImportedProgramCommandGroupSpec<
   );
 }
 
-export function defineImportedProgramCommandGroupSpecs<
-  const TDefinitions extends readonly AnyImportedProgramCommandGroupDefinition[],
->(definitions: TDefinitions): CommandGroupDescriptorSpec<(program: Command) => Promise<void>>[] {
+export function defineImportedProgramCommandGroupSpecs(
+  definitions: readonly AnyImportedProgramCommandGroupDefinition[],
+): CommandGroupDescriptorSpec<(program: Command) => Promise<void>>[] {
   return definitions.map((definition) => ({
     commandNames: definition.commandNames,
     register: async (program: Command) => {
