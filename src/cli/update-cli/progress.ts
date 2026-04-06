@@ -37,7 +37,16 @@ function getStepLabel(step: UpdateStepInfo): string {
 }
 
 export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
-  if (result.status !== "error" || result.mode !== "npm") {
+  if (result.status !== "error") {
+    return [];
+  }
+  if (result.reason === "required-manager-unavailable") {
+    return [
+      "This checkout requires its declared package manager and the updater could not bootstrap it automatically.",
+      "Install the missing package manager manually, then rerun the update command.",
+    ];
+  }
+  if (result.mode !== "npm") {
     return [];
   }
   const failedStep = [...result.steps].toReversed().find((step) => step.exitCode !== 0);
