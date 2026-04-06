@@ -75,6 +75,7 @@ describe("createMusicGenerateTool", () => {
       provider: "google",
       model: "lyria-3-clip-preview",
       attempts: [],
+      ignoredOverrides: [],
       tracks: [
         {
           buffer: Buffer.from("music-bytes"),
@@ -154,6 +155,7 @@ describe("createMusicGenerateTool", () => {
       provider: "google",
       model: "lyria-3-clip-preview",
       attempts: [],
+      ignoredOverrides: [],
       tracks: [
         {
           buffer: Buffer.from("music-bytes"),
@@ -269,5 +271,87 @@ describe("createMusicGenerateTool", () => {
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
     expect(text).toContain("supportedFormats=mp3");
     expect(text).toContain("instrumental");
+  });
+
+  it("warns when optional provider overrides are ignored", async () => {
+    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "lyria-3-clip-preview",
+        models: ["lyria-3-clip-preview"],
+        capabilities: {
+          supportsLyrics: true,
+          supportsInstrumental: true,
+          supportsFormat: true,
+          supportedFormatsByModel: {
+            "lyria-3-clip-preview": ["mp3"],
+          },
+        },
+        generateMusic: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
+      provider: "google",
+      model: "lyria-3-clip-preview",
+      attempts: [],
+      ignoredOverrides: [
+        { key: "durationSeconds", value: 30 },
+        { key: "format", value: "wav" },
+      ],
+      tracks: [
+        {
+          buffer: Buffer.from("music-bytes"),
+          mimeType: "audio/mpeg",
+          fileName: "molty-anthem.mp3",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/molty-anthem.mp3",
+      id: "molty-anthem.mp3",
+      size: 11,
+      contentType: "audio/mpeg",
+    });
+
+    const tool = createMusicGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected music_generate tool");
+    }
+
+    const result = await tool.execute("call-google-generate", {
+      prompt: "OpenClaw anthem",
+      instrumental: true,
+      durationSeconds: 30,
+      format: "wav",
+    });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Generated 1 track with google/lyria-3-clip-preview.");
+    expect(text).toContain(
+      "Warning: Ignored unsupported overrides for google/lyria-3-clip-preview: durationSeconds=30, format=wav.",
+    );
+    expect(result).toMatchObject({
+      details: {
+        instrumental: true,
+        warning:
+          "Ignored unsupported overrides for google/lyria-3-clip-preview: durationSeconds=30, format=wav.",
+        ignoredOverrides: [
+          { key: "durationSeconds", value: 30 },
+          { key: "format", value: "wav" },
+        ],
+      },
+    });
+    expect(result.details).not.toHaveProperty("durationSeconds");
+    expect(result.details).not.toHaveProperty("format");
   });
 });

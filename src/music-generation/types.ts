@@ -45,6 +45,11 @@ export type MusicGenerationResult = {
   metadata?: Record<string, unknown>;
 };
 
+export type MusicGenerationIgnoredOverride = {
+  key: "lyrics" | "instrumental" | "durationSeconds" | "format";
+  value: string | boolean | number;
+};
+
 export type MusicGenerationProviderCapabilities = {
   maxTracks?: number;
   maxInputImages?: number;
