@@ -524,6 +524,7 @@ export function createImageTool(options?: {
         const mediaLocalRoots = resolveMediaToolLocalRoots(
           options?.workspaceDir,
           {
+            fsPolicy: options?.fsPolicy,
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
           },
           resolvedPath ? [resolvedPath] : undefined,

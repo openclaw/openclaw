@@ -160,9 +160,18 @@ export function resolvePdfModelConfigForTool(params: {
     })
     .filter((value): value is string => Boolean(value));
 
-  if (primary.provider === "google" && googleOk && providerVision && primarySupportsNativePdf) {
+  if (
+    primary.provider === "google" &&
+    googleOk &&
+    providerVision &&
+    primarySupportsNativePdf
+  ) {
     preferred = providerVision;
-  } else if (providerOk && primarySupportsNativePdf && (providerVision || providerDefault)) {
+  } else if (
+    providerOk &&
+    primarySupportsNativePdf &&
+    (providerVision || providerDefault)
+  ) {
     preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
   } else {
     preferred = nativePdfCandidates[0] ?? genericImageCandidates[0] ?? null;
@@ -583,6 +592,7 @@ export function createPdfTool(options?: {
         const localRoots = resolveMediaToolLocalRoots(
           options?.workspaceDir,
           {
+            fsPolicy: options?.fsPolicy,
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
           },
           [resolvedPathInfo.resolved],
