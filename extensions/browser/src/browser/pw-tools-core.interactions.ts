@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { Frame, Page } from "playwright-core";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
@@ -28,6 +29,12 @@ type TargetOpts = {
 const MAX_CLICK_DELAY_MS = 5_000;
 const MAX_WAIT_TIME_MS = 30_000;
 const MAX_BATCH_ACTIONS = 100;
+const INTERACTION_NAVIGATION_GRACE_MS = 250;
+
+type NavigationObservablePage = Pick<Page, "url"> & {
+  on?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
+  off?: (event: "framenavigated", listener: (frame: Frame) => void) => unknown;
+};
 
 function resolveBoundedDelayMs(value: number | undefined, label: string, maxMs: number): number {
   const normalized = Math.floor(value ?? 0);
@@ -53,6 +60,73 @@ function resolveInteractionTimeoutMs(timeoutMs?: number): number {
 
 function didPageUrlChange(page: { url(): string }, previousUrl: string): boolean {
   return page.url() !== previousUrl;
+}
+
+function observeDelayedInteractionNavigation(
+  page: NavigationObservablePage,
+  previousUrl: string,
+): Promise<boolean> {
+  if (didPageUrlChange(page, previousUrl)) {
+    return Promise.resolve(true);
+  }
+  if (typeof page.on !== "function" || typeof page.off !== "function") {
+    return Promise.resolve(false);
+  }
+  const addFrameNavigatedListener = page.on;
+  const removeFrameNavigatedListener = page.off;
+
+  return new Promise<boolean>((resolve) => {
+    const onFrameNavigated = (_frame: Frame) => {
+      if (!didPageUrlChange(page, previousUrl)) {
+        return;
+      }
+      cleanup();
+      resolve(true);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve(didPageUrlChange(page, previousUrl));
+    }, INTERACTION_NAVIGATION_GRACE_MS);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      removeFrameNavigatedListener("framenavigated", onFrameNavigated);
+    };
+
+    addFrameNavigatedListener("framenavigated", onFrameNavigated);
+  });
+}
+
+async function assertInteractionNavigationCompletedSafely<T>(opts: {
+  action: () => Promise<T>;
+  cdpUrl: string;
+  page: Page;
+  previousUrl: string;
+  ssrfPolicy?: SsrFPolicy;
+  targetId?: string;
+}): Promise<T> {
+  const navigationObserved = observeDelayedInteractionNavigation(opts.page, opts.previousUrl);
+  let result: T | undefined;
+  let actionError: unknown = null;
+  try {
+    result = await opts.action();
+  } catch (err) {
+    actionError = err;
+  }
+
+  if (await navigationObserved) {
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  }
+
+  if (actionError) {
+    throw actionError;
+  }
+  return result as T;
 }
 
 async function awaitEvalWithAbort<T>(
@@ -124,32 +198,33 @@ export async function clickViaPlaywright(opts: {
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const previousUrl = page.url();
   try {
-    const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
-    if (delayMs > 0) {
-      await locator.hover({ timeout });
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-    if (opts.doubleClick) {
-      await locator.dblclick({
-        timeout,
-        button: opts.button,
-        modifiers: opts.modifiers,
-      });
-    } else {
-      await locator.click({
-        timeout,
-        button: opts.button,
-        modifiers: opts.modifiers,
-      });
-    }
-    if (didPageUrlChange(page, previousUrl)) {
-      await assertPostInteractionNavigationSafe({
-        cdpUrl: opts.cdpUrl,
-        page,
-        ssrfPolicy: opts.ssrfPolicy,
-        targetId: opts.targetId,
-      });
-    }
+    await assertInteractionNavigationCompletedSafely({
+      action: async () => {
+        const delayMs = resolveBoundedDelayMs(opts.delayMs, "click delayMs", MAX_CLICK_DELAY_MS);
+        if (delayMs > 0) {
+          await locator.hover({ timeout });
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        if (opts.doubleClick) {
+          await locator.dblclick({
+            timeout,
+            button: opts.button,
+            modifiers: opts.modifiers,
+          });
+          return;
+        }
+        await locator.click({
+          timeout,
+          button: opts.button,
+          modifiers: opts.modifiers,
+        });
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toAIFriendlyError(err, label);
   }
@@ -430,16 +505,14 @@ export async function evaluateViaPlaywright(opts: {
         fnBody: fnText,
         timeoutMs: evaluateTimeout,
       });
-      const result = await awaitEvalWithAbort(evalPromise, abortPromise);
-      if (didPageUrlChange(page, previousUrl)) {
-        await assertPageNavigationCompletedSafely({
-          cdpUrl: opts.cdpUrl,
-          page,
-          response: null,
-          ssrfPolicy: opts.ssrfPolicy,
-          targetId: opts.targetId,
-        });
-      }
+      const result = await assertInteractionNavigationCompletedSafely({
+        action: () => awaitEvalWithAbort(evalPromise, abortPromise),
+        cdpUrl: opts.cdpUrl,
+        page,
+        previousUrl,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
       return result;
     }
 
@@ -471,16 +544,14 @@ export async function evaluateViaPlaywright(opts: {
       fnBody: fnText,
       timeoutMs: evaluateTimeout,
     });
-    const result = await awaitEvalWithAbort(evalPromise, abortPromise);
-    if (didPageUrlChange(page, previousUrl)) {
-      await assertPageNavigationCompletedSafely({
-        cdpUrl: opts.cdpUrl,
-        page,
-        response: null,
-        ssrfPolicy: opts.ssrfPolicy,
-        targetId: opts.targetId,
-      });
-    }
+    const result = await assertInteractionNavigationCompletedSafely({
+      action: () => awaitEvalWithAbort(evalPromise, abortPromise),
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
     return result;
   } finally {
     if (signal && abortListener) {
