@@ -1,26 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
-import type { OpenClawPluginApi } from "../api.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const { createTempDir, createVault } = createMemoryWikiTestHarness();
-
-function createGatewayApi() {
-  const registerGatewayMethod = vi.fn();
-  const api = createTestPluginApi({
-    id: "memory-wiki",
-    name: "Memory Wiki",
-    source: "test",
-    config: {},
-    runtime: {} as OpenClawPluginApi["runtime"],
-    registerGatewayMethod,
-  }) as OpenClawPluginApi;
-  return { api, registerGatewayMethod };
-}
+const { createPluginApi, createTempDir, createVault } = createMemoryWikiTestHarness();
 
 function findGatewayHandler(
   registerGatewayMethod: ReturnType<typeof vi.fn>,
@@ -40,7 +25,7 @@ describe("memory-wiki gateway methods", () => {
       prefix: "memory-wiki-gateway-",
       initialize: true,
     });
-    const { api, registerGatewayMethod } = createGatewayApi();
+    const { api, registerGatewayMethod } = createPluginApi();
 
     registerMemoryWikiGatewayMethods({ api, config });
     const handler = findGatewayHandler(registerGatewayMethod, "wiki.status");
@@ -68,7 +53,7 @@ describe("memory-wiki gateway methods", () => {
       prefix: "memory-wiki-gateway-",
       initialize: true,
     });
-    const { api, registerGatewayMethod } = createGatewayApi();
+    const { api, registerGatewayMethod } = createPluginApi();
     await fs.writeFile(
       path.join(rootDir, "sources", "alpha.md"),
       renderWikiMarkdown({
@@ -101,7 +86,7 @@ describe("memory-wiki gateway methods", () => {
     const inputRootDir = await createTempDir("memory-wiki-gateway-");
     const inputPath = path.join(inputRootDir, "alpha-notes.txt");
     await fs.writeFile(inputPath, "alpha over gateway\n", "utf8");
-    const { api, registerGatewayMethod } = createGatewayApi();
+    const { api, registerGatewayMethod } = createPluginApi();
     const { config } = await createVault({
       rootDir: path.join(inputRootDir, "vault"),
     });
@@ -135,7 +120,7 @@ describe("memory-wiki gateway methods", () => {
     const { config } = await createVault({
       prefix: "memory-wiki-gateway-",
     });
-    const { api, registerGatewayMethod } = createGatewayApi();
+    const { api, registerGatewayMethod } = createPluginApi();
 
     registerMemoryWikiGatewayMethods({ api, config });
     const handler = findGatewayHandler(registerGatewayMethod, "wiki.apply");

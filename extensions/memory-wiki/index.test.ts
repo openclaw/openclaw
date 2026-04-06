@@ -1,35 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
-import type { OpenClawPluginApi } from "./api.js";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
 
-function createApi() {
-  const registerCli = vi.fn();
-  const registerGatewayMethod = vi.fn();
-  const registerMemoryCorpusSupplement = vi.fn();
-  const registerMemoryPromptSupplement = vi.fn();
-  const registerTool = vi.fn();
-  const api = createTestPluginApi({
-    id: "memory-wiki",
-    name: "Memory Wiki",
-    source: "test",
-    config: {},
-    runtime: {} as OpenClawPluginApi["runtime"],
-    registerCli,
-    registerGatewayMethod,
-    registerMemoryCorpusSupplement,
-    registerMemoryPromptSupplement,
-    registerTool,
-  }) as OpenClawPluginApi;
-  return {
-    api,
-    registerCli,
-    registerGatewayMethod,
-    registerMemoryCorpusSupplement,
-    registerMemoryPromptSupplement,
-    registerTool,
-  };
-}
+const { createPluginApi } = createMemoryWikiTestHarness();
 
 describe("memory-wiki plugin", () => {
   it("registers prompt supplement, gateway methods, tools, and wiki cli surface", async () => {
@@ -40,7 +13,7 @@ describe("memory-wiki plugin", () => {
       registerMemoryCorpusSupplement,
       registerMemoryPromptSupplement,
       registerTool,
-    } = createApi();
+    } = createPluginApi();
 
     await plugin.register(api);
 
