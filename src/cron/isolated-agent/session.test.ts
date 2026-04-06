@@ -226,6 +226,38 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.deliveryContext).toBeUndefined();
     });
 
+    it("clears sessionFile when forceNew is true so new sessionId drives a fresh transcript", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-sf",
+          updatedAt: NOW_MS - 1000,
+          sessionFile: "existing-session-id-sf.jsonl",
+          modelOverride: "sonnet-4",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+      // Per-session overrides must still be preserved
+      expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
+    });
+
+    it("clears sessionFile when session is stale", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id",
+          updatedAt: NOW_MS - 86_400_000,
+          sessionFile: "old-session-id.jsonl",
+        },
+        fresh: false,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+    });
+
     it("preserves delivery routing metadata when reusing fresh session", () => {
       const result = resolveWithStoredEntry({
         entry: {

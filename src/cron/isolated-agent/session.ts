@@ -83,6 +83,11 @@ export function resolveCronSession(params: {
       lastAccountId: undefined,
       lastThreadId: undefined,
       deliveryContext: undefined,
+      // Clear the cached transcript file path so the new sessionId drives a
+      // fresh .jsonl file.  Without this, `resolveSessionFilePath` sees the
+      // old `sessionFile` carried forward via `...entry` and keeps appending
+      // to the previous transcript — defeating isolatedSession / forceNew.
+      sessionFile: undefined,
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession };
