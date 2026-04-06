@@ -39,6 +39,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
 
 let sendExecApprovalFollowupResult: typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
 let maxExecApprovalFollowupFailureLogKeys: typeof import("./bash-tools.exec-host-shared.js").MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS;
+let enforceStrictInlineEvalApprovalBoundary: typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
 let resolveExecHostApprovalContext: typeof import("./bash-tools.exec-host-shared.js").resolveExecHostApprovalContext;
 let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
 let logWarn: typeof import("../logger.js").logWarn;
@@ -47,6 +48,7 @@ beforeAll(async () => {
   ({
     sendExecApprovalFollowupResult,
     MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS: maxExecApprovalFollowupFailureLogKeys,
+    enforceStrictInlineEvalApprovalBoundary,
     resolveExecHostApprovalContext,
   } = await import("./bash-tools.exec-host-shared.js"));
   ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
@@ -146,5 +148,35 @@ describe("resolveExecHostApprovalContext", () => {
     });
 
     expect(result.hostSecurity).toBe("full");
+  });
+});
+
+describe("enforceStrictInlineEvalApprovalBoundary", () => {
+  it("denies timeout-based fallback when strict inline-eval approval is required", () => {
+    expect(
+      enforceStrictInlineEvalApprovalBoundary({
+        baseDecision: { timedOut: true },
+        approvedByAsk: true,
+        deniedReason: null,
+        requiresInlineEvalApproval: true,
+      }),
+    ).toEqual({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+    });
+  });
+
+  it("keeps explicit approvals intact for strict inline-eval commands", () => {
+    expect(
+      enforceStrictInlineEvalApprovalBoundary({
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+        requiresInlineEvalApproval: true,
+      }),
+    ).toEqual({
+      approvedByAsk: true,
+      deniedReason: null,
+    });
   });
 });

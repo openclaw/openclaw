@@ -5,6 +5,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildNoCapabilityModelConfiguredMessage,
+  deriveAspectRatioFromSize,
+  resolveClosestAspectRatio,
+  resolveClosestResolution,
+  resolveClosestSize,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
@@ -71,29 +75,79 @@ function resolveProviderImageGenerationOverrides(params: {
   let aspectRatio = params.aspectRatio;
   let resolution = params.resolution;
 
-  if (
-    size &&
-    (!modeCaps.supportsSize ||
-      ((geometry?.sizes?.length ?? 0) > 0 && !geometry?.sizes?.includes(size)))
-  ) {
+  if (size && (geometry?.sizes?.length ?? 0) > 0 && modeCaps.supportsSize) {
+    size = resolveClosestSize({
+      requestedSize: size,
+      supportedSizes: geometry?.sizes,
+    });
+  }
+
+  if (!modeCaps.supportsSize && size) {
+    let translated = false;
+    if (modeCaps.supportsAspectRatio) {
+      const normalizedAspectRatio = resolveClosestAspectRatio({
+        requestedAspectRatio: aspectRatio,
+        requestedSize: size,
+        supportedAspectRatios: geometry?.aspectRatios,
+      });
+      if (normalizedAspectRatio) {
+        aspectRatio = normalizedAspectRatio;
+        translated = true;
+      }
+    }
+    if (!translated) {
+      ignoredOverrides.push({ key: "size", value: size });
+    }
+    size = undefined;
+  }
+
+  if (aspectRatio && (geometry?.aspectRatios?.length ?? 0) > 0 && modeCaps.supportsAspectRatio) {
+    aspectRatio = resolveClosestAspectRatio({
+      requestedAspectRatio: aspectRatio,
+      requestedSize: size,
+      supportedAspectRatios: geometry?.aspectRatios,
+    });
+  } else if (!modeCaps.supportsAspectRatio && aspectRatio) {
+    const derivedSize =
+      modeCaps.supportsSize && !size
+        ? resolveClosestSize({
+            requestedSize: params.size,
+            requestedAspectRatio: aspectRatio,
+            supportedSizes: geometry?.sizes,
+          })
+        : undefined;
+    let translated = false;
+    if (derivedSize) {
+      size = derivedSize;
+      translated = true;
+    }
+    if (!translated) {
+      ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
+    }
+    aspectRatio = undefined;
+  }
+
+  if (resolution && (geometry?.resolutions?.length ?? 0) > 0 && modeCaps.supportsResolution) {
+    resolution = resolveClosestResolution({
+      requestedResolution: resolution,
+      supportedResolutions: geometry?.resolutions,
+    });
+  } else if (!modeCaps.supportsResolution && resolution) {
+    ignoredOverrides.push({ key: "resolution", value: resolution });
+    resolution = undefined;
+  }
+
+  if (size && !modeCaps.supportsSize) {
     ignoredOverrides.push({ key: "size", value: size });
     size = undefined;
   }
 
-  if (
-    aspectRatio &&
-    (!modeCaps.supportsAspectRatio ||
-      ((geometry?.aspectRatios?.length ?? 0) > 0 && !geometry?.aspectRatios?.includes(aspectRatio)))
-  ) {
+  if (aspectRatio && !modeCaps.supportsAspectRatio) {
     ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
     aspectRatio = undefined;
   }
 
-  if (
-    resolution &&
-    (!modeCaps.supportsResolution ||
-      ((geometry?.resolutions?.length ?? 0) > 0 && !geometry?.resolutions?.includes(resolution)))
-  ) {
+  if (resolution && !modeCaps.supportsResolution) {
     ignoredOverrides.push({ key: "resolution", value: resolution });
     resolution = undefined;
   }
@@ -114,6 +168,8 @@ export async function generateImage(
     modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
+    agentDir: params.agentDir,
+    listProviders: listImageGenerationProviders,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg));
@@ -164,7 +220,33 @@ export async function generateImage(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
-        metadata: result.metadata,
+        metadata: {
+          ...result.metadata,
+          ...(params.size && sanitized.size && params.size !== sanitized.size
+            ? { requestedSize: params.size, normalizedSize: sanitized.size }
+            : {}),
+          ...((params.aspectRatio &&
+            sanitized.aspectRatio &&
+            params.aspectRatio !== sanitized.aspectRatio) ||
+          (!params.aspectRatio && params.size && sanitized.aspectRatio)
+            ? {
+                ...(params.size ? { requestedSize: params.size } : {}),
+                ...(params.aspectRatio ? { requestedAspectRatio: params.aspectRatio } : {}),
+                normalizedAspectRatio: sanitized.aspectRatio,
+                ...(params.size
+                  ? { aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size) }
+                  : {}),
+              }
+            : {}),
+          ...(params.resolution &&
+          sanitized.resolution &&
+          params.resolution !== sanitized.resolution
+            ? {
+                requestedResolution: params.resolution,
+                normalizedResolution: sanitized.resolution,
+              }
+            : {}),
+        },
         ignoredOverrides: sanitized.ignoredOverrides,
       };
     } catch (err) {

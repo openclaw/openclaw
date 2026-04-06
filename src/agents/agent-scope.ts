@@ -135,6 +135,7 @@ export function resolveAgentConfig(
   if (!entry) {
     return undefined;
   }
+  const agentDefaults = cfg.agents?.defaults;
   return {
     name: typeof entry.name === "string" ? entry.name : undefined,
     workspace: typeof entry.workspace === "string" ? entry.workspace : undefined,
@@ -144,7 +145,7 @@ export function resolveAgentConfig(
         ? entry.model
         : undefined,
     thinkingDefault: entry.thinkingDefault,
-    verboseDefault: cfg.agents?.defaults?.verboseDefault,
+    verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,

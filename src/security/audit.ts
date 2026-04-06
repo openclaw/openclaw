@@ -18,6 +18,7 @@ import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -194,13 +195,6 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
     return [];
   }
   return list.map((v) => String(v).trim()).filter(Boolean);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
 }
 
 function hasNonEmptyString(value: unknown): boolean {
@@ -1135,14 +1129,14 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
 }
 
 function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
-  const channels = asRecord(cfg.channels);
+  const channels = asNullableRecord(cfg.channels);
   if (!channels) {
     return [];
   }
   const hits = new Set<string>();
   const seen = new WeakSet<object>();
   const visit = (value: unknown, scope: string) => {
-    const record = asRecord(value);
+    const record = asNullableRecord(value);
     if (!record || seen.has(record)) {
       return;
     }
@@ -1158,7 +1152,7 @@ function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
         visit(nested, `${scope}.${key}`);
         continue;
       }
-      if (asRecord(nested)) {
+      if (asNullableRecord(nested)) {
         visit(nested, `${scope}.${key}`);
       }
     }

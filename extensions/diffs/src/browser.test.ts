@@ -106,7 +106,7 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("renders PDF output when format is pdf", async () => {
-    const { pages, _browser, screenshotter } = await createScreenshotterHarness();
+    const { pages, screenshotter } = await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");
 
     await screenshotter.screenshotHtml({

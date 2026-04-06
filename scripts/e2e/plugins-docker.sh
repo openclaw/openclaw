@@ -142,14 +142,20 @@ run_gateway_chat_json() {
   local session_key="$1"
   local message="$2"
   local output_file="$3"
-  local timeout_ms="${4:-15000}"
+  local timeout_ms="${4:-45000}"
   node - <<'NODE' "$OPENCLAW_ENTRY" "$session_key" "$message" "$output_file" "$timeout_ms"
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const { randomUUID } = require("node:crypto");
 
 const [, , entry, sessionKey, message, outputFile, timeoutRaw] = process.argv;
-const timeoutMs = Number(timeoutRaw) > 0 ? Number(timeoutRaw) : 15000;
+const timeoutMs = Number(timeoutRaw) > 0 ? Number(timeoutRaw) : 45000;
+// Plugin install/enable can intentionally restart the gateway mid-request.
+// Keep the underlying gateway call budget aligned with the scenario timeout
+// instead of clamping too aggressively, or normal restarts look like failures.
+const gatewayCallTimeoutMs = Math.max(15000, Math.min(timeoutMs, 90000));
+const retryableGatewayErrorPattern =
+  /gateway ws open timeout|gateway connect timeout|gateway closed|ECONNREFUSED|socket hang up|gateway timeout after/i;
 const gatewayArgs = [
   entry,
   "gateway",
@@ -159,11 +165,11 @@ const gatewayArgs = [
   "--token",
   "plugin-e2e-token",
   "--timeout",
-  "10000",
+  String(gatewayCallTimeoutMs),
   "--json",
 ];
 
-const callGateway = (method, params) => {
+const callGatewayOnce = (method, params) => {
   try {
     return {
       ok: true,
@@ -180,6 +186,9 @@ const callGateway = (method, params) => {
     return { ok: false, error: new Error(message) };
   }
 };
+
+const isRetryableGatewayError = (error) =>
+  retryableGatewayErrorPattern.test(error instanceof Error ? error.message : String(error));
 
 const extractText = (messageLike) => {
   if (!messageLike || typeof messageLike !== "object") {
@@ -220,6 +229,22 @@ const findLatestAssistantText = (history) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const callGateway = async (method, params, deadline = Date.now() + gatewayCallTimeoutMs) => {
+  let lastFailure = null;
+  while (Date.now() < deadline) {
+    const result = callGatewayOnce(method, params);
+    if (result.ok) {
+      return result;
+    }
+    lastFailure = result;
+    if (!isRetryableGatewayError(result.error)) {
+      return result;
+    }
+    await sleep(250);
+  }
+  return lastFailure ?? callGatewayOnce(method, params);
+};
+
 async function main() {
   const runId = `plugin-e2e-${randomUUID()}`;
   const sendParams = {
@@ -227,18 +252,25 @@ async function main() {
     message,
     idempotencyKey: runId,
   };
-  const sendResult = callGateway("chat.send", sendParams);
+  let lastGatewayError = null;
+  const sendResult = await callGateway(
+    "chat.send",
+    sendParams,
+    Date.now() + gatewayCallTimeoutMs,
+  );
   if (!sendResult.ok) {
     throw sendResult.error;
   }
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const historyResult = callGateway("chat.history", { sessionKey });
+    const historyResult = await callGateway("chat.history", { sessionKey }, Date.now() + 5000);
     if (!historyResult.ok) {
+      lastGatewayError = String(historyResult.error);
       await sleep(150);
       continue;
     }
+    lastGatewayError = null;
     const history = historyResult.value;
     const latestAssistant = findLatestAssistantText(history);
     if (latestAssistant) {
@@ -259,22 +291,10 @@ async function main() {
       );
       return;
     }
-    const statusResult = callGateway("chat.send", sendParams);
-    if (statusResult.ok) {
-      const status = statusResult.value;
-      if (status?.status === "error") {
-        const summary =
-          typeof status.summary === "string" && status.summary.trim()
-            ? status.summary.trim()
-            : JSON.stringify(status);
-        throw new Error(`gateway run failed for ${sessionKey}: ${summary}`);
-      }
-    }
     await sleep(100);
   }
 
-  const finalHistory = callGateway("chat.history", { sessionKey });
-  const finalStatus = callGateway("chat.send", sendParams);
+  const finalHistory = await callGateway("chat.history", { sessionKey }, Date.now() + 3000);
   fs.writeFileSync(
     outputFile,
     `${JSON.stringify(
@@ -284,15 +304,15 @@ async function main() {
         error: "timeout",
         history: finalHistory.ok ? finalHistory.value : null,
         historyError: finalHistory.ok ? null : String(finalHistory.error),
-        status: finalStatus.ok ? finalStatus.value : null,
-        statusError: finalStatus.ok ? null : String(finalStatus.error),
+        lastGatewayError,
       },
       null,
       2,
     )}\n`,
     "utf8",
   );
-  throw new Error(`timed out waiting for assistant reply for ${sessionKey}`);
+  const retrySummary = lastGatewayError ? `; last gateway error: ${lastGatewayError}` : "";
+  throw new Error(`timed out waiting for assistant reply for ${sessionKey}${retrySummary}`);
 }
 
 main().catch((error) => {
@@ -696,7 +716,11 @@ if (!text.includes("[disabled]")) {
 console.log("ok");
 NODE
 
-run_gateway_chat_json "plugin-e2e-enable" "/plugin enable claude-bundle-e2e" /tmp/plugin-command-enable.json
+run_gateway_chat_json \
+  "plugin-e2e-enable" \
+  "/plugin enable claude-bundle-e2e" \
+  /tmp/plugin-command-enable.json \
+  60000
 node - <<'NODE'
 const fs = require("node:fs");
 const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-enable.json", "utf8"));

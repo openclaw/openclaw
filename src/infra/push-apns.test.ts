@@ -187,6 +187,8 @@ describe("push APNs send semantics", () => {
           body: "Open OpenClaw to review this request.",
         },
         sound: "default",
+        category: "openclaw.exec-approval",
+        "content-available": 1,
       },
       openclaw: {
         kind: "exec.approval.requested",
@@ -194,9 +196,6 @@ describe("push APNs send semantics", () => {
       },
     });
     expect(sent?.payload).not.toMatchObject({
-      aps: {
-        category: expect.anything(),
-      },
       openclaw: {
         host: expect.anything(),
         nodeId: expect.anything(),
@@ -455,6 +454,8 @@ describe("push APNs send semantics", () => {
           title: "Exec approval required",
           body: "Open OpenClaw to review this request.",
         },
+        category: "openclaw.exec-approval",
+        "content-available": 1,
       },
       openclaw: {
         kind: "exec.approval.requested",
@@ -462,9 +463,6 @@ describe("push APNs send semantics", () => {
       },
     });
     expect(sent?.payload).not.toMatchObject({
-      aps: {
-        category: expect.anything(),
-      },
       openclaw: {
         commandText: expect.anything(),
         host: expect.anything(),

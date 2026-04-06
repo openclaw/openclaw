@@ -1158,6 +1158,7 @@
               {
                 "group": "Tools",
                 "pages": [
+                  "tools/media-overview",
                   "tools/apply-patch",
                   {
                     "group": "Web Browser",
@@ -1230,6 +1231,7 @@
                 "pages": [
                   "providers/alibaba",
                   "providers/anthropic",
+                  "providers/arcee",
                   "providers/bedrock",
                   "providers/bedrock-mantle",
                   "providers/chutes",

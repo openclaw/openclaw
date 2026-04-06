@@ -62,12 +62,19 @@ describe("matrix onboarding", () => {
 
     expect(result).not.toBe("skip");
     if (result !== "skip") {
+      const opsAccount = result.cfg.channels?.["matrix"]?.accounts?.ops as
+        | {
+            enabled?: boolean;
+            homeserver?: string;
+            accessToken?: string;
+          }
+        | undefined;
       expect(result.accountId).toBe("ops");
-      expect(result.cfg.channels?.["matrix"]?.accounts?.ops).toMatchObject({
+      expect(opsAccount).toMatchObject({
         enabled: true,
       });
-      expect(result.cfg.channels?.["matrix"]?.accounts?.ops?.homeserver).toBeUndefined();
-      expect(result.cfg.channels?.["matrix"]?.accounts?.ops?.accessToken).toBeUndefined();
+      expect(opsAccount?.homeserver).toBeUndefined();
+      expect(opsAccount?.accessToken).toBeUndefined();
     }
     expect(
       confirmMessages.some((message) =>

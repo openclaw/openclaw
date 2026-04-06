@@ -238,7 +238,7 @@ export function resolveProviderEndpoint(
   if (host === "openrouter.ai" || host.endsWith(".openrouter.ai")) {
     return { endpointClass: "openrouter", hostname: host };
   }
-  if (host === "api.x.ai") {
+  if (host === "api.x.ai" || host === "api.grok.x.ai") {
     return { endpointClass: "xai-native", hostname: host };
   }
   if (host === "api.z.ai") {

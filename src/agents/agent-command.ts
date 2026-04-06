@@ -18,6 +18,7 @@ import {
   loadConfig,
   readConfigFileSnapshotForWrite,
   setRuntimeConfigSnapshot,
+  type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../config/sessions.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
@@ -127,6 +128,38 @@ async function persistSessionEntry(params: PersistSessionEntryParams): Promise<v
   });
 }
 
+async function resolveAgentRuntimeConfig(
+  runtime: RuntimeEnv,
+  params?: { runtimeTargetsChannelSecrets?: boolean },
+): Promise<{
+  loadedRaw: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  cfg: OpenClawConfig;
+}> {
+  const loadedRaw = loadConfig();
+  const sourceConfig = await (async () => {
+    try {
+      const { snapshot } = await readConfigFileSnapshotForWrite();
+      if (snapshot.valid) {
+        return snapshot.resolved;
+      }
+    } catch {
+      // Fall back to runtime-loaded config when source snapshot is unavailable.
+    }
+    return loadedRaw;
+  })();
+  const { resolvedConfig: cfg } = await resolveCommandConfigWithSecrets({
+    config: loadedRaw,
+    commandName: "agent",
+    targetIds: getAgentRuntimeCommandSecretTargetIds({
+      includeChannelTargets: params?.runtimeTargetsChannelSecrets === true,
+    }),
+    runtime,
+  });
+  setRuntimeConfigSnapshot(cfg, sourceConfig);
+  return { loadedRaw, sourceConfig, cfg };
+}
+
 function containsControlCharacters(value: string): boolean {
   for (const char of value) {
     const code = char.codePointAt(0);
@@ -168,25 +201,9 @@ async function prepareAgentCommandExecution(
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
-  const loadedRaw = loadConfig();
-  const sourceConfig = await (async () => {
-    try {
-      const { snapshot } = await readConfigFileSnapshotForWrite();
-      if (snapshot.valid) {
-        return snapshot.resolved;
-      }
-    } catch {
-      // Fall back to runtime-loaded config when source snapshot is unavailable.
-    }
-    return loadedRaw;
-  })();
-  const { resolvedConfig: cfg } = await resolveCommandConfigWithSecrets({
-    config: loadedRaw,
-    commandName: "agent",
-    targetIds: getAgentRuntimeCommandSecretTargetIds(),
-    runtime,
+  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+    runtimeTargetsChannelSecrets: opts.deliver === true,
   });
-  setRuntimeConfigSnapshot(cfg, sourceConfig);
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,
     groupId: opts.groupId,
@@ -1003,3 +1020,8 @@ export async function agentCommandFromIngress(
     deps,
   );
 }
+
+export const __testing = {
+  resolveAgentRuntimeConfig,
+  prepareAgentCommandExecution,
+};

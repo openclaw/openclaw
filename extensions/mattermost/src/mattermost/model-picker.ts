@@ -54,6 +54,20 @@ function readContextString(context: Record<string, unknown>, key: string, fallba
   return typeof value === "string" ? value : fallback;
 }
 
+function readContextNumber(context: Record<string, unknown>, key: string): number | undefined {
+  const value = context[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 function normalizePage(value: number | undefined): number {
   if (!Number.isFinite(value)) {
     return 1;
@@ -176,7 +190,7 @@ export function parseMattermostModelPickerContext(
   }
 
   const provider = normalizeProviderId(readContextString(context, "provider"));
-  const page = Number.parseInt(readContextString(context, "page", "1"), 10);
+  const page = readContextNumber(context, "page");
   if (!provider) {
     return null;
   }

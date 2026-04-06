@@ -4,9 +4,12 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  resolveSlackNativeStreaming,
-  resolveSlackStreamingMode,
-} from "./streaming-compat.js";
+  hasLegacyAccountStreamingAliases,
+  hasLegacyStreamingAliases,
+  normalizeLegacyDmAliases,
+  normalizeLegacyStreamingAliases,
+} from "openclaw/plugin-sdk/runtime-doctor";
+import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -14,138 +17,8 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
-  const existing = asObjectRecord(owner[key]);
-  if (existing) {
-    return { ...existing };
-  }
-  return {};
-}
-
-function normalizeSlackStreamingAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { entry: Record<string, unknown>; changed: boolean } {
-  const beforeStreaming = params.entry.streaming;
-  const hadLegacyStreamMode = params.entry.streamMode !== undefined;
-  const hasLegacyFlatFields =
-    params.entry.chunkMode !== undefined ||
-    params.entry.blockStreaming !== undefined ||
-    params.entry.blockStreamingCoalesce !== undefined ||
-    params.entry.nativeStreaming !== undefined;
-  const resolvedStreaming = resolveSlackStreamingMode(params.entry);
-  const resolvedNativeStreaming = resolveSlackNativeStreaming(params.entry);
-  const shouldNormalize =
-    hadLegacyStreamMode ||
-    typeof beforeStreaming === "boolean" ||
-    typeof beforeStreaming === "string" ||
-    hasLegacyFlatFields;
-  if (!shouldNormalize) {
-    return { entry: params.entry, changed: false };
-  }
-
-  let updated = { ...params.entry };
-  let changed = false;
-  const streaming = ensureNestedRecord(updated, "streaming");
-  const block = ensureNestedRecord(streaming, "block");
-
-  if (
-    (hadLegacyStreamMode ||
-      typeof beforeStreaming === "boolean" ||
-      typeof beforeStreaming === "string") &&
-    streaming.mode === undefined
-  ) {
-    streaming.mode = resolvedStreaming;
-    if (hadLegacyStreamMode) {
-      params.changes.push(
-        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${resolvedStreaming}).`,
-      );
-    }
-    if (typeof beforeStreaming === "boolean") {
-      params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${resolvedStreaming}).`,
-      );
-    } else if (typeof beforeStreaming === "string") {
-      params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${resolvedStreaming}).`,
-      );
-    }
-    changed = true;
-  }
-  if (hadLegacyStreamMode) {
-    delete updated.streamMode;
-    changed = true;
-  }
-  if (updated.chunkMode !== undefined && streaming.chunkMode === undefined) {
-    streaming.chunkMode = updated.chunkMode;
-    delete updated.chunkMode;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.chunkMode → ${params.pathPrefix}.streaming.chunkMode.`,
-    );
-    changed = true;
-  }
-  if (updated.blockStreaming !== undefined && block.enabled === undefined) {
-    block.enabled = updated.blockStreaming;
-    delete updated.blockStreaming;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.blockStreaming → ${params.pathPrefix}.streaming.block.enabled.`,
-    );
-    changed = true;
-  }
-  if (updated.blockStreamingCoalesce !== undefined && block.coalesce === undefined) {
-    block.coalesce = updated.blockStreamingCoalesce;
-    delete updated.blockStreamingCoalesce;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.blockStreamingCoalesce → ${params.pathPrefix}.streaming.block.coalesce.`,
-    );
-    changed = true;
-  }
-  if (updated.nativeStreaming !== undefined && streaming.nativeTransport === undefined) {
-    streaming.nativeTransport = resolvedNativeStreaming;
-    delete updated.nativeStreaming;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
-    );
-    changed = true;
-  } else if (typeof beforeStreaming === "boolean" && streaming.nativeTransport === undefined) {
-    streaming.nativeTransport = resolvedNativeStreaming;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
-    );
-    changed = true;
-  }
-
-  if (Object.keys(block).length > 0) {
-    streaming.block = block;
-  }
-  updated.streaming = streaming;
-
-  return { entry: updated, changed };
-}
-
 function hasLegacySlackStreamingAliases(value: unknown): boolean {
-  const entry = asObjectRecord(value);
-  if (!entry) {
-    return false;
-  }
-  return (
-    entry.streamMode !== undefined ||
-    typeof entry.streaming === "boolean" ||
-    typeof entry.streaming === "string" ||
-    entry.chunkMode !== undefined ||
-    entry.blockStreaming !== undefined ||
-    entry.blockStreamingCoalesce !== undefined ||
-    entry.nativeStreaming !== undefined
-  );
-}
-
-function hasLegacySlackAccountStreamingAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacySlackStreamingAliases(account));
+  return hasLegacyStreamingAliases(value, { includeNativeTransport: true });
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
@@ -159,7 +32,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "slack", "accounts"],
     message:
       "channels.slack.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.accounts.<id>.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
-    match: hasLegacySlackAccountStreamingAliases,
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacySlackStreamingAliases),
   },
 ];
 
@@ -177,13 +50,23 @@ export function normalizeCompatibilityConfig({
   let updated = rawEntry;
   let changed = false;
 
-  const baseStreaming = normalizeSlackStreamingAliases({
+  const dm = normalizeLegacyDmAliases({
     entry: updated,
     pathPrefix: "channels.slack",
     changes,
   });
-  updated = baseStreaming.entry;
-  changed = changed || baseStreaming.changed;
+  updated = dm.entry;
+  changed = changed || dm.changed;
+
+  const streaming = normalizeLegacyStreamingAliases({
+    entry: updated,
+    pathPrefix: "channels.slack",
+    changes,
+    resolvedMode: resolveSlackStreamingMode(updated),
+    resolvedNativeTransport: resolveSlackNativeStreaming(updated),
+  });
+  updated = streaming.entry;
+  changed = changed || streaming.changed;
 
   const rawAccounts = asObjectRecord(updated.accounts);
   if (rawAccounts) {
@@ -194,13 +77,26 @@ export function normalizeCompatibilityConfig({
       if (!account) {
         continue;
       }
-      const streaming = normalizeSlackStreamingAliases({
-        entry: account,
+      let accountEntry = account;
+      let accountChanged = false;
+      const accountDm = normalizeLegacyDmAliases({
+        entry: accountEntry,
         pathPrefix: `channels.slack.accounts.${accountId}`,
         changes,
       });
-      if (streaming.changed) {
-        accounts[accountId] = streaming.entry;
+      accountEntry = accountDm.entry;
+      accountChanged = accountDm.changed;
+      const accountStreaming = normalizeLegacyStreamingAliases({
+        entry: accountEntry,
+        pathPrefix: `channels.slack.accounts.${accountId}`,
+        changes,
+        resolvedMode: resolveSlackStreamingMode(accountEntry),
+        resolvedNativeTransport: resolveSlackNativeStreaming(accountEntry),
+      });
+      accountEntry = accountStreaming.entry;
+      accountChanged = accountChanged || accountStreaming.changed;
+      if (accountChanged) {
+        accounts[accountId] = accountEntry;
         accountsChanged = true;
       }
     }

@@ -216,6 +216,48 @@ function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
 }
 
+function recordFailedCandidateAttempt(params: {
+  attempts: FallbackAttempt[];
+  candidate: ModelCandidate;
+  error: unknown;
+  runId?: string;
+  requestedProvider?: string;
+  requestedModel?: string;
+  attempt: number;
+  total: number;
+  nextCandidate?: ModelCandidate;
+  isPrimary: boolean;
+  requestedModelMatched: boolean;
+  fallbackConfigured: boolean;
+}) {
+  const described = describeFailoverError(params.error);
+  params.attempts.push({
+    provider: params.candidate.provider,
+    model: params.candidate.model,
+    error: described.message,
+    reason: described.reason ?? "unknown",
+    status: described.status,
+    code: described.code,
+  });
+  logModelFallbackDecision({
+    decision: "candidate_failed",
+    runId: params.runId,
+    requestedProvider: params.requestedProvider ?? params.candidate.provider,
+    requestedModel: params.requestedModel ?? params.candidate.model,
+    candidate: params.candidate,
+    attempt: params.attempt,
+    total: params.total,
+    reason: described.reason,
+    status: described.status,
+    code: described.code,
+    error: described.message,
+    nextCandidate: params.nextCandidate,
+    isPrimary: params.isPrimary,
+    requestedModelMatched: params.requestedModelMatched,
+    fallbackConfigured: params.fallbackConfigured,
+  });
+}
+
 function throwFallbackFailureSummary(params: {
   attempts: FallbackAttempt[];
   candidates: ModelCandidate[];
@@ -795,27 +837,15 @@ export async function runWithModelFallback<T>(params: {
           model: candidate.model,
         });
         lastError = switchNormalized;
-        const described = describeFailoverError(switchNormalized);
-        attempts.push({
-          provider: candidate.provider,
-          model: candidate.model,
-          error: described.message,
-          reason: described.reason ?? "unknown",
-          status: described.status,
-          code: described.code,
-        });
-        logModelFallbackDecision({
-          decision: "candidate_failed",
+        recordFailedCandidateAttempt({
+          attempts,
+          candidate,
+          error: switchNormalized,
           runId: params.runId,
           requestedProvider: params.provider,
           requestedModel: params.model,
-          candidate,
           attempt: i + 1,
           total: candidates.length,
-          reason: described.reason,
-          status: described.status,
-          code: described.code,
-          error: described.message,
           nextCandidate: candidates[i + 1],
           isPrimary,
           requestedModelMatched: requestedModel,
@@ -833,27 +863,15 @@ export async function runWithModelFallback<T>(params: {
       }
 
       lastError = isKnownFailover ? normalized : err;
-      const described = describeFailoverError(normalized);
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: described.message,
-        reason: described.reason ?? "unknown",
-        status: described.status,
-        code: described.code,
-      });
-      logModelFallbackDecision({
-        decision: "candidate_failed",
+      recordFailedCandidateAttempt({
+        attempts,
+        candidate,
+        error: normalized,
         runId: params.runId,
         requestedProvider: params.provider,
         requestedModel: params.model,
-        candidate,
         attempt: i + 1,
         total: candidates.length,
-        reason: described.reason,
-        status: described.status,
-        code: described.code,
-        error: described.message,
         nextCandidate: candidates[i + 1],
         isPrimary,
         requestedModelMatched: requestedModel,

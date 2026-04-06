@@ -12,9 +12,9 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
-  resolvePersistedModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolvePersistedSelectedModelRef,
 } from "../agents/model-selection.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -1033,7 +1033,7 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
-  const persisted = resolvePersistedModelRef({
+  const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
     runtimeProvider: entry?.modelProvider,
     runtimeModel: entry?.model,
@@ -1061,17 +1061,17 @@ export async function resolveGatewayModelSupportsImages(params: {
       (entry) =>
         entry.id === params.model && (!params.provider || entry.provider === params.provider),
     );
+    const normalizedProvider = params.provider?.trim().toLowerCase();
+    const normalizedCandidates = [
+      params.model.trim().toLowerCase(),
+      typeof modelEntry?.name === "string" ? modelEntry.name.trim().toLowerCase() : "",
+    ].filter(Boolean);
     if (modelEntry) {
       if (modelEntry.input?.includes("image")) {
         return true;
       }
       // Legacy safety shim for stale persisted Foundry rows that predate
       // provider-owned capability normalization.
-      const normalizedProvider = params.provider?.trim().toLowerCase();
-      const normalizedCandidates = [
-        params.model.trim().toLowerCase(),
-        typeof modelEntry.name === "string" ? modelEntry.name.trim().toLowerCase() : "",
-      ].filter(Boolean);
       if (
         normalizedProvider === "microsoft-foundry" &&
         normalizedCandidates.some(
@@ -1085,7 +1085,31 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
+      if (
+        normalizedProvider === "claude-cli" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate === "opus" ||
+            candidate === "sonnet" ||
+            candidate === "haiku" ||
+            candidate.startsWith("claude-"),
+        )
+      ) {
+        return true;
+      }
       return false;
+    }
+    if (
+      normalizedProvider === "claude-cli" &&
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate === "opus" ||
+          candidate === "sonnet" ||
+          candidate === "haiku" ||
+          candidate.startsWith("claude-"),
+      )
+    ) {
+      return true;
     }
     return false;
   } catch {
@@ -1187,6 +1211,9 @@ export function buildGatewaySessionRow(params: {
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
   const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const selectedModel = entry?.modelOverride?.trim()
+    ? resolveSessionModelRef(cfg, entry, sessionAgentId)
+    : null;
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,
@@ -1319,8 +1346,8 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
-    modelProvider,
-    model,
+    modelProvider: selectedModel?.provider ?? modelProvider,
+    model: selectedModel?.model ?? model,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,

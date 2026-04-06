@@ -58,6 +58,68 @@ export type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Prom
 /** Consume a quote ref exactly once. */
 export type ConsumeQuoteRefFn = () => string | undefined;
 
+function resolveQQBotMediaTargetContext(
+  event: DeliverEventContext,
+  account: ResolvedQQBotAccount,
+  prefix: string,
+): MediaTargetContext {
+  return {
+    targetType:
+      event.type === "c2c"
+        ? "c2c"
+        : event.type === "group"
+          ? "group"
+          : event.type === "dm"
+            ? "dm"
+            : "channel",
+    targetId:
+      event.type === "c2c"
+        ? event.senderId
+        : event.type === "group"
+          ? event.groupOpenid!
+          : event.type === "dm"
+            ? event.guildId!
+            : event.channelId!,
+    account,
+    replyToId: event.messageId,
+    logPrefix: prefix,
+  };
+}
+
+async function sendQQBotAutoMediaBatch(params: {
+  qualifiedTarget: string;
+  account: ResolvedQQBotAccount;
+  replyToId: string;
+  mediaUrls: string[];
+  log?: DeliverAccountContext["log"];
+  onResultError: (mediaUrl: string, error: string) => string;
+  onThrownError: (mediaUrl: string, error: string) => string;
+  onSuccess?: (mediaUrl: string) => string | undefined;
+}): Promise<void> {
+  for (const mediaUrl of params.mediaUrls) {
+    try {
+      const result = await sendMediaAuto({
+        to: params.qualifiedTarget,
+        text: "",
+        mediaUrl,
+        accountId: params.account.accountId,
+        replyToId: params.replyToId,
+        account: params.account,
+      });
+      if (result.error) {
+        params.log?.error(params.onResultError(mediaUrl, result.error));
+        continue;
+      }
+      const successMessage = params.onSuccess?.(mediaUrl);
+      if (successMessage) {
+        params.log?.info(successMessage);
+      }
+    } catch (err) {
+      params.log?.error(params.onThrownError(mediaUrl, String(err)));
+    }
+  }
+}
+
 // Media-tag parsing and delivery.
 
 /**
@@ -151,60 +213,46 @@ export async function parseAndSendMediaTags(
   log?.info(`${prefix} Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
   // Send queue items in order.
-  const mediaTarget: MediaTargetContext = {
-    targetType:
-      event.type === "c2c"
-        ? "c2c"
-        : event.type === "group"
-          ? "group"
-          : event.type === "dm"
-            ? "dm"
-            : "channel",
-    targetId:
-      event.type === "c2c"
-        ? event.senderId
-        : event.type === "group"
-          ? event.groupOpenid!
-          : event.type === "dm"
-            ? event.guildId!
-            : event.channelId!,
-    account,
-    replyToId: event.messageId,
-    logPrefix: prefix,
-  };
+  const mediaTarget = resolveQQBotMediaTargetContext(event, account, prefix);
 
   for (const item of sendQueue) {
     if (item.type === "text") {
       await sendTextChunks(item.content, event, actx, sendWithRetry, consumeQuoteRef);
     } else if (item.type === "image") {
-      const result = await sendPhoto(mediaTarget, item.content);
-      if (result.error) {
-        log?.error(`${prefix} sendPhoto error: ${result.error}`);
-      }
+      await sendQQBotPhotoWithLogging({
+        target: mediaTarget,
+        imageUrl: item.content,
+        log,
+        onError: (error) => `${prefix} sendPhoto error: ${error}`,
+      });
     } else if (item.type === "voice") {
       await sendVoiceWithTimeout(mediaTarget, item.content, account, log, prefix);
     } else if (item.type === "video") {
-      const result = await sendVideoMsg(mediaTarget, item.content);
-      if (result.error) {
-        log?.error(`${prefix} sendVideoMsg error: ${result.error}`);
-      }
-    } else if (item.type === "file") {
-      const result = await sendDocument(mediaTarget, item.content);
-      if (result.error) {
-        log?.error(`${prefix} sendDocument error: ${result.error}`);
-      }
-    } else if (item.type === "media") {
-      const result = await sendMediaAuto({
-        to: actx.qualifiedTarget,
-        text: "",
-        mediaUrl: item.content,
-        accountId: account.accountId,
-        replyToId: event.messageId,
-        account,
+      await sendQQBotResultWithLogging({
+        run: async () => await sendVideoMsg(mediaTarget, item.content),
+        log,
+        onError: (error) => `${prefix} sendVideoMsg error: ${error}`,
       });
-      if (result.error) {
-        log?.error(`${prefix} sendMedia(auto) error: ${result.error}`);
-      }
+    } else if (item.type === "file") {
+      await sendQQBotResultWithLogging({
+        run: async () => await sendDocument(mediaTarget, item.content),
+        log,
+        onError: (error) => `${prefix} sendDocument error: ${error}`,
+      });
+    } else if (item.type === "media") {
+      await sendQQBotResultWithLogging({
+        run: async () =>
+          await sendMediaAuto({
+            to: actx.qualifiedTarget,
+            text: "",
+            mediaUrl: item.content,
+            accountId: account.accountId,
+            replyToId: event.messageId,
+            account,
+          }),
+        log,
+        onError: (error) => `${prefix} sendMedia(auto) error: ${error}`,
+      });
     }
   }
 
@@ -345,25 +393,18 @@ export async function sendPlainReply(
     log?.info(
       `${prefix} Sending ${localMediaToSend.length} local media via sendMedia auto-routing`,
     );
-    for (const mediaPath of localMediaToSend) {
-      try {
-        const result = await sendMediaAuto({
-          to: qualifiedTarget,
-          text: "",
-          mediaUrl: mediaPath,
-          accountId: account.accountId,
-          replyToId: event.messageId,
-          account,
-        });
-        if (result.error) {
-          log?.error(`${prefix} sendMedia(auto) error for ${mediaPath}: ${result.error}`);
-        } else {
-          log?.info(`${prefix} Sent local media: ${mediaPath}`);
-        }
-      } catch (err) {
-        log?.error(`${prefix} sendMedia(auto) failed for ${mediaPath}: ${String(err)}`);
-      }
-    }
+    await sendQQBotAutoMediaBatch({
+      qualifiedTarget,
+      account,
+      replyToId: event.messageId,
+      mediaUrls: localMediaToSend,
+      log,
+      onSuccess: (mediaPath) => `${prefix} Sent local media: ${mediaPath}`,
+      onResultError: (mediaPath, error) =>
+        `${prefix} sendMedia(auto) error for ${mediaPath}: ${error}`,
+      onThrownError: (mediaPath, error) =>
+        `${prefix} sendMedia(auto) failed for ${mediaPath}: ${error}`,
+    });
   }
 
   // Forward media gathered during the tool phase.
@@ -371,25 +412,16 @@ export async function sendPlainReply(
     log?.info(
       `${prefix} Forwarding ${toolMediaUrls.length} tool-collected media URL(s) after block deliver`,
     );
-    for (const mediaUrl of toolMediaUrls) {
-      try {
-        const result = await sendMediaAuto({
-          to: qualifiedTarget,
-          text: "",
-          mediaUrl,
-          accountId: account.accountId,
-          replyToId: event.messageId,
-          account,
-        });
-        if (result.error) {
-          log?.error(`${prefix} Tool media forward error: ${result.error}`);
-        } else {
-          log?.info(`${prefix} Forwarded tool media: ${mediaUrl.slice(0, 80)}...`);
-        }
-      } catch (err) {
-        log?.error(`${prefix} Tool media forward failed: ${String(err)}`);
-      }
-    }
+    await sendQQBotAutoMediaBatch({
+      qualifiedTarget,
+      account,
+      replyToId: event.messageId,
+      mediaUrls: toolMediaUrls,
+      log,
+      onSuccess: (mediaUrl) => `${prefix} Forwarded tool media: ${mediaUrl.slice(0, 80)}...`,
+      onResultError: (_mediaUrl, error) => `${prefix} Tool media forward error: ${error}`,
+      onThrownError: (_mediaUrl, error) => `${prefix} Tool media forward failed: ${error}`,
+    });
     toolMediaUrls.length = 0;
   }
 }
@@ -443,6 +475,30 @@ function decodeMediaPath(raw: string, log: DeliverAccountContext["log"], prefix:
 }
 
 /** Shared helper for sending chunked text replies. */
+async function sendQQBotTextChunk(params: {
+  account: ResolvedQQBotAccount;
+  event: DeliverEventContext;
+  token: string;
+  text: string;
+  consumeQuoteRef: ConsumeQuoteRefFn;
+  allowDm: boolean;
+}): Promise<unknown> {
+  const { account, event, token, text, consumeQuoteRef, allowDm } = params;
+  const ref = consumeQuoteRef();
+  if (event.type === "c2c") {
+    return await sendC2CMessage(account.appId, token, event.senderId, text, event.messageId, ref);
+  }
+  if (event.type === "group" && event.groupOpenid) {
+    return await sendGroupMessage(account.appId, token, event.groupOpenid, text, event.messageId);
+  }
+  if (allowDm && event.type === "dm" && event.guildId) {
+    return await sendDmMessage(token, event.guildId, text, event.messageId);
+  }
+  if (event.channelId) {
+    return await sendChannelMessage(token, event.channelId, text, event.messageId);
+  }
+}
+
 async function sendTextChunks(
   text: string,
   event: DeliverEventContext,
@@ -453,40 +509,85 @@ async function sendTextChunks(
   const { account, log } = actx;
   const prefix = `[qqbot:${account.accountId}]`;
   const chunks = getQQBotRuntime().channel.text.chunkMarkdownText(text, TEXT_CHUNK_LIMIT);
+  await sendQQBotTextChunksWithRetry({
+    account,
+    event,
+    chunks,
+    sendWithRetry,
+    consumeQuoteRef,
+    allowDm: true,
+    log,
+    onSuccess: (chunk) =>
+      `${prefix} Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
+    onError: (err) => `${prefix} Failed to send text chunk: ${String(err)}`,
+  });
+}
+
+async function sendQQBotTextChunksWithRetry(params: {
+  account: ResolvedQQBotAccount;
+  event: DeliverEventContext;
+  chunks: string[];
+  sendWithRetry: SendWithRetryFn;
+  consumeQuoteRef: ConsumeQuoteRefFn;
+  allowDm: boolean;
+  log?: DeliverAccountContext["log"];
+  onSuccess: (chunk: string) => string;
+  onError: (err: unknown) => string;
+}): Promise<void> {
+  const { account, event, chunks, sendWithRetry, consumeQuoteRef, allowDm, log } = params;
   for (const chunk of chunks) {
     try {
-      await sendWithRetry(async (token) => {
-        const ref = consumeQuoteRef();
-        if (event.type === "c2c") {
-          return await sendC2CMessage(
-            account.appId,
-            token,
-            event.senderId,
-            chunk,
-            event.messageId,
-            ref,
-          );
-        } else if (event.type === "group" && event.groupOpenid) {
-          return await sendGroupMessage(
-            account.appId,
-            token,
-            event.groupOpenid,
-            chunk,
-            event.messageId,
-          );
-        } else if (event.type === "dm" && event.guildId) {
-          return await sendDmMessage(token, event.guildId, chunk, event.messageId);
-        } else if (event.channelId) {
-          return await sendChannelMessage(token, event.channelId, chunk, event.messageId);
-        }
-      });
-      log?.info(
-        `${prefix} Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
+      await sendWithRetry((token) =>
+        sendQQBotTextChunk({
+          account,
+          event,
+          token,
+          text: chunk,
+          consumeQuoteRef,
+          allowDm,
+        }),
       );
+      log?.info(params.onSuccess(chunk));
     } catch (err) {
-      log?.error(`${prefix} Failed to send text chunk: ${String(err)}`);
+      log?.error(params.onError(err));
     }
   }
+}
+
+async function sendQQBotResultWithLogging(params: {
+  run: () => Promise<{ error?: string }>;
+  log?: DeliverAccountContext["log"];
+  onSuccess?: () => string | undefined;
+  onError: (error: string) => string;
+}): Promise<void> {
+  try {
+    const result = await params.run();
+    if (result.error) {
+      params.log?.error(params.onError(result.error));
+      return;
+    }
+    const successMessage = params.onSuccess?.();
+    if (successMessage) {
+      params.log?.info(successMessage);
+    }
+  } catch (err) {
+    params.log?.error(params.onError(String(err)));
+  }
+}
+
+async function sendQQBotPhotoWithLogging(params: {
+  target: MediaTargetContext;
+  imageUrl: string;
+  log?: DeliverAccountContext["log"];
+  onSuccess?: (imageUrl: string) => string | undefined;
+  onError: (error: string) => string;
+}): Promise<void> {
+  await sendQQBotResultWithLogging({
+    run: async () => await sendPhoto(params.target, params.imageUrl),
+    log: params.log,
+    onSuccess: params.onSuccess ? () => params.onSuccess?.(params.imageUrl) : undefined,
+    onError: params.onError,
+  });
 }
 
 /** Send voice with a 45s timeout guard. */
@@ -650,40 +751,18 @@ async function sendMarkdownReply(
   // Send markdown text.
   if (result.trim()) {
     const mdChunks = chunkText(result, TEXT_CHUNK_LIMIT);
-    for (const chunk of mdChunks) {
-      try {
-        await sendWithRetry(async (token) => {
-          const ref = consumeQuoteRef();
-          if (event.type === "c2c") {
-            return await sendC2CMessage(
-              account.appId,
-              token,
-              event.senderId,
-              chunk,
-              event.messageId,
-              ref,
-            );
-          } else if (event.type === "group" && event.groupOpenid) {
-            return await sendGroupMessage(
-              account.appId,
-              token,
-              event.groupOpenid,
-              chunk,
-              event.messageId,
-            );
-          } else if (event.type === "dm" && event.guildId) {
-            return await sendDmMessage(token, event.guildId, chunk, event.messageId);
-          } else if (event.channelId) {
-            return await sendChannelMessage(token, event.channelId, chunk, event.messageId);
-          }
-        });
-        log?.info(
-          `${prefix} Sent markdown chunk (${chunk.length}/${result.length} chars) with ${httpImageUrls.length} HTTP images (${event.type})`,
-        );
-      } catch (err) {
-        log?.error(`${prefix} Failed to send markdown message chunk: ${String(err)}`);
-      }
-    }
+    await sendQQBotTextChunksWithRetry({
+      account,
+      event,
+      chunks: mdChunks,
+      sendWithRetry,
+      consumeQuoteRef,
+      allowDm: true,
+      log,
+      onSuccess: (chunk) =>
+        `${prefix} Sent markdown chunk (${chunk.length}/${result.length} chars) with ${httpImageUrls.length} HTTP images (${event.type})`,
+      onError: (err) => `${prefix} Failed to send markdown message chunk: ${String(err)}`,
+    });
   }
 }
 
@@ -701,27 +780,7 @@ async function sendPlainTextReply(
   const { account, log } = actx;
   const prefix = `[qqbot:${account.accountId}]`;
 
-  const imgMediaTarget: MediaTargetContext = {
-    targetType:
-      event.type === "c2c"
-        ? "c2c"
-        : event.type === "group"
-          ? "group"
-          : event.type === "dm"
-            ? "dm"
-            : "channel",
-    targetId:
-      event.type === "c2c"
-        ? event.senderId
-        : event.type === "group"
-          ? event.groupOpenid!
-          : event.type === "dm"
-            ? event.guildId!
-            : event.channelId!,
-    account,
-    replyToId: event.messageId,
-    logPrefix: prefix,
-  };
+  const imgMediaTarget = resolveQQBotMediaTargetContext(event, account, prefix);
 
   let result = textWithoutImages;
   for (const m of mdMatches) {
@@ -738,48 +797,30 @@ async function sendPlainTextReply(
 
   try {
     for (const imageUrl of imageUrls) {
-      try {
-        const imgResult = await sendPhoto(imgMediaTarget, imageUrl);
-        if (imgResult.error) {
-          log?.error(`${prefix} Failed to send image: ${imgResult.error}`);
-        } else {
-          log?.info(`${prefix} Sent image via sendPhoto: ${imageUrl.slice(0, 80)}...`);
-        }
-      } catch (imgErr) {
-        log?.error(`${prefix} Failed to send image: ${String(imgErr)}`);
-      }
+      await sendQQBotPhotoWithLogging({
+        target: imgMediaTarget,
+        imageUrl,
+        log,
+        onSuccess: (nextImageUrl) =>
+          `${prefix} Sent image via sendPhoto: ${nextImageUrl.slice(0, 80)}...`,
+        onError: (error) => `${prefix} Failed to send image: ${error}`,
+      });
     }
 
     if (result.trim()) {
       const plainChunks = chunkText(result, TEXT_CHUNK_LIMIT);
-      for (const chunk of plainChunks) {
-        await sendWithRetry(async (token) => {
-          const ref = consumeQuoteRef();
-          if (event.type === "c2c") {
-            return await sendC2CMessage(
-              account.appId,
-              token,
-              event.senderId,
-              chunk,
-              event.messageId,
-              ref,
-            );
-          } else if (event.type === "group" && event.groupOpenid) {
-            return await sendGroupMessage(
-              account.appId,
-              token,
-              event.groupOpenid,
-              chunk,
-              event.messageId,
-            );
-          } else if (event.channelId) {
-            return await sendChannelMessage(token, event.channelId, chunk, event.messageId);
-          }
-        });
-        log?.info(
+      await sendQQBotTextChunksWithRetry({
+        account,
+        event,
+        chunks: plainChunks,
+        sendWithRetry,
+        consumeQuoteRef,
+        allowDm: false,
+        log,
+        onSuccess: (chunk) =>
           `${prefix} Sent text chunk (${chunk.length}/${result.length} chars) (${event.type})`,
-        );
-      }
+        onError: (err) => `${prefix} Send failed: ${String(err)}`,
+      });
     }
   } catch (err) {
     log?.error(`${prefix} Send failed: ${String(err)}`);

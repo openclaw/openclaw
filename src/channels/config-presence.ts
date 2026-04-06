@@ -6,6 +6,7 @@ import {
 } from "../channels/plugins/persisted-auth-state.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { isRecord } from "../utils.js";
 import { listBundledChannelPluginIds } from "./plugins/bundled-ids.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
@@ -16,10 +17,6 @@ type ChannelPresenceOptions = {
 
 function hasNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export function hasMeaningfulChannelConfig(value: unknown): boolean {

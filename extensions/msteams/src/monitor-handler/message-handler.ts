@@ -21,6 +21,7 @@ import {
   type MSTeamsAttachmentLike,
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments.js";
+import { isRecord } from "../attachments/shared.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
@@ -39,9 +40,6 @@ import {
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
   for (const attachment of attachments) {
     if (attachment.contentType !== "text/html") {

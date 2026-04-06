@@ -62,6 +62,70 @@ const mocks = vi.hoisted(() => ({
     resolvedConfig: config,
     diagnostics: [],
   })),
+  getScopedChannelsCommandSecretTargets: vi.fn(
+    ({
+      config,
+      channel,
+      accountId,
+    }: {
+      config?: { channels?: Record<string, unknown> };
+      channel?: string | null;
+      accountId?: string | null;
+    }) => {
+      const allowedPaths = new Set<string>();
+      const targetIds = new Set<string>();
+      const scopedChannel = channel?.trim();
+      const scopedAccountId = accountId?.trim();
+      const scopedConfig =
+        scopedChannel && config?.channels && typeof config.channels[scopedChannel] === "object"
+          ? (config.channels[scopedChannel] as Record<string, unknown>)
+          : null;
+      if (!scopedChannel || !scopedConfig) {
+        return { targetIds };
+      }
+
+      const maybeCollectSecretPath = (path: string, value: unknown) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          return;
+        }
+        const record = value as Record<string, unknown>;
+        if (typeof record.source === "string" && typeof record.id === "string") {
+          targetIds.add(path);
+          allowedPaths.add(path);
+        }
+      };
+
+      maybeCollectSecretPath(`channels.${scopedChannel}.token`, scopedConfig.token);
+      maybeCollectSecretPath(`channels.${scopedChannel}.botToken`, scopedConfig.botToken);
+      if (scopedAccountId) {
+        const accountRecord =
+          scopedConfig.accounts &&
+          typeof scopedConfig.accounts === "object" &&
+          !Array.isArray(scopedConfig.accounts) &&
+          typeof (scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] === "object"
+            ? ((scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] as Record<
+                string,
+                unknown
+              >)
+            : null;
+        if (accountRecord) {
+          maybeCollectSecretPath(
+            `channels.${scopedChannel}.accounts.${scopedAccountId}.token`,
+            accountRecord.token,
+          );
+          maybeCollectSecretPath(
+            `channels.${scopedChannel}.accounts.${scopedAccountId}.botToken`,
+            accountRecord.botToken,
+          );
+        }
+      }
+
+      return {
+        targetIds,
+        ...(allowedPaths.size > 0 ? { allowedPaths } : {}),
+      };
+    },
+  ),
 }));
 
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
@@ -85,6 +149,10 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
+}));
+
+vi.mock("../../cli/command-secret-targets.js", () => ({
+  getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
 }));
 
 function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
@@ -121,6 +189,8 @@ beforeEach(() => {
     resolvedConfig: config,
     diagnostics: [],
   }));
+  mocks.getScopedChannelsCommandSecretTargets.mockClear();
+  setActivePluginRegistry(createTestRegistry([]));
 });
 
 function createChannelPlugin(params: {

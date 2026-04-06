@@ -18,11 +18,8 @@ import {
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import {
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  sanitizeChatHistoryMessages,
-} from "./server-methods/chat.js";
-import { paginateSessionMessages, SessionHistorySseState } from "./session-history-state.js";
+import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
+import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import {
   readSessionMessages,
   resolveFreshestSessionEntryFromStoreKeys,
@@ -160,13 +157,19 @@ export async function handleSessionHistoryHttpRequest(
     typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number"
       ? cfg.gateway.webchat.chatHistoryMaxChars
       : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  const sanitizedMessages = sanitizeChatHistoryMessages(
-    entry?.sessionId
-      ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
-      : [],
-    effectiveMaxChars,
-  );
-  const history = paginateSessionMessages(sanitizedMessages, limit, cursor);
+  // Read the transcript once and derive both sanitized and raw views from the
+  // same snapshot, eliminating the theoretical race window where a concurrent
+  // write between two separate reads could cause seq/content divergence.
+  const rawSnapshot = entry?.sessionId
+    ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
+    : [];
+  const historySnapshot = buildSessionHistorySnapshot({
+    rawMessages: rawSnapshot,
+    maxChars: effectiveMaxChars,
+    limit,
+    cursor,
+  });
+  const history = historySnapshot.history;
 
   if (!shouldStreamSse(req)) {
     sendJson(res, 200, {
@@ -190,12 +193,13 @@ export async function handleSessionHistoryHttpRequest(
     : new Set<string>();
 
   let sentHistory = history;
-  const sseState = new SessionHistorySseState({
+  const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
       sessionId: entry.sessionId,
       storePath: target.storePath,
       sessionFile: entry.sessionFile,
     },
+    rawMessages: rawSnapshot,
     maxChars: effectiveMaxChars,
     limit,
     cursor,

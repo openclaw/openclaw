@@ -20,6 +20,7 @@ import {
   validateTalkSpeakParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import { asRecord } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type TalkSpeakReason =
@@ -44,12 +45,6 @@ function trimString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function asStringRecord(value: unknown): Record<string, string> | undefined {

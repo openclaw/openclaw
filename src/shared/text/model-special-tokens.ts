@@ -26,6 +26,10 @@ function overlapsCodeRegion(
   return codeRegions.some((region) => start < region.end && end > region.start);
 }
 
+function shouldInsertSeparator(before: string | undefined, after: string | undefined): boolean {
+  return Boolean(before && after && !/\s/.test(before) && !/\s/.test(after));
+}
+
 export function stripModelSpecialTokens(text: string): string {
   if (!text) {
     return text;
@@ -37,11 +41,20 @@ export function stripModelSpecialTokens(text: string): string {
   MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
 
   const codeRegions = findCodeRegions(text);
-  return text.replace(MODEL_SPECIAL_TOKEN_RE, (match, offset) => {
-    const start = offset;
-    const end = start + match.length;
-    return isInsideCode(start, codeRegions) || overlapsCodeRegion(start, end, codeRegions)
-      ? match
-      : " ";
-  });
+  let out = "";
+  let cursor = 0;
+  for (const match of text.matchAll(MODEL_SPECIAL_TOKEN_RE)) {
+    const matched = match[0];
+    const start = match.index ?? 0;
+    const end = start + matched.length;
+    out += text.slice(cursor, start);
+    if (isInsideCode(start, codeRegions) || overlapsCodeRegion(start, end, codeRegions)) {
+      out += matched;
+    } else if (shouldInsertSeparator(text[start - 1], text[end])) {
+      out += " ";
+    }
+    cursor = end;
+  }
+  out += text.slice(cursor);
+  return out;
 }

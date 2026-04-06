@@ -16,7 +16,6 @@ const {
   clientFetchUserMock,
   clientGetPluginMock,
   clientHandleDeployRequestMock,
-  _createDiscordAutoPresenceControllerMock,
   createDiscordMessageHandlerMock,
   createDiscordNativeCommandMock,
   createdBindingManagers,
@@ -29,7 +28,6 @@ const {
   listSkillCommandsForAgentsMock,
   monitorLifecycleMock,
   reconcileAcpThreadBindingsOnStartupMock,
-  _resolveDiscordAllowlistConfigMock,
   resolveDiscordAccountMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
@@ -497,7 +495,7 @@ describe("monitorDiscordProvider", () => {
       params.threadBindings.stop();
     });
     clientFetchUserMock.mockImplementationOnce(async () => {
-      emitter.emit("error", new Error("Fatal Gateway error: 4014"));
+      emitter.emit("error", new Error("Fatal gateway close code: 4014"));
       return { id: "bot-1" };
     });
 

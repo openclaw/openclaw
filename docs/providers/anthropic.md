@@ -215,14 +215,14 @@ The bundled Anthropic `claude-cli` backend is supported in OpenClaw.
   `claude -p`, and Anthropic staff told us OpenClaw-style Claude CLI usage is
   allowed again. We are treating that guidance as settled unless Anthropic
   publishes a new policy change.
-- Anthropic setup-token is available again in OpenClaw as a legacy/manual path.
+- Anthropic setup-token remains available in OpenClaw as a supported token-auth path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 
 ## Troubleshooting
 
 **401 errors / token suddenly invalid**
 
-- Legacy Anthropic token auth can expire or be revoked.
+- Anthropic token auth can expire or be revoked.
 - For new setup, migrate to an Anthropic API key.
 
 **No API key found for provider "anthropic"**

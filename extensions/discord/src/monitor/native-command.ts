@@ -346,6 +346,11 @@ function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
   return normalized === "acp";
 }
 
+function shouldBypassConfiguredAcpGuildGuards(commandName: string): boolean {
+  const normalized = commandName.trim().toLowerCase();
+  return normalized === "new" || normalized === "reset";
+}
+
 function resolveDiscordNativeGroupDmAccess(params: {
   isGroupDm: boolean;
   groupEnabled?: boolean;
@@ -842,11 +847,49 @@ async function dispatchDiscordCommandInteraction(params: {
         scope: isThreadChannel ? "thread" : "channel",
       })
     : null;
-  if (channelConfig?.enabled === false) {
+  let nativeRouteStatePromise:
+    | ReturnType<typeof resolveDiscordNativeInteractionRouteStateImpl>
+    | undefined;
+  const getNativeRouteState = () =>
+    (nativeRouteStatePromise ??= resolveDiscordNativeInteractionRouteStateImpl({
+      cfg,
+      accountId,
+      guildId: interaction.guild?.id ?? undefined,
+      memberRoleIds,
+      isDirectMessage,
+      isGroupDm,
+      directUserId: user.id,
+      conversationId: rawChannelId || "unknown",
+      parentConversationId: threadParentId,
+      threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
+      enforceConfiguredBindingReadiness: !shouldBypassConfiguredAcpEnsure(
+        command.nativeName ?? command.key,
+      ),
+    }));
+  const canBypassConfiguredAcpGuildGuards = async () => {
+    if (
+      !interaction.guild ||
+      !shouldBypassConfiguredAcpGuildGuards(command.nativeName ?? command.key)
+    ) {
+      return false;
+    }
+    const routeState = await getNativeRouteState();
+    return (
+      routeState.effectiveRoute.matchedBy === "binding.channel" ||
+      routeState.boundSessionKey != null ||
+      routeState.configuredBinding != null ||
+      routeState.configuredRoute != null
+    );
+  };
+  if (channelConfig?.enabled === false && !(await canBypassConfiguredAcpGuildGuards())) {
     await respond("This channel is disabled.");
     return;
   }
-  if (interaction.guild && channelConfig?.allowed === false) {
+  if (
+    interaction.guild &&
+    channelConfig?.allowed === false &&
+    !(await canBypassConfiguredAcpGuildGuards())
+  ) {
     await respond("This channel is not allowed.");
     return;
   }
@@ -861,7 +904,7 @@ async function dispatchDiscordCommandInteraction(params: {
       guildInfo,
       channelConfig,
     });
-    if (!policyAuthorizer.allowed) {
+    if (!policyAuthorizer.allowed && !(await canBypassConfiguredAcpGuildGuards())) {
       await respond("This channel is not allowed.");
       return;
     }
@@ -943,7 +986,7 @@ async function dispatchDiscordCommandInteraction(params: {
       ownerAllowListConfigured: ownerAllowList != null,
       ownerAllowed: ownerOk,
     });
-    if (!commandAuthorized) {
+    if (!commandAuthorized && !(await canBypassConfiguredAcpGuildGuards())) {
       await respond("You are not authorized to use this command.", { ephemeral: true });
       return;
     }
@@ -990,25 +1033,6 @@ async function dispatchDiscordCommandInteraction(params: {
   }
 
   const pluginMatch = matchPluginCommandImpl(prompt);
-  let nativeRouteStatePromise:
-    | ReturnType<typeof resolveDiscordNativeInteractionRouteStateImpl>
-    | undefined;
-  const getNativeRouteState = () =>
-    (nativeRouteStatePromise ??= resolveDiscordNativeInteractionRouteStateImpl({
-      cfg,
-      accountId,
-      guildId: interaction.guild?.id ?? undefined,
-      memberRoleIds,
-      isDirectMessage,
-      isGroupDm,
-      directUserId: user.id,
-      conversationId: rawChannelId || "unknown",
-      parentConversationId: threadParentId,
-      threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
-      enforceConfiguredBindingReadiness: !shouldBypassConfiguredAcpEnsure(
-        command.nativeName ?? command.key,
-      ),
-    }));
   if (pluginMatch) {
     if (suppressReplies) {
       return;

@@ -49,6 +49,10 @@ vi.mock("../api.js", () => ({
   resolveAgentModelFallbackValues: mocks.resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue: mocks.resolveAgentModelPrimaryValue,
 }));
+vi.mock(
+  "openclaw/plugin-sdk/media-generation-runtime-shared",
+  async () => import("../../../src/media-generation/runtime-shared.js"),
+);
 
 describe("image-generation runtime", () => {
   beforeEach(() => {
@@ -157,6 +161,7 @@ describe("image-generation runtime", () => {
       {
         id: "google",
         defaultModel: "gemini-3-pro-image-preview",
+        isConfigured: () => false,
         capabilities: {
           generate: {},
           edit: { enabled: false },
@@ -168,6 +173,7 @@ describe("image-generation runtime", () => {
       {
         id: "openai",
         defaultModel: "gpt-image-1",
+        isConfigured: () => false,
         capabilities: {
           generate: {},
           edit: { enabled: false },
@@ -202,6 +208,7 @@ describe("image-generation runtime", () => {
       {
         id: "__proto__",
         defaultModel: "proto-v1",
+        isConfigured: () => false,
         capabilities: {
           generate: {},
           edit: { enabled: false },
@@ -215,5 +222,69 @@ describe("image-generation runtime", () => {
     await expect(
       generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
     ).rejects.toThrow("No image-generation model configured.");
+  });
+
+  it("maps requested size to the closest supported fallback geometry", async () => {
+    let seenRequest:
+      | {
+          size?: string;
+          aspectRatio?: string;
+          resolution?: string;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("minimax/image-01");
+    mocks.getImageGenerationProvider.mockReturnValue({
+      id: "minimax",
+      capabilities: {
+        generate: {
+          supportsSize: false,
+          supportsAspectRatio: true,
+          supportsResolution: false,
+        },
+        edit: {
+          enabled: true,
+          supportsSize: false,
+          supportsAspectRatio: true,
+          supportsResolution: false,
+        },
+        geometry: {
+          aspectRatios: ["1:1", "16:9"],
+        },
+      },
+      async generateImage(req) {
+        seenRequest = {
+          size: req.size,
+          aspectRatio: req.aspectRatio,
+          resolution: req.resolution,
+        };
+        return {
+          images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+          model: "image-01",
+        };
+      },
+    });
+
+    const result = await generateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "minimax/image-01" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      size: "1280x720",
+    });
+
+    expect(seenRequest).toEqual({
+      size: undefined,
+      aspectRatio: "16:9",
+      resolution: undefined,
+    });
+    expect(result.metadata).toMatchObject({
+      requestedSize: "1280x720",
+      normalizedAspectRatio: "16:9",
+      aspectRatioDerivedFromSize: "16:9",
+    });
   });
 });

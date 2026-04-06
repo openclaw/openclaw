@@ -59,7 +59,8 @@ const _ANTHROPIC_OAUTH_ALLOWLIST = [
   "anthropic/claude-haiku-4-5",
 ] as const;
 const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
-  "Anthropic setup-token auth is a legacy/manual path in OpenClaw.",
+  "Anthropic setup-token auth is supported in OpenClaw.",
+  "OpenClaw prefers Claude CLI reuse when it is available on the host.",
   "Anthropic staff told us this OpenClaw path is allowed again.",
   `If you want a direct API billing path instead, use ${formatCliCommand("openclaw models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")}.`,
 ] as const;
@@ -419,16 +420,16 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
       {
         id: "setup-token",
         label: "Anthropic setup-token",
-        hint: "Legacy/manual bearer token path",
+        hint: "Manual bearer token path",
         kind: "token",
         wizard: {
           choiceId: "setup-token",
           choiceLabel: "Anthropic setup-token",
-          choiceHint: "Legacy/manual path",
+          choiceHint: "Manual token path",
           assistantPriority: 40,
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "Claude CLI + API key + legacy token",
+          groupHint: "Claude CLI + API key + token",
         },
         run: async (ctx: ProviderAuthContext) => await runAnthropicSetupTokenAuth(ctx),
         runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>

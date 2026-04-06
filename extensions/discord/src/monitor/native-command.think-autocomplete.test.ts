@@ -7,7 +7,7 @@ import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtim
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
-type ConversationRuntimeModule = typeof import("openclaw/plugin-sdk/conversation-runtime");
+type ConversationRuntimeModule = typeof import("openclaw/plugin-sdk/conversation-binding-runtime");
 type ResolveConfiguredBindingRoute = ConversationRuntimeModule["resolveConfiguredBindingRoute"];
 type ConfiguredBindingRouteResult = ReturnType<ResolveConfiguredBindingRoute>;
 type EnsureConfiguredBindingRouteReady =
@@ -72,19 +72,19 @@ function createConfiguredRouteResult(
   };
 }
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
     await import("../test-support/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock<
-    typeof import("openclaw/plugin-sdk/conversation-runtime")
+    typeof import("openclaw/plugin-sdk/conversation-binding-runtime")
   >(
     {
       ensureConfiguredBindingRouteReadyMock,
       resolveConfiguredBindingRouteMock,
     },
     () =>
-      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-        "openclaw/plugin-sdk/conversation-runtime",
+      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>(
+        "openclaw/plugin-sdk/conversation-binding-runtime",
       ),
   );
 });

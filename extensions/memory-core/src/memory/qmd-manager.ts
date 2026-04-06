@@ -7,13 +7,13 @@ import chokidar, { type FSWatcher } from "chokidar";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import {
   createSubsystemLogger,
-  resolveMemorySearchConfig,
+  resolveMemorySearchSyncConfig,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveStateDir,
   writeFileWithinRoot,
   type OpenClawConfig,
-  type ResolvedMemorySearchConfig,
+  type ResolvedMemorySearchSyncConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
@@ -41,6 +41,7 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
@@ -237,7 +238,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
-  private readonly syncSettings: ResolvedMemorySearchConfig | null;
+  private readonly syncSettings: ResolvedMemorySearchSyncConfig | null;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
@@ -288,7 +289,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.stateDir = resolveStateDir(process.env, os.homedir);
     this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
     this.qmdDir = path.join(this.agentStateDir, "qmd");
-    this.syncSettings = resolveMemorySearchConfig(params.cfg, params.agentId);
+    this.syncSettings = resolveMemorySearchSyncConfig(params.cfg, params.agentId);
     // QMD uses XDG base dirs for its internal state.
     // Collections are managed via `qmd collection add` and stored inside the index DB.
     // - config:  $XDG_CONFIG_HOME (contexts, etc.)
@@ -1245,7 +1246,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private ensureWatcher(): void {
-    if (!this.syncSettings?.sync.watch || this.watcher || this.closed) {
+    if (!this.syncSettings?.watch || this.watcher || this.closed) {
       return;
     }
     const watchPaths = new Set<string>();
@@ -1280,7 +1281,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private scheduleWatchSync(): void {
-    if (!this.syncSettings?.sync.watch) {
+    if (!this.syncSettings?.watch) {
       return;
     }
     if (this.watchTimer) {
@@ -1291,11 +1292,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       void this.sync({ reason: "watch" }).catch((err) => {
         log.warn(`qmd watch sync failed: ${String(err)}`);
       });
-    }, this.syncSettings.sync.watchDebounceMs);
+    }, this.syncSettings.watchDebounceMs);
   }
 
   private async maybeWarmSession(sessionKey?: string): Promise<void> {
-    if (!this.syncSettings?.sync.onSessionStart) {
+    if (!this.syncSettings?.onSessionStart) {
       return;
     }
     const key = sessionKey?.trim() || "";
@@ -1309,7 +1310,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async maybeSyncDirtySearchState(): Promise<void> {
-    if (!this.syncSettings?.sync.onSearch || !this.dirty) {
+    if (!this.syncSettings?.onSearch || !this.dirty) {
       return;
     }
     await this.sync({ reason: "search" });
@@ -1759,43 +1760,41 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     const parsedUnknown: unknown = JSON.parse(result.stdout);
-    const isRecord = (value: unknown): value is Record<string, unknown> =>
-      typeof value === "object" && value !== null && !Array.isArray(value);
+    const parsedRecord = asRecord(parsedUnknown);
+    const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
+    const structured: unknown = structuredContent ?? parsedUnknown;
 
-    const structured =
-      isRecord(parsedUnknown) && isRecord(parsedUnknown.structuredContent)
-        ? parsedUnknown.structuredContent
-        : parsedUnknown;
-
+    const structuredRecord = asRecord(structured);
     const results: unknown[] =
-      isRecord(structured) && Array.isArray(structured.results)
-        ? (structured.results as unknown[])
+      structuredRecord && Array.isArray(structuredRecord.results)
+        ? (structuredRecord.results as unknown[])
         : Array.isArray(structured)
           ? structured
           : [];
 
     const out: QmdQueryResult[] = [];
     for (const item of results) {
-      if (!isRecord(item)) {
+      const itemRecord = asRecord(item);
+      if (!itemRecord) {
         continue;
       }
-      const docidRaw = item.docid;
+      const docidRaw = itemRecord.docid;
       const docid = typeof docidRaw === "string" ? docidRaw.replace(/^#/, "").trim() : "";
       if (!docid) {
         continue;
       }
-      const scoreRaw = item.score;
+      const scoreRaw = itemRecord.score;
       const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
-      const snippet = typeof item.snippet === "string" ? item.snippet : "";
+      const snippet = typeof itemRecord.snippet === "string" ? itemRecord.snippet : "";
       out.push({
         docid,
         score: Number.isFinite(score) ? score : 0,
         snippet,
-        collection: typeof item.collection === "string" ? item.collection : undefined,
-        file: typeof item.file === "string" ? item.file : undefined,
-        body: typeof item.body === "string" ? item.body : undefined,
-        startLine: this.normalizeSnippetLine(item.start_line ?? item.startLine),
-        endLine: this.normalizeSnippetLine(item.end_line ?? item.endLine),
+        collection: typeof itemRecord.collection === "string" ? itemRecord.collection : undefined,
+        file: typeof itemRecord.file === "string" ? itemRecord.file : undefined,
+        body: typeof itemRecord.body === "string" ? itemRecord.body : undefined,
+        startLine: this.normalizeSnippetLine(itemRecord.start_line ?? itemRecord.startLine),
+        endLine: this.normalizeSnippetLine(itemRecord.end_line ?? itemRecord.endLine),
       });
     }
     return out;

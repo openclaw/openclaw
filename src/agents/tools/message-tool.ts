@@ -617,7 +617,10 @@ function buildMessageToolDescription(options?: {
         desc += ` Other configured channels: ${otherChannels.join(", ")}.`;
       }
 
-      return appendMessageToolReadHint(desc, allActions);
+      return appendMessageToolReadHint(
+        desc,
+        Array.from(allActions) as Iterable<ChannelMessageActionName | "send">,
+      );
     }
   }
 

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { RuntimeEnv } from "../runtime-api.js";
+import "./lifecycle.test-support.js";
 import { resetProcessedFeishuCardActionTokensForTests } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
-import "./lifecycle.test-support.js";
 import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import {
   createFeishuLifecycleConfig,
@@ -100,7 +100,7 @@ async function setupLifecycleMonitor() {
   return setupFeishuLifecycleHandler({
     createEventDispatcherMock,
     onRegister: (registered) => {
-      handlers = registered;
+      _handlers = registered;
     },
     runtime: lastRuntime,
     cfg: lifecycleConfig,
@@ -114,7 +114,7 @@ describe("Feishu card-action lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-    handlers = {};
+    _handlers = {};
     lastRuntime = null;
     resetProcessedFeishuCardActionTokensForTests();
     setFeishuLifecycleStateDir("openclaw-feishu-card-action");

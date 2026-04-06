@@ -606,12 +606,6 @@ describe("monitorMatrixProvider", () => {
 });
 
 describe("matrix plugin registration", () => {
-  let _matrixPlugin: typeof import("../../../index.js").default;
-
-  beforeAll(async () => {
-    ({ default: matrixPlugin } = await import("../../../index.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });

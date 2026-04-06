@@ -5,6 +5,7 @@ import {
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
 import type { OpenClawConfig } from "./config/config.js";
+import { asRecord } from "./record-shared.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;
 const REMOTE_DEBUGGING_PAGES = [
@@ -12,12 +13,6 @@ const REMOTE_DEBUGGING_PAGES = [
   "brave://inspect/#remote-debugging",
   "edge://inspect/#remote-debugging",
 ].join(", ");
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 type ExistingSessionProfile = {
   name: string;

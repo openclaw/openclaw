@@ -171,8 +171,10 @@ describe("plugin-sdk facade runtime", () => {
                 id: "demo",
                 rootDir: path.join(dir, "demo"),
                 origin: "bundled",
+                channels: ["demo"],
               },
             ],
+            diagnostics: [],
           };
         }),
       };

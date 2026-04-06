@@ -202,7 +202,7 @@ function createSignalPlugin(
             enabled: true,
             accounts: {
               [accountId]: {
-                signalNumber: input.signalNumber,
+                account: input.signalNumber,
               },
             },
           },
@@ -228,6 +228,11 @@ describe("channelsAddCommand", () => {
   beforeEach(async () => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
+    configMocks.replaceConfigFile
+      .mockReset()
+      .mockImplementation(async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
+      });
     offsetMocks.deleteTelegramUpdateOffset.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
@@ -463,7 +468,7 @@ describe("channelsAddCommand", () => {
             enabled: true,
             accounts: {
               ops: {
-                signalNumber: "+15550001",
+                account: "+15550001",
               },
             },
           },

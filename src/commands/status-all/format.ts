@@ -19,6 +19,43 @@ export type StatusOverviewRow = {
 
 type StatusUpdateLike = UpdateCheckResult;
 
+type StatusGatewayConnection = {
+  url: string;
+  urlSource?: string;
+};
+
+type StatusGatewayProbe = {
+  connectLatencyMs?: number | null;
+  error?: string | null;
+} | null;
+
+type StatusGatewayProbeAuth = {
+  token?: string;
+  password?: string;
+} | null;
+
+type StatusGatewaySelf =
+  | {
+      host?: string | null;
+      ip?: string | null;
+      version?: string | null;
+      platform?: string | null;
+    }
+  | null
+  | undefined;
+
+type StatusManagedService = {
+  label: string;
+  installed: boolean | null;
+  managedByOpenClaw?: boolean;
+  loadedText: string;
+  runtimeShort?: string | null;
+  runtime?: {
+    status?: string | null;
+    pid?: number | null;
+  } | null;
+};
+
 export function resolveStatusUpdateChannelInfo(params: {
   updateConfigChannel?: string | null;
   update: {
@@ -196,51 +233,14 @@ export function buildStatusOverviewSurfaceRows(params: {
   decorateTailscaleWarn?: (value: string) => string;
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
-  gatewayConnection: {
-    url: string;
-    urlSource?: string;
-  };
+  gatewayConnection: StatusGatewayConnection;
   gatewayReachable: boolean;
-  gatewayProbe: {
-    connectLatencyMs?: number | null;
-    error?: string | null;
-  } | null;
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  } | null;
+  gatewayProbe: StatusGatewayProbe;
+  gatewayProbeAuth: StatusGatewayProbeAuth;
   gatewayProbeAuthWarning?: string | null;
-  gatewaySelf:
-    | {
-        host?: string | null;
-        ip?: string | null;
-        version?: string | null;
-        platform?: string | null;
-      }
-    | null
-    | undefined;
-  gatewayService: {
-    label: string;
-    installed: boolean | null;
-    managedByOpenClaw?: boolean;
-    loadedText: string;
-    runtimeShort?: string | null;
-    runtime?: {
-      status?: string | null;
-      pid?: number | null;
-    } | null;
-  };
-  nodeService: {
-    label: string;
-    installed: boolean | null;
-    managedByOpenClaw?: boolean;
-    loadedText: string;
-    runtimeShort?: string | null;
-    runtime?: {
-      status?: string | null;
-      pid?: number | null;
-    } | null;
-  };
+  gatewaySelf: StatusGatewaySelf;
+  gatewayService: StatusManagedService;
+  nodeService: StatusManagedService;
   nodeOnlyGateway?: {
     gatewayValue: string;
   } | null;
@@ -325,17 +325,7 @@ export function formatGatewayAuthUsed(
   return "none";
 }
 
-export function formatGatewaySelfSummary(
-  gatewaySelf:
-    | {
-        host?: string | null;
-        ip?: string | null;
-        version?: string | null;
-        platform?: string | null;
-      }
-    | null
-    | undefined,
-): string | null {
+export function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null {
   return gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
     ? [
         gatewaySelf.host ? gatewaySelf.host : null,
@@ -351,19 +341,10 @@ export function formatGatewaySelfSummary(
 export function buildGatewayStatusSummaryParts(params: {
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
-  gatewayConnection: {
-    url: string;
-    urlSource?: string;
-  };
+  gatewayConnection: StatusGatewayConnection;
   gatewayReachable: boolean;
-  gatewayProbe: {
-    connectLatencyMs?: number | null;
-    error?: string | null;
-  } | null;
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  } | null;
+  gatewayProbe: StatusGatewayProbe;
+  gatewayProbeAuth: StatusGatewayProbeAuth;
 }): {
   targetText: string;
   targetTextWithSource: string;
@@ -401,50 +382,13 @@ export function buildStatusGatewaySurfaceValues(params: {
   cfg: Pick<OpenClawConfig, "gateway">;
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
-  gatewayConnection: {
-    url: string;
-    urlSource?: string;
-  };
+  gatewayConnection: StatusGatewayConnection;
   gatewayReachable: boolean;
-  gatewayProbe: {
-    connectLatencyMs?: number | null;
-    error?: string | null;
-  } | null;
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  } | null;
-  gatewaySelf:
-    | {
-        host?: string | null;
-        ip?: string | null;
-        version?: string | null;
-        platform?: string | null;
-      }
-    | null
-    | undefined;
-  gatewayService: {
-    label: string;
-    installed: boolean | null;
-    managedByOpenClaw?: boolean;
-    loadedText: string;
-    runtimeShort?: string | null;
-    runtime?: {
-      status?: string | null;
-      pid?: number | null;
-    } | null;
-  };
-  nodeService: {
-    label: string;
-    installed: boolean | null;
-    managedByOpenClaw?: boolean;
-    loadedText: string;
-    runtimeShort?: string | null;
-    runtime?: {
-      status?: string | null;
-      pid?: number | null;
-    } | null;
-  };
+  gatewayProbe: StatusGatewayProbe;
+  gatewayProbeAuth: StatusGatewayProbeAuth;
+  gatewaySelf: StatusGatewaySelf;
+  gatewayService: StatusManagedService;
+  nodeService: StatusManagedService;
   nodeOnlyGateway?: {
     gatewayValue: string;
   } | null;

@@ -144,7 +144,10 @@ export function getHoisted(): AttemptSpawnWorkspaceHoisted {
   return hoisted;
 }
 
-vi.mock("@mariozechner/pi-coding-agent", () => {
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
+    "@mariozechner/pi-coding-agent",
+  );
   class AuthStorage {}
   class DefaultResourceLoader {
     async reload() {}
@@ -152,9 +155,12 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
   class ModelRegistry {}
 
   return {
+    ...actual,
     AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
     DefaultResourceLoader,
+    estimateTokens: () => 0,
+    generateSummary: async () => "",
     ModelRegistry,
     SessionManager: {
       open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
@@ -194,12 +200,18 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
   ensureGlobalUndiciStreamTimeouts: () => {},
 }));
 
-vi.mock("../../bootstrap-files.js", () => ({
-  makeBootstrapWarn: () => () => {},
-  resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-  resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
-  hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
-}));
+vi.mock("../../bootstrap-files.js", async () => {
+  const actual = await vi.importActual<typeof import("../../bootstrap-files.js")>(
+    "../../bootstrap-files.js",
+  );
+  return {
+    ...actual,
+    makeBootstrapWarn: () => () => {},
+    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+    resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
+    hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
+  };
+});
 
 vi.mock("../../skills.js", () => ({
   applySkillEnvOverrides: () => () => {},
@@ -223,7 +235,12 @@ vi.mock("../../docs-path.js", () => ({
 }));
 
 vi.mock("../../pi-project-settings.js", () => ({
-  createPreparedEmbeddedPiSettingsManager: () => ({}),
+  createPreparedEmbeddedPiSettingsManager: () => ({
+    getCompactionReserveTokens: () => 0,
+    getCompactionKeepRecentTokens: () => 40_000,
+    applyOverrides: () => {},
+    setCompactionEnabled: () => {},
+  }),
 }));
 
 vi.mock("../../pi-settings.js", () => ({
@@ -263,10 +280,18 @@ vi.mock("../../session-write-lock.js", () => ({
   resolveSessionLockMaxHoldFromTimeout: () => 1,
 }));
 
-vi.mock("../tool-result-context-guard.js", () => ({
-  installToolResultContextGuard: (...args: unknown[]) =>
-    (hoisted.installToolResultContextGuardMock as (...args: unknown[]) => unknown)(...args),
-}));
+vi.mock("../tool-result-context-guard.js", async () => {
+  const actual = await vi.importActual<typeof import("../tool-result-context-guard.js")>(
+    "../tool-result-context-guard.js",
+  );
+  return {
+    ...actual,
+    formatContextLimitTruncationNotice: (truncatedChars: number) =>
+      `[... ${Math.max(1, Math.floor(truncatedChars))} more characters truncated]`,
+    installToolResultContextGuard: (...args: unknown[]) =>
+      (hoisted.installToolResultContextGuardMock as (...args: unknown[]) => unknown)(...args),
+  };
+});
 
 vi.mock("../wait-for-idle-before-flush.js", () => ({
   flushPendingToolResultsAfterIdle: (...args: unknown[]) =>
@@ -637,6 +662,7 @@ export async function cleanupTempPaths(tempPaths: string[]) {
 }
 
 export function createDefaultEmbeddedSession(params?: {
+  initialMessages?: unknown[];
   prompt?: (
     session: MutableSession,
     prompt: string,
@@ -645,7 +671,7 @@ export function createDefaultEmbeddedSession(params?: {
 }): MutableSession {
   const session: MutableSession = {
     sessionId: "embedded-session",
-    messages: [],
+    messages: [...(params?.initialMessages ?? [])],
     isCompacting: false,
     isStreaming: false,
     agent: {
@@ -803,7 +829,7 @@ export async function createContextEngineAttemptRunner(params: {
     .mockReturnValue({ messages: seedMessages });
 
   hoisted.createAgentSessionMock.mockImplementation(async () => ({
-    session: createDefaultEmbeddedSession(),
+    session: createDefaultEmbeddedSession({ initialMessages: seedMessages }),
   }));
 
   return await (

@@ -84,6 +84,11 @@ export function defineImportedCommandGroupSpecs<TRegisterArgs, TModule>(
 }
 
 type ProgramCommandRegistrar = (program: Command) => Promise<void> | void;
+type AnyImportedProgramCommandGroupDefinition = {
+  commandNames: readonly string[];
+  loadModule: () => Promise<Record<string, unknown>>;
+  exportName: string;
+};
 
 export type ImportedProgramCommandGroupDefinition<
   TModule extends Record<TKey, ProgramCommandRegistrar>,
@@ -107,11 +112,18 @@ export function defineImportedProgramCommandGroupSpec<
   );
 }
 
-export function defineImportedProgramCommandGroupSpecs<
-  TModule extends Record<TKey, ProgramCommandRegistrar>,
-  TKey extends keyof TModule & string,
->(
-  definitions: readonly ImportedProgramCommandGroupDefinition<TModule, TKey>[],
+export function defineImportedProgramCommandGroupSpecs(
+  definitions: readonly AnyImportedProgramCommandGroupDefinition[],
 ): CommandGroupDescriptorSpec<(program: Command) => Promise<void>>[] {
-  return definitions.map((definition) => defineImportedProgramCommandGroupSpec(definition));
+  return definitions.map((definition) => ({
+    commandNames: definition.commandNames,
+    register: async (program: Command) => {
+      const module = await definition.loadModule();
+      const register = module[definition.exportName];
+      if (typeof register !== "function") {
+        throw new Error(`Missing program command registrar: ${definition.exportName}`);
+      }
+      await register(program);
+    },
+  }));
 }

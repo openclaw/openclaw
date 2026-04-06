@@ -4,7 +4,7 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard, DmPolicy } from "openclaw/plugin-sdk/setup";
 import {
   createStandardChannelSetupStatus,
   createTopLevelChannelDmPolicy,
@@ -89,7 +89,7 @@ const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   channel,
   policyKey: "channels.nostr.dmPolicy",
   allowFromKey: "channels.nostr.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.nostr?.dmPolicy ?? "pairing",
+  getCurrent: (cfg) => (cfg.channels?.nostr?.dmPolicy as DmPolicy | undefined) ?? "pairing",
   promptAllowFrom: promptNostrAllowFrom,
 });
 
@@ -234,8 +234,8 @@ export const nostrSetupWizard: ChannelSetupWizard = {
       helpLines: ["Use ws:// or wss:// relay URLs.", "Leave blank to keep the default relay set."],
       currentValue: ({ cfg, accountId }) => {
         const account = resolveNostrAccount({ cfg, accountId });
-        const relays =
-          cfg.channels?.nostr?.relays && cfg.channels.nostr.relays.length > 0 ? account.relays : [];
+        const configuredRelays = cfg.channels?.nostr?.relays as string[] | undefined;
+        const relays = configuredRelays && configuredRelays.length > 0 ? account.relays : [];
         return relays.join(", ");
       },
       keepPrompt: (value) => `Relay URLs set (${value}). Keep them?`,

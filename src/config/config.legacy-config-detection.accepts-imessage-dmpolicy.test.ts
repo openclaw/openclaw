@@ -211,7 +211,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { channels: { telegram: { groupMentionsOnly: true } } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.valid).toBe(true);
         expect(
           ctx.snapshot.legacyIssues.some(
             (issue) => issue.path === "channels.telegram.groupMentionsOnly",
@@ -234,7 +234,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { memorySearch: { provider: "local", fallback: "none" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.valid).toBe(true);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
       },
     );
@@ -243,7 +243,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.valid).toBe(true);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
       },
     );
@@ -287,7 +287,7 @@ describe("legacy config detection", () => {
     await withSnapshotForConfig(
       { memorySearch: { provider: "local", fallback: "none" } },
       async (ctx) => {
-        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.valid).toBe(true);
         expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
       },
     );

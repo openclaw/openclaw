@@ -3080,6 +3080,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              mediaGenerationAutoProviderFallback: {
+                type: "boolean",
+                title: "Media Generation Auto Provider Fallback",
+                description:
+                  "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -24995,6 +25001,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Ordered fallback music-generation models (provider/model).",
       tags: ["reliability"],
     },
+    "agents.defaults.mediaGenerationAutoProviderFallback": {
+      label: "Media Generation Auto Provider Fallback",
+      help: "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
+      tags: ["reliability"],
+    },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",
       help: "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
@@ -26839,6 +26850,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.5",
+  version: "2026.4.6",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

@@ -5,6 +5,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildNoCapabilityModelConfiguredMessage,
+  deriveAspectRatioFromSize,
+  resolveClosestAspectRatio,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
@@ -96,7 +98,20 @@ function resolveProviderVideoGenerationOverrides(params: {
   }
 
   if (size && !caps.supportsSize) {
-    ignoredOverrides.push({ key: "size", value: size });
+    let translated = false;
+    if (caps.supportsAspectRatio) {
+      const normalizedAspectRatio = resolveClosestAspectRatio({
+        requestedAspectRatio: aspectRatio,
+        requestedSize: size,
+      });
+      if (normalizedAspectRatio) {
+        aspectRatio = normalizedAspectRatio;
+        translated = true;
+      }
+    }
+    if (!translated) {
+      ignoredOverrides.push({ key: "size", value: size });
+    }
     size = undefined;
   }
 
@@ -138,6 +153,8 @@ export async function generateVideo(
     modelConfig: params.cfg.agents?.defaults?.videoGenerationModel,
     modelOverride: params.modelOverride,
     parseModelRef: parseVideoGenerationModelRef,
+    agentDir: params.agentDir,
+    listProviders: listVideoGenerationProviders,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoVideoGenerationModelConfiguredMessage(params.cfg));
@@ -212,17 +229,39 @@ export async function generateVideo(
         model: result.model ?? candidate.model,
         attempts,
         ignoredOverrides: sanitized.ignoredOverrides,
-        metadata:
-          typeof requestedDurationSeconds === "number" &&
+        metadata: {
+          ...result.metadata,
+          ...((params.size && sanitized.aspectRatio && params.size !== sanitized.size) ||
+          (params.aspectRatio &&
+            sanitized.aspectRatio &&
+            params.aspectRatio !== sanitized.aspectRatio)
+            ? {
+                ...(params.size ? { requestedSize: params.size } : {}),
+                ...(params.aspectRatio ? { requestedAspectRatio: params.aspectRatio } : {}),
+                normalizedAspectRatio: sanitized.aspectRatio,
+                ...(params.size
+                  ? { aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size) }
+                  : {}),
+              }
+            : {}),
+          ...(params.resolution &&
+          sanitized.resolution &&
+          params.resolution !== sanitized.resolution
+            ? {
+                requestedResolution: params.resolution,
+                normalizedResolution: sanitized.resolution,
+              }
+            : {}),
+          ...(typeof requestedDurationSeconds === "number" &&
           typeof normalizedDurationSeconds === "number" &&
           requestedDurationSeconds !== normalizedDurationSeconds
             ? {
-                ...result.metadata,
                 requestedDurationSeconds,
                 normalizedDurationSeconds,
                 ...(supportedDurationSeconds ? { supportedDurationSeconds } : {}),
               }
-            : result.metadata,
+            : {}),
+        },
       };
     } catch (err) {
       lastError = err;

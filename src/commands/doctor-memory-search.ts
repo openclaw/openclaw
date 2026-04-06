@@ -25,6 +25,7 @@ import {
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
 
 function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
@@ -38,13 +39,6 @@ type RuntimeMemoryAuditContext = {
   dbPath?: string;
   qmdCollections?: number;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 async function resolveRuntimeMemoryAuditContext(
   cfg: OpenClawConfig,
@@ -61,7 +55,8 @@ async function resolveRuntimeMemoryAuditContext(
   }
   try {
     const status = manager.status();
-    const customQmd = asRecord(asRecord(status.custom)?.qmd);
+    const customQmd =
+      isRecord(status.custom) && isRecord(status.custom.qmd) ? status.custom.qmd : null;
     return {
       workspaceDir: status.workspaceDir?.trim(),
       backend: status.backend,

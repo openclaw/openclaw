@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
+import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
@@ -97,28 +98,6 @@ const MANAGED_DAILY_DREAMING_BLOCKS = [
     endMarker: "<!-- openclaw:dreaming:rem:end -->",
   },
 ] as const;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function formatErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
 
 function buildCronDescription(params: {
   tag: string;

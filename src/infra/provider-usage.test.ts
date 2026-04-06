@@ -295,7 +295,6 @@ describe("provider usage loading", () => {
           providers: ["anthropic"],
           agentDir,
           fetch: mockFetch as unknown as typeof fetch,
-          config: { plugins: { enabled: false } },
         });
 
         const claude = expectSingleAnthropicProvider(summary);

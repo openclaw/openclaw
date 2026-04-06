@@ -254,12 +254,28 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 1,
-      maxDurationSeconds: 15,
-      supportsAspectRatio: true,
-      supportsResolution: true,
+      generate: {
+        maxVideos: 1,
+        maxDurationSeconds: 15,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        maxDurationSeconds: 15,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      videoToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputVideos: 1,
+        maxDurationSeconds: 15,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
     },
     async generateVideo(req) {
       const auth = await resolveApiKeyForProvider({

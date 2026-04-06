@@ -11,7 +11,6 @@ import {
   resolveVideoGenerationMode,
   resolveVideoGenerationModeCapabilities,
 } from "../../video-generation/capabilities.js";
-import { resolveVideoGenerationSupportedDurations } from "../../video-generation/duration-support.js";
 import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
 import {
   generateVideo,
@@ -124,7 +123,7 @@ const VideoGenerateToolSchema = Type.Object({
   ),
   resolution: Type.Optional(
     Type.String({
-      description: "Optional resolution hint: 480P, 720P, or 1080P.",
+      description: "Optional resolution hint: 480P, 720P, 768P, or 1080P.",
     }),
   ),
   durationSeconds: Type.Optional(
@@ -175,10 +174,15 @@ function normalizeResolution(raw: string | undefined): VideoGenerationResolution
   if (!normalized) {
     return undefined;
   }
-  if (normalized === "480P" || normalized === "720P" || normalized === "1080P") {
+  if (
+    normalized === "480P" ||
+    normalized === "720P" ||
+    normalized === "768P" ||
+    normalized === "1080P"
+  ) {
     return normalized;
   }
-  throw new ToolInputError("resolution must be one of 480P, 720P, or 1080P");
+  throw new ToolInputError("resolution must be one of 480P, 720P, 768P, or 1080P");
 }
 
 function normalizeAspectRatio(raw: string | undefined): string | undefined {
@@ -281,6 +285,12 @@ function validateVideoGenerationCapabilities(params: {
     inputImageCount: params.inputImageCount,
     inputVideoCount: params.inputVideoCount,
   });
+  if (!caps && mode === "imageToVideo" && params.inputVideoCount === 0) {
+    throw new ToolInputError(`${provider.id} does not support image-to-video reference inputs.`);
+  }
+  if (!caps && mode === "videoToVideo" && params.inputImageCount === 0) {
+    throw new ToolInputError(`${provider.id} does not support video-to-video reference inputs.`);
+  }
   if (!caps) {
     return;
   }
@@ -315,22 +325,6 @@ function validateVideoGenerationCapabilities(params: {
         `${provider.id} supports at most ${maxInputVideos} reference video${maxInputVideos === 1 ? "" : "s"}.`,
       );
     }
-  }
-  if (
-    typeof params.durationSeconds === "number" &&
-    Number.isFinite(params.durationSeconds) &&
-    !resolveVideoGenerationSupportedDurations({
-      provider,
-      model: params.model,
-      inputImageCount: params.inputImageCount,
-      inputVideoCount: params.inputVideoCount,
-    }) &&
-    typeof caps.maxDurationSeconds === "number" &&
-    params.durationSeconds > caps.maxDurationSeconds
-  ) {
-    throw new ToolInputError(
-      `${provider.id} supports at most ${caps.maxDurationSeconds} seconds per video.`,
-    );
   }
 }
 
@@ -555,6 +549,25 @@ async function executeVideoGenerationJob(params: {
         (entry): entry is number => typeof entry === "number" && Number.isFinite(entry),
       )
     : undefined;
+  const normalizedSize =
+    typeof result.metadata?.normalizedSize === "string" && result.metadata.normalizedSize.trim()
+      ? result.metadata.normalizedSize
+      : undefined;
+  const normalizedAspectRatio =
+    typeof result.metadata?.normalizedAspectRatio === "string" &&
+    result.metadata.normalizedAspectRatio.trim()
+      ? result.metadata.normalizedAspectRatio
+      : undefined;
+  const normalizedResolution =
+    typeof result.metadata?.normalizedResolution === "string" &&
+    result.metadata.normalizedResolution.trim()
+      ? result.metadata.normalizedResolution
+      : undefined;
+  const sizeTranslatedToAspectRatio =
+    !normalizedSize &&
+    typeof result.metadata?.requestedSize === "string" &&
+    result.metadata.requestedSize === params.size &&
+    Boolean(normalizedAspectRatio);
   const lines = [
     `Generated ${savedVideos.length} video${savedVideos.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
@@ -618,12 +631,15 @@ async function executeVideoGenerationJob(params: {
               })),
             }
           : {}),
-      ...(!ignoredOverrideKeys.has("size") && params.size ? { size: params.size } : {}),
-      ...(!ignoredOverrideKeys.has("aspectRatio") && params.aspectRatio
-        ? { aspectRatio: params.aspectRatio }
+      ...(normalizedSize ||
+      (!ignoredOverrideKeys.has("size") && params.size && !sizeTranslatedToAspectRatio)
+        ? { size: normalizedSize ?? params.size }
         : {}),
-      ...(!ignoredOverrideKeys.has("resolution") && params.resolution
-        ? { resolution: params.resolution }
+      ...(normalizedAspectRatio || (!ignoredOverrideKeys.has("aspectRatio") && params.aspectRatio)
+        ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
+        : {}),
+      ...(normalizedResolution || (!ignoredOverrideKeys.has("resolution") && params.resolution)
+        ? { resolution: normalizedResolution ?? params.resolution }
         : {}),
       ...(typeof normalizedDurationSeconds === "number"
         ? { durationSeconds: normalizedDurationSeconds }

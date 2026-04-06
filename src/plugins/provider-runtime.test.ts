@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/types.js";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -17,10 +18,13 @@ import type {
 } from "./types.js";
 
 type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProviders;
+type IsPluginProvidersLoadInFlight =
+  typeof import("./providers.runtime.js").isPluginProvidersLoadInFlight;
 type ResolveCatalogHookProviderPluginIds =
   typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
+const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
 const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProviderPluginIds>(
   (_) => [] as string[],
 );
@@ -231,6 +235,8 @@ describe("provider-runtime", () => {
     }));
     vi.doMock("./providers.runtime.js", () => ({
       resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+      isPluginProvidersLoadInFlight: (params: unknown) =>
+        isPluginProvidersLoadInFlightMock(params as never),
     }));
     ({
       augmentModelCatalogWithProviderPlugins,
@@ -283,6 +289,8 @@ describe("provider-runtime", () => {
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
+    isPluginProvidersLoadInFlightMock.mockReset();
+    isPluginProvidersLoadInFlightMock.mockReturnValue(false);
     resolveCatalogHookProviderPluginIdsMock.mockReset();
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue([]);
   });
@@ -1279,5 +1287,108 @@ describe("provider-runtime", () => {
         cache: false,
       }),
     );
+  });
+
+  it("does not stack-overflow when provider hook resolution reenters the same plugin load", () => {
+    let providerLoadInFlight = false;
+    isPluginProvidersLoadInFlightMock.mockImplementation(() => providerLoadInFlight);
+    resolvePluginProvidersMock.mockImplementation(() => {
+      providerLoadInFlight = true;
+      try {
+        const reentrantResult = normalizeProviderConfigWithPlugin({
+          provider: "reentrant-provider",
+          context: {
+            provider: "reentrant-provider",
+            providerConfig: {
+              baseUrl: "https://example.com",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        });
+        expect(reentrantResult).toBeUndefined();
+        return [];
+      } finally {
+        providerLoadInFlight = false;
+      }
+    });
+
+    const result = normalizeProviderConfigWithPlugin({
+      provider: "demo",
+      context: {
+        provider: "demo",
+        providerConfig: { baseUrl: "https://example.com", api: "openai-completions", models: [] },
+      },
+    });
+
+    expect(result).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps cached provider hook results available during a nested provider load", () => {
+    const cachedNormalizedConfig: ModelProviderConfig = {
+      baseUrl: "https://cached.example.com",
+      api: "openai-completions",
+      models: [],
+    };
+    let providerLoadInFlight = false;
+    isPluginProvidersLoadInFlightMock.mockImplementation(() => providerLoadInFlight);
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      const providerRef = params?.providerRefs?.[0];
+      if (providerRef === "cached-provider") {
+        return [
+          {
+            id: "cached-provider",
+            label: "Cached Provider",
+            auth: [],
+            normalizeConfig: () => cachedNormalizedConfig,
+          },
+        ];
+      }
+      providerLoadInFlight = true;
+      try {
+        const reentrantResult = normalizeProviderConfigWithPlugin({
+          provider: "cached-provider",
+          context: {
+            provider: "cached-provider",
+            providerConfig: {
+              baseUrl: "https://example.com",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        });
+        expect(reentrantResult).toBe(cachedNormalizedConfig);
+        return [];
+      } finally {
+        providerLoadInFlight = false;
+      }
+    });
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "cached-provider",
+        context: {
+          provider: "cached-provider",
+          providerConfig: { baseUrl: "https://example.com", api: "openai-completions", models: [] },
+        },
+      }),
+    ).toBe(cachedNormalizedConfig);
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "outer-provider",
+        context: {
+          provider: "outer-provider",
+          providerConfig: {
+            baseUrl: "https://outer.example.com",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      }),
+    ).toBeUndefined();
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(3);
   });
 });

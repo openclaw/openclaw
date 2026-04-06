@@ -5,6 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -13,7 +14,10 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
-import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
+import {
+  collectRelevantDoctorPluginIds,
+  listPluginDoctorLegacyConfigRules,
+} from "../plugins/doctor-contract-registry.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
@@ -50,6 +54,7 @@ import {
   setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
   setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
 } from "./runtime-snapshot.js";
+import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -69,29 +74,7 @@ export {
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
 export { MissingEnvVarError } from "./env-substitution.js";
-
-const SHELL_ENV_EXPECTED_KEYS = [
-  "OPENAI_API_KEY",
-  "ANTHROPIC_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "ANTHROPIC_OAUTH_TOKEN",
-  "GEMINI_API_KEY",
-  "ZAI_API_KEY",
-  "OPENROUTER_API_KEY",
-  "AI_GATEWAY_API_KEY",
-  "MINIMAX_API_KEY",
-  "QWEN_API_KEY",
-  "MODELSTUDIO_API_KEY",
-  "SYNTHETIC_API_KEY",
-  "KILOCODE_API_KEY",
-  "ELEVENLABS_API_KEY",
-  "TELEGRAM_BOT_TOKEN",
-  "DISCORD_BOT_TOKEN",
-  "SLACK_BOT_TOKEN",
-  "SLACK_APP_TOKEN",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PASSWORD",
-];
+export { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 
 const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
@@ -1640,12 +1623,20 @@ function resolveLegacyConfigForRead(
   resolvedConfigRaw: unknown,
   sourceRaw: unknown,
 ): LegacyMigrationResolution {
+  const pluginIds = collectRelevantDoctorPluginIds(resolvedConfigRaw);
   const sourceLegacyIssues = findLegacyConfigIssues(
     resolvedConfigRaw,
     sourceRaw,
-    listPluginDoctorLegacyConfigRules(),
+    listPluginDoctorLegacyConfigRules({ pluginIds }),
   );
-  return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
+  if (!resolvedConfigRaw || typeof resolvedConfigRaw !== "object") {
+    return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
+  }
+  const compat = applyRuntimeLegacyConfigMigrations(resolvedConfigRaw);
+  return {
+    effectiveConfigRaw: compat.next ?? resolvedConfigRaw,
+    sourceLegacyIssues,
+  };
 }
 
 type ReadConfigFileSnapshotInternalResult = {
@@ -1710,7 +1701,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           loadShellEnvFallback({
             enabled: true,
             env: deps.env,
-            expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+            expectedKeys: resolveShellEnvExpectedKeys(deps.env),
             logger: deps.logger,
             timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
           });
@@ -1840,7 +1831,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         loadShellEnvFallback({
           enabled: true,
           env: deps.env,
-          expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+          expectedKeys: resolveShellEnvExpectedKeys(deps.env),
           logger: deps.logger,
           timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(deps.env),
         });
@@ -1993,7 +1984,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
       const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
-
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {

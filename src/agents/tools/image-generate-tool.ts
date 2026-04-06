@@ -615,6 +615,25 @@ export function createImageGenerateTool(options?: {
         ignoredOverrides.length > 0
           ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredImageGenerationOverride).join(", ")}.`
           : undefined;
+      const normalizedSize =
+        typeof result.metadata?.normalizedSize === "string" && result.metadata.normalizedSize.trim()
+          ? result.metadata.normalizedSize
+          : undefined;
+      const normalizedAspectRatio =
+        typeof result.metadata?.normalizedAspectRatio === "string" &&
+        result.metadata.normalizedAspectRatio.trim()
+          ? result.metadata.normalizedAspectRatio
+          : undefined;
+      const normalizedResolution =
+        typeof result.metadata?.normalizedResolution === "string" &&
+        result.metadata.normalizedResolution.trim()
+          ? result.metadata.normalizedResolution
+          : undefined;
+      const sizeTranslatedToAspectRatio =
+        !normalizedSize &&
+        typeof result.metadata?.requestedSize === "string" &&
+        result.metadata.requestedSize === size &&
+        Boolean(normalizedAspectRatio);
 
       const savedImages = await Promise.all(
         result.images.map((image) =>
@@ -664,9 +683,15 @@ export function createImageGenerateTool(options?: {
                   })),
                 }
               : {}),
-          ...(resolution ? { resolution } : {}),
-          ...(size ? { size } : {}),
-          ...(aspectRatio ? { aspectRatio } : {}),
+          ...(normalizedResolution || resolution
+            ? { resolution: normalizedResolution ?? resolution }
+            : {}),
+          ...(normalizedSize || (size && !sizeTranslatedToAspectRatio)
+            ? { size: normalizedSize ?? size }
+            : {}),
+          ...(normalizedAspectRatio || aspectRatio
+            ? { aspectRatio: normalizedAspectRatio ?? aspectRatio }
+            : {}),
           ...(filename ? { filename } : {}),
           attempts: result.attempts,
           metadata: result.metadata,

@@ -1,8 +1,5 @@
+import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./config.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function resolvePluginWebSearchConfig(
   config: OpenClawConfig | undefined,

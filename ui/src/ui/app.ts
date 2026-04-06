@@ -1,5 +1,5 @@
 import { LitElement } from "lit";
-import { customElement, state } from "lit/decorators.js";
+import { state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -121,7 +121,6 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-@customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
   clientInstanceId = generateUUID();
@@ -783,4 +782,8 @@ export class OpenClawApp extends LitElement {
   render() {
     return renderApp(this as unknown as AppViewState);
   }
+}
+
+if (!customElements.get("openclaw-app")) {
+  customElements.define("openclaw-app", OpenClawApp);
 }

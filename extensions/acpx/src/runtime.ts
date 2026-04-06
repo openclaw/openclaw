@@ -15,24 +15,27 @@ import {
 } from "acpx/runtime";
 import type { AcpRuntime } from "../runtime-api.js";
 
-type AcpSessionRecord = Record<string, unknown> & {
-  name?: string;
-};
-
-type AcpSessionStore = {
-  load(sessionId: string): Promise<AcpSessionRecord | undefined>;
-  save(record: AcpSessionRecord): Promise<void>;
-};
+type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
+type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
+type AcpLoadedSessionRecord = Awaited<ReturnType<AcpSessionStore["load"]>>;
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
 };
 
+function readSessionRecordName(record: AcpSessionRecord): string {
+  if (typeof record !== "object" || record === null) {
+    return "";
+  }
+  const { name } = record as { name?: unknown };
+  return typeof name === "string" ? name.trim() : "";
+}
+
 function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSessionStore {
   const freshSessionKeys = new Set<string>();
 
   return {
-    async load(sessionId: string): Promise<AcpSessionRecord | undefined> {
+    async load(sessionId: string): Promise<AcpLoadedSessionRecord> {
       const normalized = sessionId.trim();
       if (normalized && freshSessionKeys.has(normalized)) {
         return undefined;
@@ -41,7 +44,7 @@ function createResetAwareSessionStore(baseStore: AcpSessionStore): ResetAwareSes
     },
     async save(record: AcpSessionRecord): Promise<void> {
       await baseStore.save(record);
-      const sessionName = typeof record.name === "string" ? record.name.trim() : "";
+      const sessionName = readSessionRecordName(record);
       if (sessionName) {
         freshSessionKeys.delete(sessionName);
       }

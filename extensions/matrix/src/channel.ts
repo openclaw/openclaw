@@ -28,6 +28,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
 import { MatrixConfigSchema } from "./config-schema.js";
@@ -69,22 +70,6 @@ import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
-
-function chunkTextForOutbound(text: string, limit: number): string[] {
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > limit) {
-    const window = remaining.slice(0, limit);
-    const splitAt = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
-    const breakAt = splitAt > 0 ? splitAt : limit;
-    chunks.push(remaining.slice(0, breakAt).trimEnd());
-    remaining = remaining.slice(breakAt).trimStart();
-  }
-  if (remaining.length > 0 || text.length === 0) {
-    chunks.push(remaining);
-  }
-  return chunks;
-}
 
 const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -141,6 +126,29 @@ const listMatrixDirectoryGroupsFromConfig =
       return raw.startsWith("!") ? `room:${raw}` : raw;
     },
   });
+
+function projectMatrixConversationBinding(binding: {
+  boundAt: number;
+  metadata?: {
+    lastActivityAt?: number;
+    idleTimeoutMs?: number;
+    maxAgeMs?: number;
+  };
+}) {
+  return {
+    boundAt: binding.boundAt,
+    lastActivityAt:
+      typeof binding.metadata?.lastActivityAt === "number"
+        ? binding.metadata.lastActivityAt
+        : binding.boundAt,
+    idleTimeoutMs:
+      typeof binding.metadata?.idleTimeoutMs === "number"
+        ? binding.metadata.idleTimeoutMs
+        : undefined,
+    maxAgeMs:
+      typeof binding.metadata?.maxAgeMs === "number" ? binding.metadata.maxAgeMs : undefined,
+  };
+}
 
 const matrixConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedMatrixAccount,
@@ -367,41 +375,13 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             targetSessionKey,
             accountId: accountId ?? "",
             idleTimeoutMs,
-          }).map((binding) => ({
-            boundAt: binding.boundAt,
-            lastActivityAt:
-              typeof binding.metadata?.lastActivityAt === "number"
-                ? binding.metadata.lastActivityAt
-                : binding.boundAt,
-            idleTimeoutMs:
-              typeof binding.metadata?.idleTimeoutMs === "number"
-                ? binding.metadata.idleTimeoutMs
-                : undefined,
-            maxAgeMs:
-              typeof binding.metadata?.maxAgeMs === "number"
-                ? binding.metadata.maxAgeMs
-                : undefined,
-          })),
+          }).map(projectMatrixConversationBinding),
         setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
           setMatrixThreadBindingMaxAgeBySessionKey({
             targetSessionKey,
             accountId: accountId ?? "",
             maxAgeMs,
-          }).map((binding) => ({
-            boundAt: binding.boundAt,
-            lastActivityAt:
-              typeof binding.metadata?.lastActivityAt === "number"
-                ? binding.metadata.lastActivityAt
-                : binding.boundAt,
-            idleTimeoutMs:
-              typeof binding.metadata?.idleTimeoutMs === "number"
-                ? binding.metadata.idleTimeoutMs
-                : undefined,
-            maxAgeMs:
-              typeof binding.metadata?.maxAgeMs === "number"
-                ? binding.metadata.maxAgeMs
-                : undefined,
-          })),
+          }).map(projectMatrixConversationBinding),
       },
       messaging: {
         normalizeTarget: normalizeMatrixMessagingTarget,

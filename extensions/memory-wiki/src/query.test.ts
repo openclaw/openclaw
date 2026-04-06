@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
@@ -15,11 +16,35 @@ vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
 }));
 
 const { createVault } = createMemoryWikiTestHarness();
+let suiteRoot = "";
+let caseIndex = 0;
 
 beforeEach(() => {
   getActiveMemorySearchManagerMock.mockReset();
   getActiveMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "unavailable" });
 });
+
+beforeAll(async () => {
+  suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-query-suite-"));
+});
+
+afterAll(async () => {
+  if (suiteRoot) {
+    await fs.rm(suiteRoot, { recursive: true, force: true });
+  }
+});
+
+async function createQueryVault(options?: {
+  config?: Parameters<typeof createVault>[0]["config"];
+  initialize?: boolean;
+}) {
+  return createVault({
+    prefix: "memory-wiki-query-",
+    rootDir: path.join(suiteRoot, `case-${caseIndex++}`),
+    initialize: options?.initialize,
+    config: options?.config,
+  });
+}
 
 function createAppConfig(): OpenClawConfig {
   return {
@@ -58,8 +83,7 @@ function createMemoryManager(overrides?: {
 
 describe("searchMemoryWiki", () => {
   it("finds wiki pages by title and body", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
     });
     await fs.writeFile(
@@ -80,8 +104,7 @@ describe("searchMemoryWiki", () => {
   });
 
   it("surfaces bridge provenance for imported source pages", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
     });
     await fs.writeFile(
@@ -115,8 +138,7 @@ describe("searchMemoryWiki", () => {
   });
 
   it("includes active memory results when shared search and all corpora are enabled", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "shared", corpus: "all" },
@@ -159,8 +181,7 @@ describe("searchMemoryWiki", () => {
   });
 
   it("allows per-call corpus overrides without changing config defaults", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "shared", corpus: "wiki" },
@@ -201,8 +222,7 @@ describe("searchMemoryWiki", () => {
   });
 
   it("keeps memory search disabled when the backend is local", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "local", corpus: "all" },
@@ -244,8 +264,7 @@ describe("searchMemoryWiki", () => {
 
 describe("getMemoryWikiPage", () => {
   it("reads wiki pages by relative path and slices line ranges", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
     });
     await fs.writeFile(
@@ -272,8 +291,7 @@ describe("getMemoryWikiPage", () => {
   });
 
   it("returns provenance for imported wiki source pages", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
     });
     await fs.writeFile(
@@ -312,8 +330,7 @@ describe("getMemoryWikiPage", () => {
   });
 
   it("falls back to active memory reads when memory corpus is selected", async () => {
-    const { config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "shared", corpus: "memory" },
@@ -352,8 +369,7 @@ describe("getMemoryWikiPage", () => {
   });
 
   it("allows per-call get overrides to bypass wiki and force memory fallback", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-query-",
+    const { rootDir, config } = await createQueryVault({
       initialize: true,
       config: {
         search: { backend: "shared", corpus: "wiki" },

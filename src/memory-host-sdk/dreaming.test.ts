@@ -55,7 +55,7 @@ describe("memory dreaming host helpers", () => {
     });
 
     expect(resolved.enabled).toBe(true);
-    expect(resolved.frequency).toBe("0 3 * * *");
+    expect(resolved.frequency).toBe("0 */4 * * *");
     expect(resolved.timezone).toBe("Europe/London");
     expect(resolved.storage).toEqual({
       mode: "both",

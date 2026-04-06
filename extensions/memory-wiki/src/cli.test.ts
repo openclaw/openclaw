@@ -1,14 +1,27 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWikiCli } from "./cli.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+let suiteRoot = "";
+let caseIndex = 0;
 
 describe("memory-wiki cli", () => {
+  beforeAll(async () => {
+    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-cli-suite-"));
+  });
+
+  afterAll(async () => {
+    if (suiteRoot) {
+      await fs.rm(suiteRoot, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(() => {
     vi.spyOn(process.stdout, "write").mockImplementation(
       (() => true) as typeof process.stdout.write,
@@ -21,8 +34,20 @@ describe("memory-wiki cli", () => {
     process.exitCode = undefined;
   });
 
+  async function createCliVault(options?: {
+    config?: Parameters<typeof createVault>[0]["config"];
+    initialize?: boolean;
+  }) {
+    return createVault({
+      prefix: "memory-wiki-cli-",
+      rootDir: path.join(suiteRoot, `case-${caseIndex++}`),
+      initialize: options?.initialize,
+      config: options?.config,
+    });
+  }
+
   it("registers apply synthesis and writes a synthesis page", async () => {
-    const { rootDir, config } = await createVault({ prefix: "memory-wiki-cli-" });
+    const { rootDir, config } = await createCliVault();
     const program = new Command();
     program.name("test");
     registerWikiCli(program, config);
@@ -52,8 +77,7 @@ describe("memory-wiki cli", () => {
   });
 
   it("registers apply metadata and preserves the page body", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-cli-",
+    const { rootDir, config } = await createCliVault({
       initialize: true,
     });
     await fs.writeFile(
@@ -113,8 +137,7 @@ cli note
   });
 
   it("runs wiki doctor and sets a non-zero exit code when warnings exist", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-cli-",
+    const { rootDir, config } = await createCliVault({
       config: {
         obsidian: { enabled: true, useOfficialCli: true },
       },

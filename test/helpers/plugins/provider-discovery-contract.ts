@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ModelDefinitionConfig } from "../../../src/config/types.models.js";
-import { registerProviders, requireProvider } from "../../../src/plugins/contracts/testkit.js";
+import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());

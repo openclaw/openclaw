@@ -86,6 +86,7 @@ import { deliverDiscordReply } from "./reply-delivery.js";
 
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
+let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
 let replyPipelineRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
   | undefined;

@@ -11,7 +11,6 @@ import type { CliBackendConfig } from "../../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
-import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
@@ -27,6 +26,11 @@ import { sanitizeImageBlocks } from "../tool-images.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
+
+function isClaudeCliProvider(providerId: string): boolean {
+  return providerId.trim().toLowerCase() === "claude-cli";
+}
+
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   return CLI_RUN_QUEUE.enqueue(key, task);
 }

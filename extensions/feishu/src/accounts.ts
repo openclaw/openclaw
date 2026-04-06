@@ -15,13 +15,12 @@ import type {
   ResolvedFeishuAccount,
 } from "./types.js";
 
-const {
-  _listConfiguredAccountIds,
-  listAccountIds: listFeishuAccountIds,
-  resolveDefaultAccountId,
-} = createAccountListHelpers("feishu", {
-  allowUnlistedDefaultAccount: true,
-});
+const { listAccountIds: listFeishuAccountIds, resolveDefaultAccountId } = createAccountListHelpers(
+  "feishu",
+  {
+    allowUnlistedDefaultAccount: true,
+  },
+);
 
 export { listFeishuAccountIds };
 

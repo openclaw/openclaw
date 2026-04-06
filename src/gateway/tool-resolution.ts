@@ -14,6 +14,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -88,10 +89,8 @@ export function resolveGatewayScopedTools(params: {
   });
 
   const policyFiltered = applyToolPolicyPipeline({
-    // oxlint-disable-next-line typescript/no-explicit-any
-    tools: allTools as any,
-    // oxlint-disable-next-line typescript/no-explicit-any
-    toolMeta: (tool) => getPluginToolMeta(tool as any),
+    tools: allTools,
+    toolMeta: (tool: AnyAgentTool) => getPluginToolMeta(tool),
     warn: logWarn,
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({

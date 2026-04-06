@@ -437,7 +437,7 @@ export async function sendChannelMessage(
   channelId: string,
   content: string,
   msgId?: string,
-): Promise<{ id: string; timestamp: string }> {
+): Promise<MessageResponse> {
   return apiRequest(accessToken, "POST", `/channels/${channelId}/messages`, {
     content,
     ...(msgId ? { msg_id: msgId } : {}),
@@ -499,9 +499,11 @@ export async function sendProactiveGroupMessage(
   accessToken: string,
   groupOpenid: string,
   content: string,
-): Promise<{ id: string; timestamp: string }> {
+): Promise<MessageResponse> {
   const body = buildProactiveMessageBody(appId, content);
-  return apiRequest(accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, body);
+  return sendAndNotify(appId, accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, body, {
+    text: content,
+  });
 }
 
 // Rich media message support.

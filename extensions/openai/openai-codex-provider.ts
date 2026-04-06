@@ -24,9 +24,11 @@ import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import { CODEX_CLI_PROFILE_ID, readOpenAICodexCliOAuthProfile } from "./openai-codex-cli-auth.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
+  buildOpenAISyntheticCatalogEntry,
   cloneFirstTemplateModel,
   findCatalogTemplate,
   isOpenAIApiBaseUrl,
+  isOpenAICodexBaseUrl,
   matchesExactOrPrefix,
 } from "./shared.js";
 import {
@@ -82,14 +84,6 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
 const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks("openai-responses-defaults");
-
-function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
-}
 
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
   const useCodexTransport =
@@ -240,30 +234,6 @@ function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
   return "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.";
 }
 
-function buildSyntheticCatalogEntry(
-  template: ReturnType<typeof findCatalogTemplate>,
-  entry: {
-    id: string;
-    reasoning: boolean;
-    input: readonly ("text" | "image")[];
-    contextWindow: number;
-    contextTokens?: number;
-  },
-) {
-  if (!template) {
-    return undefined;
-  }
-  return {
-    ...template,
-    id: entry.id,
-    name: entry.id,
-    reasoning: entry.reasoning,
-    input: [...entry.input],
-    contextWindow: entry.contextWindow,
-    ...(entry.contextTokens === undefined ? {} : { contextTokens: entry.contextTokens }),
-  };
-}
-
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
   return {
     id: PROVIDER_ID,
@@ -354,20 +324,20 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         templateIds: [OPENAI_CODEX_GPT_53_MODEL_ID, ...OPENAI_CODEX_TEMPLATE_MODEL_IDS],
       });
       return [
-        buildSyntheticCatalogEntry(gpt54Template, {
+        buildOpenAISyntheticCatalogEntry(gpt54Template, {
           id: OPENAI_CODEX_GPT_54_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
           contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
         }),
-        buildSyntheticCatalogEntry(gpt54MiniTemplate, {
+        buildOpenAISyntheticCatalogEntry(gpt54MiniTemplate, {
           id: OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_CODEX_GPT_54_MINI_CONTEXT_TOKENS,
         }),
-        buildSyntheticCatalogEntry(sparkTemplate, {
+        buildOpenAISyntheticCatalogEntry(sparkTemplate, {
           id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
           reasoning: true,
           input: ["text"],

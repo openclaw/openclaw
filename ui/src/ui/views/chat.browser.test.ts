@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import "../../styles.css";
+import "../../test-helpers/load-styles.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 
 const contextNoticeSessions: ChatProps["sessions"] = {
@@ -119,9 +119,8 @@ describe("chat context notice", () => {
       return;
     }
 
-    const iconStyle = getComputedStyle(icon);
-    expect(iconStyle.width).toBe("16px");
-    expect(iconStyle.height).toBe("16px");
+    expect(icon.getAttribute("width")).toBe("16");
+    expect(icon.getAttribute("height")).toBe("16");
     expect(icon.getBoundingClientRect().width).toBeLessThan(24);
   });
 });

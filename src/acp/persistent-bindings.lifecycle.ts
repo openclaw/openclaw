@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
-import { resolveAcpAgentFromSessionKey } from "./control-plane/manager.utils.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
 import {
   buildConfiguredAcpSessionKey,
@@ -176,14 +175,6 @@ export async function resetAcpSessionInPlace(params: {
   }
 
   const acpManager = getAcpSessionManager();
-  const agent =
-    normalizeText(meta.agent) ??
-    configuredBinding?.acpAgentId ??
-    configuredBinding?.agentId ??
-    resolveAcpAgentFromSessionKey(sessionKey, "main");
-  const mode = meta.mode === "oneshot" ? "oneshot" : "persistent";
-  const runtimeOptions = { ...meta.runtimeOptions };
-  const cwd = normalizeText(runtimeOptions.cwd ?? meta.cwd);
 
   try {
     await acpManager.closeSession({
@@ -196,25 +187,9 @@ export async function resetAcpSessionInPlace(params: {
       requireAcpSession: false,
     });
 
-    await acpManager.initializeSession({
-      cfg: params.cfg,
-      sessionKey,
-      agent,
-      mode,
-      cwd,
-      backendId: normalizeText(meta.backend) ?? normalizeText(params.cfg.acp?.backend),
-    });
-
-    const runtimeOptionsPatch = Object.fromEntries(
-      Object.entries(runtimeOptions).filter(([, value]) => value !== undefined),
-    ) as SessionAcpMeta["runtimeOptions"];
-    if (runtimeOptionsPatch && Object.keys(runtimeOptionsPatch).length > 0) {
-      await acpManager.updateSessionRuntimeOptions({
-        cfg: params.cfg,
-        sessionKey,
-        patch: runtimeOptionsPatch,
-      });
-    }
+    // Bound ACP /new and /reset should return as soon as the previous
+    // runtime state is discarded. The fresh session can be recreated lazily
+    // on the next turn through the normal binding readiness path.
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

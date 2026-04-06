@@ -1167,8 +1167,7 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
 }
 export function createExecTool(
   defaults?: ExecToolDefaults,
-  // oxlint-disable-next-line typescript/no-explicit-any
-): AgentToolWithMeta<any, ExecToolDetails> {
+): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
