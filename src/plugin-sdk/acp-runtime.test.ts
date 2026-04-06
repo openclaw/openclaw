@@ -55,6 +55,25 @@ describe("tryDispatchAcpReplyHook", () => {
     vi.clearAllMocks();
   });
 
+  it("skips ACP runtime lookup for plain-text deny turns", async () => {
+    const result = await tryDispatchAcpReplyHook(
+      {
+        ...event,
+        sendPolicy: "deny",
+        ctx: buildTestCtx({
+          SessionKey: "agent:test:session",
+          BodyForCommands: "write a test",
+          BodyForAgent: "write a test",
+        }),
+      },
+      ctx,
+    );
+
+    expect(result).toBeUndefined();
+    expect(bypassMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("skips ACP dispatch when send policy denies delivery and no bypass applies", async () => {
     bypassMock.mockResolvedValue(false);
 
