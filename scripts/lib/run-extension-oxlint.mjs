@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
+  hasFlag,
 } from "./local-heavy-check-runtime.mjs";
 
 export function runExtensionOxlint(params) {
@@ -32,6 +33,13 @@ export function runExtensionOxlint(params) {
     writeTempOxlintConfig(repoRoot, tempConfigPath);
 
     const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...extensionFiles];
+    if (
+      !hasFlag(baseArgs, "--report-unused-disable-directives") &&
+      !hasFlag(baseArgs, "--report-unused-disable-directives-severity")
+    ) {
+      baseArgs.unshift("error");
+      baseArgs.unshift("--report-unused-disable-directives-severity");
+    }
     const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, process.env);
     const result = spawnSync(oxlintPath, finalArgs, {
       stdio: "inherit",
