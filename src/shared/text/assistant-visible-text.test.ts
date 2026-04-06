@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { stripAssistantInternalScaffolding } from "./assistant-visible-text.js";
+import {
+  sanitizeAssistantVisibleText,
+  stripAssistantInternalScaffolding,
+} from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
 describe("stripAssistantInternalScaffolding", () => {
@@ -391,5 +394,31 @@ describe("stripAssistantInternalScaffolding", () => {
       expect(stripModelSpecialTokens("prefix <|assistant|>")).toBe("prefix  ");
       expect(stripModelSpecialTokens("<|assistant|>short")).toBe(" short");
     });
+  });
+});
+
+describe("sanitizeAssistantVisibleText", () => {
+  it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
+    const input = [
+      '<invoke name="read">payload</invoke></minimax:tool_call>',
+      '<tool_result>{"output":"hidden"}</tool_result>',
+      "[Tool Call: read (ID: toolu_1)]",
+      'Arguments: {"path":"/tmp/x"}',
+      "<think>secret</think>",
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("strips relevant-memories blocks on the canonical user-visible path", () => {
+    const input = [
+      "<relevant-memories>",
+      "internal note",
+      "</relevant-memories>",
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 });
