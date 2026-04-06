@@ -98,6 +98,9 @@ def main() -> int:
 
     grouped: dict[str, dict] = {}
     owner_bucket_crosstab: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    owner_bucket_actionable_summary: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: {'total': 0, 'actionable': 0, 'non_actionable': 0})
+    )
     for record in filtered_records:
         route_signature = record['route_signature']
         aggregate = grouped.setdefault(
@@ -123,8 +126,14 @@ def main() -> int:
         bucket = record.get('recovery_bucket')
         bucket_key = bucket if isinstance(bucket, str) and bucket.strip() else 'unknown'
         owner_bucket_crosstab[owner_key][bucket_key] += 1
-        if record.get('recovery_actionable') is True:
+        actionable = record.get('recovery_actionable') is True
+        cell = owner_bucket_actionable_summary[owner_key][bucket_key]
+        cell['total'] += 1
+        if actionable:
+            cell['actionable'] += 1
             aggregate['actionable_count'] += 1
+        else:
+            cell['non_actionable'] += 1
         rank = record.get('recovery_rank')
         if isinstance(rank, int) and rank > aggregate['max_recovery_rank']:
             aggregate['max_recovery_rank'] = rank
@@ -181,6 +190,7 @@ def main() -> int:
         'unknown',
     ]
     crosstab_output: dict[str, dict[str, int]] = {}
+    actionable_summary_output: dict[str, dict[str, dict[str, int]]] = {}
     for owner_key in sorted(owner_bucket_crosstab.keys()):
         row = owner_bucket_crosstab[owner_key]
         ordered_row = {bucket_name: int(row.get(bucket_name, 0)) for bucket_name in ordered_buckets}
@@ -189,10 +199,32 @@ def main() -> int:
             ordered_row[bucket_name] = int(row.get(bucket_name, 0))
         crosstab_output[owner_key] = ordered_row
 
+        actionable_row = owner_bucket_actionable_summary.get(owner_key, {})
+        ordered_actionable_row = {
+            bucket_name: {
+                'total': int(actionable_row.get(bucket_name, {}).get('total', 0)),
+                'actionable': int(actionable_row.get(bucket_name, {}).get('actionable', 0)),
+                'non_actionable': int(actionable_row.get(bucket_name, {}).get('non_actionable', 0)),
+            }
+            for bucket_name in ordered_buckets
+        }
+        extra_actionable_buckets = sorted(
+            bucket for bucket in actionable_row.keys() if bucket not in ordered_actionable_row
+        )
+        for bucket_name in extra_actionable_buckets:
+            bucket_summary = actionable_row.get(bucket_name, {})
+            ordered_actionable_row[bucket_name] = {
+                'total': int(bucket_summary.get('total', 0)),
+                'actionable': int(bucket_summary.get('actionable', 0)),
+                'non_actionable': int(bucket_summary.get('non_actionable', 0)),
+            }
+        actionable_summary_output[owner_key] = ordered_actionable_row
+
     output = {
         'total_records': len(filtered_records),
         'aggregated_routes': aggregated_routes,
         'owner_bucket_crosstab': crosstab_output,
+        'owner_bucket_actionable_summary': actionable_summary_output,
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
