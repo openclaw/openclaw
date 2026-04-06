@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   namedAccountPromotionKeys as matrixNamedAccountPromotionKeys,
   resolveSingleAccountPromotionTarget as resolveMatrixSingleAccountPromotionTarget,
   singleAccountKeysToMove as matrixSingleAccountKeysToMove,
-} from "../../../extensions/matrix/contract-api.js";
-import { singleAccountKeysToMove as telegramSingleAccountKeysToMove } from "../../../extensions/telegram/contract-api.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../plugin-sdk/matrix.js";
+import { singleAccountKeysToMove as telegramSingleAccountKeysToMove } from "../../plugin-sdk/telegram.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
