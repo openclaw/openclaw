@@ -116,6 +116,31 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("strips closed <tool_result> blocks", () => {
+      expectVisibleText(
+        'Prefix\n<tool_result> {"output": "file contents"} </tool_result>\nSuffix',
+        "Prefix\n\nSuffix",
+      );
+    });
+
+    it("strips dangling <tool_result> content to end-of-string", () => {
+      expectVisibleText('Result:\n<tool_result>\n{"output": "data"}\n', "Result:\n");
+    });
+
+    it("strips <tool_result> closed with mismatched </tool_call> and preserves trailing text", () => {
+      expectVisibleText(
+        'Prefix\n<tool_result> {"output": "data"} </tool_call>\nSuffix',
+        "Prefix\n\nSuffix",
+      );
+    });
+
+    it("does not let </tool_result> close a <tool_call> block", () => {
+      expectVisibleText(
+        'Prefix\n<tool_call>{"name":"x"}</tool_result>LEAK</tool_call>\nSuffix',
+        "Prefix\n\nSuffix",
+      );
+    });
+
     it("hides dangling <tool_call> content to end-of-string", () => {
       expectVisibleText(
         'Let me run.\n<tool_call>\n{"name": "find", "arguments": {}}\n',
