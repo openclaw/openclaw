@@ -134,7 +134,13 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("GIT_EDITOR")).toBe(true);
     expect(isDangerousHostEnvVarName("git_editor")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_EXTERNAL_DIFF")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_DIR")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_work_tree")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_COMMON_DIR")).toBe(true);
     expect(isDangerousHostEnvVarName("git_exec_path")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_INDEX_FILE")).toBe(true);
+    expect(isDangerousHostEnvVarName("git_object_directory")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_NAMESPACE")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_SEQUENCE_EDITOR")).toBe(true);
     expect(isDangerousHostEnvVarName("git_sequence_editor")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_TEMPLATE_DIR")).toBe(true);
@@ -220,7 +226,13 @@ describe("sanitizeHostExecEnv", () => {
         BROWSER: "/tmp/pwn-browser",
         GIT_EDITOR: "/tmp/pwn-editor",
         GIT_EXTERNAL_DIFF: "/tmp/pwn.sh",
+        GIT_DIR: "/tmp/evil-git-dir",
+        GIT_WORK_TREE: "/tmp/evil-work-tree",
+        GIT_COMMON_DIR: "/tmp/evil-common-dir",
         GIT_TEMPLATE_DIR: "/tmp/git-template",
+        GIT_INDEX_FILE: "/tmp/evil-git-index",
+        GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
+        GIT_NAMESPACE: "evil-namespace",
         GIT_SEQUENCE_EDITOR: "/tmp/pwn-sequence-editor",
         HGRCPATH: "/tmp/evil-hgrc",
         CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
@@ -267,7 +279,13 @@ describe("sanitizeHostExecEnv", () => {
         HGRCPATH: "/tmp/evil-hgrc",
         GIT_SSH_COMMAND: "touch /tmp/pwned",
         GIT_EDITOR: "/tmp/git-editor",
+        GIT_DIR: "/tmp/evil-git-dir",
+        GIT_WORK_TREE: "/tmp/evil-work-tree",
+        GIT_COMMON_DIR: "/tmp/evil-common-dir",
         GIT_EXEC_PATH: "/tmp/git-exec-path",
+        GIT_INDEX_FILE: "/tmp/evil-git-index",
+        GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
+        GIT_NAMESPACE: "evil-namespace",
         GIT_SEQUENCE_EDITOR: "/tmp/git-sequence-editor",
         EDITOR: "/tmp/editor",
         NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
@@ -332,6 +350,9 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.BASH_ENV).toBeUndefined();
     expect(env.BROWSER).toBeUndefined();
     expect(env.GIT_EDITOR).toBeUndefined();
+    expect(env.GIT_DIR).toBeUndefined();
+    expect(env.GIT_WORK_TREE).toBeUndefined();
+    expect(env.GIT_COMMON_DIR).toBeUndefined();
     expect(env.CC).toBeUndefined();
     expect(env.CXX).toBeUndefined();
     expect(env.CARGO_BUILD_RUSTC).toBeUndefined();
@@ -341,6 +362,9 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.RUSTC_WRAPPER).toBeUndefined();
     expect(env.HGRCPATH).toBeUndefined();
     expect(env.GIT_TEMPLATE_DIR).toBeUndefined();
+    expect(env.GIT_INDEX_FILE).toBeUndefined();
+    expect(env.GIT_OBJECT_DIRECTORY).toBeUndefined();
+    expect(env.GIT_NAMESPACE).toBeUndefined();
     expect(env.GIT_SEQUENCE_EDITOR).toBeUndefined();
     expect(env.AWS_CONFIG_FILE).toBeUndefined();
     expect(env.GIT_SSH_COMMAND).toBeUndefined();
@@ -523,6 +547,12 @@ describe("isDangerousHostEnvOverrideVarName", () => {
   it("matches override-only blocked keys case-insensitively", () => {
     expect(isDangerousHostEnvOverrideVarName("HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("zdotdir")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GIT_DIR")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("git_work_tree")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GIT_COMMON_DIR")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("git_index_file")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("GIT_OBJECT_DIRECTORY")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("git_namespace")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GIT_SSH_COMMAND")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("editor")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
@@ -624,6 +654,12 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         SSL_CERT_DIR: "/tmp/evil-cert-dir",
         REQUESTS_CA_BUNDLE: "/tmp/evil-requests-ca.pem",
         CURL_CA_BUNDLE: "/tmp/evil-curl-ca.pem",
+        GIT_DIR: "/tmp/evil-git-dir",
+        GIT_WORK_TREE: "/tmp/evil-work-tree",
+        GIT_COMMON_DIR: "/tmp/evil-common-dir",
+        GIT_INDEX_FILE: "/tmp/evil-git-index",
+        GIT_OBJECT_DIRECTORY: "/tmp/evil-git-objects",
+        GIT_NAMESPACE: "evil-namespace",
         GOPROXY: "https://example.invalid/proxy",
         GONOSUMCHECK: "example.invalid/*",
         GONOSUMDB: "example.invalid/*",
@@ -666,9 +702,15 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "DOCKER_CONTEXT",
       "DOCKER_HOST",
       "DOCKER_TLS_VERIFY",
+      "GIT_COMMON_DIR",
+      "GIT_DIR",
+      "GIT_INDEX_FILE",
+      "GIT_NAMESPACE",
+      "GIT_OBJECT_DIRECTORY",
       "GIT_SSL_CAINFO",
       "GIT_SSL_CAPATH",
       "GIT_SSL_NO_VERIFY",
+      "GIT_WORK_TREE",
       "GOENV",
       "GONOPROXY",
       "GONOSUMCHECK",
@@ -742,6 +784,12 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.SSL_CERT_DIR).toBeUndefined();
     expect(result.env.REQUESTS_CA_BUNDLE).toBeUndefined();
     expect(result.env.CURL_CA_BUNDLE).toBeUndefined();
+    expect(result.env.GIT_DIR).toBeUndefined();
+    expect(result.env.GIT_WORK_TREE).toBeUndefined();
+    expect(result.env.GIT_COMMON_DIR).toBeUndefined();
+    expect(result.env.GIT_INDEX_FILE).toBeUndefined();
+    expect(result.env.GIT_OBJECT_DIRECTORY).toBeUndefined();
+    expect(result.env.GIT_NAMESPACE).toBeUndefined();
     expect(result.env.GOPROXY).toBeUndefined();
     expect(result.env.GONOSUMCHECK).toBeUndefined();
     expect(result.env.GONOSUMDB).toBeUndefined();
