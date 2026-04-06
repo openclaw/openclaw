@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
+import { limitHistoryTurns } from "../history.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -128,6 +131,44 @@ describe("runEmbeddedAttempt context injection", () => {
     expect(hoisted.sessionManager.appendCustomEntry).not.toHaveBeenCalledWith(
       "openclaw:bootstrap-context:full",
       expect.anything(),
+    );
+  });
+
+  it("filters no-op heartbeat pairs before history limiting and context-engine assembly", async () => {
+    hoisted.getDmHistoryLimitFromSessionKeyMock.mockReturnValue(1);
+    hoisted.limitHistoryTurnsMock.mockImplementation(limitHistoryTurns);
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages,
+      estimatedTokens: 1,
+    }));
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "real question", timestamp: 1 } as AgentMessage,
+      { role: "assistant", content: "real answer", timestamp: 2 } as AgentMessage,
+      { role: "user", content: HEARTBEAT_PROMPT, timestamp: 3 } as AgentMessage,
+      { role: "assistant", content: "HEARTBEAT_OK", timestamp: 4 } as AgentMessage,
+    ];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: { assemble },
+      attemptOverrides: {
+        config: {
+          agents: {
+            list: [{ id: "main", heartbeat: {} }],
+          },
+        },
+      },
+      sessionKey: "agent:main:discord:dm:test-user",
+      sessionMessages,
+      tempPaths,
+    });
+
+    expect(assemble).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({ role: "user", content: "real question" }),
+          expect.objectContaining({ role: "assistant", content: "real answer" }),
+        ],
+      }),
     );
   });
 });

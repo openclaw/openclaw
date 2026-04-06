@@ -15,6 +15,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
+import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -1004,8 +1005,14 @@ export async function compactEmbeddedPiSessionDirect(
           // Truncate session file to remove compacted entries (#39953)
           if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
             try {
+              const heartbeatSummary = resolveHeartbeatSummaryForAgent(
+                params.config,
+                sessionAgentId,
+              );
               const truncResult = await truncateSessionAfterCompaction({
                 sessionFile: params.sessionFile,
+                ackMaxChars: heartbeatSummary.ackMaxChars,
+                heartbeatPrompt: heartbeatSummary.prompt,
               });
               if (truncResult.truncated) {
                 log.info(

@@ -21,7 +21,7 @@ type LookupCallback = (
   family?: number,
 ) => void;
 
-type LookupResult = LookupAddress | readonly LookupAddress[];
+type LookupResult = LookupAddress | LookupAddress[];
 
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
@@ -203,7 +203,10 @@ function assertAllowedResolvedAddressesOrThrow(
 }
 
 function normalizeLookupResults(results: LookupResult): readonly LookupAddress[] {
-  return Array.isArray(results) ? results : [results];
+  if (Array.isArray(results)) {
+    return results;
+  }
+  return [results];
 }
 
 export function createPinnedLookup(params: {
