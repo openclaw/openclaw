@@ -141,6 +141,38 @@ const ttsMocks = vi.hoisted(() => {
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
   };
 });
+const threadInfoMocks = vi.hoisted(() => ({
+  parseSessionThreadInfo: vi.fn<
+    (sessionKey: string | undefined) => {
+      baseSessionKey: string | undefined;
+      threadId: string | undefined;
+    }
+  >(),
+}));
+
+function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
+  const trimmed = sessionKey?.trim();
+  if (!trimmed) {
+    return { baseSessionKey: undefined, threadId: undefined };
+  }
+  const threadMarker = ":thread:";
+  const topicMarker = ":topic:";
+  const marker = trimmed.includes(threadMarker)
+    ? threadMarker
+    : trimmed.includes(topicMarker)
+      ? topicMarker
+      : undefined;
+  if (!marker) {
+    return { baseSessionKey: trimmed, threadId: undefined };
+  }
+  const index = trimmed.lastIndexOf(marker);
+  if (index < 0) {
+    return { baseSessionKey: trimmed, threadId: undefined };
+  }
+  const baseSessionKey = trimmed.slice(0, index).trim() || undefined;
+  const threadId = trimmed.slice(index + marker.length).trim() || undefined;
+  return { baseSessionKey, threadId };
+}
 
 vi.mock("./route-reply.runtime.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
@@ -193,6 +225,10 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
+}));
+vi.mock("../../config/sessions/thread-info.js", () => ({
+  parseSessionThreadInfo: (sessionKey: string | undefined) =>
+    threadInfoMocks.parseSessionThreadInfo(sessionKey),
 }));
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
@@ -593,6 +629,8 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+    threadInfoMocks.parseSessionThreadInfo.mockReset();
+    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
@@ -663,7 +701,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     sessionStoreMocks.currentEntry = {
       deliveryContext: {
-        channel: "mattermost",
+        channel: "discord",
         to: "channel:CHAN1",
         accountId: "default",
       },
@@ -677,10 +715,10 @@ describe("dispatchReplyFromConfig", () => {
     const ctx = buildTestCtx({
       Provider: "webchat",
       Surface: "webchat",
-      SessionKey: "agent:main:mattermost:channel:CHAN1:thread:post-root",
+      SessionKey: "agent:main:discord:channel:CHAN1:thread:post-root",
       AccountId: "default",
       MessageThreadId: undefined,
-      OriginatingChannel: "mattermost",
+      OriginatingChannel: "discord",
       OriginatingTo: "channel:CHAN1",
       ExplicitDeliverRoute: true,
     });
@@ -690,7 +728,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(mocks.routeReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "mattermost",
+        channel: "discord",
         to: "channel:CHAN1",
         threadId: "post-root",
       }),
