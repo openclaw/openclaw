@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createAcpVitestConfig } from "../vitest.acp.config.ts";
@@ -201,6 +202,14 @@ describe("scoped vitest configs", () => {
       expect(config.test?.isolate).toBe(false);
       expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
     }
+  });
+
+  it("keeps the process lane off the openclaw runtime setup", () => {
+    expect(defaultProcessConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(defaultPluginSdkConfig.test?.setupFiles).toEqual([
+      "test/setup.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
   });
 
   it("defaults channel tests to threads with the non-isolated runner", () => {
