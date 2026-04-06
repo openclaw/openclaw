@@ -69,6 +69,37 @@ function resolveSourceFirstPublicSurfacePath(params: {
   return null;
 }
 
+function resolveRegistryPluginModuleLocation(params: {
+  dirName: string;
+  artifactBasename: string;
+}): { modulePath: string; boundaryRoot: string } | null {
+  const { config } = getFacadeBoundaryResolvedConfig();
+  const registry = loadPluginManifestRegistry({ config, cache: true }).plugins;
+  const tiers: Array<(plugin: (typeof registry)[number]) => boolean> = [
+    (plugin) => plugin.id === params.dirName,
+    (plugin) => path.basename(plugin.rootDir) === params.dirName,
+    (plugin) => plugin.channels.includes(params.dirName),
+  ];
+  const artifactBasename = params.artifactBasename.replace(/^\.\//u, "");
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
+  for (const matchFn of tiers) {
+    for (const record of registry.filter(matchFn)) {
+      const rootDir = path.resolve(record.rootDir);
+      const builtCandidate = path.join(rootDir, artifactBasename);
+      if (fs.existsSync(builtCandidate)) {
+        return { modulePath: builtCandidate, boundaryRoot: rootDir };
+      }
+      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+        const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
+        if (fs.existsSync(sourceCandidate)) {
+          return { modulePath: sourceCandidate, boundaryRoot: rootDir };
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function resolveFacadeModuleLocation(params: {
   dirName: string;
   artifactBasename: string;
@@ -88,9 +119,24 @@ function resolveFacadeModuleLocation(params: {
         dirName: params.dirName,
         artifactBasename: params.artifactBasename,
       });
-    if (!modulePath) {
-      return null;
+    if (modulePath) {
+      return {
+        modulePath,
+        boundaryRoot:
+          bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
+            ? path.resolve(bundledPluginsDir)
+            : OPENCLAW_PACKAGE_ROOT,
+      };
     }
+    return resolveRegistryPluginModuleLocation(params);
+  }
+  const modulePath = resolveBundledPluginPublicSurfacePath({
+    rootDir: OPENCLAW_PACKAGE_ROOT,
+    ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
+    dirName: params.dirName,
+    artifactBasename: params.artifactBasename,
+  });
+  if (modulePath) {
     return {
       modulePath,
       boundaryRoot:
@@ -99,22 +145,7 @@ function resolveFacadeModuleLocation(params: {
           : OPENCLAW_PACKAGE_ROOT,
     };
   }
-  const modulePath = resolveBundledPluginPublicSurfacePath({
-    rootDir: OPENCLAW_PACKAGE_ROOT,
-    ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
-    dirName: params.dirName,
-    artifactBasename: params.artifactBasename,
-  });
-  if (!modulePath) {
-    return null;
-  }
-  return {
-    modulePath,
-    boundaryRoot:
-      bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
-        ? path.resolve(bundledPluginsDir)
-        : OPENCLAW_PACKAGE_ROOT,
-  };
+  return resolveRegistryPluginModuleLocation(params);
 }
 
 function getJiti(modulePath: string) {
@@ -204,7 +235,12 @@ function resolveBundledPluginManifestRecord(params: {
     }
   }
 
-  return registry.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ?? null;
+  return (
+    registry.find((plugin) => plugin.id === params.dirName) ??
+    registry.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ??
+    registry.find((plugin) => plugin.channels.includes(params.dirName)) ??
+    null
+  );
 }
 
 function resolveTrackedFacadePluginId(params: {
@@ -343,7 +379,12 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
     boundaryLabel:
       location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
         ? "OpenClaw package root"
-        : "bundled plugin directory",
+        : (() => {
+            const bundledDir = resolveBundledPluginsDir();
+            return bundledDir && path.resolve(location.boundaryRoot) === path.resolve(bundledDir)
+              ? "bundled plugin directory"
+              : "plugin root";
+          })(),
     rejectHardlinks: false,
   });
   if (!opened.ok) {

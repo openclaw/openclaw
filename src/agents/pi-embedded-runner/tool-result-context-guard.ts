@@ -49,6 +49,21 @@ type GuardableAgentRecord = {
   transformContext?: GuardableTransformContext;
 };
 
+function getToolResultName(msg: AgentMessage): string | undefined {
+  const toolName = (msg as { toolName?: unknown }).toolName;
+  if (typeof toolName === "string" && toolName.trim().length > 0) {
+    return toolName;
+  }
+  const legacyToolName = (msg as { tool_name?: unknown }).tool_name;
+  return typeof legacyToolName === "string" && legacyToolName.trim().length > 0
+    ? legacyToolName
+    : undefined;
+}
+
+function isReadToolResultMessage(msg: AgentMessage): boolean {
+  return isToolResultMessage(msg) && getToolResultName(msg) === "read";
+}
+
 function truncateTextToBudget(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
@@ -145,7 +160,7 @@ function compactToPlaceholderInPlace(params: {
   }
 
   let reduced = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
+  for (const i of resolveToolResultCompactionOrder(messages)) {
     const msg = messages[i];
     if (!isToolResultMessage(msg)) {
       continue;
@@ -215,11 +230,10 @@ function compactExistingToolResultsInPlace(params: {
   }
 
   let reduced = 0;
-  // Compact newest-first so more of the cached prefix survives: rewriting
-  // messages[k] for small k invalidates the provider prompt cache from that point onward.
-  // Keep a truncated slice of newer tool output before falling back to a
-  // full placeholder so recent, user-visible results remain readable when possible.
-  for (let i = messages.length - 1; i >= 0; i--) {
+  // Keep the most recent tool result visible as long as older tool outputs can
+  // absorb the overflow. Among older tool results, compact newest-first so we
+  // still preserve as much of the cached prefix as possible.
+  for (const i of resolveToolResultCompactionOrder(messages)) {
     const msg = messages[i];
     if (!isToolResultMessage(msg)) {
       continue;
@@ -262,6 +276,80 @@ function compactExistingToolResultsInPlace(params: {
   }
 
   return reduced;
+}
+
+function resolveToolResultCompactionOrder(messages: AgentMessage[]): number[] {
+  const toolResultIndexes: number[] = [];
+  for (let i = 0; i < messages.length; i += 1) {
+    if (isToolResultMessage(messages[i])) {
+      toolResultIndexes.push(i);
+    }
+  }
+  if (toolResultIndexes.length <= 1) {
+    return toolResultIndexes;
+  }
+  const newestIndex = toolResultIndexes[toolResultIndexes.length - 1];
+  const olderIndexes = toolResultIndexes.slice(0, -1).toReversed();
+  return [...olderIndexes, newestIndex];
+}
+
+function getNewestToolResultIndex(messages: AgentMessage[]): number | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (isToolResultMessage(messages[i])) {
+      return i;
+    }
+  }
+  return undefined;
+}
+
+function shouldPreferOverflowForLatestRead(params: {
+  messages: AgentMessage[];
+  contextBudgetChars: number;
+  maxSingleToolResultChars: number;
+}): boolean {
+  const newestToolResultIndex = getNewestToolResultIndex(params.messages);
+  if (newestToolResultIndex === undefined) {
+    return false;
+  }
+  const newestToolResult = params.messages[newestToolResultIndex];
+  if (!isReadToolResultMessage(newestToolResult)) {
+    return false;
+  }
+
+  const initialCache = createMessageCharEstimateCache();
+  if (
+    estimateMessageCharsCached(newestToolResult, initialCache) > params.maxSingleToolResultChars
+  ) {
+    return false;
+  }
+
+  const simulatedMessages = cloneMessagesForGuard(params.messages);
+  const estimateCache = createMessageCharEstimateCache();
+  for (const message of simulatedMessages) {
+    if (!isToolResultMessage(message)) {
+      continue;
+    }
+    const truncated = truncateToolResultToChars(
+      message,
+      params.maxSingleToolResultChars,
+      estimateCache,
+    );
+    applyMessageMutationInPlace(message, truncated, estimateCache);
+  }
+
+  const currentChars = estimateContextChars(simulatedMessages, estimateCache);
+  if (currentChars <= params.contextBudgetChars) {
+    return false;
+  }
+
+  const newestToolResultAfterPerToolLimit = simulatedMessages[newestToolResultIndex];
+  const newestToolResultTextBefore = getToolResultText(newestToolResultAfterPerToolLimit);
+  compactExistingToolResultsInPlace({
+    messages: simulatedMessages,
+    charsNeeded: currentChars - params.contextBudgetChars,
+    cache: estimateCache,
+  });
+  return getToolResultText(simulatedMessages[newestToolResultIndex]) !== newestToolResultTextBefore;
 }
 
 function cloneMessagesForGuard(messages: AgentMessage[]): AgentMessage[] {
@@ -334,7 +422,7 @@ function enforceToolResultContextBudgetInPlace(params: {
     return;
   }
 
-  // Compact newest tool outputs first so more of the cached prefix survives;
+  // Prefer compacting older tool outputs before sacrificing the newest one;
   // stop once the context is back under budget.
   compactExistingToolResultsInPlace({
     messages,
@@ -374,6 +462,15 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+    if (
+      shouldPreferOverflowForLatestRead({
+        messages: sourceMessages,
+        contextBudgetChars,
+        maxSingleToolResultChars,
+      })
+    ) {
+      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+    }
     const contextMessages = contextNeedsToolResultCompaction({
       messages: sourceMessages,
       contextBudgetChars,

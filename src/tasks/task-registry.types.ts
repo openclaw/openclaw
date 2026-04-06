@@ -53,6 +53,7 @@ export type TaskDeliveryState = {
 export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   requesterSessionKey: string;
   ownerKey: string;

@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -89,6 +90,50 @@ vi.mock("../pi-tools.before-tool-call.js", () => ({
 
 vi.mock("../pi-tools.abort.js", () => ({
   wrapToolWithAbortSignal: vi.fn((tool) => tool),
+}));
+
+vi.mock("../auth-profiles.js", () => ({
+  ensureAuthProfileStore: (agentDir?: string) => {
+    if (!agentDir) {
+      return { version: 1, profiles: {} };
+    }
+    const pathname = path.join(agentDir, "auth-profiles.json");
+    try {
+      return JSON.parse(fsSync.readFileSync(pathname, "utf8")) as {
+        version?: number;
+        profiles?: Record<string, { provider?: string }>;
+      };
+    } catch {
+      return { version: 1, profiles: {} };
+    }
+  },
+  listProfilesForProvider: (
+    store: { profiles?: Record<string, { provider?: string }> },
+    provider: string,
+  ) => Object.values(store.profiles ?? {}).filter((profile) => profile?.provider === provider),
+}));
+
+vi.mock("../model-auth.js", () => ({
+  resolveEnvApiKey: (provider: string) => {
+    const envVarByProvider: Record<string, string[]> = {
+      anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+      minimax: ["MINIMAX_API_KEY", "MINIMAX_OAUTH_TOKEN"],
+      "minimax-portal": ["MINIMAX_OAUTH_TOKEN"],
+      moonshot: ["MOONSHOT_API_KEY"],
+      openai: ["OPENAI_API_KEY"],
+      openrouter: ["OPENROUTER_API_KEY"],
+      zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+    };
+    const envVar = (envVarByProvider[provider] ?? []).find((key) => {
+      const value = process.env[key];
+      return typeof value === "string" && value.length > 0;
+    });
+    return {
+      apiKey: envVar ? process.env[envVar] : undefined,
+      source: envVar ? "env" : undefined,
+      envVar,
+    };
+  },
 }));
 
 vi.mock("../openclaw-tools.js", async () => {

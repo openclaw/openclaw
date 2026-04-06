@@ -15,8 +15,10 @@ const DEFAULT_GOOGLE_VIDEO_MODEL = "veo-3.1-fast-generate-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
 const MAX_POLL_ATTEMPTS = 90;
-const GOOGLE_VIDEO_MIN_DURATION_SECONDS = 4;
-const GOOGLE_VIDEO_MAX_DURATION_SECONDS = 8;
+const GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS = [4, 6, 8] as const;
+const GOOGLE_VIDEO_MIN_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[0];
+const GOOGLE_VIDEO_MAX_DURATION_SECONDS =
+  GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS.length - 1];
 
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
   const configured = req.cfg?.models?.providers?.google?.baseUrl?.trim();
@@ -75,10 +77,21 @@ function resolveDurationSeconds(durationSeconds: number | undefined): number | u
   if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
     return undefined;
   }
-  return Math.min(
+  const rounded = Math.min(
     GOOGLE_VIDEO_MAX_DURATION_SECONDS,
     Math.max(GOOGLE_VIDEO_MIN_DURATION_SECONDS, Math.round(durationSeconds)),
   );
+  return GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS.reduce((best, current) => {
+    const currentDistance = Math.abs(current - rounded);
+    const bestDistance = Math.abs(best - rounded);
+    if (currentDistance < bestDistance) {
+      return current;
+    }
+    if (currentDistance === bestDistance && current > best) {
+      return current;
+    }
+    return best;
+  });
 }
 
 function resolveInputImage(req: VideoGenerationRequest) {
@@ -149,6 +162,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       maxInputImages: 1,
       maxInputVideos: 1,
       maxDurationSeconds: GOOGLE_VIDEO_MAX_DURATION_SECONDS,
+      supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
       supportsAspectRatio: true,
       supportsResolution: true,
       supportsSize: true,

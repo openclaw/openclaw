@@ -36,6 +36,7 @@ type PluginManifestContractListKey =
   | "realtimeTranscriptionProviders"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
+  | "musicGenerationProviders"
   | "memoryEmbeddingProviders"
   | "webFetchProviders"
   | "webSearchProviders";

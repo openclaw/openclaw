@@ -77,6 +77,8 @@ type ProviderRuntimeHooks = {
   }) => boolean;
 };
 
+type ProviderRuntimeModule = typeof import("../../plugins/provider-runtime.js");
+
 const requireProviderRuntime = resolveNodeRequireFromMeta(import.meta.url);
 let cachedProviderRuntimeHooks: ProviderRuntimeHooks | null | undefined;
 
@@ -96,15 +98,16 @@ function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
   try {
     const loaded = requireProviderRuntime(
       "../../plugins/provider-runtime.js",
-    ) as ProviderRuntimeHooks;
+    ) as unknown as ProviderRuntimeModule;
     cachedProviderRuntimeHooks = {
-      classifyProviderFailoverReasonWithPlugin: loaded.classifyProviderFailoverReasonWithPlugin,
+      classifyProviderFailoverReasonWithPlugin: ({ context }) =>
+        loaded.classifyProviderFailoverReasonWithPlugin({ context }) ?? null,
       matchesProviderContextOverflowWithPlugin: loaded.matchesProviderContextOverflowWithPlugin,
     };
   } catch {
     cachedProviderRuntimeHooks = null;
   }
-  return cachedProviderRuntimeHooks;
+  return cachedProviderRuntimeHooks ?? null;
 }
 
 function looksLikeProviderContextOverflowCandidate(errorMessage: string): boolean {
@@ -136,9 +139,10 @@ export function matchesProviderContextOverflow(errorMessage: string): boolean {
  */
 export function classifyProviderSpecificError(errorMessage: string): FailoverReason | null {
   const runtimeHooks = resolveProviderRuntimeHooks();
-  const pluginReason = runtimeHooks?.classifyProviderFailoverReasonWithPlugin({
-    context: { errorMessage },
-  });
+  const pluginReason =
+    runtimeHooks?.classifyProviderFailoverReasonWithPlugin({
+      context: { errorMessage },
+    }) ?? null;
   if (pluginReason) {
     return pluginReason;
   }

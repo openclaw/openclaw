@@ -63,6 +63,27 @@ const mocks = vi.hoisted(() => {
       }
       return null;
     }),
+    resolveProviderEnvApiKeyCandidates: vi.fn().mockReturnValue({
+      anthropic: ["ANTHROPIC_API_KEY"],
+      google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+      minimax: ["MINIMAX_API_KEY"],
+      "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+      openai: ["OPENAI_API_KEY"],
+      "openai-codex": ["OPENAI_OAUTH_TOKEN"],
+      fal: ["FAL_KEY"],
+    }),
+    listKnownProviderEnvApiKeyNames: vi
+      .fn()
+      .mockReturnValue([
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "MINIMAX_API_KEY",
+        "MINIMAX_OAUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "OPENAI_OAUTH_TOKEN",
+        "FAL_KEY",
+      ]),
     hasUsableCustomProviderApiKey: vi.fn().mockReturnValue(false),
     resolveUsableCustomProviderApiKey: vi.fn().mockReturnValue(null),
     getCustomProviderApiKey: vi.fn().mockReturnValue(undefined),
@@ -112,6 +133,10 @@ async function loadFreshModelsStatusCommandModuleForTest() {
     hasUsableCustomProviderApiKey: mocks.hasUsableCustomProviderApiKey,
     resolveUsableCustomProviderApiKey: mocks.resolveUsableCustomProviderApiKey,
     getCustomProviderApiKey: mocks.getCustomProviderApiKey,
+  }));
+  vi.doMock("../../agents/model-auth-env-vars.js", () => ({
+    resolveProviderEnvApiKeyCandidates: mocks.resolveProviderEnvApiKeyCandidates,
+    listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
   }));
   vi.doMock("../../infra/shell-env.js", () => ({
     getShellEnvAppliedKeys: mocks.getShellEnvAppliedKeys,
@@ -233,6 +258,11 @@ describe("modelsStatusCommand auth overview", () => {
     const openai = providers.find((p) => p.provider === "openai");
     expect(openai?.env?.source).toContain("OPENAI_API_KEY");
     expect(openai?.env?.value).toContain("...");
+    expect(
+      (payload.auth.oauth.providers as Array<{ provider: string }>).some(
+        (provider) => provider.provider === "openai",
+      ),
+    ).toBe(false);
 
     expect(
       (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("anthropic")),
@@ -268,6 +298,68 @@ describe("modelsStatusCommand auth overview", () => {
       expect(labels.join(" ")).not.toContain(shortSecret);
     } finally {
       mocks.store.profiles = originalProfiles;
+    }
+  });
+
+  it("includes env-backed image-generation providers in effective auth output", async () => {
+    const localRuntime = createRuntime();
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+
+    mocks.resolveEnvApiKey.mockImplementation((provider: string) => {
+      if (provider === "openai") {
+        return {
+          apiKey: "sk-openai-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
+          source: "shell env: OPENAI_API_KEY",
+        };
+      }
+      if (provider === "anthropic") {
+        return {
+          apiKey: "sk-ant-oat01-ACCESS-TOKEN-1234567890", // pragma: allowlist secret
+          source: "env: ANTHROPIC_OAUTH_TOKEN",
+        };
+      }
+      if (provider === "minimax") {
+        return {
+          apiKey: "sk-minimax-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
+          source: "env: MINIMAX_API_KEY",
+        };
+      }
+      if (provider === "fal") {
+        return {
+          apiKey: "fal_test_0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
+          source: "env: FAL_KEY",
+        };
+      }
+      return null;
+    });
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const providers = payload.auth.providers as Array<{
+        provider: string;
+        effective: { kind: string };
+      }>;
+      expect(providers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: "minimax",
+            effective: expect.objectContaining({ kind: "env" }),
+          }),
+          expect.objectContaining({
+            provider: "fal",
+            effective: expect.objectContaining({ kind: "env" }),
+          }),
+        ]),
+      );
+    } finally {
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
     }
   });
 

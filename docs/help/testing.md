@@ -389,6 +389,15 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Enable: `BYTEPLUS_API_KEY=... BYTEPLUS_LIVE_TEST=1 pnpm test:live src/agents/byteplus.live.test.ts`
 - Optional model override: `BYTEPLUS_CODING_MODEL=ark-code-latest`
 
+## ComfyUI workflow media live
+
+- Test: `extensions/comfy/comfy.live.test.ts`
+- Enable: `OPENCLAW_LIVE_TEST=1 COMFY_LIVE_TEST=1 pnpm test:live -- extensions/comfy/comfy.live.test.ts`
+- Scope:
+  - Exercises the bundled comfy image, video, and `music_generate` paths
+  - Skips each capability unless `models.providers.comfy.<capability>` is configured
+  - Useful after changing comfy workflow submission, polling, downloads, or plugin registration
+
 ## Image generation live
 
 - Test: `src/image-generation/runtime.live.test.ts`
@@ -412,6 +421,19 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
+## Music generation live
+
+- Test: `extensions/music-generation-providers.live.test.ts`
+- Enable: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/music-generation-providers.live.test.ts`
+- Scope:
+  - Exercises the shared bundled music-generation provider path
+  - Currently covers Google and MiniMax
+  - Loads provider env vars from your login shell (`~/.profile`) before probing
+  - Skips providers with no usable auth/profile/model
+- Optional narrowing:
+  - `OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS="google,minimax"`
+  - `OPENCLAW_LIVE_MUSIC_GENERATION_MODELS="google/lyria-3-clip-preview,minimax/music-2.5+"`
 
 ## Docker runners (optional "works in Linux" checks)
 

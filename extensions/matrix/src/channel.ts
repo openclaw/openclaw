@@ -498,6 +498,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
               homeserver: auth.homeserver,
               accessToken: auth.accessToken,
               userId: auth.userId,
+              deviceId: auth.deviceId,
               timeoutMs,
               accountId: account.accountId,
               allowPrivateNetwork: auth.allowPrivateNetwork,
