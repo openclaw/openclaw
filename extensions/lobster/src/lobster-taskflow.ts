@@ -101,8 +101,6 @@ function toJsonLike(value: unknown, seen = new WeakSet<object>()): JsonLike {
       seen.delete(value);
       return jsonObject;
     }
-    default:
-      return null;
   }
   return null;
 }
