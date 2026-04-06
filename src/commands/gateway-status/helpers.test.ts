@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
+  buildNetworkHints,
   extractConfigSummary,
   isProbeReachable,
   isScopeLimitedProbeFailure,
   renderProbeSummaryLine,
-  resolveProbeBudgetMs,
   resolveAuthForTarget,
+  resolveProbeBudgetMs,
+  resolveTargets,
 } from "./helpers.js";
 
 describe("extractConfigSummary", () => {
@@ -274,6 +276,28 @@ describe("probe reachability classification", () => {
     expect(renderProbeSummaryLine(probe, false)).toContain("RPC: failed");
   });
 });
+describe("gateway-status local target scheme", () => {
+  it("uses wss for local loopback targets and network hints when gateway TLS is enabled", () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+        tls: { enabled: true },
+      },
+    };
+
+    const targets = resolveTargets(cfg as never);
+    expect(targets).toContainEqual(
+      expect.objectContaining({
+        id: "localLoopback",
+        url: "wss://127.0.0.1:18789",
+      }),
+    );
+
+    const hints = buildNetworkHints(cfg as never);
+    expect(hints.localLoopbackUrl).toBe("wss://127.0.0.1:18789");
+  });
+});
+
 describe("resolveProbeBudgetMs", () => {
   it("lets active local loopback probes use the full caller budget", () => {
     expect(
