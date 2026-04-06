@@ -1,5 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { acquireSessionWriteLock } from "../session-write-lock.js";
+import { log } from "./logger.js";
+import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
 /**
  * Maximum share of the context window a single tool result should occupy.
@@ -245,6 +250,80 @@ export function truncateOversizedToolResultsInMessages(
   return { messages: result, truncatedCount };
 }
 
+export async function truncateOversizedToolResultsInSession(params: {
+  sessionFile: string;
+  contextWindowTokens: number;
+  sessionId?: string;
+  sessionKey?: string;
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
+  const { sessionFile, contextWindowTokens } = params;
+  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+
+  try {
+    sessionLock = await acquireSessionWriteLock({ sessionFile });
+    const sessionManager = SessionManager.open(sessionFile);
+    const branch = sessionManager.getBranch();
+
+    if (branch.length === 0) {
+      return { truncated: false, truncatedCount: 0, reason: "empty session" };
+    }
+
+    const oversizedIndices: number[] = [];
+    for (let i = 0; i < branch.length; i += 1) {
+      const entry = branch[i];
+      if (entry.type !== "message") {
+        continue;
+      }
+      const msg = entry.message;
+      if ((msg as { role?: string }).role !== "toolResult") {
+        continue;
+      }
+      if (getToolResultTextLength(msg) > maxChars) {
+        oversizedIndices.push(i);
+      }
+    }
+
+    if (oversizedIndices.length === 0) {
+      return { truncated: false, truncatedCount: 0, reason: "no oversized tool results" };
+    }
+
+    const replacements = oversizedIndices.flatMap((index) => {
+      const entry = branch[index];
+      if (!entry || entry.type !== "message") {
+        return [];
+      }
+      return [{ entryId: entry.id, message: truncateToolResultMessage(entry.message, maxChars) }];
+    });
+
+    const rewriteResult = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements,
+    });
+    if (rewriteResult.changed) {
+      emitSessionTranscriptUpdate(sessionFile);
+    }
+
+    log.info(
+      `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
+        `(contextWindow=${contextWindowTokens} maxChars=${maxChars}) ` +
+        `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
+    );
+
+    return {
+      truncated: rewriteResult.changed,
+      truncatedCount: rewriteResult.rewrittenEntries,
+      reason: rewriteResult.reason,
+    };
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
+    return { truncated: false, truncatedCount: 0, reason: errMsg };
+  } finally {
+    await sessionLock?.release();
+  }
+}
+
 /**
  * Check if a tool result message exceeds the size limit for a given context window.
  */
@@ -254,4 +333,23 @@ export function isOversizedToolResult(msg: AgentMessage, contextWindowTokens: nu
   }
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
   return getToolResultTextLength(msg) > maxChars;
+}
+
+export function sessionLikelyHasOversizedToolResults(params: {
+  messages: AgentMessage[];
+  contextWindowTokens: number;
+}): boolean {
+  const { messages, contextWindowTokens } = params;
+  const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+
+  for (const msg of messages) {
+    if ((msg as { role?: string }).role !== "toolResult") {
+      continue;
+    }
+    if (getToolResultTextLength(msg) > maxChars) {
+      return true;
+    }
+  }
+
+  return false;
 }
