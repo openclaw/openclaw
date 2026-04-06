@@ -1,6 +1,7 @@
 import type { EventEmitter } from "node:events";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 
 export type DiscordGatewayEventType =
@@ -32,7 +33,12 @@ export function classifyDiscordGatewayEvent(params: {
   err: unknown;
   isDisallowedIntentsError: (err: unknown) => boolean;
 }): DiscordGatewayEvent {
-  const message = String(params.err);
+  const message =
+    params.err instanceof Error
+      ? params.err.message
+        ? `${params.err.name}: ${params.err.message}`
+        : params.err.name || "Error"
+      : formatErrorMessage(params.err);
   if (params.isDisallowedIntentsError(params.err)) {
     return {
       type: "disallowed-intents",
@@ -49,7 +55,14 @@ export function classifyDiscordGatewayEvent(params: {
       shouldStopLifecycle: true,
     };
   }
-  if (message.includes("Fatal Gateway error")) {
+  if (
+    params.err instanceof TypeError ||
+    message.includes("Fatal Gateway error") ||
+    message.includes("Fatal gateway close code") ||
+    message.includes("Gateway HELLO missing heartbeat") ||
+    message.includes("Invalid gateway payload") ||
+    message.includes("Gateway socket emitted an unknown error")
+  ) {
     return {
       type: "fatal",
       err: params.err,

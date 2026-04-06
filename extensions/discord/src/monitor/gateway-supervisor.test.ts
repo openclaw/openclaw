@@ -6,21 +6,21 @@ import {
 } from "./gateway-supervisor.js";
 
 describe("classifyDiscordGatewayEvent", () => {
-  it("maps raw gateway errors onto domain events", () => {
+  it("maps current Carbon gateway errors onto domain events", () => {
     const reconnectEvent = classifyDiscordGatewayEvent({
-      err: new Error("Max reconnect attempts (0) reached after code 1006"),
+      err: new Error("Max reconnect attempts (0) reached after close code 1006"),
       isDisallowedIntentsError: () => false,
     });
     const fatalEvent = classifyDiscordGatewayEvent({
-      err: new Error("Fatal Gateway error: 4000"),
+      err: new Error("Fatal gateway close code: 4000"),
       isDisallowedIntentsError: () => false,
     });
     const disallowedEvent = classifyDiscordGatewayEvent({
-      err: new Error("Fatal Gateway error: 4014"),
+      err: new Error("Fatal gateway close code: 4014"),
       isDisallowedIntentsError: (err) => String(err).includes("4014"),
     });
     const transientEvent = classifyDiscordGatewayEvent({
-      err: new Error("transient"),
+      err: new TypeError(),
       isDisallowedIntentsError: () => false,
     });
 
@@ -28,8 +28,9 @@ describe("classifyDiscordGatewayEvent", () => {
     expect(reconnectEvent.shouldStopLifecycle).toBe(true);
     expect(fatalEvent.type).toBe("fatal");
     expect(disallowedEvent.type).toBe("disallowed-intents");
-    expect(transientEvent.type).toBe("other");
-    expect(transientEvent.shouldStopLifecycle).toBe(false);
+    expect(transientEvent.type).toBe("fatal");
+    expect(transientEvent.message).toBe("TypeError");
+    expect(transientEvent.shouldStopLifecycle).toBe(true);
   });
 });
 
@@ -46,7 +47,7 @@ describe("createDiscordGatewaySupervisor", () => {
     });
     const seen: string[] = [];
 
-    emitter.emit("error", new Error("Fatal Gateway error: 4014"));
+    emitter.emit("error", new Error("Fatal gateway close code: 4014"));
     expect(
       supervisor.drainPending((event) => {
         seen.push(event.type);
@@ -57,10 +58,10 @@ describe("createDiscordGatewaySupervisor", () => {
     supervisor.attachLifecycle((event) => {
       seen.push(event.type);
     });
-    emitter.emit("error", new Error("Fatal Gateway error: 4000"));
+    emitter.emit("error", new Error("Fatal gateway close code: 4000"));
 
     supervisor.detachLifecycle();
-    emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1006"));
+    emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1006"));
 
     expect(seen).toEqual(["disallowed-intents", "fatal"]);
     expect(runtime.error).toHaveBeenCalledWith(
@@ -94,7 +95,7 @@ describe("createDiscordGatewaySupervisor", () => {
     supervisor.dispose();
 
     expect(() =>
-      emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
+      emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1005")),
     ).not.toThrow();
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
