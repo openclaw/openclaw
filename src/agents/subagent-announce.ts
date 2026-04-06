@@ -103,6 +103,77 @@ function hasUsableSessionEntry(entry: unknown): boolean {
   return typeof sessionId !== "string" || sessionId.trim() !== "";
 }
 
+type ResolvedAnnounceTarget = {
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  requesterDepth: number;
+  requesterIsInternal: boolean;
+  fallbackUsed: boolean;
+};
+
+async function resolveSubagentAnnounceTarget(params: {
+  requesterSessionKey: string;
+  requesterDisplayKey?: string;
+  requesterOrigin?: DeliveryContext;
+  subagentRegistryRuntime?: Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>;
+}): Promise<ResolvedAnnounceTarget | null> {
+  let requesterSessionKey = params.requesterDisplayKey?.trim() || params.requesterSessionKey;
+  let requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  let requesterDepth = getSubagentDepthFromSessionStore(requesterSessionKey);
+  let requesterIsInternal = requesterDepth >= 1 || isCronSessionKey(requesterSessionKey);
+  let fallbackUsed = false;
+
+  if (!requesterIsInternal) {
+    return {
+      requesterSessionKey,
+      requesterOrigin,
+      requesterDepth,
+      requesterIsInternal,
+      fallbackUsed,
+    };
+  }
+
+  if (isCronSessionKey(requesterSessionKey)) {
+    return {
+      requesterSessionKey,
+      requesterOrigin,
+      requesterDepth,
+      requesterIsInternal: true,
+      fallbackUsed,
+    };
+  }
+
+  const runtime = params.subagentRegistryRuntime ?? (await loadSubagentRegistryRuntime());
+  if (runtime.shouldIgnorePostCompletionAnnounceForSession(requesterSessionKey)) {
+    return null;
+  }
+
+  const parentSessionEntry = loadSessionEntryByKey(requesterSessionKey);
+  const requesterSessionEntry = loadRequesterSessionEntry(requesterSessionKey).entry;
+  const parentSessionAlive =
+    hasUsableSessionEntry(parentSessionEntry) || requesterSessionEntry != null;
+
+  if (!parentSessionAlive) {
+    const fallback = runtime.resolveRequesterForChildSession(requesterSessionKey);
+    if (!fallback?.requesterSessionKey) {
+      return null;
+    }
+    requesterSessionKey = fallback.requesterSessionKey;
+    requesterOrigin = normalizeDeliveryContext(fallback.requesterOrigin) ?? requesterOrigin;
+    requesterDepth = getSubagentDepthFromSessionStore(requesterSessionKey);
+    requesterIsInternal = requesterDepth >= 1 || isCronSessionKey(requesterSessionKey);
+    fallbackUsed = true;
+  }
+
+  return {
+    requesterSessionKey,
+    requesterOrigin,
+    requesterDepth,
+    requesterIsInternal,
+    fallbackUsed,
+  };
+}
+
 function buildDescendantWakeMessage(params: { findings: string; taskLabel: string }): string {
   return [
     "[Subagent Context] Your prior run ended while waiting for descendant subagent completions.",
@@ -460,34 +531,23 @@ export async function runSubagentAnnounceFlow(params: {
     const announceSessionId = childSessionId || "unknown";
     const findings = childCompletionFindings || reply || "(no output)";
 
-    let requesterIsSubagent = requesterIsInternalSession();
-    if (requesterIsSubagent) {
-      const {
-        isSubagentSessionRunActive,
-        resolveRequesterForChildSession,
-        shouldIgnorePostCompletionAnnounceForSession,
-      } = subagentRegistryRuntime ?? (await loadSubagentRegistryRuntime());
-      if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
-        if (shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)) {
-          return true;
-        }
-        const parentSessionEntry = loadSessionEntryByKey(targetRequesterSessionKey);
-        const parentSessionAlive = hasUsableSessionEntry(parentSessionEntry);
-
-        if (!parentSessionAlive) {
-          const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
-          if (!fallback?.requesterSessionKey) {
-            shouldDeleteChildSession = false;
-            return false;
-          }
-          targetRequesterSessionKey = fallback.requesterSessionKey;
-          targetRequesterOrigin =
-            normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
-          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
-          requesterIsSubagent = requesterIsInternalSession();
-        }
+    const resolvedTarget = await resolveSubagentAnnounceTarget({
+      requesterSessionKey: targetRequesterSessionKey,
+      requesterDisplayKey: params.requesterDisplayKey,
+      requesterOrigin: targetRequesterOrigin,
+      subagentRegistryRuntime,
+    });
+    if (!resolvedTarget) {
+      if (requesterIsInternalSession()) {
+        shouldDeleteChildSession = false;
+        return false;
       }
+      return true;
     }
+    targetRequesterSessionKey = resolvedTarget.requesterSessionKey;
+    targetRequesterOrigin = resolvedTarget.requesterOrigin;
+    requesterDepth = resolvedTarget.requesterDepth;
+    let requesterIsSubagent = resolvedTarget.requesterIsInternal;
 
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
