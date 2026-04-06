@@ -67,6 +67,29 @@ def run_handoff_seed(script_dir: Path, handoff: dict) -> dict:
     return json.loads(completed.stdout)
 
 
+def run_policy_shortcut(script_dir: Path, seed: dict, recommended_action: str | None) -> dict:
+    cmd = [
+        str(script_dir / 'sense-runtime-manager-policy-shortcut.sh'),
+        '--input-json',
+        json.dumps(
+            {
+                'shortcut_version': 'v1',
+                'source': 'lightweight_handoff_seed',
+                'recommended_action': recommended_action,
+                'suggested_next_step': seed.get('suggested_next_step'),
+                'primary_remaining_issue': seed.get('primary_remaining_issue'),
+                'summary_confidence': seed.get('summary_confidence'),
+            },
+            ensure_ascii=False,
+        ),
+    ]
+    completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        error_text = completed.stderr.strip() or completed.stdout.strip() or 'policy shortcut build failed'
+        raise RuntimeError(error_text)
+    return json.loads(completed.stdout)
+
+
 def run_full_evaluator(script_dir: Path, runtime_args: list[str]) -> dict:
     cmd = [str(script_dir / 'sense-runtime-routing-loop.sh'), *runtime_args]
     completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
@@ -102,6 +125,11 @@ def main() -> int:
 
     if decision == 'use_handoff':
         seed_result = run_handoff_seed(script_dir, handoff)
+        shortcut_result = run_policy_shortcut(
+            script_dir,
+            seed_result.get('seed') or {},
+            seed_result.get('recommended_action'),
+        )
         entry_result = {
             'mode': 'handoff',
             'suggested_next_step': suggested_next_step,
@@ -109,6 +137,7 @@ def main() -> int:
             'summary_confidence': summary_confidence,
             'seed': seed_result.get('seed'),
             'recommended_action': seed_result.get('recommended_action'),
+            'shortcut_plan': shortcut_result,
         }
         output = {
             'entry_decision': decision,
