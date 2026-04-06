@@ -210,7 +210,7 @@ export async function applyBeforeResponseEmitHook(
     // session rewrites to avoid unnecessary work and observer confusion.
     const allContentChanged =
       emitResult.allContent.length !== sessionAllContent.length ||
-      emitResult.allContent.some((t, i) => t !== sessionAllContent[i]);
+      emitResult.allContent.some((t: string, i: number) => t !== sessionAllContent[i]);
     if (!allContentChanged) {
       log.debug("allContent unchanged, skipping rewrite");
       return undefined;
