@@ -9,6 +9,12 @@ import { loadBundledEntryExportSync } from "./channel-entry-contract.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.resetModules();
+  vi.doUnmock("jiti");
+  vi.doUnmock("node:fs");
+  vi.doUnmock("node:module");
+  vi.doUnmock("../infra/boundary-file-read.js");
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -18,7 +24,53 @@ afterEach(() => {
 });
 
 describe("loadBundledEntryExportSync", () => {
-  it("includes importer and resolved path context when a bundled sidecar is missing", () => {
+  it("converts Windows absolute paths to file URLs before handing them to jiti", async () => {
+    const importerUrl = "file:///C:/openclaw/dist/extensions/signal/setup-entry.js";
+    const modulePath = String.raw`C:\openclaw\dist\extensions\signal\api.js`;
+    const safeImportPath = "file:///C:/openclaw/dist/extensions/signal/api.js";
+
+    const loader = vi.fn().mockReturnValue({ signalSetupPlugin: {} });
+    vi.doMock("jiti", () => ({
+      createJiti: vi.fn(() => loader),
+    }));
+    vi.doMock("node:module", () => ({
+      createRequire: vi.fn(() => () => {
+        throw new Error("force jiti fallback");
+      }),
+    }));
+    vi.doMock("node:fs", () => ({
+      default: {
+        closeSync: vi.fn(),
+      },
+    }));
+    vi.doMock("../infra/boundary-file-read.js", () => ({
+      openBoundaryFileSync: vi.fn(({ absolutePath }: { absolutePath: string }) => ({
+        ok: true,
+        fd: 1,
+        path: absolutePath === "./api.js" ? modulePath : absolutePath,
+      })),
+    }));
+
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platformDescriptor?.configurable) {
+      throw new Error("process.platform is not configurable in this test environment");
+    }
+    Object.defineProperty(process, "platform", { value: "win32" });
+
+    try {
+      const { loadBundledEntryExportSync } = await import("./channel-entry-contract.js");
+      loadBundledEntryExportSync(importerUrl, {
+        specifier: "./api.js",
+        exportName: "signalSetupPlugin",
+      });
+      expect(loader).toHaveBeenCalledOnce();
+      expect(loader).toHaveBeenCalledWith(safeImportPath);
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+    }
+  });
+
+  it("includes importer and resolved path context when a bundled sidecar is missing", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
 
@@ -27,6 +79,8 @@ describe("loadBundledEntryExportSync", () => {
 
     const importerPath = path.join(pluginRoot, "index.js");
     fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+
+    const { loadBundledEntryExportSync } = await import("./channel-entry-contract.js");
 
     let thrown: unknown;
     try {

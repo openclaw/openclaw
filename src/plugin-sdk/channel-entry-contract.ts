@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -259,6 +259,19 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
   );
 }
 
+function toSafeImportPath(specifier: string): string {
+  if (process.platform !== "win32") {
+    return specifier;
+  }
+  if (specifier.startsWith("file://")) {
+    return specifier;
+  }
+  if (path.win32.isAbsolute(specifier)) {
+    return pathToFileURL(specifier).href;
+  }
+  return specifier;
+}
+
 function getJiti(modulePath: string) {
   const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
     modulePath,
@@ -280,6 +293,7 @@ function getJiti(modulePath: string) {
 
 function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): unknown {
   const modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
+  const safeImportPath = toSafeImportPath(modulePath);
   const cached = loadedModuleExports.get(modulePath);
   if (cached !== undefined) {
     return cached;
@@ -293,10 +307,10 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
     try {
       loaded = nodeRequire(modulePath);
     } catch {
-      loaded = getJiti(modulePath)(modulePath);
+      loaded = getJiti(modulePath)(safeImportPath);
     }
   } else {
-    loaded = getJiti(modulePath)(modulePath);
+    loaded = getJiti(modulePath)(safeImportPath);
   }
   loadedModuleExports.set(modulePath, loaded);
   return loaded;
