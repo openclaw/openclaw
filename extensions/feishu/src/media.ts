@@ -1,3 +1,4 @@
+import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
@@ -13,6 +14,60 @@ import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result
 import { resolveFeishuSendTarget } from "./send-target.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
+
+/**
+ * Extract the first frame of a video buffer as a JPEG thumbnail using ffmpeg.
+ * Returns a Buffer containing JPEG image data, or undefined if ffmpeg is
+ * unavailable or extraction fails. Callers should treat undefined as a
+ * soft failure — the video can still be sent without a thumbnail.
+ */
+async function extractVideoCover(videoBuffer: Buffer): Promise<Buffer | undefined> {
+  return new Promise((resolve) => {
+    let ffmpeg: ReturnType<typeof spawn>;
+    try {
+      ffmpeg = spawn("ffmpeg", [
+        "-i",
+        "pipe:0", // read from stdin
+        "-vframes",
+        "1", // extract exactly one frame
+        "-f",
+        "image2", // output format: raw image
+        "-vcodec",
+        "mjpeg", // encode as JPEG
+        "-loglevel",
+        "error", // suppress progress noise
+        "pipe:1", // write to stdout
+      ]);
+    } catch {
+      // ffmpeg binary not found
+      resolve(undefined);
+      return;
+    }
+
+    if (!ffmpeg.stdout || !ffmpeg.stdin) {
+      resolve(undefined);
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    ffmpeg.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+    ffmpeg.on("error", () => resolve(undefined));
+    ffmpeg.on("close", (code) => {
+      if (code === 0 && chunks.length > 0) {
+        resolve(Buffer.concat(chunks));
+      } else {
+        resolve(undefined);
+      }
+    });
+
+    ffmpeg.stdin.on("error", () => {
+      // stdin write error (e.g. broken pipe) — not fatal, wait for close event
+    });
+
+    ffmpeg.stdin.end(videoBuffer);
+  });
+}
 
 export type DownloadImageResult = {
   buffer: Buffer;
@@ -452,18 +507,31 @@ export async function sendFileFeishu(params: {
   fileKey: string;
   /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
   msgType?: "file" | "audio" | "media";
+  /**
+   * Thumbnail image_key for video (msg_type=media) messages.
+   * When provided, Feishu renders the video with a cover image instead of a
+   * generic file icon. Obtain via uploadImageFeishu() before calling this
+   * function. Optional — omitting it is safe but degrades the visual.
+   */
+  imageKey?: string;
   replyToMessageId?: string;
   replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
+  const { cfg, to, fileKey, imageKey, replyToMessageId, replyInThread, accountId } = params;
   const msgType = params.msgType ?? "file";
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
-  const content = JSON.stringify({ file_key: fileKey });
+  // For video messages (msg_type=media), Feishu requires image_key to display
+  // a thumbnail. Without it the message sends but shows no cover preview.
+  const contentPayload =
+    msgType === "media" && imageKey
+      ? { file_key: fileKey, image_key: imageKey }
+      : { file_key: fileKey };
+  const content = JSON.stringify(contentPayload);
 
   if (replyToMessageId) {
     const response = await client.im.message.reply({
@@ -628,6 +696,23 @@ export async function sendMediaFeishu(params: {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
+    // For video messages, extract a thumbnail via ffmpeg and upload it so
+    // Feishu can render a cover preview instead of a generic file icon.
+    // This is a best-effort step: if ffmpeg is unavailable or extraction
+    // fails, we fall back to sending without a thumbnail.
+    let videoImageKey: string | undefined;
+    if (routing.msgType === "media") {
+      const coverBuffer = await extractVideoCover(buffer);
+      if (coverBuffer) {
+        try {
+          const { imageKey } = await uploadImageFeishu({ cfg, image: coverBuffer, accountId });
+          videoImageKey = imageKey;
+        } catch {
+          // Upload failed — proceed without thumbnail
+        }
+      }
+    }
+
     const { fileKey } = await uploadFileFeishu({
       cfg,
       file: buffer,
@@ -640,6 +725,7 @@ export async function sendMediaFeishu(params: {
       to,
       fileKey,
       msgType: routing.msgType,
+      imageKey: videoImageKey,
       replyToMessageId,
       replyInThread,
       accountId,
