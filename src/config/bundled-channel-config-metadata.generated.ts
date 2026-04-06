@@ -14813,6 +14813,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           enum: ["pairing", "allowlist", "open", "disabled"],
         },
+        dmRequireMention: {
+          type: "boolean",
+        },
         selfChatMode: {
           type: "boolean",
         },
@@ -15065,6 +15068,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 default: "pairing",
                 type: "string",
                 enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              dmRequireMention: {
+                type: "boolean",
               },
               selfChatMode: {
                 type: "boolean",

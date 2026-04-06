@@ -47,6 +47,8 @@ type WhatsAppSharedConfig = {
   enabled?: boolean;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
+  /** When true, DMs from authorized senders require a mention-pattern match to trigger a reply. */
+  dmRequireMention?: boolean;
   /** Same-phone setup (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
