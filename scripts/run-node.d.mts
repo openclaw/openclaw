@@ -19,6 +19,7 @@ export function runNodeMain(params?: {
     args: string[],
     options: unknown,
   ) => {
+    kill?: (signal?: string) => boolean | void;
     on: (
       event: "exit",
       cb: (code: number | null, signal: string | null) => void,
@@ -27,6 +28,7 @@ export function runNodeMain(params?: {
   spawnSync?: unknown;
   fs?: unknown;
   stderr?: { write: (value: string) => void };
+  process?: NodeJS.Process;
   execPath?: string;
   cwd?: string;
   args?: string[];

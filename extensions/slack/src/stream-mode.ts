@@ -4,7 +4,7 @@ import {
   resolveSlackStreamingMode,
   type SlackLegacyDraftStreamMode,
   type StreamingMode,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "./streaming-compat.js";
 
 export type SlackStreamMode = SlackLegacyDraftStreamMode;
 export type SlackStreamingMode = StreamingMode;

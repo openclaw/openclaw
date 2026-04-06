@@ -400,7 +400,7 @@ type MessageToolOptions = {
   currentChannelProvider?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;

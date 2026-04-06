@@ -9,6 +9,10 @@ export type ReplyReferencePlanner = {
   hasReplied(): boolean;
 };
 
+export function isSingleUseReplyToMode(mode: ReplyToMode): boolean {
+  return mode === "first" || mode === "batched";
+}
+
 export function createReplyReferencePlanner(options: {
   replyToMode: ReplyToMode;
   /** Existing thread/reference id (preferred when allowed by replyToMode). */
@@ -40,12 +44,11 @@ export function createReplyReferencePlanner(options: {
       hasReplied = true;
       return id;
     }
-    // "first": only the first reply gets a reference.
-    if (!hasReplied) {
-      hasReplied = true;
-      return id;
+    if (isSingleUseReplyToMode(options.replyToMode) && hasReplied) {
+      return undefined;
     }
-    return undefined;
+    hasReplied = true;
+    return id;
   };
 
   const markSent = () => {

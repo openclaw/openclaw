@@ -27,6 +27,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private var foreground = true
+  private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
+  val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
+  private val _chatDraft = MutableStateFlow<String?>(null)
+  val chatDraft: StateFlow<String?> = _chatDraft
+  private val _pendingAssistantAutoSend = MutableStateFlow<String?>(null)
+  val pendingAssistantAutoSend: StateFlow<String?> = _pendingAssistantAutoSend
 
   private fun ensureRuntime(): NodeRuntime {
     runtimeRef.value?.let { return it }
@@ -246,6 +252,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ensureRuntime().setVoiceScreenActive(active)
   }
 
+  fun handleAssistantLaunch(request: AssistantLaunchRequest) {
+    _requestedHomeDestination.value = HomeDestination.Chat
+    if (request.autoSend) {
+      _pendingAssistantAutoSend.value = request.prompt
+      _chatDraft.value = null
+      return
+    }
+    _pendingAssistantAutoSend.value = null
+    _chatDraft.value = request.prompt
+  }
+
+  fun clearRequestedHomeDestination() {
+    _requestedHomeDestination.value = null
+  }
+
+  fun clearChatDraft() {
+    _chatDraft.value = null
+  }
+
+  fun clearPendingAssistantAutoSend() {
+    _pendingAssistantAutoSend.value = null
+  }
+
   fun setMicEnabled(enabled: Boolean) {
     ensureRuntime().setMicEnabled(enabled)
   }
@@ -336,5 +365,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
     ensureRuntime().sendChat(message = message, thinking = thinking, attachments = attachments)
+  }
+
+  suspend fun sendChatAwaitAcceptance(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+  ): Boolean {
+    return ensureRuntime().sendChatAwaitAcceptance(
+      message = message,
+      thinking = thinking,
+      attachments = attachments,
+    )
   }
 }

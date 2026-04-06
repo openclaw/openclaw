@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/browser-support";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/browser-config-runtime";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
-} from "openclaw/plugin-sdk/browser-support";
+} from "openclaw/plugin-sdk/browser-config-runtime";
 
 export function isDefaultBrowserPluginEnabled(cfg: OpenClawConfig): boolean {
   return resolveEffectiveEnableState({

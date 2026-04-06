@@ -73,9 +73,13 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  {
+    prefix: "agents.list",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
-  { prefix: "browser", kind: "restart" },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
@@ -129,7 +133,32 @@ function listReloadRules(): ReloadRule[] {
       }),
     ),
   ]);
-  const rules = [...BASE_RELOAD_RULES, ...channelReloadRules, ...BASE_RELOAD_RULES_TAIL];
+  const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) => [
+    ...(entry.registration.restartPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "restart",
+      }),
+    ),
+    ...(entry.registration.hotPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "hot",
+      }),
+    ),
+    ...(entry.registration.noopPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "none",
+      }),
+    ),
+  ]);
+  const rules = [
+    ...BASE_RELOAD_RULES,
+    ...pluginReloadRules,
+    ...channelReloadRules,
+    ...BASE_RELOAD_RULES_TAIL,
+  ];
   cachedReloadRules = rules;
   return rules;
 }

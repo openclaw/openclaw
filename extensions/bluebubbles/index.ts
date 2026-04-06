@@ -1,14 +1,16 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { bluebubblesPlugin } from "./src/channel.js";
-import { setBlueBubblesRuntime } from "./src/runtime.js";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export { bluebubblesPlugin } from "./src/channel.js";
-export { setBlueBubblesRuntime } from "./src/runtime.js";
-
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "bluebubbles",
   name: "BlueBubbles",
   description: "BlueBubbles channel plugin (macOS app)",
-  plugin: bluebubblesPlugin,
-  setRuntime: setBlueBubblesRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "bluebubblesPlugin",
+  },
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setBlueBubblesRuntime",
+  },
 });

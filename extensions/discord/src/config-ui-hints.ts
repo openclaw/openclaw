@@ -1,4 +1,4 @@
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const discordChannelConfigUiHints = {
   "": {
@@ -32,10 +32,6 @@ export const discordChannelConfigUiHints = {
   streaming: {
     label: "Discord Streaming Mode",
     help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
-  },
-  streamMode: {
-    label: "Discord Stream Mode (Legacy)",
-    help: "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
   },
   "draftChunk.minChars": {
     label: "Discord Draft Chunk Min Chars",

@@ -4,10 +4,10 @@ import path from "node:path";
 import { optimizeImageToPng } from "openclaw/plugin-sdk/media-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
+import { captureEnv } from "openclaw/plugin-sdk/testing";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../../../test/helpers/plugins/env.js";
+import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
 import {
   LocalMediaAccessError,

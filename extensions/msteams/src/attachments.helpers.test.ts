@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
@@ -30,7 +29,13 @@ type AttachmentPlaceholderInput = Parameters<typeof buildMSTeamsAttachmentPlaceh
 type GraphMessageUrlParams = Parameters<typeof buildMSTeamsGraphMessageUrls>[0];
 type MSTeamsMediaPayload = ReturnType<typeof buildMSTeamsMediaPayload>;
 
-const runtimeStub: PluginRuntime = createPluginRuntimeMock();
+const runtimeStub = {
+  channel: {
+    text: {
+      chunkText: (text: string) => (text ? [text] : []),
+    },
+  },
+} as unknown as PluginRuntime;
 const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
 const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
 const formatImagePlaceholder = (count: number) =>

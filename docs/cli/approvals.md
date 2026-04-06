@@ -11,6 +11,8 @@ title: "approvals"
 Manage exec approvals for the **local host**, **gateway host**, or a **node host**.
 By default, commands target the local approvals file on disk. Use `--gateway` to target the gateway, or `--node` to target a specific node.
 
+Alias: `openclaw exec-approvals`
+
 Related:
 
 - Exec approvals: [Exec approvals](/tools/exec-approvals)
@@ -41,9 +43,62 @@ Precedence is intentional:
 
 ```bash
 openclaw approvals set --file ./exec-approvals.json
+openclaw approvals set --stdin <<'EOF'
+{ version: 1, defaults: { security: "full", ask: "off" } }
+EOF
 openclaw approvals set --node <id|name|ip> --file ./exec-approvals.json
 openclaw approvals set --gateway --file ./exec-approvals.json
 ```
+
+`set` accepts JSON5, not only strict JSON. Use either `--file` or `--stdin`, not both.
+
+## "Never prompt" / YOLO example
+
+For a host that should never stop on exec approvals, set the host approvals defaults to `full` + `off`:
+
+```bash
+openclaw approvals set --stdin <<'EOF'
+{
+  version: 1,
+  defaults: {
+    security: "full",
+    ask: "off",
+    askFallback: "full"
+  }
+}
+EOF
+```
+
+Node variant:
+
+```bash
+openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
+{
+  version: 1,
+  defaults: {
+    security: "full",
+    ask: "off",
+    askFallback: "full"
+  }
+}
+EOF
+```
+
+This changes the **host approvals file** only. To keep the requested OpenClaw policy aligned, also set:
+
+```bash
+openclaw config set tools.exec.host gateway
+openclaw config set tools.exec.security full
+openclaw config set tools.exec.ask off
+```
+
+Why `tools.exec.host=gateway` in this example:
+
+- `host=auto` still means "sandbox when available, otherwise gateway".
+- YOLO is about approvals, not routing.
+- If you want host exec even when a sandbox is configured, make the host choice explicit with `gateway` or `/exec host=gateway`.
+
+This matches the current host-default YOLO behavior. Tighten it if you want approvals.
 
 ## Allowlist helpers
 
@@ -54,6 +109,24 @@ openclaw approvals allowlist add --agent "*" "/usr/bin/uname"
 
 openclaw approvals allowlist remove "~/Projects/**/bin/rg"
 ```
+
+## Common options
+
+`get`, `set`, and `allowlist add|remove` all support:
+
+- `--node <id|name|ip>`
+- `--gateway`
+- shared node RPC options: `--url`, `--token`, `--timeout`, `--json`
+
+Targeting notes:
+
+- no target flags means the local approvals file on disk
+- `--gateway` targets the gateway host approvals file
+- `--node` targets one node host after resolving id, name, IP, or id prefix
+
+`allowlist add|remove` also supports:
+
+- `--agent <id>` (defaults to `*`)
 
 ## Notes
 

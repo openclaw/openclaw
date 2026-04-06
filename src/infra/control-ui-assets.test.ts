@@ -19,8 +19,8 @@ function setDir(p: string) {
   state.entries.set(abs(p), { kind: "dir" });
 }
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("./control-ui-assets.fs.runtime.js", async () => {
+  const actual = await import("node:fs");
   const pathMod = await import("node:path");
   const absInMock = (p: string) => pathMod.resolve(p);
   const fixturesRoot = `${absInMock("fixtures")}${pathMod.sep}`;
@@ -31,7 +31,6 @@ vi.mock("node:fs", async (importOriginal) => {
   const readFixtureEntry = (p: string) => state.entries.get(absInMock(p));
 
   const wrapped = {
-    ...actual,
     existsSync: (p: string) =>
       isFixturePath(p) ? state.entries.has(absInMock(p)) : actual.existsSync(p),
     readFileSync: (p: string, encoding?: BufferEncoding) => {
@@ -62,8 +61,7 @@ vi.mock("node:fs", async (importOriginal) => {
         ? (state.realpaths.get(absInMock(p)) ?? absInMock(p))
         : actual.realpathSync(p),
   };
-
-  return { ...wrapped, default: wrapped };
+  return wrapped;
 });
 
 vi.mock("./openclaw-root.js", () => ({
