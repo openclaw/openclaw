@@ -722,6 +722,21 @@ export function attachGatewayWsMessageHandler(params: {
           rejectUnauthorized(authResult);
           return;
         }
+        const sharedGatewaySessionGeneration =
+          authMethod === "token" || authMethod === "password"
+            ? resolveSharedGatewaySessionGeneration(resolvedAuth)
+            : undefined;
+        if (authMethod === "token" || authMethod === "password") {
+          const requiredSharedGatewaySessionGeneration =
+            getRequiredSharedGatewaySessionGeneration();
+          if (sharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration) {
+            setCloseCause("gateway-auth-rotated", {
+              authGenerationStale: true,
+            });
+            close(4001, "gateway auth changed");
+            return;
+          }
+        }
         const issuedBootstrapProfile =
           authMethod === "bootstrap-token" && bootstrapTokenCandidate
             ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
@@ -1186,21 +1201,6 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl && canvasCapability
             ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
             : canvasHostUrl;
-        const sharedGatewaySessionGeneration =
-          authMethod === "token" || authMethod === "password"
-            ? resolveSharedGatewaySessionGeneration(resolvedAuth)
-            : undefined;
-        if (authMethod === "token" || authMethod === "password") {
-          const requiredSharedGatewaySessionGeneration =
-            getRequiredSharedGatewaySessionGeneration();
-          if (sharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration) {
-            setCloseCause("gateway-auth-rotated", {
-              authGenerationStale: true,
-            });
-            close(4001, "gateway auth changed");
-            return;
-          }
-        }
         const helloOk = {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
