@@ -379,6 +379,16 @@ type WrappedPendingContent = {
   payload: unknown;
 };
 
+function consumeActiveWrappedEntries(
+  activeEntries: Map<string, ActiveApprovalEntries>,
+  requestId: string,
+  fallbackEntries: WrappedPendingEntry[],
+): WrappedPendingEntry[] {
+  const entries = activeEntries.get(requestId)?.entries ?? fallbackEntries;
+  activeEntries.delete(requestId);
+  return entries;
+}
+
 async function applyApprovalFinalAction(params: {
   nativeRuntime: ChannelApprovalNativeRuntimeAdapter;
   baseContext: ChannelApprovalCapabilityHandlerContext;
@@ -919,9 +929,9 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         });
       },
       finalizeResolved: async ({ request, resolved, entries }) => {
-        activeEntries.delete(request.id);
+        const resolvedEntries = consumeActiveWrappedEntries(activeEntries, request.id, entries);
         const view = buildResolvedApprovalView(request, resolved);
-        for (const wrapped of entries) {
+        for (const wrapped of resolvedEntries) {
           if (wrapped.binding !== undefined) {
             await nativeRuntime.interactions?.unbindPending?.({
               ...baseContext,
@@ -948,9 +958,9 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         }
       },
       finalizeExpired: async ({ request, entries }) => {
-        activeEntries.delete(request.id);
+        const expiredEntries = consumeActiveWrappedEntries(activeEntries, request.id, entries);
         const view = buildExpiredApprovalView(request);
-        for (const wrapped of entries) {
+        for (const wrapped of expiredEntries) {
           if (wrapped.binding !== undefined) {
             await nativeRuntime.interactions?.unbindPending?.({
               ...baseContext,
