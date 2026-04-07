@@ -283,6 +283,10 @@ export function createImageTool(options?: {
   workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  /** Provider of the currently selected runtime model. */
+  modelProvider?: string;
+  /** Model id of the currently selected runtime model. */
+  modelId?: string;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
 }): AnyAgentTool | null {
@@ -298,7 +302,16 @@ export function createImageTool(options?: {
     cfg: options?.config,
     agentDir,
   });
-  if (!imageModelConfig) {
+  const runtimeProvider = options?.modelProvider?.trim();
+  const runtimeModelId = options?.modelId?.trim();
+  // Keep the config-driven fallback path authoritative. Only fall back to the
+  // active runtime model when this run has already proven the model can see images.
+  const effectiveImageModelConfig =
+    imageModelConfig ??
+    (options?.modelHasVision && runtimeProvider && runtimeModelId
+      ? { primary: `${runtimeProvider}/${runtimeModelId}` }
+      : null);
+  if (!effectiveImageModelConfig) {
     return null;
   }
 
@@ -509,7 +522,7 @@ export function createImageTool(options?: {
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,
-        imageModelConfig,
+        imageModelConfig: effectiveImageModelConfig,
         modelOverride,
         prompt: promptRaw,
         images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),

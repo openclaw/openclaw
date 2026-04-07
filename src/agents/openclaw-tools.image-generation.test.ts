@@ -90,3 +90,25 @@ describe("openclaw tools image generation registration", () => {
     expect(tools.map((tool) => tool.name)).not.toContain("image_generate");
   });
 });
+
+describe("openclaw tools image registration", () => {
+  it("registers image when the current runtime model is vision-capable", () => {
+    const tools = createOpenClawTools({
+      config: asConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "opencode-go/minimax-m2.7",
+            },
+          },
+        },
+      }),
+      agentDir: "/tmp/openclaw-agent-main",
+      modelHasVision: true,
+      modelProvider: "opencode-go",
+      modelId: "minimax-m2.7",
+    });
+
+    expect(tools.map((tool) => tool.name)).toContain("image");
+  });
+});

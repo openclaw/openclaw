@@ -89,6 +89,8 @@ export function createOpenClawTools(
     modelHasVision?: boolean;
     /** Active model provider for provider-specific tool gating. */
     modelProvider?: string;
+    /** Active model id for runtime-only tool fallbacks. */
+    modelId?: string;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -152,6 +154,8 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        modelProvider: options?.modelProvider,
+        modelId: options?.modelId,
         modelHasVision: options?.modelHasVision,
       })
     : null;

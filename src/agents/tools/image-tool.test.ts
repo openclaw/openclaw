@@ -615,6 +615,55 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("keeps config-driven image fallback disabled for opencode-go minimax models", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "opencode-go/minimax-m2.7" } } },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
+      expect(createImageTool({ config: cfg, agentDir })).toBeNull();
+    });
+  });
+
+  it("uses the current runtime vision model when config-driven fallback is unavailable", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "opencode-go/minimax-m2.7" } } },
+      };
+
+      const tool = createImageTool({
+        config: cfg,
+        agentDir,
+        modelHasVision: true,
+        modelProvider: "opencode-go",
+        modelId: "minimax-m2.7",
+      });
+
+      expect(tool).not.toBeNull();
+      expect(tool?.description).toContain(
+        "Only use this tool when images were NOT already provided",
+      );
+    });
+  });
+
+  it("keeps the runtime model fallback disabled until vision support is confirmed", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "opencode-go/minimax-m2.7" } } },
+      };
+
+      expect(
+        createImageTool({
+          config: cfg,
+          agentDir,
+          modelProvider: "opencode-go",
+          modelId: "minimax-m2.7",
+        }),
+      ).toBeNull();
+    });
+  });
+
   it("pairs minimax primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
