@@ -1,7 +1,13 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const OPENROUTER_DEFAULT_MODEL_ID = "auto";
+// Use the canonical "openrouter/" prefix so this entry collapses with the
+// pi-ai built-in `openrouter/auto` in `mergeCustomModels` (which dedupes by
+// raw `provider+id` string equality). Without the prefix, both entries
+// survive into the merged registry and the /models picker shows two buttons
+// for the same upstream model. The other entries below (`openrouter/hunter-
+// alpha`, `openrouter/healer-alpha`) are already prefixed for the same reason.
+const OPENROUTER_DEFAULT_MODEL_ID = "openrouter/auto";
 const OPENROUTER_DEFAULT_CONTEXT_WINDOW = 200000;
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_DEFAULT_COST = {
