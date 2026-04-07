@@ -117,6 +117,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
     next.cacheRead = usage.cacheRead ?? 0;
     next.cacheWrite = usage.cacheWrite ?? 0;
+    next.lastAssistantMessageAt = Date.now();
+    if ((next.cacheRead ?? 0) > 0 || (next.cacheWrite ?? 0) > 0) {
+      next.lastCacheTouchAt = Date.now();
+    }
     if (runEstimatedCostUsd !== undefined) {
       next.estimatedCostUsd =
         (resolveNonNegativeNumber(entry.estimatedCostUsd) ?? 0) + runEstimatedCostUsd;

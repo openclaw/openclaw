@@ -572,6 +572,7 @@ async function agentCommandInternal(
         next.thinkingLevel = thinkOverride;
       }
       applyVerboseOverride(next, verboseOverride);
+      next.lastUserMessageAt = Date.now();
       await persistSessionEntry({
         sessionStore,
         sessionKey,

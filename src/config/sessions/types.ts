@@ -115,6 +115,12 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   sessionId: string;
   updatedAt: number;
+  /** Epoch ms of the last user message received in this session. */
+  lastUserMessageAt?: number;
+  /** Epoch ms of the last assistant reply completed in this session. */
+  lastAssistantMessageAt?: number;
+  /** Epoch ms of the last confirmed prompt-cache touch (write or read). */
+  lastCacheTouchAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;

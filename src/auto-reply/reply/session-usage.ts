@@ -139,6 +139,7 @@ export async function persistSessionUsageUpdate(params: {
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
             updatedAt: Date.now(),
+            lastAssistantMessageAt: Date.now(),
           };
           if (hasUsage) {
             patch.inputTokens = params.usage?.input ?? 0;
@@ -148,6 +149,9 @@ export async function persistSessionUsageUpdate(params: {
             const cacheUsage = params.lastCallUsage ?? params.usage;
             patch.cacheRead = cacheUsage?.cacheRead ?? 0;
             patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
+            if ((patch.cacheRead ?? 0) > 0 || (patch.cacheWrite ?? 0) > 0) {
+              patch.lastCacheTouchAt = Date.now();
+            }
           }
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = existingEstimatedCostUsd + runEstimatedCostUsd;
