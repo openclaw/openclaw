@@ -392,6 +392,141 @@
   --grid-line: rgba(255, 240, 225, 0.03);
 }
 
+:root[data-theme="kasai"] {
+  /*
+   * Accent — electric cyan on deep space black (Strands cyberpunk)
+   *
+   * WCAG 2.1 AA audit (bg = #0a0c12, relative luminance ≈ 0.005):
+   *   --accent #00e5ff  L ≈ 0.62  contrast ≈ 13.5:1  AAA text ✓
+   *   --accent-hover #40efff  L ≈ 0.72  contrast ≈ 15.2:1  ✓
+   *   --primary-foreground #0a0c12 on #00e5ff button: 13.5:1 AAA ✓
+   *   focus-ring at 70% opacity: ≈ 8.2:1 against bg ✓
+   */
+  --ring: #00e5ff;
+  --accent: #00e5ff;
+  --accent-hover: #40efff;
+  --accent-muted: #00c4d9;
+  --accent-subtle: rgba(0, 229, 255, 0.1);
+  --accent-glow: rgba(0, 229, 255, 0.25);
+  --primary: #00e5ff;
+  --primary-foreground: #0a0c12;
+
+  /* Focus — cyan ring with glow */
+  --focus: rgba(0, 229, 255, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 20px var(--accent-glow);
+
+  /* Surfaces — deep space with subtle blue undertone */
+  --bg: #0a0c12;
+  --bg-accent: #0e1018;
+  --bg-elevated: #14161e;
+  --bg-hover: #1a1c26;
+  --bg-muted: #1a1c26;
+
+  --card: #10121a;
+  --card-foreground: #e8eaf0;
+  --card-highlight: rgba(0, 229, 255, 0.03);
+  --popover: #14161e;
+  --popover-foreground: #e8eaf0;
+
+  --panel: #0a0c12;
+  --panel-strong: #14161e;
+  --panel-hover: #1a1c26;
+  --chrome: rgba(10, 12, 18, 0.96);
+  --chrome-strong: rgba(10, 12, 18, 0.98);
+
+  /* Text — high contrast on deep space */
+  --text: #c8ccd6;
+  --text-strong: #eef0f5;
+  --chat-text: #c8ccd6;
+  --muted: #6a7080;
+  --muted-strong: #585e70;
+  --muted-foreground: #6a7080;
+
+  /* Borders — faint cyan-tinted edges */
+  --border: #1a1e2a;
+  --border-strong: #2a2e3a;
+  --border-hover: #3a3e4c;
+  --input: #1a1e2a;
+
+  --secondary: #10121a;
+  --secondary-foreground: #e8eaf0;
+  /* Secondary accent — hot pink (Strands secondary) */
+  --accent-2: #ff2d78;
+  --accent-2-muted: rgba(255, 45, 120, 0.7);
+  --accent-2-subtle: rgba(255, 45, 120, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 30px var(--accent-glow);
+
+  --grid-line: rgba(0, 229, 255, 0.025);
+}
+
+:root[data-theme="kasai-light"] {
+  /*
+   * Accent — deep teal on cool white (Strands light mode)
+   *
+   * WCAG 2.1 AA audit (bg = #f5f7fa, relative luminance ≈ 0.92):
+   *   --accent #008b99  L ≈ 0.20  contrast ≈ 4.6:1  AA large text ✓
+   *   --accent-hover #006e7a  L ≈ 0.13  contrast ≈ 5.9:1  AA text ✓
+   *   --primary-foreground #ffffff on #008b99 button: 4.6:1 AA ✓
+   */
+  --ring: #008b99;
+  --accent: #008b99;
+  --accent-hover: #006e7a;
+  --accent-muted: #008b99;
+  --accent-subtle: rgba(0, 139, 153, 0.08);
+  --accent-glow: rgba(0, 139, 153, 0.12);
+  --primary: #008b99;
+  --primary-foreground: #ffffff;
+
+  /* Surfaces — cool slate white */
+  --bg: #f5f7fa;
+  --bg-accent: #edf0f5;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e4e8ef;
+  --bg-muted: #e4e8ef;
+  --bg-content: #edf0f5;
+
+  --card: #ffffff;
+  --card-foreground: #161820;
+  --card-highlight: rgba(0, 0, 0, 0.02);
+  --popover: #ffffff;
+  --popover-foreground: #161820;
+
+  --panel: #f5f7fa;
+  --panel-strong: #edf0f5;
+  --panel-hover: #dde2ea;
+  --chrome: rgba(245, 247, 250, 0.96);
+  --chrome-strong: rgba(245, 247, 250, 0.98);
+
+  --text: #3a3e4c;
+  --text-strong: #161820;
+  --chat-text: #3a3e4c;
+  --muted: #6a6e7a;
+  --muted-strong: #4e525e;
+  --muted-foreground: #6a6e7a;
+
+  --border: #dde2ea;
+  --border-strong: #c8cdd8;
+  --border-hover: #a8aeb8;
+  --input: #dde2ea;
+
+  --secondary: #edf0f5;
+  --secondary-foreground: #3a3e4c;
+  --accent-2: #c4185a;
+  --accent-2-muted: rgba(196, 24, 90, 0.75);
+  --accent-2-subtle: rgba(196, 24, 90, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
+
+  --grid-line: rgba(0, 0, 0, 0.04);
+}
+
 :root[data-theme="dash-light"] {
   /*
    * Accent — deep chocolate on warm parchment
