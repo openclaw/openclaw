@@ -4,6 +4,7 @@ import { repeat } from "lit/directives/repeat.js";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentMimeType,
+  resolveSupportedChatAttachmentMimeType,
 } from "../chat/attachment-support.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
@@ -405,7 +406,8 @@ function handleFileSelect(e: Event, props: ChatProps) {
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of input.files) {
-    if (!isSupportedChatAttachmentMimeType(file.type)) {
+    const mimeType = resolveSupportedChatAttachmentMimeType(file);
+    if (!mimeType) {
       continue;
     }
     pending++;
@@ -414,7 +416,7 @@ function handleFileSelect(e: Event, props: ChatProps) {
       additions.push({
         id: generateAttachmentId(),
         dataUrl: reader.result as string,
-        mimeType: file.type,
+        mimeType,
       });
       pending--;
       if (pending === 0) {
@@ -436,7 +438,8 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of files) {
-    if (!isSupportedChatAttachmentMimeType(file.type)) {
+    const mimeType = resolveSupportedChatAttachmentMimeType(file);
+    if (!mimeType) {
       continue;
     }
     pending++;
@@ -445,7 +448,7 @@ function handleDrop(e: DragEvent, props: ChatProps) {
       additions.push({
         id: generateAttachmentId(),
         dataUrl: reader.result as string,
-        mimeType: file.type,
+        mimeType,
       });
       pending--;
       if (pending === 0) {
