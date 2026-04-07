@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export type LobsterEnvelope =
   | {
@@ -460,10 +461,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
           });
           return normalizeWorkflowOutput(okEnvelope, output);
         } catch (error) {
-          return errorEnvelope(
-            "runtime_error",
-            error instanceof Error ? error.message : String(error),
-          );
+          return errorEnvelope("runtime_error", formatErrorMessage(error));
         }
       }
 
@@ -471,7 +469,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
       try {
         parsed = deps.parsePipeline(String(pipeline));
       } catch (error) {
-        return errorEnvelope("parse_error", error instanceof Error ? error.message : String(error));
+        return errorEnvelope("parse_error", formatErrorMessage(error));
       }
 
       try {
@@ -512,10 +510,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
 
         return okEnvelope("ok", output.items, null);
       } catch (error) {
-        return errorEnvelope(
-          "runtime_error",
-          error instanceof Error ? error.message : String(error),
-        );
+        return errorEnvelope("runtime_error", formatErrorMessage(error));
       }
     },
 
@@ -526,7 +521,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
       try {
         payload = deps.decodeResumeToken(token);
       } catch (error) {
-        return errorEnvelope("parse_error", error instanceof Error ? error.message : String(error));
+        return errorEnvelope("parse_error", formatErrorMessage(error));
       }
 
       if (!approved) {
@@ -549,10 +544,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
           });
           return normalizeWorkflowOutput(okEnvelope, output);
         } catch (error) {
-          return errorEnvelope(
-            "runtime_error",
-            error instanceof Error ? error.message : String(error),
-          );
+          return errorEnvelope("runtime_error", formatErrorMessage(error));
         }
       }
 
@@ -603,10 +595,7 @@ function createFallbackEmbeddedToolRuntime(deps: ToolRuntimeDeps): EmbeddedToolR
         }
         return okEnvelope("ok", output.items, null);
       } catch (error) {
-        return errorEnvelope(
-          "runtime_error",
-          error instanceof Error ? error.message : String(error),
-        );
+        return errorEnvelope("runtime_error", formatErrorMessage(error));
       }
     },
   };

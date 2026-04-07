@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 async function loadMarkerModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
   vi.resetModules();
   return Promise.all([import("./model-auth-env-vars.js"), import("./model-auth-markers.js")]);
 }
 
 beforeEach(() => {
   vi.doUnmock("../plugins/manifest-registry.js");
+  vi.doUnmock("../secrets/provider-env-vars.js");
 });
 
 describe("model auth markers", () => {

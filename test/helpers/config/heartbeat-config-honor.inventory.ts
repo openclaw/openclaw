@@ -40,6 +40,21 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
     testPaths: ["src/infra/heartbeat-runner.returns-default-unset.test.ts"],
   },
   {
+    key: "includeSystemPromptSection",
+    schemaPaths: [
+      "agents.defaults.heartbeat.includeSystemPromptSection",
+      "agents.list.*.heartbeat.includeSystemPromptSection",
+    ],
+    typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
+    mergePaths: ["src/agents/heartbeat-system-prompt.ts"],
+    consumerPaths: [
+      "src/agents/heartbeat-system-prompt.ts",
+      "src/agents/pi-embedded-runner/run/attempt.prompt-helpers.ts",
+    ],
+    reloadPaths: ["src/gateway/config-reload-plan.ts"],
+    testPaths: ["src/agents/heartbeat-system-prompt.test.ts"],
+  },
+  {
     key: "ackMaxChars",
     schemaPaths: ["agents.defaults.heartbeat.ackMaxChars", "agents.list.*.heartbeat.ackMaxChars"],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],

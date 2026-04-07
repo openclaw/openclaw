@@ -2,6 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import { expandHomePrefix } from "./home-dir.js";
@@ -15,7 +21,7 @@ export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
     return normalized;
   }
@@ -23,7 +29,7 @@ export function normalizeExecHost(value?: string | null): ExecHost | null {
 }
 
 export function normalizeExecTarget(value?: string | null): ExecTarget | null {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "auto") {
     return normalized;
   }
@@ -31,12 +37,10 @@ export function normalizeExecTarget(value?: string | null): ExecTarget | null {
 }
 
 /** Coerce a raw JSON field to string, returning undefined for non-string types. */
-function toStringOrUndefined(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
+const toStringOrUndefined = readStringValue;
 
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
     return normalized;
   }
@@ -44,7 +48,7 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
 }
 
 export function normalizeExecAsk(value?: string | null): ExecAsk | null {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
     return normalized;
   }
@@ -194,8 +198,8 @@ export function resolveExecApprovalsSocketPath(): string {
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed ? trimmed.toLowerCase() : null;
+  const trimmed = normalizeOptionalString(value) ?? "";
+  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
 }
 
 function mergeLegacyAgent(
@@ -853,7 +857,7 @@ export function addAllowlistEntry(
   if (!trimmed) {
     return;
   }
-  const trimmedArgPattern = options?.argPattern?.trim() || undefined;
+  const trimmedArgPattern = normalizeOptionalString(options?.argPattern);
   const existingEntry = allowlist.find(
     (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern,
   );

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   colorize,
   defaultRuntime,
@@ -34,6 +35,7 @@ import type {
   MemorySearchCommandOptions,
 } from "./cli.types.js";
 import { previewRemDreaming } from "./dreaming-phases.js";
+import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import {
   applyShortTermPromotions,
@@ -69,13 +71,6 @@ type LoadedMemoryCommandConfig = {
   config: OpenClawConfig;
   diagnostics: string[];
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set([
@@ -221,13 +216,13 @@ function matchesPromotionSelector(
   },
   selector: string,
 ): boolean {
-  const trimmed = selector.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(selector);
   if (!trimmed) {
     return false;
   }
   return (
-    candidate.key.toLowerCase() === trimmed ||
-    candidate.key.toLowerCase().includes(trimmed) ||
+    normalizeLowercaseStringOrEmpty(candidate.key) === trimmed ||
+    normalizeLowercaseStringOrEmpty(candidate.key).includes(trimmed) ||
     candidate.path.toLowerCase().includes(trimmed) ||
     candidate.snippet.toLowerCase().includes(trimmed)
   );

@@ -14,6 +14,21 @@ const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
 const OPENAI_SUPPORTED_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;
 const OPENAI_MAX_INPUT_IMAGES = 5;
+const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
+
+function shouldAllowPrivateImageEndpoint(req: {
+  provider: string;
+  cfg: { models?: { providers?: Record<string, { baseUrl?: string }> } };
+}) {
+  if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
+    return true;
+  }
+  const baseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+  if (!baseUrl.startsWith("http://127.0.0.1:") && !baseUrl.startsWith("http://localhost:")) {
+    return false;
+  }
+  return process.env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER === "1";
+}
 
 type OpenAIImageApiResponse = {
   data?: Array<{
@@ -68,6 +83,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         resolveProviderHttpRequestConfig({
           baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
           defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
+          allowPrivateNetwork: shouldAllowPrivateImageEndpoint(req),
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },

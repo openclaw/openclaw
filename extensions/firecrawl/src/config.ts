@@ -59,7 +59,7 @@ function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   if (!search || typeof search !== "object") {
     return undefined;
   }
-  return search as WebSearchConfig;
+  return search;
 }
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
@@ -67,7 +67,7 @@ function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   if (!fetch || typeof fetch !== "object") {
     return undefined;
   }
-  return fetch as WebFetchConfig;
+  return fetch;
 }
 
 export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSearchConfig {

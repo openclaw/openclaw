@@ -6,6 +6,7 @@ import {
   logInboundDrop,
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
+  resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { resolveDualTextControlCommandGate } from "openclaw/plugin-sdk/command-auth";
@@ -468,10 +469,23 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "control command (unauthorized)" };
   }
 
-  const shouldBypassMention =
-    isGroup && requireMention && !mentioned && commandAuthorized && hasControlCommandInMessage;
-  const effectiveWasMentioned = mentioned || shouldBypassMention;
-  if (isGroup && requireMention && canDetectMention && !mentioned && !shouldBypassMention) {
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention,
+      wasMentioned: mentioned,
+      hasAnyMention: false,
+      implicitMentionKinds: [],
+    },
+    policy: {
+      isGroup,
+      requireMention,
+      allowTextCommands: true,
+      hasControlCommand: hasControlCommandInMessage,
+      commandAuthorized,
+    },
+  });
+  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     params.logVerbose?.(`imessage: skipping group message (no mention)`);
     recordPendingHistoryEntryIfEnabled({
       historyMap: params.groupHistories,

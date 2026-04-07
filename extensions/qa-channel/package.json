@@ -5,6 +5,7 @@
   "description": "OpenClaw QA synthetic channel plugin",
   "type": "module",
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

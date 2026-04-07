@@ -61,13 +61,17 @@ What the Matrix wizard actually asks for:
 - optional device name
 - whether to enable E2EE
 - whether to configure Matrix room access now
+- whether to configure Matrix invite auto-join now
+- when invite auto-join is enabled, whether it should be `allowlist`, `always`, or `off`
 
 Wizard behavior that matters:
 
-- If Matrix auth env vars already exist for the selected account, and that account does not already have auth saved in config, the wizard offers an env shortcut and only writes `enabled: true` for that account.
+- If Matrix auth env vars already exist for the selected account, and that account does not already have auth saved in config, the wizard offers an env shortcut so setup can keep auth in env vars instead of copying secrets into config.
 - When you add another Matrix account interactively, the entered account name is normalized into the account ID used in config and env vars. For example, `Ops Bot` becomes `ops-bot`.
 - DM allowlist prompts accept full `@user:server` values immediately. Display names only work when live directory lookup finds one exact match; otherwise the wizard asks you to retry with a full Matrix ID.
 - Room allowlist prompts accept room IDs and aliases directly. They can also resolve joined-room names live, but unresolved names are only kept as typed during setup and are ignored later by runtime allowlist resolution. Prefer `!room:server` or `#alias:server`.
+- The wizard now shows an explicit warning before the invite auto-join step because `channels.matrix.autoJoin` defaults to `off`; agents will not join invited rooms or fresh DM-style invites unless you set it.
+- In invite auto-join allowlist mode, use only stable invite targets: `!roomId:server`, `#alias:server`, or `*`. Plain room names are rejected.
 - Runtime room/session identity uses the stable Matrix room ID. Room-declared aliases are only used as lookup inputs, not as the long-term session key or stable group identity.
 - To resolve room names before saving them, use `openclaw channels resolve --channel matrix "Project Room"`.
 
@@ -77,6 +81,8 @@ Wizard behavior that matters:
 If you leave it unset, the bot will not join invited rooms or fresh DM-style invites, so it will not appear in new groups or invited DMs unless you join manually first.
 
 Set `autoJoin: "allowlist"` together with `autoJoinAllowlist` to restrict which invites it accepts, or set `autoJoin: "always"` if you want it to join every invite.
+
+In `allowlist` mode, `autoJoinAllowlist` only accepts `!roomId:server`, `#alias:server`, or `*`.
 </Warning>
 
 Allowlist example:
@@ -874,7 +880,8 @@ See [Pairing](/channels/pairing) for the shared DM pairing flow and storage layo
 
 ## Exec approvals
 
-Matrix can act as an exec approval client for a Matrix account.
+Matrix can act as a native approval client for a Matrix account. The native
+DM/channel routing knobs still live under exec approval config:
 
 - `channels.matrix.execApprovals.enabled`
 - `channels.matrix.execApprovals.approvers` (optional; falls back to `channels.matrix.dm.allowFrom`)
@@ -882,13 +889,14 @@ Matrix can act as an exec approval client for a Matrix account.
 - `channels.matrix.execApprovals.agentFilter`
 - `channels.matrix.execApprovals.sessionFilter`
 
-Approvers must be Matrix user IDs such as `@owner:example.org`. Matrix auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `channels.matrix.dm.allowFrom`. Set `enabled: false` to disable Matrix as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
+Approvers must be Matrix user IDs such as `@owner:example.org`. Matrix auto-enables native approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved. Exec approvals use `execApprovals.approvers` first and can fall back to `channels.matrix.dm.allowFrom`. Plugin approvals authorize through `channels.matrix.dm.allowFrom`. Set `enabled: false` to disable Matrix as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the approval fallback policy.
 
-Native Matrix routing is exec-only today:
+Matrix native routing now supports both approval kinds:
 
-- `channels.matrix.execApprovals.*` controls native DM/channel routing for exec approvals only.
-- Plugin approvals still use shared same-chat `/approve` plus any configured `approvals.plugin` forwarding.
-- Matrix can still reuse `channels.matrix.dm.allowFrom` for plugin-approval authorization when it can infer approvers safely, but it does not expose a separate native plugin-approval DM/channel fanout path.
+- `channels.matrix.execApprovals.*` controls the native DM/channel fanout mode for Matrix approval prompts.
+- Exec approvals use the exec approver set from `execApprovals.approvers` or `channels.matrix.dm.allowFrom`.
+- Plugin approvals use the Matrix DM allowlist from `channels.matrix.dm.allowFrom`.
+- Matrix reaction shortcuts and message updates apply to both exec and plugin approvals.
 
 Delivery rules:
 
@@ -904,9 +912,9 @@ Matrix approval prompts seed reaction shortcuts on the primary approval message:
 
 Approvers can react on that message or use the fallback slash commands: `/approve <id> allow-once`, `/approve <id> allow-always`, or `/approve <id> deny`.
 
-Only resolved approvers can approve or deny. Channel delivery includes the command text, so only enable `channel` or `both` in trusted rooms.
+Only resolved approvers can approve or deny. For exec approvals, channel delivery includes the command text, so only enable `channel` or `both` in trusted rooms.
 
-Matrix approval prompts reuse the shared core approval planner. The Matrix-specific native surface is transport only for exec approvals: room/DM routing and message send/update/delete behavior.
+Matrix approval prompts reuse the shared core approval planner. The Matrix-specific native surface handles room/DM routing, reactions, and message send/update/delete behavior for both exec and plugin approvals.
 
 Per-account override:
 

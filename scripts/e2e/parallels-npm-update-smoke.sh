@@ -320,6 +320,28 @@ function Invoke-CaptureLogged {
   return ($output | Out-String).Trim()
 }
 
+function Wait-GatewayRpcReady {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath,
+    [int]$Attempts = 10,
+    [int]$SleepSeconds = 3
+  )
+
+  for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+    Write-ProgressLog "update.gateway-status.attempt-$attempt"
+    try {
+      Invoke-Logged 'openclaw gateway status' { & $OpenClawPath gateway status --deep --require-rpc }
+      return
+    } catch {
+      if ($attempt -ge $Attempts) {
+        throw
+      }
+      Write-ProgressLog "update.gateway-status.retry-$attempt"
+      Start-Sleep -Seconds $SleepSeconds
+    }
+  }
+}
+
 try {
   $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
   $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
@@ -343,9 +365,8 @@ try {
   # Restart the gateway/service before verifying status or the next agent turn.
   Write-ProgressLog 'update.restart-gateway'
   Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
-  Start-Sleep -Seconds 5
   Write-ProgressLog 'update.gateway-status'
-  Invoke-Logged 'openclaw gateway status' { & $openclaw gateway status --deep --require-rpc }
+  Wait-GatewayRpcReady -OpenClawPath $openclaw
   Write-ProgressLog 'update.agent-turn'
   Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE

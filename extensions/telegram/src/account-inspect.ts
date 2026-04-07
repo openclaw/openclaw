@@ -9,6 +9,7 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
@@ -131,7 +132,7 @@ function inspectTelegramAccountPrimary(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       token: accountTokenFile.token,
       tokenSource: accountTokenFile.tokenSource,
       tokenStatus: accountTokenFile.tokenStatus,
@@ -145,7 +146,7 @@ function inspectTelegramAccountPrimary(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       token: accountToken.token,
       tokenSource: accountToken.tokenSource,
       tokenStatus: accountToken.tokenStatus,
@@ -159,7 +160,7 @@ function inspectTelegramAccountPrimary(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       token: channelTokenFile.token,
       tokenSource: channelTokenFile.tokenSource,
       tokenStatus: channelTokenFile.tokenStatus,
@@ -176,7 +177,7 @@ function inspectTelegramAccountPrimary(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       token: channelToken.token,
       tokenSource: channelToken.tokenSource,
       tokenStatus: channelToken.tokenStatus,
@@ -191,7 +192,7 @@ function inspectTelegramAccountPrimary(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       token: envToken,
       tokenSource: "env",
       tokenStatus: "available",
@@ -203,7 +204,7 @@ function inspectTelegramAccountPrimary(params: {
   return {
     accountId,
     enabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     token: "",
     tokenSource: "none",
     tokenStatus: "missing",

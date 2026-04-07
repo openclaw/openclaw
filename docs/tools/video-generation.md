@@ -154,7 +154,9 @@ and the shared live sweep.
 | `model`    | string | Provider/model override (e.g. `runway/gen4.5`)  |
 | `filename` | string | Output filename hint                            |
 
-Not all providers support all parameters. Unsupported overrides are ignored on a best-effort basis and reported as warnings in the tool result. Hard capability limits (such as too many reference inputs) fail before submission.
+Not all providers support all parameters. OpenClaw already normalizes duration to the closest provider-supported value, and it also remaps translated geometry hints such as size-to-aspect-ratio when a fallback provider exposes a different control surface. Truly unsupported overrides are ignored on a best-effort basis and reported as warnings in the tool result. Hard capability limits (such as too many reference inputs) fail before submission.
+
+Tool results report the applied settings. When OpenClaw remaps duration or geometry during provider fallback, the returned `durationSeconds`, `size`, `aspectRatio`, and `resolution` values reflect what was submitted, and `details.normalization` captures the requested-to-applied translation.
 
 Reference inputs also select the runtime mode:
 
@@ -181,6 +183,10 @@ When generating a video, OpenClaw resolves the model in this order:
 4. **Auto-detection** -- uses providers that have valid auth, starting with the current default provider, then remaining providers in alphabetical order.
 
 If a provider fails, the next candidate is tried automatically. If all candidates fail, the error includes details from each attempt.
+
+Set `agents.defaults.mediaGenerationAutoProviderFallback: false` if you want
+video generation to use only the explicit `model`, `primary`, and `fallbacks`
+entries.
 
 ```json5
 {

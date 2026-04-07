@@ -47,7 +47,7 @@ describe("resolveProviderHttpRequestConfig", () => {
     });
 
     expect(resolved.baseUrl).toBe("https://api.openai.com/v1");
-    expect(resolved.allowPrivateNetwork).toBe(true);
+    expect(resolved.allowPrivateNetwork).toBe(false);
     expect(resolved.headers.get("authorization")).toBe("Bearer override");
     expect(resolved.headers.get("x-default")).toBe("1");
     expect(resolved.headers.get("user-agent")).toMatch(/^openclaw\//);

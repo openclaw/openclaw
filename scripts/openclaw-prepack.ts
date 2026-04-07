@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { formatErrorMessage } from "../src/infra/errors.ts";
 
 const skipPrepackPreparedEnv = "OPENCLAW_PREPACK_PREPARED";
 const requiredPreparedPathGroups = [
@@ -90,7 +91,7 @@ function ensurePreparedArtifacts(): void {
       console.error(`prepack: ${error}`);
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     console.error(`prepack: failed to verify prepared artifacts: ${message}`);
   }
 

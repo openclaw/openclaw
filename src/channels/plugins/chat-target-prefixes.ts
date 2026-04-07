@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 
 export type ChatTargetPrefixesParams = {
@@ -94,7 +96,7 @@ export function resolveServicePrefixedTarget<TService extends string, TTarget>(p
     if (!remainder) {
       throw new Error(`${prefix} target is required`);
     }
-    const remainderLower = remainder.toLowerCase();
+    const remainderLower = normalizeLowercaseStringOrEmpty(remainder);
     if (params.isChatTarget(remainderLower)) {
       return params.parseTarget(remainder);
     }

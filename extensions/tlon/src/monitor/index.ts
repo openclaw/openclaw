@@ -28,6 +28,7 @@ import {
   mergeUniqueStrings,
   shouldMigrateTlonSetting,
 } from "./settings-helpers.js";
+import { asRecord, formatErrorMessage, readString } from "./utils.js";
 import {
   extractMessageText,
   formatModelName,
@@ -45,22 +46,9 @@ export type MonitorTlonOpts = {
   accountId?: string | null;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
-}
-
 function readNumber(record: Record<string, unknown> | null, key: string): number | undefined {
   const value = record?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<void> {

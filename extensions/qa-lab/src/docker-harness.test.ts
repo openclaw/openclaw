@@ -27,6 +27,7 @@ describe("qa docker harness", () => {
       providerBaseUrl: "http://host.docker.internal:45123/v1",
       repoRoot: "/repo/openclaw",
       usePrebuiltImage: true,
+      bindUiDist: true,
     });
 
     expect(result.files).toEqual(
@@ -46,6 +47,7 @@ describe("qa docker harness", () => {
     expect(compose).toContain("qa-mock-openai:");
     expect(compose).toContain("18889:18789");
     expect(compose).toContain('      - "43124:43123"');
+    expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
     expect(compose).toContain("      - sh");
     expect(compose).toContain("      - -lc");
     expect(compose).toContain(
@@ -54,6 +56,8 @@ describe("qa docker harness", () => {
     expect(compose).toContain("      - --control-ui-proxy-target");
     expect(compose).toContain('      - "http://openclaw-qa-gateway:18789/"');
     expect(compose).toContain("      - --send-kickoff-on-start");
+    expect(compose).toContain("      - --ui-dist-dir");
+    expect(compose).toContain('      - "/opt/openclaw-qa-lab-ui"');
     expect(compose).toContain(":/opt/openclaw-repo:ro");
     expect(compose).toContain("./state:/opt/openclaw-scaffold:ro");
     expect(compose).toContain(
@@ -84,6 +88,7 @@ describe("qa docker harness", () => {
 
     const readme = await readFile(path.join(outputDir, "README.md"), "utf8");
     expect(readme).toContain("in-process restarts inside Docker");
+    expect(readme).toContain("pnpm qa:lab:watch");
   });
 
   it("builds the reusable QA image with bundled QA extensions", async () => {

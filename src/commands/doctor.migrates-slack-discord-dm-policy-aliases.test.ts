@@ -6,7 +6,7 @@ const { doctorCommand } = await import("./doctor.js");
 
 describe("doctor command", () => {
   it(
-    "migrates Slack/Discord dm.policy keys to dmPolicy aliases",
+    "does not rewrite supported Slack/Discord dm.policy aliases",
     { timeout: DOCTOR_MIGRATION_TIMEOUT_MS },
     async () => {
       readConfigFileSnapshot.mockResolvedValue({
@@ -33,22 +33,11 @@ describe("doctor command", () => {
       });
 
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      writeConfigFile.mockClear();
 
       await doctorCommand(runtime, { nonInteractive: true, repair: true });
 
-      expect(writeConfigFile).toHaveBeenCalledTimes(1);
-      const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
-      const channels = (written.channels ?? {}) as Record<string, unknown>;
-      const slack = (channels.slack ?? {}) as Record<string, unknown>;
-      const discord = (channels.discord ?? {}) as Record<string, unknown>;
-
-      expect(slack.dmPolicy).toBe("open");
-      expect(slack.allowFrom).toEqual(["*"]);
-      expect(slack.dm).toEqual({ enabled: true });
-
-      expect(discord.dmPolicy).toBe("allowlist");
-      expect(discord.allowFrom).toEqual(["123"]);
-      expect(discord.dm).toEqual({ enabled: true });
+      expect(writeConfigFile).not.toHaveBeenCalled();
     },
   );
 });

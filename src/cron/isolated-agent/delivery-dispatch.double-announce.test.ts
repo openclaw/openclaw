@@ -67,6 +67,7 @@ vi.mock("./subagent-followup.runtime.js", () => ({
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { callGateway } from "../../gateway/call.runtime.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import {
@@ -276,6 +277,29 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         isCronSystemEvent: () => true,
       }),
     ).toBe(false);
+  });
+
+  it("preserves all successful text payloads for direct delivery", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloads = [{ text: "Working on it..." }, { text: "Final weather summary" }];
+    params.summary = "Final weather summary";
+    params.outputText = "Final weather summary";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456",
+        payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+      }),
+    );
   });
 
   it("queues main-session awareness for isolated cron jobs after delivery", async () => {
@@ -531,6 +555,44 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("surfaces structured direct delivery failures without retry when best-effort is disabled", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("boom"));
+
+    const params = makeBaseParams({ synthesizedText: "Report attached." });
+    (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "error",
+        error: "Error: boom",
+        deliveryAttempted: true,
+      }),
+    );
+  });
+
+  it("ignores structured direct delivery failures when best-effort is enabled", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("boom"));
+
+    const params = makeBaseParams({ synthesizedText: "Report attached." }) as Record<
+      string,
+      unknown
+    >;
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryBestEffort = true;
+    const state = await dispatchCronDelivery(params as never);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(false);
+    expect(state.deliveryAttempted).toBe(true);
+  });
+
   it("no delivery requested means deliveryAttempted stays false and no delivery is sent", async () => {
     const params = makeBaseParams({
       synthesizedText: "Task done.",
@@ -641,6 +703,76 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         isCronSystemEvent: () => true,
       }),
     ).toBe(false);
+  });
+
+  it("delivers explicit targets with direct text through the outbound adapter", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "hello from cron" });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456",
+        accountId: undefined,
+        threadId: undefined,
+        bestEffort: false,
+        skipQueue: true,
+        payloads: [{ text: "hello from cron" }],
+      }),
+    );
+  });
+
+  it("builds outbound session context from the run session key under per-channel-peer scoping", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "hello from cron" });
+    params.cfgWithAgentDefaults = {
+      session: { dmScope: "per-channel-peer" },
+    } as never;
+    params.agentSessionKey = "agent:main:telegram:123456";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(buildOutboundSessionContext).toHaveBeenCalledWith({
+      cfg: params.cfgWithAgentDefaults,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:123456",
+    });
+  });
+
+  it("passes threaded telegram delivery through to the outbound adapter", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "Final weather summary" });
+    params.resolvedDelivery = {
+      ...makeResolvedDelivery(),
+      mode: "implicit",
+      threadId: 42,
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456",
+        threadId: 42,
+        payloads: [{ text: "Final weather summary" }],
+      }),
+    );
   });
 
   it("suppresses NO_REPLY payload with surrounding whitespace", async () => {

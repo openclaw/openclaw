@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
+
 const TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_-]/g;
 export const TOOL_NAME_SEPARATOR = "__";
 const TOOL_NAME_MAX_PREFIX = 30;
@@ -16,12 +21,12 @@ export function sanitizeServerName(raw: string, usedNames: Set<string>): string 
   const base = sanitizeToolFragment(raw, "mcp", TOOL_NAME_MAX_PREFIX);
   let candidate = base;
   let n = 2;
-  while (usedNames.has(candidate.toLowerCase())) {
+  while (usedNames.has(normalizeLowercaseStringOrEmpty(candidate))) {
     const suffix = `-${n}`;
     candidate = `${base.slice(0, Math.max(1, TOOL_NAME_MAX_PREFIX - suffix.length))}${suffix}`;
     n += 1;
   }
-  usedNames.add(candidate.toLowerCase());
+  usedNames.add(normalizeLowercaseStringOrEmpty(candidate));
   return candidate;
 }
 
@@ -30,7 +35,11 @@ export function sanitizeToolName(raw: string): string {
 }
 
 export function normalizeReservedToolNames(names?: Iterable<string>): Set<string> {
-  return new Set(Array.from(names ?? [], (name) => name.trim().toLowerCase()).filter(Boolean));
+  return new Set(
+    Array.from(names ?? [], (name) => normalizeOptionalLowercaseString(name)).filter(
+      (name): name is string => Boolean(name),
+    ),
+  );
 }
 
 export function buildSafeToolName(params: {
@@ -47,7 +56,7 @@ export function buildSafeToolName(params: {
   let candidateToolName = truncatedToolName || "tool";
   let candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
   let n = 2;
-  while (params.reservedNames.has(candidate.toLowerCase())) {
+  while (params.reservedNames.has(normalizeLowercaseStringOrEmpty(candidate))) {
     const suffix = `-${n}`;
     candidateToolName = `${(truncatedToolName || "tool").slice(0, Math.max(1, maxToolChars - suffix.length))}${suffix}`;
     candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;

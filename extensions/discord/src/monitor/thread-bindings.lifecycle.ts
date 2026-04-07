@@ -1,5 +1,6 @@
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
@@ -104,7 +105,7 @@ export async function autoBindSpawnedDiscordSubagent(params: {
   label?: string;
   boundBy?: string;
 }): Promise<ThreadBindingRecord | null> {
-  const channel = params.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(params.channel);
   if (channel !== "discord") {
     return null;
   }

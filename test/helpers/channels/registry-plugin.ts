@@ -6,12 +6,15 @@ type PluginContractEntry = {
   plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">;
 };
 
-let pluginContractRegistryCache: PluginContractEntry[] | undefined;
-
 export function getPluginContractRegistry(): PluginContractEntry[] {
-  pluginContractRegistryCache ??= listBundledChannelPlugins().map((plugin) => ({
+  return listBundledChannelPlugins().map((plugin) => ({
     id: plugin.id,
-    plugin,
+    plugin: {
+      ...plugin,
+      meta: {
+        ...plugin.meta,
+        id: plugin.id,
+      },
+    },
   }));
-  return pluginContractRegistryCache;
 }

@@ -8,12 +8,12 @@ import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/typ
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
-  buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   resolveLoaderPackageRoot,
-  shouldPreferNativeJiti,
+  resolvePluginLoaderJitiConfig,
 } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext };
 
@@ -69,7 +69,7 @@ const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedModuleExports = new Map<string, unknown>();
 
 function resolveSpecifierCandidates(modulePath: string): string[] {
-  const ext = path.extname(modulePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(modulePath));
   if (ext === ".js") {
     return [modulePath, modulePath.slice(0, -3) + ".ts"];
   }
@@ -252,12 +252,11 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
 }
 
 function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    modulePath,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    preferBuiltDist: true,
   });
   const cached = jitiLoaders.get(cacheKey);
   if (cached) {
@@ -281,7 +280,7 @@ function loadBundledEntryModuleSync(importMetaUrl: string, specifier: string): u
   if (
     process.platform === "win32" &&
     modulePath.includes(`${path.sep}dist${path.sep}`) &&
-    [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase())
+    [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))
   ) {
     try {
       loaded = nodeRequire(modulePath);

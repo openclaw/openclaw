@@ -1,9 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as matrixSecrets from "../../extensions/matrix/src/secret-contract.ts";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+
+const matrixSecrets = loadBundledChannelSecretContractApi("matrix");
+if (!matrixSecrets?.collectRuntimeConfigAssignments) {
+  throw new Error("Missing Matrix secret contract api");
+}
 
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
 

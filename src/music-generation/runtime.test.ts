@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => {
       (providerId: string, config?: OpenClawConfig) => MusicGenerationProvider | undefined
     >(() => undefined),
     getProviderEnvVars: vi.fn<(providerId: string) => string[]>(() => []),
+    resolveProviderAuthEnvVarCandidates: vi.fn(() => ({})),
     isFailoverError: vi.fn<(err: unknown) => boolean>(() => false),
     listMusicGenerationProviders: vi.fn<(config?: OpenClawConfig) => MusicGenerationProvider[]>(
       () => [],
@@ -49,9 +50,14 @@ vi.mock("../config/model-input.js", () => ({
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: mocks.createSubsystemLogger,
 }));
-vi.mock("../secrets/provider-env-vars.js", () => ({
-  getProviderEnvVars: mocks.getProviderEnvVars,
-}));
+vi.mock("../secrets/provider-env-vars.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/provider-env-vars.js")>();
+  return {
+    ...actual,
+    getProviderEnvVars: mocks.getProviderEnvVars,
+    resolveProviderAuthEnvVarCandidates: mocks.resolveProviderAuthEnvVarCandidates,
+  };
+});
 vi.mock("./model-ref.js", () => ({
   parseMusicGenerationModelRef: mocks.parseMusicGenerationModelRef,
 }));
@@ -67,6 +73,8 @@ describe("music-generation runtime", () => {
     mocks.getMusicGenerationProvider.mockReset();
     mocks.getProviderEnvVars.mockReset();
     mocks.getProviderEnvVars.mockReturnValue([]);
+    mocks.resolveProviderAuthEnvVarCandidates.mockReset();
+    mocks.resolveProviderAuthEnvVarCandidates.mockReturnValue({});
     mocks.isFailoverError.mockReset();
     mocks.isFailoverError.mockReturnValue(false);
     mocks.listMusicGenerationProviders.mockReset();
@@ -125,6 +133,68 @@ describe("music-generation runtime", () => {
         buffer: Buffer.from("mp3-bytes"),
         mimeType: "audio/mpeg",
         fileName: "sample.mp3",
+      },
+    ]);
+  });
+
+  it("auto-detects and falls through to another configured music-generation provider by default", async () => {
+    mocks.getMusicGenerationProvider.mockImplementation((providerId: string) => {
+      if (providerId === "google") {
+        return {
+          id: "google",
+          defaultModel: "lyria-3-clip-preview",
+          capabilities: {},
+          isConfigured: () => true,
+          async generateMusic() {
+            throw new Error("Google music generation response missing audio data");
+          },
+        };
+      }
+      if (providerId === "minimax") {
+        return {
+          id: "minimax",
+          defaultModel: "music-2.5+",
+          capabilities: {},
+          isConfigured: () => true,
+          async generateMusic() {
+            return {
+              tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
+              model: "music-2.5+",
+            };
+          },
+        };
+      }
+      return undefined;
+    });
+    mocks.listMusicGenerationProviders.mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "lyria-3-clip-preview",
+        capabilities: {},
+        isConfigured: () => true,
+        generateMusic: async () => ({ tracks: [] }),
+      },
+      {
+        id: "minimax",
+        defaultModel: "music-2.5+",
+        capabilities: {},
+        isConfigured: () => true,
+        generateMusic: async () => ({ tracks: [] }),
+      },
+    ]);
+
+    const result = await generateMusic({
+      cfg: {} as OpenClawConfig,
+      prompt: "play a synth line",
+    });
+
+    expect(result.provider).toBe("minimax");
+    expect(result.model).toBe("music-2.5+");
+    expect(result.attempts).toEqual([
+      {
+        provider: "google",
+        model: "lyria-3-clip-preview",
+        error: "Google music generation response missing audio data",
       },
     ]);
   });
@@ -284,5 +354,59 @@ describe("music-generation runtime", () => {
       { key: "durationSeconds", value: 30 },
       { key: "format", value: "mp3" },
     ]);
+  });
+
+  it("normalizes requested durations to the closest supported max duration", async () => {
+    let seenRequest:
+      | {
+          durationSeconds?: number;
+        }
+      | undefined;
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("minimax/music-2.5+");
+    mocks.getMusicGenerationProvider.mockReturnValue({
+      id: "minimax",
+      capabilities: {
+        generate: {
+          supportsDuration: true,
+          maxDurationSeconds: 30,
+        },
+      },
+      generateMusic: async (req) => {
+        seenRequest = {
+          durationSeconds: req.durationSeconds,
+        };
+        return {
+          tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
+          model: "music-2.5+",
+        };
+      },
+    });
+
+    const result = await generateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "minimax/music-2.5+" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "energetic arcade anthem",
+      durationSeconds: 45,
+    });
+
+    expect(seenRequest).toEqual({
+      durationSeconds: 30,
+    });
+    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.normalization).toMatchObject({
+      durationSeconds: {
+        requested: 45,
+        applied: 30,
+      },
+    });
+    expect(result.metadata).toMatchObject({
+      requestedDurationSeconds: 45,
+      normalizedDurationSeconds: 30,
+    });
   });
 });

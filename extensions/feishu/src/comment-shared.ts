@@ -1,3 +1,11 @@
+import {
+  asOptionalRecord,
+  hasNonEmptyString as sharedHasNonEmptyString,
+  isRecord as sharedIsRecord,
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/text-runtime";
+
 export function encodeQuery(params: Record<string, string | undefined>): string {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -10,13 +18,15 @@ export function encodeQuery(params: Record<string, string | undefined>): string 
   return queryString ? `?${queryString}` : "";
 }
 
-export function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
+export const readString = readStringValue;
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+export const normalizeString = normalizeOptionalString;
+
+export const isRecord = sharedIsRecord;
+
+export const asRecord = asOptionalRecord;
+
+export const hasNonEmptyString = sharedHasNonEmptyString;
 
 export function extractCommentElementText(element: unknown): string | undefined {
   if (!isRecord(element)) {

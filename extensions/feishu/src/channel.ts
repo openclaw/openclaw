@@ -23,6 +23,7 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   inspectFeishuCredentials,
   listEnabledFeishuAccounts,
@@ -49,6 +50,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "./channel-runtime-api.js";
 import { createFeishuClient } from "./client.js";
+import { isRecord } from "./comment-shared.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
   buildFeishuConversationId,
@@ -75,10 +77,6 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
     return undefined;
   }
   return media.trim() ? media : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
@@ -349,9 +347,9 @@ function resolveFeishuSenderScopedCommandConversation(params: {
   if (!parentConversationId || !threadId || !senderId) {
     return undefined;
   }
-  const expectedScopePrefix = `feishu:group:${parentConversationId.toLowerCase()}:topic:${threadId.toLowerCase()}:sender:`;
+  const expectedScopePrefix = `feishu:group:${normalizeLowercaseStringOrEmpty(parentConversationId)}:topic:${normalizeLowercaseStringOrEmpty(threadId)}:sender:`;
   const isSenderScopedSession = [params.sessionKey, params.parentSessionKey].some((candidate) => {
-    const normalized = typeof candidate === "string" ? candidate.trim().toLowerCase() : "";
+    const normalized = normalizeLowercaseStringOrEmpty(candidate ?? "");
     if (!normalized) {
       return false;
     }
@@ -637,7 +635,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             },
           }),
       },
-      auth: feishuApprovalAuth,
+      approvalCapability: feishuApprovalAuth,
       secrets: {
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,

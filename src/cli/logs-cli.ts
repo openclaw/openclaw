@@ -2,9 +2,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
@@ -93,7 +95,7 @@ function normalizeErrorMessage(error: unknown): string {
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
-  const message = normalizeErrorMessage(error).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   if (!message.includes("pairing required")) {
     return false;
   }
@@ -210,7 +212,7 @@ async function emitGatewayError(
   const runtime = await loadLogsCliRuntime();
   const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
-  const errorText = err instanceof Error ? err.message : String(err);
+  const errorText = formatErrorMessage(err);
 
   const details = runtime.buildGatewayConnectionDetails({ url: opts.url });
   if (mode === "json") {

@@ -45,6 +45,8 @@ const IMAGE_MODELS = new Set([
   "veo3",
 ]);
 const VIDEO_MODELS = new Set(["gen4_aleph"]);
+const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
+const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
 
 function resolveRunwayBaseUrl(req: VideoGenerationRequest): string {
   return req.cfg?.models?.providers?.runway?.baseUrl?.trim() || DEFAULT_RUNWAY_BASE_URL;
@@ -264,6 +266,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
       generate: {
         maxVideos: 1,
         maxDurationSeconds: MAX_DURATION_SECONDS,
+        aspectRatios: RUNWAY_TEXT_ASPECT_RATIOS,
         supportsAspectRatio: true,
       },
       imageToVideo: {
@@ -271,12 +274,14 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         maxVideos: 1,
         maxInputImages: 1,
         maxDurationSeconds: MAX_DURATION_SECONDS,
+        aspectRatios: RUNWAY_EDIT_ASPECT_RATIOS,
         supportsAspectRatio: true,
       },
       videoToVideo: {
         enabled: true,
         maxVideos: 1,
         maxInputVideos: 1,
+        aspectRatios: RUNWAY_EDIT_ASPECT_RATIOS,
         supportsAspectRatio: true,
       },
     },

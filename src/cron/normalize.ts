@@ -1,4 +1,8 @@
 import { sanitizeAgentId } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import {
   TimeoutSecondsFieldSchema,
@@ -61,7 +65,7 @@ function normalizeTrimmedStringArray(
 
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
-  const rawKind = typeof schedule.kind === "string" ? schedule.kind.trim().toLowerCase() : "";
+  const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
   const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
   const exprRaw = typeof schedule.expr === "string" ? schedule.expr.trim() : "";
   const legacyCronRaw = typeof schedule.cron === "string" ? schedule.cron.trim() : "";
@@ -141,7 +145,7 @@ function coerceSchedule(schedule: UnknownRecord) {
 
 function coercePayload(payload: UnknownRecord) {
   const next: UnknownRecord = { ...payload };
-  const kindRaw = typeof next.kind === "string" ? next.kind.trim().toLowerCase() : "";
+  const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
@@ -316,7 +320,7 @@ function normalizeSessionTarget(raw: unknown) {
     return undefined;
   }
   const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower === "main" || lower === "isolated" || lower === "current") {
     return lower;
   }
@@ -331,7 +335,7 @@ function normalizeWakeMode(raw: unknown) {
   if (typeof raw !== "string") {
     return undefined;
   }
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (trimmed === "now" || trimmed === "next-heartbeat") {
     return trimmed;
   }
@@ -439,7 +443,7 @@ export function normalizeCronJobInput(
     if (typeof enabled === "boolean") {
       next.enabled = enabled;
     } else if (typeof enabled === "string") {
-      const trimmed = enabled.trim().toLowerCase();
+      const trimmed = normalizeOptionalLowercaseString(enabled);
       if (trimmed === "true") {
         next.enabled = true;
       }

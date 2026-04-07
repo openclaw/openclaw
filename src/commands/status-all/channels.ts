@@ -19,6 +19,7 @@ import type {
 import { inspectReadOnlyChannelAccount } from "../../channels/read-only-account-inspect.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
+import { asRecord } from "../../shared/record-coerce.js";
 import { formatTimeAgo } from "./format.js";
 
 export type ChannelRow = {
@@ -43,9 +44,6 @@ type ResolvedChannelAccountRowParams = {
   sourceConfig: OpenClawConfig;
   accountId: string;
 };
-
-const asRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
 function summarizeSources(sources: Array<string | undefined>): {
   label: string;

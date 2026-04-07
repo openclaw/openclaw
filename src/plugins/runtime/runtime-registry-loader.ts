@@ -63,9 +63,6 @@ export function ensurePluginRegistryLoaded(options?: {
   const requestedPluginIds =
     options?.onlyPluginIds?.map((pluginId) => pluginId.trim()).filter(Boolean) ?? [];
   const scopedLoad = requestedPluginIds.length > 0;
-  if (!scopedLoad && scopeRank(pluginRegistryLoaded) >= scopeRank(scope)) {
-    return;
-  }
   const context = resolvePluginRuntimeLoadContext(options);
   const expectedChannelPluginIds = scopedLoad
     ? requestedPluginIds
@@ -83,6 +80,13 @@ export function ensurePluginRegistryLoaded(options?: {
           })
         : [];
   const active = getActivePluginRegistry();
+  if (
+    !scopedLoad &&
+    scopeRank(pluginRegistryLoaded) >= scopeRank(scope) &&
+    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds, expectedChannelPluginIds)
+  ) {
+    return;
+  }
   if (
     (pluginRegistryLoaded === "none" || scopedLoad) &&
     activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds, expectedChannelPluginIds)

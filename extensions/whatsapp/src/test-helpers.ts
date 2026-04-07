@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
@@ -105,7 +106,7 @@ function resolveChannelContextVisibilityModeMock(params: {
 
 function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Provider?: string }) {
   const from = ctx.From?.trim() ?? "";
-  const chatType = ctx.ChatType?.trim().toLowerCase();
+  const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
   if (!from) {
     return null;
   }
@@ -119,7 +120,7 @@ function resolveGroupSessionKeyMock(ctx: { From?: string; ChatType?: string; Pro
   }
   return {
     key: `whatsapp:group:${from.toLowerCase()}`,
-    channel: ctx.Provider?.trim().toLowerCase() || "whatsapp",
+    channel: normalizeLowercaseStringOrEmpty(ctx.Provider) || "whatsapp",
     id: from.toLowerCase(),
     chatType: chatType === "channel" ? "channel" : "group",
   };
@@ -392,6 +393,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
 
 vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
   hasControlCommand: (body: string) => body.trim().startsWith("/"),
+  implicitMentionKindWhen: (kind: string, enabled: boolean) => (enabled ? [kind] : []),
   normalizeE164: (value: string) => {
     const digits = String(value).replace(/\D+/g, "");
     return digits ? `+${digits}` : null;
@@ -409,17 +411,54 @@ vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
     const next = [...current, params.entry].slice(-params.limit);
     params.historyMap.set(params.historyKey, next);
   },
-  resolveMentionGating: (params: {
-    requireMention: boolean;
-    wasMentioned: boolean;
-    implicitMention?: boolean;
-    shouldBypassMention?: boolean;
+  resolveInboundMentionDecision: (params: {
+    facts?: {
+      canDetectMention: boolean;
+      wasMentioned: boolean;
+      implicitMentionKinds?: string[];
+    };
+    policy?: {
+      isGroup: boolean;
+      requireMention: boolean;
+      allowTextCommands: boolean;
+      hasControlCommand: boolean;
+      commandAuthorized: boolean;
+    };
+    isGroup?: boolean;
+    requireMention?: boolean;
+    canDetectMention?: boolean;
+    wasMentioned?: boolean;
+    implicitMentionKinds?: string[];
+    allowTextCommands?: boolean;
+    hasControlCommand?: boolean;
+    commandAuthorized?: boolean;
   }) => {
-    const effectiveWasMentioned =
-      params.wasMentioned || Boolean(params.implicitMention) || Boolean(params.shouldBypassMention);
+    const facts =
+      "facts" in params && params.facts
+        ? params.facts
+        : {
+            canDetectMention: Boolean(params.canDetectMention),
+            wasMentioned: Boolean(params.wasMentioned),
+            implicitMentionKinds: params.implicitMentionKinds,
+          };
+    const policy =
+      "policy" in params && params.policy
+        ? params.policy
+        : {
+            isGroup: Boolean(params.isGroup),
+            requireMention: Boolean(params.requireMention),
+            allowTextCommands: Boolean(params.allowTextCommands),
+            hasControlCommand: Boolean(params.hasControlCommand),
+            commandAuthorized: Boolean(params.commandAuthorized),
+          };
+    const effectiveWasMentioned = facts.wasMentioned || Boolean(facts.implicitMentionKinds?.length);
     return {
       effectiveWasMentioned,
-      shouldSkip: params.requireMention && !effectiveWasMentioned,
+      shouldSkip:
+        policy.isGroup && policy.requireMention && facts.canDetectMention && !effectiveWasMentioned,
+      shouldBypassMention: false,
+      implicitMention: Boolean(facts.implicitMentionKinds?.length),
+      matchedImplicitMentionKinds: facts.implicitMentionKinds ?? [],
     };
   },
 }));

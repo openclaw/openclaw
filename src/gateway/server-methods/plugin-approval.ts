@@ -27,6 +27,18 @@ export function createPluginApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
   return {
+    "plugin.approval.list": async ({ respond }) => {
+      respond(
+        true,
+        manager.listPendingRecords().map((record) => ({
+          id: record.id,
+          request: record.request,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        })),
+        undefined,
+      );
+    },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (!validatePluginApprovalRequestParams(params)) {
         respond(

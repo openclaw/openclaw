@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 
 const MARKDOWN_CODE_SEGMENT_PATTERN = /```[\s\S]*?```|`[^`\n]*`/g;
@@ -47,7 +48,7 @@ function rewritePlainTextMentions(text: string, accountId?: string | null): stri
     if (!handle) {
       return match;
     }
-    const lookup = handle.toLowerCase();
+    const lookup = normalizeLowercaseStringOrEmpty(handle);
     if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
       return match;
     }
