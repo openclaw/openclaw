@@ -308,6 +308,61 @@ describe("loadEnabledPluginMcpServerConfig", () => {
     });
   });
 
+  it("drops config-loaded plugin MCP servers when the load path is removed", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "plugin-a",
+        origin: "config",
+        rootDir: "/tmp/plugin-a",
+        source: "/tmp/plugin-a/index.ts",
+        activationSource: "default",
+      }),
+    );
+    registry.mcpServers.push({
+      pluginId: "plugin-a",
+      name: "helloWorld",
+      server: { command: "node", args: ["hello.mjs"] },
+      source: "/tmp/plugin-a/index.ts",
+      rootDir: "/tmp/plugin-a",
+    });
+    setActivePluginRegistry(registry, "mcp-server-test", "default", "/tmp/workspace-a");
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        workspaceDir: "/tmp/workspace-a",
+        cfg: {
+          plugins: {
+            load: {
+              paths: ["/tmp/plugin-a"],
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {
+          helloWorld: {
+            command: "node",
+            args: ["hello.mjs"],
+            cwd: "/tmp/plugin-a",
+          },
+        },
+      },
+    });
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        workspaceDir: "/tmp/workspace-a",
+        cfg: {},
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {},
+      },
+    });
+  });
+
   it("keeps bundled default-enabled MCP servers when runtime config has no allowlist", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(

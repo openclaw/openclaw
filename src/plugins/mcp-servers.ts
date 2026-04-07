@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { isRecord } from "../utils.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 import type { BundleMcpConfig } from "./bundle-mcp.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginRegistry } from "./registry.js";
@@ -16,6 +16,46 @@ type PluginMcpServerConfigNormalizationResult =
   | { ok: true; server: OpenClawPluginMcpServerConfig }
   | { ok: false; error: string };
 
+function normalizeWorkspacePathForMatch(workspaceDir: string): string {
+  let normalized = path.resolve(workspaceDir);
+  try {
+    normalized = fs.realpathSync.native(normalized);
+  } catch {
+    // Missing workspaces can still be compared by their resolved spelling.
+  }
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isPathSameOrInside(basePath: string, candidatePath: string): boolean {
+  const relative = path.relative(basePath, candidatePath);
+  return (
+    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function isConfigOriginPluginStillLoadable(params: {
+  plugin: PluginRegistry["plugins"][number];
+  loadPaths: string[];
+}): boolean {
+  if (params.plugin.origin !== "config") {
+    return true;
+  }
+  if (params.loadPaths.length === 0) {
+    return false;
+  }
+
+  const pluginPaths = [params.plugin.rootDir, params.plugin.source]
+    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    .map((entry) => normalizeWorkspacePathForMatch(entry));
+
+  return params.loadPaths.some((rawLoadPath) => {
+    const loadPath = normalizeWorkspacePathForMatch(resolveUserPath(rawLoadPath));
+    return pluginPaths.some(
+      (pluginPath) => loadPath === pluginPath || isPathSameOrInside(loadPath, pluginPath),
+    );
+  });
+}
+
 function isPluginEnabledByConfig(
   plugin: PluginRegistry["plugins"][number],
   cfg?: OpenClawConfig,
@@ -26,6 +66,15 @@ function isPluginEnabledByConfig(
 
   const normalizedPlugins = normalizePluginsConfig(cfg.plugins);
   if (!normalizedPlugins.enabled) {
+    return false;
+  }
+
+  if (
+    !isConfigOriginPluginStillLoadable({
+      plugin,
+      loadPaths: normalizedPlugins.loadPaths,
+    })
+  ) {
     return false;
   }
 
@@ -45,16 +94,6 @@ function isPluginEnabledByConfig(
     rootConfig: cfg,
     enabledByDefault: plugin.enabledByDefault,
   }).activated;
-}
-
-function normalizeWorkspacePathForMatch(workspaceDir: string): string {
-  let normalized = path.resolve(workspaceDir);
-  try {
-    normalized = fs.realpathSync.native(normalized);
-  } catch {
-    // Missing workspaces can still be compared by their resolved spelling.
-  }
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function isWorkspaceMatch(params: { workspaceDir?: string; activeWorkspaceDir?: string }): boolean {
