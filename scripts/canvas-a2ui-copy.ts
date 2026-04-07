@@ -17,8 +17,8 @@ export async function copyA2uiAssets({ srcDir, outDir }: { srcDir: string; outDi
     await fs.stat(path.join(srcDir, "a2ui.bundle.js"));
   } catch (err) {
     const message = 'Missing A2UI bundle assets. Run "pnpm canvas:a2ui:bundle" and retry.';
-    if (skipMissing) {
-      console.warn(`${message} Skipping copy (OPENCLAW_A2UI_SKIP_MISSING=1).`);
+    if (skipMissing || process.platform === "win32") {
+      console.warn(`${message} Skipping copy.`);
       return;
     }
     throw new Error(message, { cause: err });
