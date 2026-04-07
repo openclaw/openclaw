@@ -1,9 +1,12 @@
+import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
 import {
+  buildSessionEntry,
   listSessionFilesForAgent,
+  parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -101,6 +104,8 @@ const SESSION_INGESTION_MIN_SNIPPET_CHARS = 12;
 const SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP = 240;
 const SESSION_INGESTION_MAX_MESSAGES_PER_FILE = 80;
 const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
+const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
+const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
@@ -631,13 +636,13 @@ async function writeDailyIngestionState(
 type SessionIngestionFileState = {
   mtimeMs: number;
   size: number;
-  lineCount: number;
-  lastJsonlLine: number;
+  contentHash: string;
 };
 
 type SessionIngestionState = {
-  version: 1;
+  version: 2;
   files: Record<string, SessionIngestionFileState>;
+  seenMessages: Record<string, string[]>;
 };
 
 type SessionIngestionMessage = {
@@ -664,39 +669,44 @@ function resolveSessionIngestionStatePath(workspaceDir: string): string {
 function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
   const record = asRecord(raw);
   const filesRaw = asRecord(record?.files);
-  if (!filesRaw) {
-    return { version: 1, files: {} };
-  }
   const files: Record<string, SessionIngestionFileState> = {};
-  for (const [key, value] of Object.entries(filesRaw)) {
-    const file = asRecord(value);
-    if (!file || key.trim().length === 0) {
-      continue;
+  if (filesRaw) {
+    for (const [key, value] of Object.entries(filesRaw)) {
+      const file = asRecord(value);
+      if (!file || key.trim().length === 0) {
+        continue;
+      }
+      const mtimeMs = Number(file.mtimeMs);
+      const size = Number(file.size);
+      if (!Number.isFinite(mtimeMs) || mtimeMs < 0 || !Number.isFinite(size) || size < 0) {
+        continue;
+      }
+      files[key] = {
+        mtimeMs: Math.floor(mtimeMs),
+        size: Math.floor(size),
+        contentHash: typeof file.contentHash === "string" ? file.contentHash.trim() : "",
+      };
     }
-    const mtimeMs = Number(file.mtimeMs);
-    const size = Number(file.size);
-    const lineCount = Number(file.lineCount);
-    const lastJsonlLine = Number(file.lastJsonlLine);
-    if (
-      !Number.isFinite(mtimeMs) ||
-      mtimeMs < 0 ||
-      !Number.isFinite(size) ||
-      size < 0 ||
-      !Number.isFinite(lineCount) ||
-      lineCount < 0 ||
-      !Number.isFinite(lastJsonlLine) ||
-      lastJsonlLine < 0
-    ) {
-      continue;
-    }
-    files[key] = {
-      mtimeMs: Math.floor(mtimeMs),
-      size: Math.floor(size),
-      lineCount: Math.floor(lineCount),
-      lastJsonlLine: Math.floor(lastJsonlLine),
-    };
   }
-  return { version: 1, files };
+  const seenMessagesRaw = asRecord(record?.seenMessages);
+  const seenMessages: Record<string, string[]> = {};
+  if (seenMessagesRaw) {
+    for (const [scope, value] of Object.entries(seenMessagesRaw)) {
+      if (scope.trim().length === 0 || !Array.isArray(value)) {
+        continue;
+      }
+      const unique = [
+        ...new Set(value.filter((entry): entry is string => typeof entry === "string")),
+      ]
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(-SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION);
+      if (unique.length > 0) {
+        seenMessages[scope] = unique;
+      }
+    }
+  }
+  return { version: 2, files, seenMessages };
 }
 
 async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
@@ -707,7 +717,7 @@ async function readSessionIngestionState(workspaceDir: string): Promise<SessionI
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT" || err instanceof SyntaxError) {
-      return { version: 1, files: {} };
+      return { version: 2, files: {}, seenMessages: {} };
     }
     throw err;
   }
@@ -724,71 +734,79 @@ async function writeSessionIngestionState(
   await fs.rename(tmpPath, statePath);
 }
 
-function normalizeSessionText(value: string): string {
-  return value
-    .replace(/\s*\n+\s*/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+function trimTrackedSessionScopes(
+  seenMessages: Record<string, string[]>,
+): Record<string, string[]> {
+  const keys = Object.keys(seenMessages);
+  if (keys.length <= SESSION_INGESTION_MAX_TRACKED_SCOPES) {
+    return seenMessages;
+  }
+  const keep = new Set(keys.toSorted().slice(-SESSION_INGESTION_MAX_TRACKED_SCOPES));
+  const next: Record<string, string[]> = {};
+  for (const [scope, hashes] of Object.entries(seenMessages)) {
+    if (keep.has(scope)) {
+      next[scope] = hashes;
+    }
+  }
+  return next;
 }
 
-function extractSessionMessageText(content: unknown): string | null {
-  if (typeof content === "string") {
-    const normalized = normalizeSessionText(content);
-    return normalized.length > 0 ? normalized : null;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    const record = asRecord(block);
-    if (!record || record.type !== "text" || typeof record.text !== "string") {
-      continue;
-    }
-    const normalized = normalizeSessionText(record.text);
-    if (normalized.length > 0) {
-      parts.push(normalized);
-    }
-  }
-  if (parts.length === 0) {
-    return null;
-  }
-  return parts.join(" ");
+function normalizeSessionCorpusSnippet(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
-function parseSessionTimestampMs(record: Record<string, unknown>): number | null {
-  const candidates = [record.timestamp, asRecord(record.message)?.timestamp];
-  for (const value of candidates) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      const ms = value > 0 && value < 1e11 ? value * 1000 : value;
-      if (Number.isFinite(ms) && ms > 0) {
-        return ms;
-      }
-    }
-    if (typeof value === "string") {
-      const parsed = Date.parse(value);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-  }
-  return null;
+function hashSessionMessageId(value: string): string {
+  return createHash("sha1").update(value).digest("hex");
 }
 
-function formatSessionSnippet(role: "user" | "assistant", text: string): string {
-  const label = role === "user" ? "User" : "Assistant";
-  const normalized = normalizeSessionText(text);
-  if (!normalized) {
-    return "";
+function buildSessionScopeKey(agentId: string, absolutePath: string): string {
+  const fileName = path.basename(absolutePath);
+  const logicalSessionId = parseUsageCountedSessionIdFromFileName(fileName) ?? fileName;
+  return `${agentId}:${logicalSessionId}`;
+}
+
+function mergeTrackedMessageHashes(existing: string[], additions: string[]): string[] {
+  if (additions.length === 0) {
+    return existing;
   }
-  return `${label}: ${normalized}`
-    .slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS)
-    .replace(/\s+/g, " ")
-    .trim();
+  const seen = new Set(existing);
+  const next = existing.slice();
+  for (const hash of additions) {
+    if (!seen.has(hash)) {
+      seen.add(hash);
+      next.push(hash);
+    }
+  }
+  if (next.length <= SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION) {
+    return next;
+  }
+  return next.slice(-SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION);
+}
+
+function areStringArraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function buildSessionStateKey(agentId: string, absolutePath: string): string {
   return `${agentId}:${sessionPathForFile(absolutePath)}`;
+}
+
+function buildSessionRenderedLine(params: {
+  agentId: string;
+  sessionPath: string;
+  lineNumber: number;
+  snippet: string;
+}): string {
+  const source = `${params.agentId}/${params.sessionPath}#L${params.lineNumber}`;
+  return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
 }
 
 function resolveSessionAgentsForWorkspace(
@@ -865,14 +883,17 @@ async function collectSessionIngestionBatches(params: {
   if (!params.cfg) {
     return {
       batches: [],
-      nextState: { version: 1, files: {} },
-      changed: Object.keys(params.state.files).length > 0,
+      nextState: { version: 2, files: {}, seenMessages: {} },
+      changed:
+        Object.keys(params.state.files).length > 0 ||
+        Object.keys(params.state.seenMessages).length > 0,
     };
   }
   const agentIds = resolveSessionAgentsForWorkspace(params.cfg, params.workspaceDir);
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const batchByDay = new Map<string, SessionIngestionMessage[]>();
   const nextFiles: Record<string, SessionIngestionFileState> = {};
+  const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   let changed = false;
 
   const sessionFiles: Array<{ agentId: string; absolutePath: string; sessionPath: string }> = [];
@@ -926,101 +947,95 @@ async function collectSessionIngestionBatches(params: {
       mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
       size: Math.floor(Math.max(0, stat.size)),
     };
-    const cursorAtEnd = previous && previous.lastJsonlLine >= previous.lineCount;
     const unchanged =
       Boolean(previous) &&
       previous.mtimeMs === fingerprint.mtimeMs &&
       previous.size === fingerprint.size &&
-      cursorAtEnd;
+      previous.contentHash.length > 0;
     if (unchanged) {
       nextFiles[stateKey] = previous!;
       continue;
     }
 
-    const raw = await fs.readFile(file.absolutePath, "utf-8").catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return "";
-      }
-      throw err;
-    });
-    const lines = raw.split(/\r?\n/);
-    const resetCursor =
-      !previous ||
-      fingerprint.size < previous.size ||
-      fingerprint.mtimeMs < previous.mtimeMs ||
-      previous.lastJsonlLine > lines.length;
-    let cursor = resetCursor ? 0 : previous.lastJsonlLine;
+    const entry = await buildSessionEntry(file.absolutePath);
+    if (!entry) {
+      continue;
+    }
+    const contentHash = entry.hash.trim();
+    if (
+      previous &&
+      previous.mtimeMs === fingerprint.mtimeMs &&
+      previous.size === fingerprint.size &&
+      previous.contentHash === contentHash
+    ) {
+      nextFiles[stateKey] = previous;
+      continue;
+    }
+
+    const sessionScope = buildSessionScopeKey(file.agentId, file.absolutePath);
+    const previousSeen = nextSeenMessages[sessionScope] ?? [];
+    let seenSet = new Set(previousSeen);
+    const newSeenHashes: string[] = [];
+
+    const lines = entry.content.length > 0 ? entry.content.split("\n") : [];
+    const day = formatMemoryDreamingDay(fingerprint.mtimeMs, params.timezone);
+    if (!isDayWithinLookback(day, cutoffMs)) {
+      nextFiles[stateKey] = {
+        mtimeMs: fingerprint.mtimeMs,
+        size: fingerprint.size,
+        contentHash,
+      };
+      continue;
+    }
+
     const fileCap = Math.max(1, Math.min(perFileCap, remaining));
     let fileCount = 0;
-    let lastProcessedLine = cursor;
-
-    for (let index = cursor; index < lines.length; index += 1) {
+    for (let index = 0; index < lines.length; index += 1) {
       if (fileCount >= fileCap || remaining <= 0) {
         break;
       }
-      const rawLine = lines[index] ?? "";
-      const lineNumber = index + 1;
-      lastProcessedLine = lineNumber;
-      if (!rawLine.trim()) {
-        continue;
-      }
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(rawLine);
-      } catch {
-        continue;
-      }
-      const record = asRecord(parsed);
-      if (!record || record.type !== "message") {
-        continue;
-      }
-      const message = asRecord(record.message);
-      if (!message) {
-        continue;
-      }
-      const role = message.role === "user" || message.role === "assistant" ? message.role : null;
-      if (!role) {
-        continue;
-      }
-      const text = extractSessionMessageText(message.content);
-      if (!text) {
-        continue;
-      }
-      const snippet = formatSessionSnippet(role, text);
+      const rawSnippet = lines[index] ?? "";
+      const snippet = normalizeSessionCorpusSnippet(rawSnippet);
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
         continue;
       }
-      const timestampMs = parseSessionTimestampMs(record) ?? parseSessionTimestampMs(message);
-      const day = formatMemoryDreamingDay(timestampMs ?? fingerprint.mtimeMs, params.timezone);
-      if (!isDayWithinLookback(day, cutoffMs)) {
+      const lineNumber = entry.lineMap[index] ?? index + 1;
+      const messageHash = hashSessionMessageId(
+        `${file.agentId}\n${sessionScope}\n${lineNumber}\n${snippet}`,
+      );
+      if (seenSet.has(messageHash)) {
         continue;
       }
-      const source = `${file.agentId}/${file.sessionPath}#L${lineNumber}`;
-      const rendered = `[${source}] ${snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
+      const rendered = buildSessionRenderedLine({
+        agentId: file.agentId,
+        sessionPath: file.sessionPath,
+        lineNumber,
+        snippet,
+      });
       const bucket = batchByDay.get(day) ?? [];
       bucket.push({ day, snippet, rendered });
       batchByDay.set(day, bucket);
+      seenSet.add(messageHash);
+      newSeenHashes.push(messageHash);
       fileCount += 1;
       remaining -= 1;
     }
 
-    if (lastProcessedLine < cursor) {
-      lastProcessedLine = cursor;
-    }
-    cursor = Math.max(0, Math.min(lastProcessedLine, lines.length));
     nextFiles[stateKey] = {
       mtimeMs: fingerprint.mtimeMs,
       size: fingerprint.size,
-      lineCount: lines.length,
-      lastJsonlLine: cursor,
+      contentHash,
     };
+    const mergedSeen = mergeTrackedMessageHashes(previousSeen, newSeenHashes);
+    nextSeenMessages[sessionScope] = mergedSeen;
+    if (!areStringArraysEqual(mergedSeen, previousSeen)) {
+      changed = true;
+    }
     if (
       !previous ||
       previous.mtimeMs !== fingerprint.mtimeMs ||
       previous.size !== fingerprint.size ||
-      previous.lineCount !== lines.length ||
-      previous.lastJsonlLine !== cursor
+      previous.contentHash !== contentHash
     ) {
       changed = true;
     }
@@ -1032,13 +1047,28 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
     const next = nextFiles[key];
+    if (!next || next.mtimeMs !== state.mtimeMs || next.size !== state.size) {
+      changed = true;
+    }
     if (
-      !next ||
-      next.mtimeMs !== state.mtimeMs ||
-      next.size !== state.size ||
-      next.lineCount !== state.lineCount ||
-      next.lastJsonlLine !== state.lastJsonlLine
+      next &&
+      typeof state.contentHash === "string" &&
+      state.contentHash.trim().length > 0 &&
+      next.contentHash !== state.contentHash
     ) {
+      changed = true;
+    }
+  }
+
+  const trimmedSeenMessages = trimTrackedSessionScopes(nextSeenMessages);
+  for (const [scope, hashes] of Object.entries(trimmedSeenMessages)) {
+    const previous = params.state.seenMessages[scope] ?? [];
+    if (!areStringArraysEqual(previous, hashes)) {
+      changed = true;
+    }
+  }
+  for (const scope of Object.keys(params.state.seenMessages)) {
+    if (!Object.hasOwn(trimmedSeenMessages, scope)) {
       changed = true;
     }
   }
@@ -1061,7 +1091,7 @@ async function collectSessionIngestionBatches(params: {
 
   return {
     batches,
-    nextState: { version: 1, files: nextFiles },
+    nextState: { version: 2, files: nextFiles, seenMessages: trimmedSeenMessages },
     changed,
   };
 }

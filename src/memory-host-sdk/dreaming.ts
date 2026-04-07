@@ -1,6 +1,5 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 
@@ -587,9 +586,6 @@ export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDrea
 
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
   for (const agentId of agentIds) {
-    if (!resolveMemorySearchConfig(cfg, agentId)) {
-      continue;
-    }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId)?.trim();
     if (!workspaceDir) {
       continue;
