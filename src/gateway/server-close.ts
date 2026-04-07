@@ -4,11 +4,7 @@ import type { WebSocketServer } from "ws";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
-import {
-  createInternalHookEvent,
-  triggerInternalHook,
-  type GatewayRestartOutboxTask,
-} from "../hooks/internal-hooks.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -65,57 +61,85 @@ async function closeWssWithTimeout(
   });
 }
 
-function normalizeGatewayOutbox(
-  outbox: GatewayRestartOutboxTask[],
-  restartId?: string,
-  correlationId?: string,
-): RestartOutboxTask[] {
-  return outbox
-    .map((raw) => {
-      if (!raw || typeof raw !== "object") {
-        return null;
-      }
-      const message = normalizeNonEmptyString(raw.message);
-      if (!message) {
-        return null;
-      }
-      const sessionKey = normalizeNonEmptyString(raw.sessionKey);
-      const threadId = normalizeNonEmptyString(raw.threadId);
-      const deliveryContext = raw.deliveryContext;
-      const delivery =
-        deliveryContext && typeof deliveryContext === "object"
-          ? {
-              channel: normalizeNonEmptyString(deliveryContext.channel),
-              to: normalizeNonEmptyString(deliveryContext.to),
-              accountId: normalizeNonEmptyString(deliveryContext.accountId),
-            }
-          : undefined;
-      const resolvedRestartId = normalizeNonEmptyString(raw.restartId) ?? restartId;
-      const resolvedCorrelationId =
-        normalizeNonEmptyString(raw.correlationId) ?? correlationId ?? resolvedRestartId;
-      const rawKind = normalizeNonEmptyString((raw as { kind?: unknown }).kind);
-      const kind: RestartOutboxTask["kind"] =
-        rawKind === "system_event" ? "system_event" : "message";
-      const task: RestartOutboxTask = {
-        ...(kind === "message" ? { kind: "message" as const } : { kind: "system_event" as const }),
+function normalizeGatewayOutbox(outbox: unknown[]): RestartOutboxTask[] {
+  const normalized: RestartOutboxTask[] = [];
+  for (const raw of outbox) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const item = raw as Record<string, unknown>;
+    const kindRaw = normalizeNonEmptyString(item.kind);
+    const kind =
+      kindRaw === "message" || kindRaw === "system_event" || kindRaw === "notify-session"
+        ? kindRaw
+        : "message";
+    const message = normalizeNonEmptyString(item.message);
+    if (!kind || !message) {
+      continue;
+    }
+
+    const sessionKey = normalizeNonEmptyString(item.sessionKey);
+
+    if (kind === "notify-session") {
+      normalized.push({
+        kind,
         message,
         ...(sessionKey ? { sessionKey } : {}),
-        ...(threadId ? { threadId } : {}),
-        ...(delivery?.channel || delivery?.to || delivery?.accountId
-          ? {
-              deliveryContext: {
-                ...(delivery.channel ? { channel: delivery.channel } : {}),
-                ...(delivery.to ? { to: delivery.to } : {}),
-                ...(delivery.accountId ? { accountId: delivery.accountId } : {}),
-              },
-            }
+        ...(normalizeNonEmptyString(item.channel)
+          ? { channel: normalizeNonEmptyString(item.channel)! }
           : {}),
-        ...(resolvedRestartId ? { restartId: resolvedRestartId } : {}),
-        ...(resolvedCorrelationId ? { correlationId: resolvedCorrelationId } : {}),
-      };
-      return task;
-    })
-    .filter((task): task is RestartOutboxTask => task !== null);
+        ...(normalizeNonEmptyString(item.to) ? { to: normalizeNonEmptyString(item.to)! } : {}),
+        ...(normalizeNonEmptyString(item.accountId)
+          ? { accountId: normalizeNonEmptyString(item.accountId)! }
+          : {}),
+        ...(normalizeNonEmptyString(item.threadId)
+          ? { threadId: normalizeNonEmptyString(item.threadId)! }
+          : {}),
+      });
+      continue;
+    }
+
+    const deliveryContextRaw = item.deliveryContext;
+    const deliveryContext =
+      deliveryContextRaw && typeof deliveryContextRaw === "object"
+        ? {
+            ...(normalizeNonEmptyString((deliveryContextRaw as Record<string, unknown>).channel)
+              ? {
+                  channel: normalizeNonEmptyString(
+                    (deliveryContextRaw as Record<string, unknown>).channel,
+                  )!,
+                }
+              : {}),
+            ...(normalizeNonEmptyString((deliveryContextRaw as Record<string, unknown>).to)
+              ? { to: normalizeNonEmptyString((deliveryContextRaw as Record<string, unknown>).to)! }
+              : {}),
+            ...(normalizeNonEmptyString((deliveryContextRaw as Record<string, unknown>).accountId)
+              ? {
+                  accountId: normalizeNonEmptyString(
+                    (deliveryContextRaw as Record<string, unknown>).accountId,
+                  )!,
+                }
+              : {}),
+          }
+        : undefined;
+
+    normalized.push({
+      kind,
+      message,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(normalizeNonEmptyString(item.threadId)
+        ? { threadId: normalizeNonEmptyString(item.threadId)! }
+        : {}),
+      ...(deliveryContext && Object.keys(deliveryContext).length > 0 ? { deliveryContext } : {}),
+      ...(normalizeNonEmptyString(item.restartId)
+        ? { restartId: normalizeNonEmptyString(item.restartId)! }
+        : {}),
+      ...(normalizeNonEmptyString(item.correlationId)
+        ? { correlationId: normalizeNonEmptyString(item.correlationId)! }
+        : {}),
+    });
+  }
+  return normalized;
 }
 
 async function persistGatewayRestartOutbox(params: {
@@ -123,13 +147,9 @@ async function persistGatewayRestartOutbox(params: {
   initiator?: string;
   restartId?: string;
   correlationId?: string;
-  outbox: GatewayRestartOutboxTask[];
+  outbox: unknown[];
 }) {
-  const normalizedOutbox = normalizeGatewayOutbox(
-    params.outbox,
-    params.restartId,
-    params.correlationId,
-  );
+  const normalizedOutbox = normalizeGatewayOutbox(params.outbox);
 
   const existing = await readRestartSentinel().catch(() => null);
   const existingPayload = existing?.payload;
@@ -202,6 +222,12 @@ export function createGatewayCloseHandler(params: {
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
+  stopTaskRegistryMaintenance?: () => void;
+  logger?: {
+    info?: (...args: unknown[]) => void;
+    warn?: (...args: unknown[]) => void;
+    error?: (...args: unknown[]) => void;
+  };
   chatRunState: { clear: () => void };
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
@@ -226,7 +252,7 @@ export function createGatewayCloseHandler(params: {
       const correlationIdRaw =
         typeof opts?.correlationId === "string" ? opts.correlationId.trim() : "";
       const correlationId = correlationIdRaw || restartId;
-      const outbox: GatewayRestartOutboxTask[] = [];
+      const outbox: unknown[] = [];
 
       try {
         const shutdownEvent = createInternalHookEvent("gateway", "shutdown", "gateway", {
