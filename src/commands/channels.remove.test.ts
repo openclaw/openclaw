@@ -43,6 +43,11 @@ describe("channelsRemoveCommand", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
+    configMocks.replaceConfigFile
+      .mockReset()
+      .mockImplementation(async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
+      });
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -97,17 +102,8 @@ describe("channelsRemoveCommand", () => {
       { hasFlags: true },
     );
 
-    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: catalogEntry,
-      }),
-    );
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
-      }),
-    );
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.not.objectContaining({
         channels: expect.objectContaining({

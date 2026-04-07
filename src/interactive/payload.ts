@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
 export type InteractiveReplyButton = {
@@ -37,11 +39,7 @@ export type InteractiveReply = {
 };
 
 function readTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value);
 }
 
 function normalizeButtonStyle(value: unknown): InteractiveButtonStyle | undefined {

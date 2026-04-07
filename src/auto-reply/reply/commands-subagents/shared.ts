@@ -19,6 +19,7 @@ import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
   formatDurationCompact,
   formatTokenUsageDisplay,
@@ -206,8 +207,8 @@ export function resolveRequesterSessionKey(
   params: SubagentsCommandParams,
   opts?: { preferCommandTarget?: boolean },
 ): string | undefined {
-  const commandTarget = params.ctx.CommandTargetSessionKey?.trim();
-  const commandSession = params.sessionKey?.trim();
+  const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
+  const commandSession = normalizeOptionalString(params.sessionKey);
   const shouldPreferCommandTarget =
     opts?.preferCommandTarget ?? params.ctx.CommandSource === "native";
   const raw = shouldPreferCommandTarget

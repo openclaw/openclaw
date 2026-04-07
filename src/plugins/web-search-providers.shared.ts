@@ -1,47 +1,22 @@
-import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { type NormalizedPluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { resolveManifestContractPluginIds } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
-
-function resolveBundledWebSearchCompatPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-}): string[] {
-  return resolveManifestContractPluginIds({
-    contract: "webSearchProviders",
-    origin: "bundled",
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-}
-
-function compareWebSearchProvidersAlphabetically(
-  left: Pick<PluginWebSearchProviderEntry, "id" | "pluginId">,
-  right: Pick<PluginWebSearchProviderEntry, "id" | "pluginId">,
-): number {
-  return left.id.localeCompare(right.id) || left.pluginId.localeCompare(right.pluginId);
-}
+import {
+  resolveBundledWebProviderResolutionConfig,
+  sortPluginProviders,
+  sortPluginProvidersForAutoDetect,
+} from "./web-provider-resolution-shared.js";
 
 export function sortWebSearchProviders(
   providers: PluginWebSearchProviderEntry[],
 ): PluginWebSearchProviderEntry[] {
-  return providers.toSorted(compareWebSearchProvidersAlphabetically);
+  return sortPluginProviders(providers);
 }
 
 export function sortWebSearchProvidersForAutoDetect(
   providers: PluginWebSearchProviderEntry[],
 ): PluginWebSearchProviderEntry[] {
-  return providers.toSorted((left, right) => {
-    const leftOrder = left.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = right.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    return compareWebSearchProvidersAlphabetically(left, right);
-  });
+  return sortPluginProvidersForAutoDetect(providers);
 }
 
 export function resolveBundledWebSearchResolutionConfig(params: {
@@ -55,23 +30,11 @@ export function resolveBundledWebSearchResolutionConfig(params: {
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
 } {
-  const activation = resolveBundledPluginCompatibleActivationInputs({
-    rawConfig: params.config,
-    env: params.env,
+  return resolveBundledWebProviderResolutionConfig({
+    contract: "webSearchProviders",
+    config: params.config,
     workspaceDir: params.workspaceDir,
-    applyAutoEnable: true,
-    compatMode: {
-      allowlist: params.bundledAllowlistCompat,
-      enablement: "always",
-      vitest: true,
-    },
-    resolveCompatPluginIds: resolveBundledWebSearchCompatPluginIds,
+    env: params.env,
+    bundledAllowlistCompat: params.bundledAllowlistCompat,
   });
-
-  return {
-    config: activation.config,
-    normalized: activation.normalized,
-    activationSourceConfig: activation.activationSourceConfig,
-    autoEnabledReasons: activation.autoEnabledReasons,
-  };
 }

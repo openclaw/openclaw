@@ -39,7 +39,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       JSON.stringify(
         {
           name: "@openclaw/feishu",
-          version: "2026.4.5",
+          version: "2026.4.6",
           dependencies: {
             "@larksuiteoapi/node-sdk": "^1.60.0",
           },

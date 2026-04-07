@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -193,12 +193,10 @@ function expectConflictingCoreNameResolution(params: {
 }
 
 describe("resolvePluginTools optional tools", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ resolvePluginTools } = await import("./tools.js"));
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-  });
-
-  beforeEach(() => {
     loadOpenClawPluginsMock.mockClear();
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockImplementation((params) =>

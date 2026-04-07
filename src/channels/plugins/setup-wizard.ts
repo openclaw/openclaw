@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
 import type { ChannelAccessPolicy } from "./setup-group-access.js";
@@ -10,6 +11,7 @@ import {
   splitSetupEntries,
 } from "./setup-wizard-helpers.js";
 import type {
+  ChannelSetupPlugin,
   ChannelSetupWizardAdapter,
   ChannelSetupConfigureContext,
   ChannelSetupDmPolicy,
@@ -17,7 +19,6 @@ import type {
   ChannelSetupStatusContext,
 } from "./setup-wizard-types.js";
 import type { ChannelSetupInput } from "./types.core.js";
-import type { ChannelPlugin } from "./types.js";
 
 export type ChannelSetupWizardStatus = {
   configuredLabel: string;
@@ -282,7 +283,7 @@ export type ChannelSetupWizard = {
   onAccountRecorded?: ChannelSetupWizardAdapter["onAccountRecorded"];
 };
 
-type ChannelSetupWizardPlugin = Pick<ChannelPlugin, "id" | "meta" | "config" | "setup">;
+type ChannelSetupWizardPlugin = ChannelSetupPlugin;
 
 async function buildStatus(
   plugin: ChannelSetupWizardPlugin,
@@ -362,8 +363,7 @@ function applySetupInput(params: {
 }
 
 function trimResolvedValue(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function collectCredentialValues(params: {

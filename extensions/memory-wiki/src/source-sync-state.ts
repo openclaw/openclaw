@@ -46,7 +46,7 @@ export async function readMemoryWikiSourceSyncState(
     const parsed = JSON.parse(raw) as Partial<MemoryWikiImportedSourceState>;
     return {
       version: 1,
-      entries: { ...(parsed.entries ?? {}) },
+      entries: { ...parsed.entries },
     };
   } catch {
     return {

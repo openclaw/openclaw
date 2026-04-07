@@ -258,6 +258,13 @@ describe("createVideoGenerateTool", () => {
           fileName: "lobster.mp4",
         },
       ],
+      normalization: {
+        durationSeconds: {
+          requested: 5,
+          applied: 6,
+          supportedValues: [4, 6, 8],
+        },
+      },
       metadata: {
         requestedDurationSeconds: 5,
         normalizedDurationSeconds: 6,
@@ -295,7 +302,79 @@ describe("createVideoGenerateTool", () => {
       durationSeconds: 6,
       requestedDurationSeconds: 5,
       supportedDurationSeconds: [4, 6, 8],
+      normalization: {
+        durationSeconds: {
+          requested: 5,
+          applied: 6,
+          supportedValues: [4, 6, 8],
+        },
+      },
     });
+  });
+
+  it("surfaces normalized video geometry from runtime metadata", async () => {
+    vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "runway",
+      model: "gen4.5",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
+      metadata: {
+        requestedSize: "1280x720",
+        normalizedAspectRatio: "16:9",
+      },
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/generated-lobster.mp4",
+      id: "generated-lobster.mp4",
+      size: 11,
+      contentType: "video/mp4",
+    });
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "runway/gen4.5" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const result = await tool.execute("call-1", {
+      prompt: "friendly lobster surfing",
+      size: "1280x720",
+    });
+
+    expect(result.details).toMatchObject({
+      aspectRatio: "16:9",
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
+      metadata: {
+        requestedSize: "1280x720",
+        normalizedAspectRatio: "16:9",
+      },
+    });
+    expect(result.details).not.toHaveProperty("size");
   });
 
   it("lists supported provider durations when advertised", async () => {
@@ -305,8 +384,16 @@ describe("createVideoGenerateTool", () => {
         defaultModel: "veo-3.1-fast-generate-preview",
         models: ["veo-3.1-fast-generate-preview"],
         capabilities: {
-          maxDurationSeconds: 8,
-          supportedDurationSeconds: [4, 6, 8],
+          generate: {
+            maxDurationSeconds: 8,
+            supportedDurationSeconds: [4, 6, 8],
+          },
+          imageToVideo: {
+            enabled: true,
+            maxInputImages: 1,
+            maxDurationSeconds: 8,
+            supportedDurationSeconds: [4, 6, 8],
+          },
         },
         generateVideo: vi.fn(async () => {
           throw new Error("not used");
@@ -329,7 +416,56 @@ describe("createVideoGenerateTool", () => {
 
     const result = await tool.execute("call-1", { action: "list" });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    expect(text).toContain("modes=generate/imageToVideo");
     expect(text).toContain("supportedDurationSeconds=4/6/8");
+    expect(result.details).toMatchObject({
+      providers: [
+        expect.objectContaining({
+          id: "google",
+          modes: ["generate", "imageToVideo"],
+        }),
+      ],
+    });
+  });
+
+  it("rejects image-to-video when the provider disables that mode", async () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "video-plugin",
+        defaultModel: "vid-v1",
+        models: ["vid-v1"],
+        capabilities: {
+          imageToVideo: {
+            enabled: false,
+          },
+        },
+        generateVideo: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateSpy = vi.spyOn(videoGenerationRuntime, "generateVideo");
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await expect(
+      tool.execute("call-1", {
+        prompt: "lobster timelapse",
+        image: "data:image/png;base64,cG5n",
+      }),
+    ).rejects.toThrow("video-plugin does not support image-to-video reference inputs.");
+    expect(generateSpy).not.toHaveBeenCalled();
   });
 
   it("warns when optional provider overrides are ignored", async () => {
@@ -339,7 +475,9 @@ describe("createVideoGenerateTool", () => {
         defaultModel: "sora-2",
         models: ["sora-2"],
         capabilities: {
-          supportsSize: true,
+          generate: {
+            supportsSize: true,
+          },
         },
         generateVideo: vi.fn(async () => {
           throw new Error("not used");

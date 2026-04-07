@@ -17,6 +17,7 @@ import {
   type SessionsPatchResult,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
@@ -251,7 +252,7 @@ export class GatewayChatClient {
     });
   }
 
-  async getStatus() {
+  async getGatewayStatus() {
     return await this.client.request("status");
   }
 
@@ -338,7 +339,7 @@ export async function resolveGatewayConnection(
   try {
     assertExplicitGatewayAuthModeWhenBothConfigured(config);
   } catch (err) {
-    throwGatewayAuthResolutionError(err instanceof Error ? err.message : String(err));
+    throwGatewayAuthResolutionError(formatErrorMessage(err));
   }
 
   const resolved = await resolveGatewayInteractiveSurfaceAuth({

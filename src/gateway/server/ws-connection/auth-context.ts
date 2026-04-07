@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -40,19 +41,11 @@ export type ConnectAuthDecision = {
   authMethod: GatewayAuthResult["method"];
 };
 
-function trimToUndefined(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function resolveSharedConnectAuth(
   connectAuth: HandshakeConnectAuth | null | undefined,
 ): { token?: string; password?: string } | undefined {
-  const token = trimToUndefined(connectAuth?.token);
-  const password = trimToUndefined(connectAuth?.password);
+  const token = normalizeOptionalString(connectAuth?.token);
+  const password = normalizeOptionalString(connectAuth?.password);
   if (!token && !password) {
     return undefined;
   }
@@ -63,11 +56,11 @@ function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | 
   token?: string;
   source?: DeviceTokenCandidateSource;
 } {
-  const explicitDeviceToken = trimToUndefined(connectAuth?.deviceToken);
+  const explicitDeviceToken = normalizeOptionalString(connectAuth?.deviceToken);
   if (explicitDeviceToken) {
     return { token: explicitDeviceToken, source: "explicit-device-token" };
   }
-  const fallbackToken = trimToUndefined(connectAuth?.token);
+  const fallbackToken = normalizeOptionalString(connectAuth?.token);
   if (!fallbackToken) {
     return {};
   }
@@ -77,7 +70,7 @@ function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | 
 function resolveBootstrapTokenCandidate(
   connectAuth: HandshakeConnectAuth | null | undefined,
 ): string | undefined {
-  return trimToUndefined(connectAuth?.bootstrapToken);
+  return normalizeOptionalString(connectAuth?.bootstrapToken);
 }
 
 export async function resolveConnectAuthState(params: {

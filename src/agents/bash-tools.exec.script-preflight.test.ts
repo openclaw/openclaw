@@ -783,3 +783,33 @@ describeWin("exec script preflight on windows path syntax", () => {
     });
   });
 });
+
+describe("exec interpreter heuristics ReDoS guard", () => {
+  it("does not hang on long commands with VAR=value assignments and whitespace-heavy text", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    // Simulate a heredoc with HTML content after a VAR= assignment. Keep the
+    // command-substitution failure local so the test measures parser behavior,
+    // not external network timing.
+    const htmlBlock = '<section style="padding: 30px 20px; font-family: Arial;">'.repeat(50);
+    const command = `ACCESS_TOKEN=$(__openclaw_missing_redos_guard__)\ncat > /tmp/out.html << 'EOF'\n${htmlBlock}\nEOF`;
+
+    const start = Date.now();
+    // The command itself will fail — we only care that the interpreter
+    // heuristics analysis completes without hanging.
+    try {
+      await Promise.race([
+        tool.execute("redos-guard", { command }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("ReDoS: regex hung for >5s")), 5000),
+        ),
+      ]);
+    } catch (e) {
+      // Any error EXCEPT the timeout is acceptable — it means the regex finished
+      if (e instanceof Error && e.message.includes("ReDoS")) {
+        throw e;
+      }
+    }
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(5000);
+  });
+});

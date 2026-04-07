@@ -4,7 +4,7 @@ import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
-import { resolveMemorySearchConfig } from "./memory-search.js";
+import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
 
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
 
@@ -155,6 +155,25 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
+  it("returns null sync config when disabled", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: { enabled: true },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    });
+    const resolved = resolveMemorySearchSyncConfig(cfg, "main");
+    expect(resolved).toBeNull();
+  });
+
   it("defaults provider to auto when unspecified", () => {
     const cfg = asConfig({
       agents: {
@@ -168,6 +187,44 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.provider).toBe("auto");
     expect(resolved?.fallback).toBe("none");
+  });
+
+  it("resolves sync config without consulting embedding providers", () => {
+    clearMemoryEmbeddingProviders();
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            sync: {
+              onSessionStart: false,
+              onSearch: true,
+              watch: false,
+              watchDebounceMs: 25,
+              intervalMinutes: 3,
+              sessions: {
+                deltaBytes: 321,
+                deltaMessages: 7,
+                postCompactionForce: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveMemorySearchSyncConfig(cfg, "main")).toEqual({
+      onSessionStart: false,
+      onSearch: true,
+      watch: false,
+      watchDebounceMs: 25,
+      intervalMinutes: 3,
+      sessions: {
+        deltaBytes: 321,
+        deltaMessages: 7,
+        postCompactionForce: false,
+      },
+    });
   });
 
   it("merges defaults and overrides", () => {

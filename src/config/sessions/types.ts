@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
@@ -65,6 +66,41 @@ export type AcpSessionRuntimeOptions = {
   timeoutSeconds?: number;
   /** Backend-specific option bag mapped through session/set_config_option. */
   backendExtras?: Record<string, string>;
+};
+
+export type CliSessionBinding = {
+  sessionId: string;
+  authProfileId?: string;
+  authEpoch?: string;
+  extraSystemPromptHash?: string;
+  mcpConfigHash?: string;
+};
+
+export type SessionCompactionCheckpointReason =
+  | "manual"
+  | "auto-threshold"
+  | "overflow-retry"
+  | "timeout-retry";
+
+export type SessionCompactionTranscriptReference = {
+  sessionId: string;
+  sessionFile?: string;
+  leafId?: string;
+  entryId?: string;
+};
+
+export type SessionCompactionCheckpoint = {
+  checkpointId: string;
+  sessionKey: string;
+  sessionId: string;
+  createdAt: number;
+  reason: SessionCompactionCheckpointReason;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  summary?: string;
+  firstKeptEntryId?: string;
+  preCompaction: SessionCompactionTranscriptReference;
+  postCompaction: SessionCompactionTranscriptReference;
 };
 
 export type SessionEntry = {
@@ -174,9 +210,13 @@ export type SessionEntry = {
   fallbackNoticeReason?: string;
   contextTokens?: number;
   compactionCount?: number;
+  compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
+  cliSessionIds?: Record<string, string>;
+  cliSessionBindings?: Record<string, CliSessionBinding>;
+  claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
   channel?: string;
@@ -196,7 +236,7 @@ export type SessionEntry = {
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   return trimmed ? trimmed : undefined;
 }
 

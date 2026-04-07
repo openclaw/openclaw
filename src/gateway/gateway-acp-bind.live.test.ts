@@ -25,6 +25,7 @@ const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 
 const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
+type LiveAcpAgent = "claude" | "codex" | "gemini";
 
 function createSlackCurrentConversationBindingRegistry() {
   return createTestRegistry([
@@ -42,8 +43,11 @@ function createSlackCurrentConversationBindingRegistry() {
   ]);
 }
 
-function normalizeAcpAgent(raw: string | undefined): "claude" | "codex" {
+function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
   const normalized = raw?.trim().toLowerCase();
+  if (normalized === "gemini") {
+    return "gemini";
+  }
   if (normalized === "codex") {
     return "codex";
   }
@@ -65,9 +69,19 @@ function extractAssistantTexts(messages: unknown[]): string[] {
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
-function extractLastAssistantText(messages: unknown[]): string | null {
-  const texts = extractAssistantTexts(messages);
-  return texts.at(-1) ?? null;
+function createAcpRecallPrompt(liveAgent: LiveAcpAgent): string {
+  if (liveAgent !== "claude") {
+    return "Please include the exact token from your immediately previous assistant reply.";
+  }
+  return "Reply with exactly the token from your immediately previous assistant reply and nothing else.";
+}
+
+function createAcpMarkerPrompt(liveAgent: LiveAcpAgent, memoryNonce: string): string {
+  const token = `ACP-BIND-MEMORY-${memoryNonce}`;
+  if (liveAgent !== "claude") {
+    return `Please include the exact token ${token} in your reply.`;
+  }
+  return `Reply with exactly this token and nothing else: ${token}`;
 }
 
 function extractSpawnedAcpSessionKey(texts: string[]): string | null {
@@ -231,7 +245,7 @@ function formatAssistantTextPreview(texts: string[], maxChars = 600): string {
 async function bindConversationAndWait(params: {
   client: GatewayClient;
   sessionKey: string;
-  liveAgent: "claude" | "codex";
+  liveAgent: LiveAcpAgent;
   originatingChannel: string;
   originatingTo: string;
   originatingAccountId: string;
@@ -329,6 +343,44 @@ async function sendChatAndWait(params: {
     throw new Error(`chat.send did not start correctly: ${JSON.stringify(started)}`);
   }
   await waitForAgentRunOk(params.client, started.runId);
+}
+
+async function waitForAssistantText(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  contains: string;
+  minAssistantCount?: number;
+  timeoutMs?: number;
+}): Promise<{ messages: unknown[]; lastAssistantText: string }> {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const history = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+      sessionKey: params.sessionKey,
+      limit: 16,
+    });
+    const messages = history.messages ?? [];
+    const assistantTexts = extractAssistantTexts(messages);
+    const lastAssistantText = assistantTexts.at(-1) ?? null;
+    if (
+      assistantTexts.length >= (params.minAssistantCount ?? 1) &&
+      lastAssistantText?.includes(params.contains)
+    ) {
+      return { messages, lastAssistantText };
+    }
+    await sleep(500);
+  }
+
+  const finalHistory = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+    sessionKey: params.sessionKey,
+    limit: 16,
+  });
+  throw new Error(
+    `timed out waiting for assistant text containing ${params.contains}: ${formatAssistantTextPreview(
+      extractAssistantTexts(finalHistory.messages ?? []),
+    )}`,
+  );
 }
 
 describeLive("gateway live (ACP bind)", () => {
@@ -469,30 +521,57 @@ describeLive("gateway live (ACP bind)", () => {
         });
         logLiveStep("follow-up turn completed");
 
+        const firstBoundHistory = await waitForAssistantText({
+          client,
+          sessionKey: spawnedSessionKey,
+          contains: `ACP-BIND-${followupNonce}`,
+        });
+        const firstAssistantCount = extractAssistantTexts(firstBoundHistory.messages).length;
+
         await sendChatAndWait({
           client,
           sessionKey: originalSessionKey,
           idempotencyKey: `idem-memory-${randomUUID()}`,
-          message:
-            "Reply with exactly two uppercase tokens separated by a single space: " +
-            "first, the token from your immediately previous assistant reply; " +
-            `second, ACP-BIND-MEMORY-${memoryNonce}. No extra text.`,
+          message: createAcpRecallPrompt(liveAgent),
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
         });
-        logLiveStep("memory follow-up turn completed");
+        logLiveStep("memory recall turn completed");
 
-        const boundHistory = await client.request<{ messages?: unknown[] }>("chat.history", {
+        const recallHistory = await waitForAssistantText({
+          client,
           sessionKey: spawnedSessionKey,
-          limit: 16,
+          contains: `ACP-BIND-${followupNonce}`,
+          minAssistantCount: firstAssistantCount + 1,
         });
-        const assistantTexts = extractAssistantTexts(boundHistory.messages ?? []);
-        const lastAssistantText = extractLastAssistantText(boundHistory.messages ?? []);
+        const recallAssistantText = recallHistory.lastAssistantText;
+        expect(recallAssistantText).toContain(`ACP-BIND-${followupNonce}`);
+        logLiveStep("bound session transcript retained the previous token");
+        const recallAssistantCount = extractAssistantTexts(recallHistory.messages).length;
+
+        await sendChatAndWait({
+          client,
+          sessionKey: originalSessionKey,
+          idempotencyKey: `idem-marker-${randomUUID()}`,
+          message: createAcpMarkerPrompt(liveAgent, memoryNonce),
+          originatingChannel: "slack",
+          originatingTo: conversationId,
+          originatingAccountId: accountId,
+        });
+        logLiveStep("memory marker turn completed");
+
+        const boundHistory = await waitForAssistantText({
+          client,
+          sessionKey: spawnedSessionKey,
+          contains: `ACP-BIND-MEMORY-${memoryNonce}`,
+          minAssistantCount: recallAssistantCount + 1,
+        });
+        const assistantTexts = extractAssistantTexts(boundHistory.messages);
+        const lastAssistantText = boundHistory.lastAssistantText;
         expect(assistantTexts.join("\n\n")).toContain(`ACP-BIND-${followupNonce}`);
-        expect(lastAssistantText).toContain(`ACP-BIND-${followupNonce}`);
         expect(lastAssistantText).toContain(`ACP-BIND-MEMORY-${memoryNonce}`);
-        logLiveStep("bound session transcript contains follow-up token");
+        logLiveStep("bound session transcript contains the final marker token");
       } finally {
         releasePinnedPluginChannelRegistry(channelRegistry);
         clearRuntimeConfigSnapshot();

@@ -34,6 +34,7 @@ export {
   stripToolMessages,
 } from "./chat-history-text.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
@@ -87,8 +88,7 @@ export type SessionListRow = {
 };
 
 function normalizeKey(value?: string) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 export function resolveSessionToolContext(opts?: {

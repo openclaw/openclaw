@@ -23,8 +23,10 @@ import {
   isHighSignalLiveModelRef,
   selectHighSignalLiveItems,
 } from "../agents/live-model-filter.js";
+import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import { getApiKeyForModel } from "../agents/model-auth.js";
+import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
@@ -49,6 +51,7 @@ import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
+const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SMOKE);
 const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
@@ -823,24 +826,117 @@ async function getFreeGatewayPort(): Promise<number> {
   throw new Error("failed to acquire a free gateway port block");
 }
 
-async function connectClient(params: { url: string; token: string }) {
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sanitizeAuthProfileStoreForLiveGateway(store: AuthProfileStore): AuthProfileStore {
+  if (REQUIRE_PROFILE_KEYS) {
+    return store;
+  }
+
+  const envBackedProviders = new Set<string>();
+  for (const profile of Object.values(store.profiles)) {
+    if (resolveEnvApiKey(profile.provider)?.apiKey) {
+      envBackedProviders.add(normalizeProviderId(profile.provider));
+    }
+  }
+  if (envBackedProviders.size === 0) {
+    return store;
+  }
+
+  const profiles = Object.fromEntries(
+    Object.entries(store.profiles).filter(([, profile]) => {
+      return !envBackedProviders.has(normalizeProviderId(profile.provider));
+    }),
+  );
+  const keepProfileIds = new Set(Object.keys(profiles));
+
+  const order = store.order
+    ? Object.fromEntries(
+        Object.entries(store.order)
+          .filter(([provider]) => !envBackedProviders.has(normalizeProviderId(provider)))
+          .map(([provider, ids]) => [provider, ids.filter((id) => keepProfileIds.has(id))])
+          .filter(([, ids]) => ids.length > 0),
+      )
+    : undefined;
+
+  const lastGood = store.lastGood
+    ? Object.fromEntries(
+        Object.entries(store.lastGood).filter(([provider, id]) => {
+          return !envBackedProviders.has(normalizeProviderId(provider)) && keepProfileIds.has(id);
+        }),
+      )
+    : undefined;
+
+  const usageStats = store.usageStats
+    ? Object.fromEntries(Object.entries(store.usageStats).filter(([id]) => keepProfileIds.has(id)))
+    : undefined;
+
+  return {
+    ...store,
+    profiles,
+    order: order && Object.keys(order).length > 0 ? order : undefined,
+    lastGood: lastGood && Object.keys(lastGood).length > 0 ? lastGood : undefined,
+    usageStats: usageStats && Object.keys(usageStats).length > 0 ? usageStats : undefined,
+  };
+}
+
+async function connectClient(params: { url: string; token: string; timeoutMs?: number }) {
+  const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_PROBE_TIMEOUT_MS;
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError: Error | null = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    attempt += 1;
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    try {
+      return await connectClientOnce({
+        ...params,
+        timeoutMs: Math.min(remainingMs, 35_000),
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 5_000) {
+        throw lastError;
+      }
+      logProgress(`gateway connect warmup retry ${attempt}: ${lastError.message}`);
+      await sleep(Math.min(1_000 * attempt, 5_000));
+    }
+  }
+
+  throw lastError ?? new Error("gateway connect timeout");
+}
+
+async function connectClientOnce(params: { url: string; token: string; timeoutMs?: number }) {
+  const timeoutMs = params.timeoutMs ?? 10_000;
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    const stop = (err?: Error, client?: GatewayClient) => {
+    let client: GatewayClient | undefined;
+    const stop = (err?: Error, nextClient?: GatewayClient) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
       if (err) {
+        if (client) {
+          void client.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
+        }
         reject(err);
       } else {
-        resolve(client as GatewayClient);
+        resolve(nextClient as GatewayClient);
       }
     };
-    const client = new GatewayClient({
+    client = new GatewayClient({
       url: params.url,
       token: params.token,
+      requestTimeoutMs: Math.max(timeoutMs, GATEWAY_LIVE_MODEL_TIMEOUT_MS),
+      connectChallengeTimeoutMs: timeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: "vitest-live",
       clientVersion: "dev",
@@ -850,12 +946,72 @@ async function connectClient(params: { url: string; token: string }) {
       onClose: (code, reason) =>
         stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
     });
-    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), 10_000);
+    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), timeoutMs);
     timer.unref();
     client.start();
   });
 }
 
+function isRetryableGatewayConnectError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("gateway closed during connect (1000)") ||
+    message.includes("gateway connect timeout") ||
+    message.includes("gateway connect challenge timeout") ||
+    message.includes("gateway request timeout for connect")
+  );
+}
+
+describe("sanitizeAuthProfileStoreForLiveGateway", () => {
+  it("drops env-backed provider profiles when live auth should prefer env", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        openaiProfile: {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-openai-test",
+        },
+        codexProfile: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: 1,
+        },
+      },
+      order: {
+        openai: ["openaiProfile"],
+        "openai-codex": ["codexProfile"],
+      },
+      lastGood: {
+        openai: "openaiProfile",
+        "openai-codex": "codexProfile",
+      },
+      usageStats: {
+        openaiProfile: { lastUsed: 1 },
+        codexProfile: { lastUsed: 2 },
+      },
+    };
+
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-live-openai";
+    try {
+      const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
+      expect(sanitized.profiles.openaiProfile).toBeUndefined();
+      expect(sanitized.profiles.codexProfile).toBeDefined();
+      expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
+      expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
+      expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+  });
+});
 function extractTranscriptMessageText(message: unknown): string {
   if (!message || typeof message !== "object") {
     return "";
@@ -1139,7 +1295,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const hostStore = ensureAuthProfileStore(hostAgentDir, {
     allowKeychainPrompt: false,
   });
-  const sanitizedStore: AuthProfileStore = {
+  const sanitizedStore = sanitizeAuthProfileStoreForLiveGateway({
     version: hostStore.version,
     profiles: { ...hostStore.profiles },
     // Keep selection state so the gateway picks the same known-good profiles
@@ -1147,7 +1303,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     order: hostStore.order ? { ...hostStore.order } : undefined,
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
-  };
+  });
   tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
   tempAgentDir = path.join(tempStateDir, "agents", DEFAULT_AGENT_ID, "agent");
@@ -1841,8 +1997,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const useExplicit = Boolean(rawModels) && !useModern;
         const filter = useExplicit ? parseFilter(rawModels) : null;
         const maxModels = GATEWAY_LIVE_MAX_MODELS;
+        const targetMatcher = createLiveTargetMatcher({
+          providerFilter: PROVIDERS,
+          modelFilter: filter,
+          config: cfg,
+          env: process.env,
+        });
         const wanted = filter
-          ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
+          ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
           : all.filter((m) => isHighSignalLiveModelRef({ provider: m.provider, id: m.id }));
 
         const candidates: Array<Model<Api>> = [];
@@ -1851,12 +2013,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
             continue;
           }
-          if (PROVIDERS && !PROVIDERS.has(model.provider)) {
+          if (!targetMatcher.matchesProvider(model.provider)) {
             continue;
           }
           const modelRef = `${model.provider}/${model.id}`;
           try {
-            const apiKeyInfo = await getApiKeyForModel({ model, cfg });
+            const apiKeyInfo = await getApiKeyForModel({
+              model,
+              cfg,
+              credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            });
             if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
               skipped.push({
                 model: modelRef,
@@ -1972,8 +2138,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       return;
     }
     try {
-      await getApiKeyForModel({ model: anthropic, cfg });
-      await getApiKeyForModel({ model: zai, cfg });
+      await getApiKeyForModel({
+        model: anthropic,
+        cfg,
+        credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+      });
+      await getApiKeyForModel({
+        model: zai,
+        cfg,
+        credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+      });
     } catch {
       return;
     }

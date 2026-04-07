@@ -31,7 +31,7 @@ vi.mock("../../agents/subagent-control.js", () => ({
 
 afterEach(() => {
   resetTaskRegistryDeliveryRuntimeForTests();
-  resetTaskRegistryForTests();
+  resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   vi.clearAllMocks();
 });

@@ -13,7 +13,11 @@ import {
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
 import { normalizeHostname } from "./hostname.js";
-import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
+import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+} from "./undici-runtime.js";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,
@@ -21,7 +25,7 @@ type LookupCallback = (
   family?: number,
 ) => void;
 
-type LookupResult = LookupAddress | readonly LookupAddress[];
+type LookupResult = LookupAddress | LookupAddress[];
 
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
@@ -203,7 +207,10 @@ function assertAllowedResolvedAddressesOrThrow(
 }
 
 function normalizeLookupResults(results: LookupResult): readonly LookupAddress[] {
-  return Array.isArray(results) ? results : [results];
+  if (Array.isArray(results)) {
+    return results;
+  }
+  return [results];
 }
 
 export function createPinnedLookup(params: {
@@ -410,17 +417,16 @@ export function createPinnedDispatcher(
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
 ): Dispatcher {
-  const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
-    return new Agent({
+    return createHttp1Agent({
       connect: withPinnedLookup(lookup, policy?.connect),
     });
   }
 
   if (policy.mode === "env-proxy") {
-    return new EnvHttpProxyAgent({
+    return createHttp1EnvHttpProxyAgent({
       connect: withPinnedLookup(lookup, policy.connect),
       ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
     });
@@ -429,9 +435,9 @@ export function createPinnedDispatcher(
   const proxyUrl = policy.proxyUrl.trim();
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
   if (!requestTls) {
-    return new ProxyAgent(proxyUrl);
+    return createHttp1ProxyAgent({ uri: proxyUrl });
   }
-  return new ProxyAgent({
+  return createHttp1ProxyAgent({
     uri: proxyUrl,
     // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
     // transport hints for explicit proxies. Translate that to undici's

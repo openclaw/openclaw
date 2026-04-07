@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+
 export function normalizeOutboundThreadId(value?: string | number | null): string | undefined {
   if (value == null) {
     return undefined;
@@ -8,6 +10,5 @@ export function normalizeOutboundThreadId(value?: string | number | null): strin
     }
     return String(Math.trunc(value));
   }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }

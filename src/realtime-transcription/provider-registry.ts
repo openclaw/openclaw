@@ -1,17 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { RealtimeTranscriptionProviderId } from "./provider-types.js";
-
-function trimToUndefined(value: string | undefined): string | undefined {
-  const trimmed = value?.trim().toLowerCase();
-  return trimmed ? trimmed : undefined;
-}
 
 export function normalizeRealtimeTranscriptionProviderId(
   providerId: string | undefined,
 ): RealtimeTranscriptionProviderId | undefined {
-  return trimToUndefined(providerId);
+  return normalizeOptionalString(providerId)?.toLowerCase();
 }
 
 function resolveRealtimeTranscriptionProviderEntries(

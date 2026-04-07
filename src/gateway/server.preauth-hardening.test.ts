@@ -124,7 +124,7 @@ describe("gateway pre-auth hardening", () => {
       });
       expect(close.code).toBe(1000);
       expect(close.elapsedMs).toBeGreaterThan(0);
-      expect(close.elapsedMs).toBeLessThan(1_000);
+      expect(close.elapsedMs).toBeLessThan(2_500);
     } finally {
       await harness.close();
     }

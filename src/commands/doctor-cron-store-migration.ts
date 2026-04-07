@@ -1,3 +1,4 @@
+import { normalizeCronJobIdentityFields } from "../cron/normalize-job-identity.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { coerceFiniteScheduleNumber } from "../cron/schedule.js";
 import { inferLegacyName, normalizeOptionalText } from "../cron/service/normalize.js";
@@ -212,19 +213,11 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
-    const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
-    const legacyJobId = typeof raw.jobId === "string" ? raw.jobId.trim() : "";
-    if (!rawId && legacyJobId) {
-      raw.id = legacyJobId;
-      mutated = true;
-      trackIssue("jobId");
-    } else if (rawId && raw.id !== rawId) {
-      raw.id = rawId;
+    const idNorm = normalizeCronJobIdentityFields(raw);
+    if (idNorm.mutated) {
       mutated = true;
     }
-    if ("jobId" in raw) {
-      delete raw.jobId;
-      mutated = true;
+    if (idNorm.legacyJobIdIssue) {
       trackIssue("jobId");
     }
 

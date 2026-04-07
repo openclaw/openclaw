@@ -2,6 +2,9 @@
 
 export type {
   GeneratedMusicAsset,
+  MusicGenerationEditCapabilities,
+  MusicGenerationMode,
+  MusicGenerationModeCapabilities,
   MusicGenerationProvider,
   MusicGenerationProviderCapabilities,
   MusicGenerationRequest,

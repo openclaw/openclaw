@@ -184,7 +184,7 @@ export function getChromeMcpMocks(): Record<string, MockFn> {
 const chromeUserDataDir = vi.hoisted(() => ({ dir: "/tmp/openclaw" }));
 installChromeUserDataDirHooks(chromeUserDataDir);
 
-type BrowserServerModule = typeof import("./server.js");
+type BrowserServerModule = typeof import("../server.js");
 let browserServerModule: BrowserServerModule | null = null;
 
 async function loadBrowserServerModule(): Promise<BrowserServerModule> {
@@ -192,7 +192,7 @@ async function loadBrowserServerModule(): Promise<BrowserServerModule> {
     return browserServerModule;
   }
   vi.resetModules();
-  browserServerModule = await import("./server.js");
+  browserServerModule = await import("../server.js");
   return browserServerModule;
 }
 

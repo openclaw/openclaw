@@ -10,7 +10,9 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveManifestContractPluginIds } from "../plugins/manifest-registry.js";
 import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
@@ -37,6 +39,7 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
 const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
+  "google-gemini-cli": "google",
   kimi: "moonshotai",
   "kimi-coding": "moonshotai",
   moonshot: "moonshotai",
@@ -66,11 +69,9 @@ function clearRefreshTimer(): void {
 
 function listLikePrimary(value: ModelListLike): string | undefined {
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
+    return normalizeOptionalString(value);
   }
-  const trimmed = value?.primary?.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value?.primary);
 }
 
 function listLikeFallbacks(value: ModelListLike): string[] {
@@ -80,8 +81,8 @@ function listLikeFallbacks(value: ModelListLike): string[] {
   return Array.isArray(value.fallbacks)
     ? value.fallbacks
         .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
+        .map((entry) => normalizeOptionalString(entry))
+        .filter((entry): entry is string => Boolean(entry))
     : [];
 }
 
@@ -250,6 +251,23 @@ function addProviderModelPair(params: {
   params.refs.set(modelKey(normalized.provider, normalized.model), normalized);
 }
 
+function addConfiguredWebSearchPluginModels(params: {
+  config: OpenClawConfig;
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+  refs: Map<string, ModelRef>;
+}): void {
+  for (const pluginId of resolveManifestContractPluginIds({
+    contract: "webSearchProviders",
+    config: params.config,
+  })) {
+    addResolvedModelRef({
+      raw: resolvePluginWebSearchConfig(params.config, pluginId)?.model as string | undefined,
+      aliasIndex: params.aliasIndex,
+      refs: params.refs,
+    });
+  }
+}
+
 export function collectConfiguredModelPricingRefs(config: OpenClawConfig): ModelRef[] {
   const refs = new Map<string, ModelRef>();
   const aliasIndex = buildModelAliasIndex({
@@ -289,26 +307,7 @@ export function collectConfiguredModelPricingRefs(config: OpenClawConfig): Model
     }
   }
 
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "google")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "xai")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "moonshot")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
-  addResolvedModelRef({
-    raw: resolvePluginWebSearchConfig(config, "perplexity")?.model as string | undefined,
-    aliasIndex,
-    refs,
-  });
+  addConfiguredWebSearchPluginModels({ config, aliasIndex, refs });
 
   for (const entry of config.tools?.media?.models ?? []) {
     addProviderModelPair({ provider: entry.provider, model: entry.model, refs });

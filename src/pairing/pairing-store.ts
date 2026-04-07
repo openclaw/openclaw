@@ -9,6 +9,7 @@ import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -870,11 +871,11 @@ export async function approveChannelPairingCode(params: {
         version: 1,
         requests: pruned,
       } satisfies PairingStore);
-      const entryAccountId = String(entry.meta?.accountId ?? "").trim() || undefined;
+      const entryAccountId = normalizeOptionalString(String(entry.meta?.accountId ?? ""));
       await addChannelAllowFromStoreEntry({
         channel: params.channel,
         entry: entry.id,
-        accountId: params.accountId?.trim() || entryAccountId,
+        accountId: normalizeOptionalString(params.accountId) ?? entryAccountId,
         env,
       });
       return { id: entry.id, entry };

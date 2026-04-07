@@ -251,12 +251,23 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 0,
-      supportsAspectRatio: true,
-      supportsResolution: true,
-      supportsSize: true,
+      generate: {
+        maxVideos: 1,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsSize: true,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsSize: true,
+      },
+      videoToVideo: {
+        enabled: false,
+      },
     },
     async generateVideo(req) {
       if ((req.inputVideos?.length ?? 0) > 0) {

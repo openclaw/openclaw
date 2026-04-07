@@ -1,14 +1,15 @@
 import type { Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createPiAiStreamSimpleMock } from "./extra-params.pi-ai-mock.js";
-import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 vi.mock("@mariozechner/pi-ai", async () =>
   createPiAiStreamSimpleMock(() =>
     vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai"),
   ),
 );
+
+let runExtraParamsCase: typeof import("./extra-params.test-support.js").runExtraParamsCase;
 
 type ToolStreamCase = {
   applyProvider: string;
@@ -30,6 +31,12 @@ function runToolStreamCase(params: ToolStreamCase) {
 }
 
 describe("extra-params: provider tool_stream support", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doUnmock("../../plugins/provider-runtime.js");
+    ({ runExtraParamsCase } = await import("./extra-params.test-support.js"));
+  });
+
   it("injects tool_stream=true for zai provider by default", () => {
     const payload = runToolStreamCase({
       applyProvider: "zai",

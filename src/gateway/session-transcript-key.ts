@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   loadCombinedSessionStoreForGateway,
   resolveGatewaySessionStoreTarget,
@@ -13,7 +14,7 @@ import {
 const TRANSCRIPT_SESSION_KEY_CACHE = new Map<string, string>();
 
 function resolveTranscriptPathForComparison(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }

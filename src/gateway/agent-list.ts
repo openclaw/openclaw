@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionScope } from "../config/sessions.js";
 import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type GatewayAgentListRow = {
   id: string;
@@ -62,7 +63,7 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
       continue;
     }
     configuredById.set(normalizeAgentId(entry.id), {
-      name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : undefined,
+      name: normalizeOptionalString(entry.name),
     });
   }
   const explicitIds = new Set(

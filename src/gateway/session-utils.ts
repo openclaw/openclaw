@@ -12,9 +12,9 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
-  resolvePersistedModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolvePersistedSelectedModelRef,
 } from "../agents/model-selection.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -54,6 +54,7 @@ import {
   isWorkspaceRelativeAvatarPath,
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
@@ -211,6 +212,18 @@ function resolvePositiveNumber(value: number | null | undefined): number | undef
 
 function resolveNonNegativeNumber(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function resolveLatestCompactionCheckpoint(
+  entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
+): NonNullable<SessionEntry["compactionCheckpoints"]>[number] | undefined {
+  const checkpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    return undefined;
+  }
+  return checkpoints.reduce((latest, checkpoint) =>
+    !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
+  );
 }
 
 function resolveEstimatedSessionCostUsd(params: {
@@ -642,19 +655,19 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     }
     const identity = entry.identity
       ? {
-          name: entry.identity.name?.trim() || undefined,
-          theme: entry.identity.theme?.trim() || undefined,
-          emoji: entry.identity.emoji?.trim() || undefined,
-          avatar: entry.identity.avatar?.trim() || undefined,
+          name: normalizeOptionalString(entry.identity.name),
+          theme: normalizeOptionalString(entry.identity.theme),
+          emoji: normalizeOptionalString(entry.identity.emoji),
+          avatar: normalizeOptionalString(entry.identity.avatar),
           avatarUrl: resolveIdentityAvatarUrl(
             cfg,
             normalizeAgentId(entry.id),
-            entry.identity.avatar?.trim(),
+            normalizeOptionalString(entry.identity.avatar),
           ),
         }
       : undefined;
     configuredById.set(normalizeAgentId(entry.id), {
-      name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : undefined,
+      name: normalizeOptionalString(entry.name),
       identity,
     });
   }
@@ -1033,7 +1046,7 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
-  const persisted = resolvePersistedModelRef({
+  const persisted = resolvePersistedSelectedModelRef({
     defaultProvider: resolved.provider || DEFAULT_PROVIDER,
     runtimeProvider: entry?.modelProvider,
     runtimeModel: entry?.model,
@@ -1061,17 +1074,17 @@ export async function resolveGatewayModelSupportsImages(params: {
       (entry) =>
         entry.id === params.model && (!params.provider || entry.provider === params.provider),
     );
+    const normalizedProvider = params.provider?.trim().toLowerCase();
+    const normalizedCandidates = [
+      params.model.trim().toLowerCase(),
+      typeof modelEntry?.name === "string" ? modelEntry.name.trim().toLowerCase() : "",
+    ].filter(Boolean);
     if (modelEntry) {
       if (modelEntry.input?.includes("image")) {
         return true;
       }
       // Legacy safety shim for stale persisted Foundry rows that predate
       // provider-owned capability normalization.
-      const normalizedProvider = params.provider?.trim().toLowerCase();
-      const normalizedCandidates = [
-        params.model.trim().toLowerCase(),
-        typeof modelEntry.name === "string" ? modelEntry.name.trim().toLowerCase() : "",
-      ].filter(Boolean);
       if (
         normalizedProvider === "microsoft-foundry" &&
         normalizedCandidates.some(
@@ -1085,7 +1098,31 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
+      if (
+        normalizedProvider === "claude-cli" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate === "opus" ||
+            candidate === "sonnet" ||
+            candidate === "haiku" ||
+            candidate.startsWith("claude-"),
+        )
+      ) {
+        return true;
+      }
       return false;
+    }
+    if (
+      normalizedProvider === "claude-cli" &&
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate === "opus" ||
+          candidate === "sonnet" ||
+          candidate === "haiku" ||
+          candidate.startsWith("claude-"),
+      )
+    ) {
+      return true;
     }
     return false;
   } catch {
@@ -1187,6 +1224,9 @@ export function buildGatewaySessionRow(params: {
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
   const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const selectedModel = entry?.modelOverride?.trim()
+    ? resolveSessionModelRef(cfg, entry, sessionAgentId)
+    : null;
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,
@@ -1241,6 +1281,7 @@ export function buildGatewaySessionRow(params: {
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const childSessions = resolveChildSessionKeys(key, store);
+  const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
@@ -1319,14 +1360,16 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
-    modelProvider,
-    model,
+    modelProvider: selectedModel?.provider ?? modelProvider,
+    model: selectedModel?.model ?? model,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,
     lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
+    compactionCheckpointCount: entry?.compactionCheckpoints?.length,
+    latestCompactionCheckpoint,
   };
 }
 

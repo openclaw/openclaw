@@ -38,6 +38,7 @@ import { normalizeProviderId } from "./model-selection.js";
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 const log = createSubsystemLogger("model-auth");
 function resolveProviderConfig(
@@ -347,6 +348,7 @@ export async function resolveApiKeyForProvider(params: {
   /** When true, treat profileId as a user-locked selection that must not be
    *  silently overridden by env/config credentials (e.g. ollama-local). */
   lockedProfile?: boolean;
+  credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
@@ -398,6 +400,20 @@ export async function resolveApiKeyForProvider(params: {
         apiKey: customKey.apiKey,
         source: customKey.source,
         mode: "api-key",
+      };
+    }
+  }
+
+  if (params.credentialPrecedence === "env-first") {
+    const envResolved = resolveEnvApiKey(provider);
+    if (envResolved) {
+      const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
+        ? "oauth"
+        : "api-key";
+      return {
+        apiKey: envResolved.apiKey,
+        source: envResolved.source,
+        mode: resolvedMode,
       };
     }
   }
@@ -633,6 +649,7 @@ export async function getApiKeyForModel(params: {
   store?: AuthProfileStore;
   agentDir?: string;
   lockedProfile?: boolean;
+  credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
@@ -642,6 +659,7 @@ export async function getApiKeyForModel(params: {
     store: params.store,
     agentDir: params.agentDir,
     lockedProfile: params.lockedProfile,
+    credentialPrecedence: params.credentialPrecedence,
   });
 }
 

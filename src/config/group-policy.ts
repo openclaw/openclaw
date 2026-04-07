@@ -1,6 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { OpenClawConfig } from "./config.js";
 import {
   parseToolsBySenderTypedKey,
@@ -207,7 +208,7 @@ function resolveCompiledToolsBySenderPolicy(
 }
 
 function normalizeCandidate(value: string | null | undefined, type: SenderKeyType): string {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return "";
   }
@@ -215,7 +216,7 @@ function normalizeCandidate(value: string | null | undefined, type: SenderKeyTyp
 }
 
 function normalizeSenderIdCandidates(value: string | null | undefined): string[] {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return [];
   }

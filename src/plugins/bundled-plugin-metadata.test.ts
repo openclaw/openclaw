@@ -30,10 +30,31 @@ function expectTestOnlyArtifactsExcluded(artifacts: readonly string[]) {
 
 function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: string) {
   expect(
-    resolveBundledPluginGeneratedPath(tempRoot, {
-      source: "plugin/index.ts",
-      built: "plugin/index.js",
-    }),
+    resolveBundledPluginGeneratedPath(
+      tempRoot,
+      {
+        source: "./plugin/index.ts",
+        built: "plugin/index.js",
+      },
+      undefined,
+    ),
+  ).toBe(path.join(tempRoot, expectedRelativePath));
+}
+
+function expectPluginScopedGeneratedPathResolution(
+  tempRoot: string,
+  pluginDirName: string,
+  expectedRelativePath: string,
+) {
+  expect(
+    resolveBundledPluginGeneratedPath(
+      tempRoot,
+      {
+        source: "./index.ts",
+        built: "index.js",
+      },
+      pluginDirName,
+    ),
   ).toBe(path.join(tempRoot, expectedRelativePath));
 }
 
@@ -167,13 +188,38 @@ describe("bundled plugin metadata", () => {
 
   it("prefers built generated paths when present and falls back to source paths", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-");
+    const pluginRoot = path.join(tempRoot, "extensions", "plugin");
+    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "plugin");
 
-    fs.mkdirSync(path.join(tempRoot, "plugin"), { recursive: true });
-    fs.writeFileSync(path.join(tempRoot, "plugin", "index.ts"), "export {};\n", "utf8");
-    expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.ts"));
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
+    expectGeneratedPathResolution(tempRoot, path.join("extensions", "plugin", "index.ts"));
 
-    fs.writeFileSync(path.join(tempRoot, "plugin", "index.js"), "export {};\n", "utf8");
-    expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.js"));
+    fs.mkdirSync(distPluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export {};\n", "utf8");
+    expectGeneratedPathResolution(tempRoot, path.join("dist", "extensions", "plugin", "index.js"));
+  });
+
+  it("resolves plugin-local generated entry paths when the plugin dir is provided", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-local-");
+    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
+    const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
+
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export {};\n", "utf8");
+    expectPluginScopedGeneratedPathResolution(
+      tempRoot,
+      "alpha",
+      path.join("extensions", "alpha", "index.ts"),
+    );
+
+    fs.mkdirSync(distPluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(distPluginRoot, "index.js"), "export {};\n", "utf8");
+    expectPluginScopedGeneratedPathResolution(
+      tempRoot,
+      "alpha",
+      path.join("dist", "extensions", "alpha", "index.js"),
+    );
   });
 
   it("resolves bundled repo entry paths from dist before workspace source", () => {
