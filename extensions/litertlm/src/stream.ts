@@ -6,6 +6,12 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { PROVIDER_ID } from "./provider-models.js";
+import {
+  buildLiteRtLmShimRequest,
+  resolveLiteRtLmRuntimeConfig,
+  type LiteRtLmRuntimeConfig,
+  type LiteRtLmShimResponse,
+} from "./runtime-config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,11 +79,22 @@ function buildStreamErrorAssistantMessage(params: {
   };
 }
 
-function getShimPath() {
+function getBundledShimPath() {
   return path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
-    "../../../scripts/litertlm_provider_shim.py",
+    "../scripts/litertlm_provider_shim.py",
   );
+}
+
+function resolveShimPath(runtimeConfig: LiteRtLmRuntimeConfig) {
+  const configuredPath = runtimeConfig.shimPath.trim();
+  if (!configuredPath) {
+    return getBundledShimPath();
+  }
+  if (path.isAbsolute(configuredPath)) {
+    return configuredPath;
+  }
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", configuredPath);
 }
 
 function buildModelDescriptor(modelId: string): StreamModelDescriptor {
@@ -107,6 +124,39 @@ function extractPrompt(context: { messages?: unknown[] }) {
   return "";
 }
 
+function buildUsageFromShimResponse(payload: LiteRtLmShimResponse): Usage {
+  if (!payload.ok) {
+    return buildUsageWithNoCost({});
+  }
+  return buildUsageWithNoCost({
+    input: payload.usage?.inputTokens,
+    output: payload.usage?.outputTokens,
+    totalTokens: payload.usage?.totalTokens,
+  });
+}
+
+async function invokeLiteRtLmShim(params: {
+  runtimeConfig: LiteRtLmRuntimeConfig;
+  request: ReturnType<typeof buildLiteRtLmShimRequest>;
+}): Promise<LiteRtLmShimResponse> {
+  const shimPath = resolveShimPath(params.runtimeConfig);
+  const { stdout } = await execFileAsync(
+    params.runtimeConfig.pythonPath,
+    [shimPath, "--input", JSON.stringify(params.request)],
+    {
+      timeout: params.runtimeConfig.timeoutMs,
+      maxBuffer: 1024 * 1024,
+    },
+  );
+
+  const parsed = JSON.parse(stdout) as LiteRtLmShimResponse;
+  return parsed;
+}
+
+function buildLiteRtLmErrorMessage(err: unknown) {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export function createLiteRtLmShimStreamFn(params: { model: { id: string } }): StreamFn {
   return (_model, context, _options) => {
     const stream = createAssistantMessageEventStream();
@@ -114,37 +164,37 @@ export function createLiteRtLmShimStreamFn(params: { model: { id: string } }): S
     const run = async () => {
       const modelInfo = buildModelDescriptor(params.model.id);
       try {
-        const shimInput: Record<string, unknown> = {
-          prompt: extractPrompt(context),
-          backend: "CPU",
-        };
-        if (typeof context.systemPrompt === "string" && context.systemPrompt.trim()) {
-          shimInput.system = context.systemPrompt;
+        const runtimeConfig = resolveLiteRtLmRuntimeConfig({
+          model: { modelId: params.model.id },
+        });
+
+        if (!runtimeConfig.modelFile) {
+          throw new Error("litertlm provider requires a configured model file path");
         }
 
-        const { stdout } = await execFileAsync("python3", [
-          getShimPath(),
-          "--input",
-          JSON.stringify(shimInput),
-        ]);
+        const request = buildLiteRtLmShimRequest({
+          modelId: params.model.id,
+          runtimeConfig,
+          prompt: extractPrompt(context),
+          system:
+            typeof context.systemPrompt === "string" && context.systemPrompt.trim()
+              ? context.systemPrompt
+              : undefined,
+        });
 
-        const payload = JSON.parse(stdout) as {
-          ok: boolean;
-          output_text?: string;
-          diagnostics?: unknown;
-          error?: { message?: string };
-        };
+        const payload = await invokeLiteRtLmShim({ runtimeConfig, request });
 
         if (!payload.ok) {
-          throw new Error(payload.error?.message || "LiteRT-LM shim failed");
+          throw new Error(payload.error.message || "LiteRT-LM shim failed");
         }
 
-        const text = payload.output_text || "";
+        const text = payload.output.text || "";
+        const usage = buildUsageFromShimResponse(payload);
         const partial = buildAssistantMessage({
           model: modelInfo,
           content: [{ type: "text", text }],
           stopReason: "stop",
-          usage: buildUsageWithNoCost({}),
+          usage,
         });
 
         stream.push({ type: "start", partial });
@@ -158,7 +208,7 @@ export function createLiteRtLmShimStreamFn(params: { model: { id: string } }): S
             model: modelInfo,
             content: [{ type: "text", text }],
             stopReason: "stop",
-            usage: buildUsageWithNoCost({}),
+            usage,
           }),
         });
       } catch (err) {
@@ -167,7 +217,7 @@ export function createLiteRtLmShimStreamFn(params: { model: { id: string } }): S
           reason: "error",
           error: buildStreamErrorAssistantMessage({
             model: modelInfo,
-            errorMessage: err instanceof Error ? err.message : String(err),
+            errorMessage: buildLiteRtLmErrorMessage(err),
           }),
         });
       } finally {
