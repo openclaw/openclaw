@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
   buildBootstrapContextFiles,
@@ -163,10 +164,11 @@ function shouldExcludeHeartbeatBootstrapFile(params: {
   if (sessionAgentId !== defaultAgentId) {
     return false;
   }
-  const defaults = params.config.agents?.defaults?.heartbeat;
-  const overrides = resolveAgentConfig(params.config, sessionAgentId)?.heartbeat;
-  const merged = !defaults && !overrides ? overrides : { ...defaults, ...overrides };
-  return merged?.includeSystemPromptSection === false;
+  return !shouldIncludeHeartbeatGuidanceForSystemPrompt({
+    config: params.config,
+    agentId: sessionAgentId,
+    defaultAgentId,
+  });
 }
 
 function filterHeartbeatBootstrapFile(
