@@ -10,7 +10,7 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalString, sanitizeModelName } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -597,7 +597,12 @@ export async function runEmbeddedPiAgent(
             groupSpace: params.groupSpace,
             spawnedBy: params.spawnedBy,
             senderId: params.senderId,
-            senderName: params.senderName,
+            // Sanitize for model API compatibility: OpenAI restricts the
+            // message `name` field to /^[a-zA-Z0-9_-]{1,64}$/.  The raw
+            // senderName is intentionally kept unsanitized upstream so that
+            // tool-policy matching (toolsBySender) still works with real
+            // display names.
+            senderName: sanitizeModelName(params.senderName),
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
             senderIsOwner: params.senderIsOwner,
