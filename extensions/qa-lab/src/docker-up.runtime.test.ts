@@ -1,8 +1,34 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runQaDockerUp } from "./docker-up.runtime.js";
+
+async function occupyPortOrAcceptExisting(port: number): Promise<{ close: () => Promise<void> }> {
+  const server = createServer();
+  const listening = await new Promise<boolean>((resolve, reject) => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        resolve(false);
+        return;
+      }
+      reject(error);
+    });
+    server.listen(port, "127.0.0.1", () => resolve(true));
+  });
+
+  return {
+    close: async () => {
+      if (!listening) {
+        return;
+      }
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    },
+  };
+}
 
 describe("runQaDockerUp", () => {
   it("builds the QA UI, writes the harness, starts compose, and waits for health", async () => {
@@ -109,6 +135,8 @@ describe("runQaDockerUp", () => {
       }
       return preferredPort;
     });
+    const gatewayPortReservation = await occupyPortOrAcceptExisting(18789);
+    const qaLabPortReservation = await occupyPortOrAcceptExisting(43124);
 
     try {
       const result = await runQaDockerUp(
@@ -138,6 +166,8 @@ describe("runQaDockerUp", () => {
       expect(result.gatewayUrl).toBe("http://127.0.0.1:28001/");
       expect(result.qaLabUrl).toBe("http://127.0.0.1:28002");
     } finally {
+      await gatewayPortReservation.close();
+      await qaLabPortReservation.close();
       await rm(outputDir, { recursive: true, force: true });
     }
   });

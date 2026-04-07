@@ -37,12 +37,14 @@ export type ExecApprovalChannelRuntimeAdapter<
   isConfigured: () => boolean;
   shouldHandle: (request: TRequest) => boolean;
   deliverRequested: (request: TRequest) => Promise<TPending[]>;
+  beforeGatewayClientStart?: () => Promise<void> | void;
   finalizeResolved: (params: {
     request: TRequest;
     resolved: TResolved;
     entries: TPending[];
   }) => Promise<void>;
   finalizeExpired?: (params: { request: TRequest; entries: TPending[] }) => Promise<void>;
+  onStopped?: () => Promise<void> | void;
   nowMs?: () => number;
 };
 
@@ -239,9 +241,17 @@ export function createExecApprovalChannelRuntime<
           client.stop();
           return;
         }
-        client.start();
+        await adapter.beforeGatewayClientStart?.();
         gatewayClient = client;
         started = true;
+        try {
+          client.start();
+        } catch (error) {
+          gatewayClient = null;
+          started = false;
+          client.stop();
+          throw error;
+        }
       })().finally(() => {
         startPromise = null;
       });
@@ -255,6 +265,7 @@ export function createExecApprovalChannelRuntime<
         await startPromise.catch(() => {});
       }
       if (!started && !gatewayClient) {
+        await adapter.onStopped?.();
         return;
       }
       started = false;
@@ -266,6 +277,7 @@ export function createExecApprovalChannelRuntime<
       pending.clear();
       gatewayClient?.stop();
       gatewayClient = null;
+      await adapter.onStopped?.();
       log.debug("stopped");
     },
 

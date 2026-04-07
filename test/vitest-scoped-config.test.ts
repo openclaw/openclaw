@@ -313,7 +313,6 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionChannelsConfig.test?.dir).toBe("extensions");
     expect(defaultExtensionChannelsConfig.test?.include).toEqual(
       expect.arrayContaining([
-        "browser/**/*.test.ts",
         "discord/**/*.test.ts",
         "line/**/*.test.ts",
         "slack/**/*.test.ts",

@@ -18,6 +18,7 @@ import {
   type MemoryLightDreamingConfig,
   type MemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import {
@@ -1114,7 +1115,7 @@ function jaccardSimilarity(left: string, right: string): number {
   const leftTokens = tokenizeSnippet(left);
   const rightTokens = tokenizeSnippet(right);
   if (leftTokens.size === 0 || rightTokens.size === 0) {
-    return left.trim().toLowerCase() === right.trim().toLowerCase() ? 1 : 0;
+    return normalizeLowercaseStringOrEmpty(left) === normalizeLowercaseStringOrEmpty(right) ? 1 : 0;
   }
   let intersection = 0;
   for (const token of leftTokens) {

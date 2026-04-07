@@ -361,7 +361,7 @@ async function buildReminderContextLines(params: {
 }
 
 function stripThreadSuffixFromSessionKey(sessionKey: string): string {
-  const normalized = sessionKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   const idx = normalized.lastIndexOf(":thread:");
   if (idx <= 0) {
     return sessionKey;

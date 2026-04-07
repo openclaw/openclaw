@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 async function resetProviderRuntimeState() {
-  const [{ clearPluginManifestRegistryCache }, { resetProviderRuntimeHookCacheForTest }] =
-    await Promise.all([
-      import("../plugins/manifest-registry.js"),
-      import("../plugins/provider-runtime.js"),
-    ]);
+  const [
+    { clearPluginManifestRegistryCache },
+    { resetProviderRuntimeHookCacheForTest },
+    { resetPluginLoaderTestStateForTest },
+  ] = await Promise.all([
+    import("../plugins/manifest-registry.js"),
+    import("../plugins/provider-runtime.js"),
+    import("../plugins/loader.test-fixtures.js"),
+  ]);
+  resetPluginLoaderTestStateForTest();
   clearPluginManifestRegistryCache();
   resetProviderRuntimeHookCacheForTest();
 }

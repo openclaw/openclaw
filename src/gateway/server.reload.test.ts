@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
@@ -8,6 +9,7 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import { openTrackedWs } from "./device-authz.test-helpers.js";
+import { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
 import {
   connectReq,
   connectOk,
@@ -38,6 +40,10 @@ const hoisted = vi.hoisted(() => {
     stop: heartbeatStop,
     updateConfig: heartbeatUpdateConfig,
   }));
+  const activeEmbeddedRunCount = { value: 0 };
+  const totalPendingReplies = { value: 0 };
+  const totalQueueSize = { value: 0 };
+  const activeTaskCount = { value: 0 };
 
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
@@ -135,6 +141,10 @@ const hoisted = vi.hoisted(() => {
     heartbeatStop,
     heartbeatUpdateConfig,
     startHeartbeatRunner,
+    activeEmbeddedRunCount,
+    totalPendingReplies,
+    totalQueueSize,
+    activeTaskCount,
     startGmailWatcher,
     stopGmailWatcher,
     providerManager,
@@ -159,6 +169,51 @@ vi.mock("../hooks/gmail-watcher.js", () => ({
   stopGmailWatcher: hoisted.stopGmailWatcher,
 }));
 
+vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/runs.js")>(
+    "../agents/pi-embedded-runner/runs.js",
+  );
+  return {
+    ...actual,
+    getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
+  };
+});
+
+vi.mock("../auto-reply/reply/dispatcher-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../auto-reply/reply/dispatcher-registry.js")>(
+    "../auto-reply/reply/dispatcher-registry.js",
+  );
+  return {
+    ...actual,
+    getTotalPendingReplies: () => hoisted.totalPendingReplies.value,
+  };
+});
+
+vi.mock("../process/command-queue.js", async () => {
+  const actual = await vi.importActual<typeof import("../process/command-queue.js")>(
+    "../process/command-queue.js",
+  );
+  return {
+    ...actual,
+    getTotalQueueSize: () => hoisted.totalQueueSize.value,
+  };
+});
+
+vi.mock("../tasks/task-registry.maintenance.js", async () => {
+  const actual = await vi.importActual<typeof import("../tasks/task-registry.maintenance.js")>(
+    "../tasks/task-registry.maintenance.js",
+  );
+  return {
+    ...actual,
+    getInspectableTaskRegistrySummary: () => ({
+      active: hoisted.activeTaskCount.value,
+      queued: 0,
+      completed: 0,
+      failed: 0,
+    }),
+  };
+});
+
 vi.mock("./server-channels.js", () => ({
   createChannelManager: hoisted.createChannelManager,
 }));
@@ -168,6 +223,17 @@ vi.mock("./config-reload.js", () => ({
 }));
 
 installGatewayTestHooks({ scope: "suite" });
+
+async function waitForGatewayAuthChangedClose(ws: WebSocket): Promise<{
+  code: number;
+  reason: string;
+}> {
+  return await new Promise((resolve) => {
+    ws.once("close", (code, reason) => {
+      resolve({ code, reason: reason.toString() });
+    });
+  });
+}
 
 describe("gateway hot reload", () => {
   let prevSkipChannels: string | undefined;
@@ -185,6 +251,10 @@ describe("gateway hot reload", () => {
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    hoisted.activeEmbeddedRunCount.value = 0;
+    hoisted.totalPendingReplies.value = 0;
+    hoisted.totalQueueSize.value = 0;
+    hoisted.activeTaskCount.value = 0;
   });
 
   afterEach(() => {
@@ -991,8 +1061,17 @@ process.stdin.on("end", () => {
       await connectOk(ws, { token: "token-before-reload" });
 
       await fs.writeFile(tokenPath, "token-after-reload\n", "utf8");
-      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
-      expect(reload.ok).toBe(true);
+      const closed = waitForGatewayAuthChangedClose(ws);
+      const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {}).catch(
+        (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
+      );
+      await expect(closed).resolves.toEqual({
+        code: 4001,
+        reason: "gateway auth changed",
+      });
+      if (!(reload instanceof Error)) {
+        expect(reload.ok).toBe(true);
+      }
 
       const staleWs = await openTrackedWs(port);
       try {
@@ -1002,6 +1081,9 @@ process.stdin.on("end", () => {
         });
         expect(staleConnect.ok).toBe(false);
         expect(staleConnect.error?.message ?? "").toContain("gateway token mismatch");
+        expect((staleConnect.error?.details as { code?: unknown } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+        );
       } finally {
         staleWs.close();
       }

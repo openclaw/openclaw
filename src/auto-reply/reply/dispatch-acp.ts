@@ -15,6 +15,7 @@ import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
@@ -340,18 +341,19 @@ export async function tryDispatchAcpReply(params: {
         normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
         resolveAgentIdFromSessionKey(canonicalSessionKey))
       : resolveAgentIdFromSessionKey(canonicalSessionKey);
-  const normalizedDispatchChannel =
-    normalizeOptionalString(
-      params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
-    )?.toLowerCase() ?? "";
+  const normalizedDispatchChannel = normalizeOptionalLowercaseString(
+    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+  );
   const explicitDispatchAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const dispatchChannels = params.cfg.channels as
+    | Record<string, { defaultAccount?: unknown } | undefined>
+    | undefined;
+  const defaultDispatchAccount =
+    normalizedDispatchChannel == null
+      ? undefined
+      : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
   const effectiveDispatchAccountId =
-    explicitDispatchAccountId ??
-    normalizeOptionalString(
-      (
-        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-      )?.[normalizedDispatchChannel]?.defaultAccount,
-    );
+    explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
@@ -382,7 +384,7 @@ export async function tryDispatchAcpReply(params: {
         `acp-dispatch: session=${sessionKey} outcome=error code=${acpResolution.error.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
       );
       params.recordProcessed("completed", {
-        reason: `acp_error:${acpResolution.error.code.toLowerCase()}`,
+        reason: `acp_error:${normalizeLowercaseStringOrEmpty(acpResolution.error.code)}`,
       });
       params.markIdle("message_completed");
       return { queuedFinal: delivered, counts };
@@ -505,7 +507,7 @@ export async function tryDispatchAcpReply(params: {
       `acp-dispatch: session=${sessionKey} outcome=error code=${acpError.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
     );
     params.recordProcessed("completed", {
-      reason: `acp_error:${acpError.code.toLowerCase()}`,
+      reason: `acp_error:${normalizeLowercaseStringOrEmpty(acpError.code)}`,
     });
     params.markIdle("message_completed");
     return { queuedFinal, counts };

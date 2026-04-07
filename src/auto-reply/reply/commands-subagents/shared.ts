@@ -19,7 +19,10 @@ import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import {
   formatDurationCompact,
   formatTokenUsageDisplay,
@@ -114,7 +117,11 @@ export function formatSubagentListLine(params: {
         ? params.sessionEntry.modelOverride
         : null,
     fallbackModel: params.entry.model,
-  })}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+  })}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${
+    normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label)
+      ? ` - ${task}`
+      : ""
+  }`;
 }
 
 function formatTimestamp(valueMs?: number) {
@@ -268,7 +275,7 @@ export function resolveSubagentsAction(params: {
 }): SubagentsAction | null {
   if (params.handledPrefix === COMMAND) {
     const [actionRaw] = params.restTokens;
-    const action = (actionRaw?.toLowerCase() || "list") as SubagentsAction;
+    const action = (normalizeLowercaseStringOrEmpty(actionRaw) || "list") as SubagentsAction;
     if (!ACTIONS.has(action)) {
       return null;
     }

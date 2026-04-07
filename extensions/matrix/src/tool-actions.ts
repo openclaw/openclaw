@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import {
   bootstrapMatrixVerification,
@@ -433,7 +434,7 @@ export async function handleMatrixAction(
     }
     if (action === "verificationStart") {
       const methodRaw = readStringParam(params, "method");
-      const method = methodRaw?.trim().toLowerCase();
+      const method = normalizeOptionalLowercaseString(methodRaw);
       if (method && method !== "sas") {
         throw new Error(
           "Matrix verificationStart only supports method=sas; use verificationGenerateQr/verificationScanQr for QR flows.",

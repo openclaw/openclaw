@@ -44,7 +44,7 @@ function mockStartedMonitor() {
 }
 
 function startNextcloudAccount(abortSignal?: AbortSignal) {
-  return nextcloudTalkGatewayAdapter.startAccount(
+  return nextcloudTalkGatewayAdapter.startAccount!(
     createStartAccountContext({
       account: buildAccount(),
       abortSignal,
@@ -60,7 +60,7 @@ describe("nextcloud-talk startAccount lifecycle", () => {
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = mockStartedMonitor();
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: nextcloudTalkGatewayAdapter.startAccount,
+      startAccount: nextcloudTalkGatewayAdapter.startAccount!,
       account: buildAccount(),
     });
     await expectStopPendingUntilAbort({

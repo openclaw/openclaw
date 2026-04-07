@@ -27,6 +27,7 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
 export type SecurityAuditFinding = {
@@ -815,7 +816,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
 
     const seccompProfile =
       typeof docker.seccompProfile === "string" ? docker.seccompProfile : undefined;
-    if (seccompProfile && seccompProfile.trim().toLowerCase() === "unconfined") {
+    if (normalizeOptionalLowercaseString(seccompProfile) === "unconfined") {
       findings.push({
         checkId: "sandbox.dangerous_seccomp_profile",
         severity: "critical",
@@ -827,7 +828,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
 
     const apparmorProfile =
       typeof docker.apparmorProfile === "string" ? docker.apparmorProfile : undefined;
-    if (apparmorProfile && apparmorProfile.trim().toLowerCase() === "unconfined") {
+    if (normalizeOptionalLowercaseString(apparmorProfile) === "unconfined") {
       findings.push({
         checkId: "sandbox.dangerous_apparmor_profile",
         severity: "critical",
@@ -842,7 +843,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
   const defaultBrowser = resolveSandboxConfigForAgent(cfg).browser;
   if (
     defaultBrowser.enabled &&
-    defaultBrowser.network.trim().toLowerCase() === "bridge" &&
+    normalizeOptionalLowercaseString(defaultBrowser.network) === "bridge" &&
     !defaultBrowser.cdpSourceRange?.trim()
   ) {
     browserExposurePaths.push("agents.defaults.sandbox.browser");
@@ -855,7 +856,7 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     if (!browser.enabled) {
       continue;
     }
-    if (browser.network.trim().toLowerCase() !== "bridge") {
+    if (normalizeOptionalLowercaseString(browser.network) !== "bridge") {
       continue;
     }
     if (browser.cdpSourceRange?.trim()) {

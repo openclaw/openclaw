@@ -482,6 +482,7 @@ export function registerBrowserAgentActRoutes(
       targetId,
       run: async ({ profileCtx, cdpUrl, tab }) => {
         const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
+        const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
         const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const profileName = profileCtx.profile.name;
 
@@ -539,6 +540,7 @@ export function registerBrowserAgentActRoutes(
               cdpUrl,
               targetId: tab.targetId,
               doubleClick,
+              ssrfPolicy,
             };
             if (ref) {
               clickRequest.ref = ref;
@@ -616,6 +618,7 @@ export function registerBrowserAgentActRoutes(
               text,
               submit,
               slowly,
+              ssrfPolicy,
             };
             if (ref) {
               typeRequest.ref = ref;
@@ -656,6 +659,7 @@ export function registerBrowserAgentActRoutes(
               targetId: tab.targetId,
               key,
               delayMs: delayMs ?? undefined,
+              ssrfPolicy,
             });
             return res.json({ ok: true, targetId: tab.targetId });
           }
@@ -1105,6 +1109,7 @@ export function registerBrowserAgentActRoutes(
               actions,
               stopOnError,
               evaluateEnabled,
+              ssrfPolicy,
             });
             return res.json({ ok: true, targetId: tab.targetId, results: result.results });
           }

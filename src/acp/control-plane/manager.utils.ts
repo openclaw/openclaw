@@ -59,7 +59,7 @@ export function canonicalizeAcpSessionKey(params: {
   if (!normalized) {
     return "";
   }
-  const lowered = normalized.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(normalized);
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }

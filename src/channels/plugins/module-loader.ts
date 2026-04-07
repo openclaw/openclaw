@@ -4,10 +4,10 @@ import path from "node:path";
 import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import {
-  buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
-  resolvePluginLoaderJitiTryNative,
+  resolvePluginLoaderJitiConfig,
 } from "../../plugins/sdk-alias.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const nodeRequire = createRequire(import.meta.url);
 
@@ -15,13 +15,11 @@ function createModuleLoader() {
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 
   return (modulePath: string) => {
-    const tryNative = resolvePluginLoaderJitiTryNative(modulePath, {
+    const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+      modulePath,
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
       preferBuiltDist: true,
-    });
-    const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
     });
     const cached = jitiLoaders.get(cacheKey);
     if (cached) {
@@ -39,7 +37,9 @@ function createModuleLoader() {
 let loadModule = createModuleLoader();
 
 export function isJavaScriptModulePath(modulePath: string): boolean {
-  return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
+  return [".js", ".mjs", ".cjs"].includes(
+    normalizeLowercaseStringOrEmpty(path.extname(modulePath)),
+  );
 }
 
 export function resolveCompiledBundledModulePath(modulePath: string): string {

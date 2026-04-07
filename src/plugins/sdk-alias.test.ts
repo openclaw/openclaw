@@ -10,10 +10,13 @@ import {
 import { withEnv } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
+  createPluginLoaderJitiCacheKey,
   buildPluginLoaderJitiOptions,
+  isBundledPluginExtensionPath,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
   normalizeJitiAliasTargetPath,
+  resolvePluginLoaderJitiConfig,
   resolvePluginLoaderJitiTryNative,
   resolveExtensionApiAlias,
   resolvePluginRuntimeModulePath,
@@ -730,6 +733,64 @@ describe("plugin sdk alias helpers", () => {
         preferBuiltDist: true,
       }),
     ).toBe(true);
+  });
+
+  it("keeps plugin loader Jiti cache keys stable across alias insertion order", () => {
+    expect(
+      createPluginLoaderJitiCacheKey({
+        tryNative: true,
+        aliasMap: {
+          zeta: "/repo/zeta.js",
+          alpha: "/repo/alpha.js",
+        },
+      }),
+    ).toBe(
+      createPluginLoaderJitiCacheKey({
+        tryNative: true,
+        aliasMap: {
+          alpha: "/repo/alpha.js",
+          zeta: "/repo/zeta.js",
+        },
+      }),
+    );
+  });
+
+  it("returns plugin loader Jiti config with stable cache keys", () => {
+    const first = resolvePluginLoaderJitiConfig({
+      modulePath: `/repo/${bundledDistPluginFile("browser", "index.js")}`,
+      argv1: "/repo/openclaw.mjs",
+      moduleUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      preferBuiltDist: true,
+    });
+    const second = resolvePluginLoaderJitiConfig({
+      modulePath: `/repo/${bundledDistPluginFile("browser", "index.js")}`,
+      argv1: "/repo/openclaw.mjs",
+      moduleUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      preferBuiltDist: true,
+    });
+
+    expect(second).toEqual(first);
+  });
+
+  it("detects bundled plugin extension paths across source and dist roots", () => {
+    expect(
+      isBundledPluginExtensionPath({
+        modulePath: "/repo/extensions/demo/api.js",
+        openClawPackageRoot: "/repo",
+      }),
+    ).toBe(true);
+    expect(
+      isBundledPluginExtensionPath({
+        modulePath: "/repo/dist/extensions/demo/api.js",
+        openClawPackageRoot: "/repo",
+      }),
+    ).toBe(true);
+    expect(
+      isBundledPluginExtensionPath({
+        modulePath: "/repo/vendor/demo/api.js",
+        openClawPackageRoot: "/repo",
+      }),
+    ).toBe(false);
   });
 
   it("normalizes Windows alias targets before handing them to Jiti", () => {

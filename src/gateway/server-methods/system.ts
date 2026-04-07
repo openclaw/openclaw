@@ -7,7 +7,7 @@ import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
-import { readStringValue } from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "../../shared/string-coerce.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -102,7 +102,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       const next = presenceUpdate.next;
       const changed = new Set(presenceUpdate.changedKeys);
       const reasonValue = next.reason ?? reason;
-      const normalizedReason = (reasonValue ?? "").toLowerCase();
+      const normalizedReason = normalizeLowercaseStringOrEmpty(reasonValue);
       const ignoreReason =
         normalizedReason.startsWith("periodic") || normalizedReason === "heartbeat";
       const hostChanged = changed.has("host");
