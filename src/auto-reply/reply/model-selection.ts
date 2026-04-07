@@ -22,12 +22,11 @@ import {
 } from "../../agents/model-selection.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { defaultRuntime } from "../../runtime.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { ThinkLevel } from "./directives.js";
+import { collectImageModelKeys, isImageModel } from "./image-model-helpers.js";
 
 export type ModelDirectiveSelection = {
   provider: string;
@@ -71,227 +70,8 @@ function loadSessionStoreRuntime() {
   return sessionStoreRuntimePromise;
 }
 
-/**
- * Collect all configured image models (primary + fallbacks) into a Set of model keys.
- * Resolves aliases using aliasIndex and the image model's own provider context.
- * Returns a Set of both raw strings and resolved "provider/model" keys.
- * Also adds providerless model names so isImageModel can match across providers.
- */
-function collectImageModelKeys(
-  imageModelConfig: AgentModelConfig | undefined,
-  aliasIndex?: ModelAliasIndex,
-  defaultProvider?: string,
-): { keys: Set<string>; imageModelDefaultProvider: string } {
-  const keys = new Set<string>();
-  const noProviderValue = defaultProvider ?? "";
-  if (!imageModelConfig) {
-    return { keys, imageModelDefaultProvider: noProviderValue };
-  }
-
-  const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
-
-  // Resolve the image model's primary to get its provider for fallback resolution.
-  // Providerless fallbacks should resolve against the image model's provider,
-  // not the agent's default provider (to handle mixed-provider configs correctly).
-  let imageModelDefaultProvider = "";
-  // Compute whether primary has a provider — needed by both the primary-deriving block
-  // and the fallback-deriving block below.
-  const primaryTrimmed = imageModelPrimary?.trim() ?? "";
-  const primaryHasProvider = primaryTrimmed.includes("/");
-  // Only derive imageModelDefaultProvider from imageModelPrimary if it has an explicit
-  // provider. If imageModelPrimary is providerless (no slash), leave imageModelDefaultProvider
-  // empty so the fallback block below can derive the correct provider from fallbacks.
-  // This fixes the case where imageModel: { fallbacks: ["openai/gpt-4o"] } with
-  // defaultProvider "anthropic" would incorrectly resolve "gpt-4o" as Anthropic.
-  if (imageModelPrimary && aliasIndex && defaultProvider && primaryHasProvider) {
-    const resolved = resolveModelRefFromString({
-      raw: primaryTrimmed,
-      defaultProvider,
-      aliasIndex,
-    });
-    if (resolved) {
-      imageModelDefaultProvider = resolved.ref.provider;
-    }
-    // If providerless, leave imageModelDefaultProvider empty so fallback block derives from fallbacks.
-  }
-
-  // If no primary was configured or the primary is providerless, derive
-  // imageModelDefaultProvider from the first fallback that has an explicit provider
-  // so that providerless fallback keys resolve correctly (e.g., an agent configured
-  // with defaultProvider "anthropic" and imageModel: { primary: "gpt-4o", fallbacks: ["openai/gpt-4o"] }
-  // should resolve providerless "gpt-4o" as OpenAI, not Anthropic).
-  // Also handles the case where imageModelPrimary is providerless like "gpt-4o"
-  // with fallbacks ["openai/gpt-4.1"] — the provider "openai" should be derived from fallbacks.
-  // Scan all fallbacks to find the first one with an explicit provider.
-  // Only if no fallback has an explicit provider, use alias resolution against defaultProvider.
-  if ((!imageModelPrimary || !primaryHasProvider) && aliasIndex && !imageModelDefaultProvider) {
-    const fallbacks =
-      typeof imageModelConfig === "string"
-        ? [imageModelConfig]
-        : Array.isArray(imageModelConfig?.fallbacks)
-          ? imageModelConfig.fallbacks
-          : [];
-
-    // First pass: try to resolve providerless primary alias to get its provider.
-    // This handles the case where imageModel: { primary: "vision" } with "vision"
-    // being an alias to "openai/gpt-4o" — we should derive "openai" as the provider.
-    // If primary is providerless and NOT an alias (e.g., "gpt-4o"), resolveModelRefFromString
-    // would return defaultProvider which is wrong in mixed-provider configs.
-    // In that case, leave imageModelDefaultProvider empty so fallbacks derive the correct provider.
-    if (!primaryHasProvider && imageModelPrimary && defaultProvider) {
-      const resolved = resolveModelRefFromString({
-        raw: primaryTrimmed,
-        defaultProvider,
-        aliasIndex,
-      });
-      if (resolved?.alias) {
-        imageModelDefaultProvider = resolved.ref.provider;
-      }
-    }
-
-    // Second pass: find the first fallback with an explicit provider
-    if (!imageModelDefaultProvider) {
-      for (const fb of fallbacks) {
-        if (typeof fb !== "string" || !fb.trim()) {
-          continue;
-        }
-        const slash = fb.indexOf("/");
-        if (slash > 0) {
-          imageModelDefaultProvider = fb.slice(0, slash).trim();
-          break;
-        }
-      }
-    }
-
-    // Third pass: if still no provider, use alias resolution on fallbacks
-    // Only use provider from fallbacks that are actual aliases.
-    // Providerless non-alias fallbacks (e.g., "gpt-4.1") would resolve to
-    // defaultProvider which is wrong in mixed-provider configs.
-    if (!imageModelDefaultProvider && defaultProvider) {
-      for (const fb of fallbacks) {
-        if (typeof fb !== "string" || !fb.trim()) {
-          continue;
-        }
-        const resolved = resolveModelRefFromString({
-          raw: fb.trim(),
-          defaultProvider,
-          aliasIndex,
-        });
-        if (resolved?.alias && resolved.ref.provider) {
-          imageModelDefaultProvider = resolved.ref.provider;
-          break;
-        }
-      }
-    }
-  }
-
-  const addModelKey = (rawModel: string, isPrimary: boolean) => {
-    const trimmed = rawModel.trim();
-    if (!trimmed) {
-      return;
-    }
-
-    const trimmedSlash = trimmed.indexOf("/");
-
-    // Add provider-qualified raw strings directly
-    if (trimmedSlash > 0) {
-      keys.add(trimmed);
-    }
-
-    // Also add providerless model names directly for cross-provider matching.
-    // This allows a providerless imageModel like "gpt-4o" to match "openai/gpt-4o".
-    if (trimmedSlash <= 0) {
-      keys.add(trimmed);
-    }
-
-    // Resolve alias and add canonical key.
-    // For primary: use defaultProvider (primary should resolve against agent default)
-    // For fallbacks: use imageModelDefaultProvider if available (fallbacks should resolve
-    // against fallback-derived provider context for cross-provider configs)
-    const providerContext = isPrimary
-      ? defaultProvider
-      : imageModelDefaultProvider || defaultProvider;
-    if (aliasIndex && providerContext) {
-      const resolved = resolveModelRefFromString({
-        raw: trimmed,
-        defaultProvider: providerContext,
-        aliasIndex,
-      });
-      if (resolved) {
-        keys.add(modelKey(resolved.ref.provider, resolved.ref.model));
-      }
-    }
-  };
-
-  if (typeof imageModelConfig === "string") {
-    addModelKey(imageModelConfig, true);
-  } else {
-    if (imageModelPrimary?.trim()) {
-      addModelKey(imageModelPrimary, true);
-    }
-    if (Array.isArray(imageModelConfig.fallbacks)) {
-      for (const fb of imageModelConfig.fallbacks) {
-        if (fb?.trim()) {
-          addModelKey(fb, false);
-        }
-      }
-    }
-  }
-  return { keys, imageModelDefaultProvider };
-}
-
-/**
- * Check if a given provider/model combination is in the set of image models.
- * Checks:
- * 1. "provider/model" format (exact match against provider-qualified keys)
- * 2. Stored model string directly (for provider-qualified raw entries like "openai/gpt-4.1")
- * 3. Pure name match with provider alignment for provider-qualified entries
- * 4. Pure name match for providerless entries (matches any provider)
- */
-function isImageModel(provider: string, model: string, imageModelKeys: Set<string>): boolean {
-  // Do not split model on the first "/" here: the model parameter comes from
-  // normalizeModelRef which already handles provider/model separation. For providers
-  // like OpenRouter, model IDs such as "openai/gpt-4o" are the actual model identifier
-  // (not provider/model format), so splitting would incorrectly compute effectiveProvider="openai"
-  // instead of using the passed provider. This preserves correct key matching for
-  // provider-qualified image model configs like "openrouter/openai/gpt-4o".
-  const effectiveProvider = provider;
-  const pureModel = model;
-
-  // 1. Check exact provider/model key match
-  const key = modelKey(effectiveProvider, pureModel);
-  if (imageModelKeys.has(key)) {
-    return true;
-  }
-
-  // 2. Check stored model string directly against provider-qualified entries
-  if (imageModelKeys.has(model)) {
-    return true;
-  }
-
-  // 3. Match against all entries in imageModelKeys
-  for (const entry of imageModelKeys) {
-    const slash = entry.indexOf("/");
-    if (slash <= 0) {
-      // Providerless entry - matches any provider with the same model name.
-      // This handles imageModel configs like "gpt-4o" matching "openai/gpt-4o".
-      if (entry === pureModel) {
-        return true;
-      }
-    } else {
-      // Provider-qualified entry - match by pure name with provider alignment
-      const entryPureModel = entry.slice(slash + 1);
-      if (entryPureModel === pureModel) {
-        const entryProvider = entry.slice(0, slash);
-        if (effectiveProvider === entryProvider) {
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
+// Image model helpers are now in a shared module to avoid code duplication
+// with chat.ts. See src/auto-reply/reply/image-model-helpers.ts.
 
 const FUZZY_VARIANT_TOKENS = [
   "lightning",
@@ -654,11 +434,11 @@ export async function createModelSelectionState(params: {
   if (params.hasAppliedImageModelOverride && storedOverride?.model) {
     // Build alias index for resolving model aliases
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
-    const { keys: imageModelKeys, imageModelDefaultProvider } = collectImageModelKeys(
-      cfg.agents?.defaults?.imageModel,
+    const { keys: imageModelKeys, imageModelDefaultProvider } = collectImageModelKeys({
+      imageModelConfig: cfg.agents?.defaults?.imageModel,
       aliasIndex,
       defaultProvider,
-    );
+    });
     // Normalize the stored override to handle provider-qualified model strings
     const normalizedStored = normalizeModelRef(
       storedOverride.provider || defaultProvider,

@@ -5,11 +5,6 @@ import {
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
 import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "../../agents/model-catalog.js";
-import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
@@ -20,10 +15,6 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../../config/model-input.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -34,6 +25,7 @@ import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { resolveChannelModelSupportsVision } from "./image-model-helpers.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { initSessionState } from "./session.js";
@@ -402,184 +394,17 @@ export async function getReplyFromConfig(
   );
 
   // Check if channel model is already a vision model (skip image model switch if so).
-  // Only compute when image model override was actually applied, since the result
-  // is only consumed when hasAppliedImageModelOverride is true.
-  let channelModelIsVisionModel = false;
-  if (channelModelOverride && hasAppliedImageModelOverride) {
-    // Use the active default provider when building the alias index so that
-    // aliases defined on providerless model keys resolve correctly to the
-    // agent's default provider. This ensures channel model aliases that point
-    // to vision models are properly detected.
-    const channelAliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
-
-    // Resolve the channel model to get provider/model
-    const channelResolved = resolveModelRefFromString({
-      raw: channelModelOverride.model,
-      defaultProvider,
-      aliasIndex: channelAliasIndex,
-    });
-
-    if (channelResolved) {
-      // First, check if the channel model matches the configured imageModel or its fallbacks
-      const imageModelConfig = cfg.agents?.defaults?.imageModel;
-      const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
-      const fallbacks = resolveAgentModelFallbackValues(imageModelConfig);
-      // Process if either primary or fallbacks are configured (handles fallback-only configs)
-      if (imageModelPrimary || fallbacks.length > 0) {
-        const imageModelKeys = new Set<string>();
-
-        // Determine the provider for image model resolution.
-        // This mirrors collectImageModelKeys in model-selection.ts for consistency.
-        // Providerless models should resolve against the image model's provider,
-        // not the agent's default provider (to handle mixed-provider configs correctly).
-        // Initialize to empty string (not defaultProvider) so the fallback scanning block
-        // can correctly determine if provider was derived from primary or fallbacks.
-        let imageModelDefaultProvider = "";
-
-        const primaryTrimmed = imageModelPrimary?.trim() ?? "";
-        const primaryHasProvider = primaryTrimmed.includes("/");
-
-        // Derive imageModelDefaultProvider from primary if it has an explicit provider.
-        if (imageModelPrimary && channelAliasIndex && defaultProvider && primaryHasProvider) {
-          const resolved = resolveModelRefFromString({
-            raw: primaryTrimmed,
-            defaultProvider,
-            aliasIndex: channelAliasIndex,
-          });
-          if (resolved) {
-            imageModelDefaultProvider = resolved.ref.provider;
-          }
-        }
-
-        // If no primary was configured, primary is providerless, or primary resolution
-        // didn't determine provider, derive imageModelDefaultProvider from fallbacks.
-        // This handles:
-        // 1. Fallback-only configs (e.g., imageModel.fallbacks: ["openai/gpt-4.1"])
-        // 2. Providerless primary with fallbacks (e.g., primary: "gpt-4o", fallbacks: ["openai/gpt-4.1"])
-        // 3. Providerless primary alias that resolved to defaultProvider
-        // IMPORTANT: Do NOT enter this block when primary has an explicit provider,
-        // even if that provider equals defaultProvider. Scanning fallbacks in that case
-        // would overwrite the correct primary-derived provider with the first fallback's
-        // provider, breaking mixed-provider configs like primary: "anthropic/claude-3"
-        // with fallbacks: ["openai/gpt-4o", "gpt-4.1"].
-        if ((!imageModelPrimary || !primaryHasProvider) && channelAliasIndex && defaultProvider) {
-          // First pass: if primary is providerless, try to resolve it as an alias.
-          // Only use the resolved provider if primary is actually an alias.
-          if (!primaryHasProvider && imageModelPrimary) {
-            const resolved = resolveModelRefFromString({
-              raw: primaryTrimmed,
-              defaultProvider,
-              aliasIndex: channelAliasIndex,
-            });
-            if (resolved?.alias && resolved.ref.provider) {
-              imageModelDefaultProvider = resolved.ref.provider;
-            }
-          }
-
-          // Second pass: scan fallbacks for first with explicit provider
-          if (!imageModelDefaultProvider) {
-            for (const fb of fallbacks) {
-              if (!fb?.trim()) {
-                continue;
-              }
-              const slash = fb.indexOf("/");
-              if (slash > 0) {
-                imageModelDefaultProvider = fb.slice(0, slash).trim();
-                break;
-              }
-            }
-          }
-
-          // Third pass: if still not found, try alias resolution on fallbacks
-          // Only use provider from fallbacks that are actual aliases.
-          // Providerless non-alias fallbacks (e.g., "gpt-4.1") would resolve to
-          // defaultProvider which is wrong in mixed-provider configs.
-          if (!imageModelDefaultProvider && defaultProvider) {
-            for (const fb of fallbacks) {
-              if (!fb?.trim()) {
-                continue;
-              }
-              const fbResolved = resolveModelRefFromString({
-                raw: fb.trim(),
-                defaultProvider,
-                aliasIndex: channelAliasIndex,
-              });
-              if (fbResolved?.alias && fbResolved.ref.provider) {
-                imageModelDefaultProvider = fbResolved.ref.provider;
-                break;
-              }
-            }
-          }
-        }
-
-        const addResolvedModelKey = (rawModel: string, isPrimary: boolean) => {
-          imageModelKeys.add(rawModel.trim());
-          // For primary: use defaultProvider (primary should resolve against agent default)
-          // For fallbacks: use imageModelDefaultProvider if available (fallbacks should resolve
-          // against fallback-derived provider context for cross-provider configs)
-          const providerContext = isPrimary
-            ? defaultProvider
-            : imageModelDefaultProvider || defaultProvider;
-          if (!providerContext) {
-            return;
-          }
-          const resolved = resolveModelRefFromString({
-            raw: rawModel.trim(),
-            defaultProvider: providerContext,
-            aliasIndex: channelAliasIndex,
-          });
-          if (resolved) {
-            imageModelKeys.add(modelKey(resolved.ref.provider, resolved.ref.model));
-          }
-        };
-        if (imageModelPrimary) {
-          addResolvedModelKey(imageModelPrimary, true);
-        }
-        for (const fb of fallbacks) {
-          if (fb?.trim()) {
-            addResolvedModelKey(fb, false);
-          }
-        }
-        const channelKey = modelKey(channelResolved.ref.provider, channelResolved.ref.model);
-        // Resolve channel override using the same provider context as channelResolved.
-        // This ensures providerless channel override models are resolved consistently
-        // with how they're actually applied (using defaultProvider), preventing
-        // false matches in mixed-provider configs where imageModelDefaultProvider
-        // differs from defaultProvider.
-        const channelOverrideResolved = resolveModelRefFromString({
-          raw: channelModelOverride.model,
-          defaultProvider,
-          aliasIndex: channelAliasIndex,
-        });
-        // When channel override can't be resolved (no alias match), use the channel's
-        // provider to construct the key. This prevents providerless fallbacks like
-        // "gpt-4.1" in imageModel from incorrectly matching any provider's gpt-4.1.
-        const channelOverrideKey = channelOverrideResolved
-          ? modelKey(channelOverrideResolved.ref.provider, channelOverrideResolved.ref.model)
-          : modelKey(channelResolved.ref.provider, channelModelOverride.model);
-        if (imageModelKeys.has(channelKey) || imageModelKeys.has(channelOverrideKey)) {
-          channelModelIsVisionModel = true;
-        }
-      }
-
-      // If not found in imageModel list, check catalog for vision capabilities
-      if (!channelModelIsVisionModel) {
-        try {
-          const catalog = await loadModelCatalog({ config: cfg });
-          const catalogEntry = findModelInCatalog(
-            catalog,
-            channelResolved.ref.provider,
-            channelResolved.ref.model,
-          );
-          if (modelSupportsVision(catalogEntry)) {
-            channelModelIsVisionModel = true;
-          }
-        } catch {
-          // Catalog lookup failed; fall back to text-only assumption
-        }
-      }
-    }
-  }
+  const { channelModelIsVisionModel } = await resolveChannelModelSupportsVision({
+    channelModelOverride: channelModelOverride ?? undefined,
+    imageModelConfig: cfg.agents?.defaults?.imageModel,
+    defaultProvider,
+    cfg,
+    hasAppliedImageModelOverride,
+    loadModelCatalog: async () => {
+      const { loadModelCatalog: loadCatalog } = await import("../../agents/model-catalog.js");
+      return loadCatalog({ config: cfg });
+    },
+  });
 
   // Skip channel model override when image model was already selected for attachments,
   // UNLESS the channel model is already a vision model (no need to switch)

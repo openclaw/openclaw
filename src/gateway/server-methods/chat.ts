@@ -14,11 +14,14 @@ import {
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import {
+  collectImageModelKeysWithContext,
+  prepareImageModelFallbacks,
+} from "../../auto-reply/reply/image-model-helpers.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -92,73 +95,6 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
-
-/**
- * Filter and canonicalize image model fallbacks in one step.
- * This combines allowlist filtering with provider-aware canonicalization.
- *
- * @param fallbacks - Raw fallback model strings from config
- * @param cfg - OpenClaw config for allowlist lookup
- * @param agentId - Agent ID for per-agent allowlist
- * @param aliasIndex - Model alias index for resolution
- * @param defaultProvider - Agent's default provider
- * @param defaultModel - Agent's default model
- * @param imageModelProvider - Pre-computed image model provider (avoids re-resolution)
- * @returns Filtered and canonicalized fallback keys in "provider/model" format
- */
-function prepareImageModelFallbacks(params: {
-  fallbacks: string[];
-  cfg: OpenClawConfig;
-  agentId?: string;
-  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
-  defaultProvider: string;
-  defaultModel?: string;
-  imageModelProvider?: string;
-}): string[] {
-  const { fallbacks, cfg, agentId, aliasIndex, defaultProvider, defaultModel, imageModelProvider } =
-    params;
-
-  if (fallbacks.length === 0) {
-    return [];
-  }
-
-  const providerForResolution = imageModelProvider ?? defaultProvider;
-  const { allowAny, allowedKeys } = buildAllowedModelSet({
-    cfg,
-    catalog: [],
-    defaultProvider,
-    defaultModel,
-    agentId,
-  });
-
-  return fallbacks
-    .map((fb) => {
-      const trimmed = fb?.trim();
-      if (!trimmed) {
-        return null;
-      }
-
-      const resolved = resolveModelRefFromString({
-        raw: trimmed,
-        defaultProvider: providerForResolution,
-        aliasIndex,
-      });
-
-      if (!resolved) {
-        if (!allowAny && !allowedKeys.has(trimmed)) {
-          return null;
-        }
-        return trimmed;
-      }
-
-      const key = modelKey(resolved.ref.provider, resolved.ref.model);
-      if (!allowAny && !allowedKeys.has(key) && !allowedKeys.has(trimmed)) {
-        return null;
-      }
-      return key;
-    })
-    .filter((fb): fb is string => fb !== null);
-}
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -748,9 +684,10 @@ function sanitizeChatHistoryMessage(
           typeof (block as { textSignature?: unknown }).textSignature === "string",
       );
     if (hasPhaseMetadata) {
-      const stripped = stripInlineDirectiveTagsForDisplay(
-        extractAssistantVisibleText(entry as Parameters<typeof extractAssistantVisibleText>[0]),
+      const extractedText = extractAssistantVisibleText(
+        entry as Parameters<typeof extractAssistantVisibleText>[0],
       );
+      const stripped = stripInlineDirectiveTagsForDisplay(extractedText ?? "");
       const res = truncateChatHistoryText(stripped.text, maxChars);
       const nonTextBlocks = sanitizedBlocks.filter(
         (block) =>
@@ -1975,47 +1912,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         const sessionModelOverride = entry?.modelOverride;
         const sessionProviderOverride = entry?.providerOverride;
         if (sessionModelOverride) {
-          // Collect all image model keys for checking (resolve aliases to full provider/model format)
-          const imageModelKeys = new Set<string>();
-
-          // Helper to resolve and add model key
-          // For promoted primary (usedPrimaryFromFallback=true): use imageModelProvider
-          //   (promoted primary should resolve against fallback-inferred provider)
-          // For explicit primary: use defaultProvider
-          //   (explicit primary should resolve against agent default provider)
-          // For fallbacks: use imageModelProvider if available
-          //   (fallbacks should resolve against fallback-derived provider context)
-          const addResolvedModelKey = (rawModel: string, isPrimary: boolean) => {
-            const usePromotedProvider = isPrimary && usedPrimaryFromFallback && imageModelProvider;
-            const resolved = resolveModelRefFromString({
-              raw: rawModel.trim(),
-              defaultProvider: usePromotedProvider
-                ? imageModelProvider!
-                : isPrimary
-                  ? defaultProvider
-                  : (imageModelProvider ?? defaultProvider),
-              aliasIndex: usePromotedProvider
-                ? imageFallbackAliasIndex
-                : isPrimary
-                  ? aliasIndex
-                  : imageFallbackAliasIndex,
-            });
-            if (resolved) {
-              const key = modelKey(resolved.ref.provider, resolved.ref.model);
-              imageModelKeys.add(key);
-            }
-            // Also add the raw string for backward compatibility
-            imageModelKeys.add(rawModel.trim());
-          };
-
-          if (imageModelPrimary) {
-            addResolvedModelKey(imageModelPrimary, true);
-          }
-          for (const fb of imageModelConfigFallbacks) {
-            if (fb?.trim()) {
-              addResolvedModelKey(fb, false);
-            }
-          }
+          // Use shared helper to collect image model keys with proper fallback-derived provider context.
+          // This handles mixed-provider configs where providerless fallbacks should resolve against
+          // the image model's provider, not the agent default provider.
+          const { keys: imageModelKeys } = collectImageModelKeysWithContext({
+            imageModelConfig: cfg.agents?.defaults?.imageModel,
+            aliasIndex,
+            defaultProvider,
+            useFallbackDerivedProvider: usedPrimaryFromFallback,
+            imageModelProvider,
+            fallbackAliasIndex: imageFallbackAliasIndex,
+          });
 
           // Resolve user's stored model to full provider/model format
           const userRawModel = sessionProviderOverride
