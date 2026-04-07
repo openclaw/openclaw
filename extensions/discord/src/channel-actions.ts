@@ -9,6 +9,7 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
   createDiscordActionGate,
   listEnabledDiscordAccounts,
@@ -169,8 +170,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action === "sendMessage") {
-      const to = typeof args.to === "string" ? args.to : undefined;
-      return to ? { to } : null;
+      return extractToolSend(args, "sendMessage");
     }
     if (action === "threadReply") {
       const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";

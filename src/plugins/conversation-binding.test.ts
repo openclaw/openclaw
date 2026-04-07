@@ -106,13 +106,17 @@ vi.mock("../infra/home-dir.js", async () => {
   };
 });
 
-vi.mock("./runtime.js", () => ({
-  getActivePluginRegistry: () => pluginRuntimeState.registry,
-  getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
-  setActivePluginRegistry: (registry: PluginRegistry) => {
-    pluginRuntimeState.registry = registry;
-  },
-}));
+vi.mock("./runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
+  return {
+    ...actual,
+    getActivePluginRegistry: () => pluginRuntimeState.registry,
+    getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
+    setActivePluginRegistry: (registry: PluginRegistry) => {
+      pluginRuntimeState.registry = registry;
+    },
+  };
+});
 
 let __testing: typeof import("./conversation-binding.js").__testing;
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
@@ -398,13 +402,17 @@ describe("plugin conversation binding approvals", () => {
         },
       };
     });
-    vi.doMock("./runtime.js", () => ({
-      getActivePluginRegistry: () => pluginRuntimeState.registry,
-      getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
-      setActivePluginRegistry: (registry: PluginRegistry) => {
-        pluginRuntimeState.registry = registry;
-      },
-    }));
+    vi.doMock("./runtime.js", async () => {
+      const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
+      return {
+        ...actual,
+        getActivePluginRegistry: () => pluginRuntimeState.registry,
+        getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
+        setActivePluginRegistry: (registry: PluginRegistry) => {
+          pluginRuntimeState.registry = registry;
+        },
+      };
+    });
     ({
       __testing,
       buildPluginBindingApprovalCustomId,

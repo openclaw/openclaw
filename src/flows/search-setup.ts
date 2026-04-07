@@ -12,6 +12,7 @@ import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution, FlowOption } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
@@ -40,7 +41,7 @@ function resolveSearchProviderCredentialLabel(
   if (entry.requiresCredential === false) {
     return `${entry.label} setup`;
   }
-  return entry.credentialLabel?.trim() || `${entry.label} API key`;
+  return normalizeOptionalString(entry.credentialLabel) || `${entry.label} API key`;
 }
 
 export function listSearchProviderOptions(
@@ -107,7 +108,7 @@ function resolveSearchProviderEntry(
 }
 
 export function hasKeyInEnv(entry: Pick<PluginWebSearchProviderEntry, "envVars">): boolean {
-  return entry.envVars.some((k) => Boolean(process.env[k]?.trim()));
+  return entry.envVars.some((k) => Boolean(normalizeOptionalString(process.env[k])));
 }
 
 function providerNeedsCredential(
@@ -154,13 +155,15 @@ function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): Se
     resolveSearchProviderEntry(config, provider) ??
     listSearchProviderOptions(config).find((candidate) => candidate.id === provider) ??
     listSearchProviderOptions().find((candidate) => candidate.id === provider);
-  const envVar = entry?.envVars.find((k) => Boolean(process.env[k]?.trim())) ?? entry?.envVars[0];
-  if (!envVar) {
+  const resolvedEnvVar =
+    entry?.envVars.find((k) => Boolean(normalizeOptionalString(process.env[k]))) ??
+    entry?.envVars[0];
+  if (!resolvedEnvVar) {
     throw new Error(
       `No env var mapping for search provider "${provider}" at ${entry?.credentialPath ?? "unknown path"} in secret-input-mode=ref.`,
     );
   }
-  return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: envVar };
+  return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: resolvedEnvVar };
 }
 
 function resolveSearchSecretInput(
@@ -478,7 +481,7 @@ export async function runSearchSetupFlow(
     placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
   });
 
-  const key = keyInput?.trim() ?? "";
+  const key = normalizeOptionalString(keyInput) ?? "";
   if (key) {
     const secretInput = resolveSearchSecretInput(config, choice, key, opts?.secretInputMode);
     return await finalizeSearchProviderSetup({

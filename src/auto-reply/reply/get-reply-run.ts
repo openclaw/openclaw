@@ -13,6 +13,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
@@ -220,7 +221,7 @@ export async function runPreparedReply(
         silentToken: SILENT_REPLY_TOKEN,
       })
     : "";
-  const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  const groupSystemPrompt = normalizeOptionalString(sessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
@@ -256,7 +257,7 @@ export async function runPreparedReply(
     isNewSession
       ? {
           ...sessionCtx,
-          ...(sessionCtx.ThreadHistoryBody?.trim()
+          ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
             ? { InboundHistory: undefined, ThreadStarterBody: undefined }
             : {}),
         }
@@ -306,8 +307,8 @@ export async function runPreparedReply(
     }
   }
   const prefixedBodyCore = prefixedBodyBase;
-  const threadStarterBody = ctx.ThreadStarterBody?.trim();
-  const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
+  const threadStarterBody = normalizeOptionalString(ctx.ThreadStarterBody);
+  const threadHistoryBody = normalizeOptionalString(ctx.ThreadHistoryBody);
   const threadContextNote = threadHistoryBody
     ? `[Thread history - for context]\n${threadHistoryBody}`
     : threadStarterBody
@@ -542,12 +543,14 @@ export async function runPreparedReply(
       }),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
-      groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
-      groupSpace: sessionCtx.GroupSpace?.trim() ?? undefined,
-      senderId: sessionCtx.SenderId?.trim() || undefined,
-      senderName: sessionCtx.SenderName?.trim() || undefined,
-      senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
-      senderE164: sessionCtx.SenderE164?.trim() || undefined,
+      groupChannel:
+        normalizeOptionalString(sessionCtx.GroupChannel) ??
+        normalizeOptionalString(sessionCtx.GroupSubject),
+      groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
+      senderId: normalizeOptionalString(sessionCtx.SenderId),
+      senderName: normalizeOptionalString(sessionCtx.SenderName),
+      senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
+      senderE164: normalizeOptionalString(sessionCtx.SenderE164),
       senderIsOwner: command.senderIsOwner,
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,

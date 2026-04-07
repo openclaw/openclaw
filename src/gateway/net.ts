@@ -13,6 +13,7 @@ import {
   isPrivateOrLoopbackIpAddress,
   normalizeIpAddress,
 } from "../shared/net/ip.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
@@ -26,7 +27,7 @@ export function pickPrimaryLanIPv4(): string | undefined {
 }
 
 export function normalizeHostHeader(hostHeader?: string): string {
-  return (hostHeader ?? "").trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(hostHeader);
 }
 
 export function resolveHostName(hostHeader?: string): string {

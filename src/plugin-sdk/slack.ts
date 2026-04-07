@@ -1,7 +1,7 @@
 // Manual facade. Keep loader boundary explicit.
 type InteractiveRepliesSurface = typeof import("@openclaw/slack/interactive-replies-api.js");
 type SecuritySurface = typeof import("@openclaw/slack/security-contract-api.js");
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 function loadInteractiveRepliesSurface(): InteractiveRepliesSurface {
   return loadBundledPluginPublicSurfaceModuleSync<InteractiveRepliesSurface>({

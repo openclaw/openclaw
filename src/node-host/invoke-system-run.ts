@@ -27,6 +27,7 @@ import {
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { logWarn } from "../logger.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import {
   applyOutputTruncation,
@@ -252,9 +253,9 @@ async function parseSystemRunPhase(
     });
     return null;
   }
-  const agentId = opts.params.agentId?.trim() || undefined;
-  const sessionKey = opts.params.sessionKey?.trim() || "node";
-  const runId = opts.params.runId?.trim() || crypto.randomUUID();
+  const agentId = normalizeOptionalString(opts.params.agentId);
+  const sessionKey = normalizeOptionalString(opts.params.sessionKey) ?? "node";
+  const runId = normalizeOptionalString(opts.params.runId) ?? crypto.randomUUID();
   const suppressNotifyOnExit = opts.params.suppressNotifyOnExit === true;
   const envOverrideDiagnostics = inspectHostExecEnvOverrides({
     overrides: opts.params.env ?? undefined,
@@ -301,7 +302,7 @@ async function parseSystemRunPhase(
     approvalDecision: resolveExecApprovalDecision(opts.params.approvalDecision),
     envOverrides,
     env: opts.sanitizeEnv(envOverrides),
-    cwd: opts.params.cwd?.trim() || undefined,
+    cwd: normalizeOptionalString(opts.params.cwd),
     timeoutMs: opts.params.timeoutMs ?? undefined,
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved: opts.params.approved === true,
@@ -358,9 +359,10 @@ async function evaluateSystemRunPolicyPhase(
         .find((entry) => entry !== null) ?? null)
     : null;
   const isWindows = process.platform === "win32";
-  const cmdInvocation = parsed.shellPayload
-    ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
-    : opts.isCmdExeInvocation(parsed.argv);
+  // Detect Windows wrapper transport from the original request argv, not the
+  // analyzed inner shell payload. Once parsing unwraps `cmd.exe /c ...`, the
+  // inner segments no longer retain the wrapper marker we need for policy.
+  const cmdInvocation = opts.isCmdExeInvocation(parsed.argv);
   const durableApprovalSatisfied = hasDurableExecApproval({
     analysisOk,
     segmentAllowlistEntries,
@@ -406,13 +408,8 @@ async function evaluateSystemRunPolicyPhase(
     return null;
   }
 
-  // Fail closed if policy/runtime drift re-allows unapproved shell wrappers.
-  if (
-    security === "allowlist" &&
-    parsed.shellPayload &&
-    !policy.approvedByAsk &&
-    !durableApprovalSatisfied
-  ) {
+  // Fail closed if policy/runtime drift re-allows Windows shell wrappers.
+  if (policy.shellWrapperBlocked && !policy.approvedByAsk && !durableApprovalSatisfied) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: "SYSTEM_RUN_DENIED: approval required",

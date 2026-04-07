@@ -1,5 +1,6 @@
 import { URL } from "node:url";
 import type { GatewayConfig } from "../config/types.gateway.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   loadOrCreateDeviceIdentity,
   signDevicePayload,
@@ -46,13 +47,17 @@ const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
 const GATEWAY_SIGNED_AT_HEADER = "x-openclaw-gateway-signed-at-ms";
 
 function normalizeNonEmptyString(value: string | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed.length > 0 ? trimmed : null;
 }
 
 function normalizeTimeoutMs(value: string | number | undefined): number {
   const raw =
-    typeof value === "number" ? value : typeof value === "string" ? value.trim() : undefined;
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? normalizeOptionalString(value)
+        : undefined;
   if (raw === undefined || raw === "") {
     return DEFAULT_APNS_RELAY_TIMEOUT_MS;
   }
@@ -64,7 +69,7 @@ function normalizeTimeoutMs(value: string | number | undefined): number {
 }
 
 function readAllowHttp(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
@@ -79,7 +84,7 @@ function isLoopbackRelayHostname(hostname: string): boolean {
 }
 
 function parseReason(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return typeof value === "string" ? normalizeOptionalString(value) : undefined;
 }
 
 function buildRelayGatewaySignaturePayload(params: {

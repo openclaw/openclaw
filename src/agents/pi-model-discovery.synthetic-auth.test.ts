@@ -4,19 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 
-const loadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(() => ({
-    plugins: [
-      {
-        id: "anthropic",
-        origin: "bundled",
-        providers: ["anthropic"],
-        cliBackends: ["claude-cli"],
-      },
-    ],
-    diagnostics: [],
-  })),
-);
+const resolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() => vi.fn(() => ["claude-cli"]));
 
 const resolveProviderSyntheticAuthWithPlugin = vi.hoisted(() =>
   vi.fn((params: { provider: string }) =>
@@ -30,8 +18,8 @@ const resolveProviderSyntheticAuthWithPlugin = vi.hoisted(() =>
   ),
 );
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
+  resolveRuntimeSyntheticAuthProviderRefs,
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -54,7 +42,7 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
 describe("pi model discovery synthetic auth", () => {
   beforeEach(() => {
     vi.resetModules();
-    loadPluginManifestRegistry.mockClear();
+    resolveRuntimeSyntheticAuthProviderRefs.mockClear();
     resolveProviderSyntheticAuthWithPlugin.mockClear();
   });
 
@@ -75,7 +63,7 @@ describe("pi model discovery synthetic auth", () => {
       const { discoverAuthStorage } = await import("./pi-model-discovery.js");
       const authStorage = discoverAuthStorage(agentDir);
 
-      expect(loadPluginManifestRegistry).toHaveBeenCalled();
+      expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalled();
       expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith({
         provider: "claude-cli",
         context: {

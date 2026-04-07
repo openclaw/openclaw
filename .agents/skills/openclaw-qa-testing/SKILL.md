@@ -39,7 +39,6 @@ pnpm openclaw qa suite \
   --provider-mode live-openai \
   --model openai/gpt-5.4 \
   --alt-model openai/gpt-5.4 \
-  --fast \
   --output-dir .artifacts/qa-e2e/run-all-live-openai-<tag>
 ```
 

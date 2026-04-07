@@ -29,6 +29,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { matrixMessageActions } from "./actions.js";
 import { matrixApprovalCapability } from "./approval-native.js";
 import { MatrixConfigSchema } from "./config-schema.js";
@@ -45,6 +46,7 @@ import {
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import {
@@ -304,7 +306,7 @@ function resolveMatrixInboundConversation(params: {
   const target = rawTarget ? resolveMatrixTargetIdentity(rawTarget) : null;
   const parentConversationId = target?.kind === "room" ? target.id : undefined;
   const threadId =
-    params.threadId != null ? String(params.threadId).trim() || undefined : undefined;
+    params.threadId != null ? normalizeOptionalString(String(params.threadId)) : undefined;
   if (threadId) {
     return {
       conversationId: threadId,
@@ -484,7 +486,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           } catch (err) {
             return {
               ok: false,
-              error: err instanceof Error ? err.message : String(err),
+              error: formatMatrixErrorMessage(err),
               elapsedMs: 0,
             };
           }
@@ -580,7 +582,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       buildToolContext: ({ context, hasRepliedRef }) => {
         const currentTarget = context.To;
         return {
-          currentChannelId: currentTarget?.trim() || undefined,
+          currentChannelId: normalizeOptionalString(currentTarget),
           currentThreadTs:
             context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
           currentDirectUserId: resolveMatrixDirectUserId({

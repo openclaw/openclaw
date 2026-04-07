@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveChannelStreamingChunkMode } from "openclaw/plugin-sdk/channel-streaming";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
 import { normalizeBlueBubblesServerUrl, type BlueBubblesAccountConfig } from "./types.js";
 
@@ -58,7 +59,7 @@ export function resolveBlueBubblesAccount(params: {
   return {
     accountId,
     enabled: baseEnabled !== false && accountEnabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     config: merged,
     configured,
     baseUrl,

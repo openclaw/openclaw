@@ -47,14 +47,12 @@ export async function runQaSuiteCommand(opts: {
   providerMode?: "mock-openai" | "live-openai";
   primaryModel?: string;
   alternateModel?: string;
-  fastMode?: boolean;
 }) {
   const result = await runQaSuite({
     outputDir: opts.outputDir ? path.resolve(opts.outputDir) : undefined,
     providerMode: opts.providerMode,
     primaryModel: opts.primaryModel,
     alternateModel: opts.alternateModel,
-    fastMode: opts.fastMode,
   });
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
@@ -69,6 +67,7 @@ export async function runQaLabUiCommand(opts: {
   controlUiUrl?: string;
   controlUiToken?: string;
   controlUiProxyTarget?: string;
+  uiDistDir?: string;
   autoKickoffTarget?: string;
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
@@ -81,6 +80,7 @@ export async function runQaLabUiCommand(opts: {
     controlUiUrl: opts.controlUiUrl,
     controlUiToken: opts.controlUiToken,
     controlUiProxyTarget: opts.controlUiProxyTarget,
+    uiDistDir: opts.uiDistDir,
     autoKickoffTarget: opts.autoKickoffTarget,
     embeddedGateway: opts.embeddedGateway,
     sendKickoffOnStart: opts.sendKickoffOnStart,
@@ -95,6 +95,7 @@ export async function runQaDockerScaffoldCommand(opts: {
   providerBaseUrl?: string;
   image?: string;
   usePrebuiltImage?: boolean;
+  bindUiDist?: boolean;
 }) {
   const outputDir = path.resolve(opts.outputDir);
   const result = await writeQaDockerHarnessFiles({
@@ -105,6 +106,7 @@ export async function runQaDockerScaffoldCommand(opts: {
     providerBaseUrl: opts.providerBaseUrl,
     imageName: opts.image,
     usePrebuiltImage: opts.usePrebuiltImage,
+    bindUiDist: opts.bindUiDist,
   });
   process.stdout.write(`QA docker scaffold: ${result.outputDir}\n`);
 }
@@ -124,6 +126,7 @@ export async function runQaDockerUpCommand(opts: {
   providerBaseUrl?: string;
   image?: string;
   usePrebuiltImage?: boolean;
+  bindUiDist?: boolean;
   skipUiBuild?: boolean;
 }) {
   const result = await runQaDockerUp({
@@ -134,6 +137,7 @@ export async function runQaDockerUpCommand(opts: {
     providerBaseUrl: opts.providerBaseUrl,
     image: opts.image,
     usePrebuiltImage: opts.usePrebuiltImage,
+    bindUiDist: opts.bindUiDist,
     skipUiBuild: opts.skipUiBuild,
   });
   process.stdout.write(`QA docker dir: ${result.outputDir}\n`);

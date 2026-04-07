@@ -3,6 +3,7 @@ import path from "node:path";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { isMutatingToolCall } from "../agents/tool-mutation.js";
 import { resolveOwnerOnlyToolApprovalClass } from "../agents/tool-policy.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { asRecord } from "./record-shared.js";
 
 const SAFE_SEARCH_TOOL_IDS = new Set(["search", "web_search", "memory_search"]);
@@ -41,9 +42,9 @@ function readFirstStringValue(
     return undefined;
   }
   for (const key of keys) {
-    const value = source[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
+    const value = normalizeOptionalString(source[key]);
+    if (value) {
+      return value;
     }
   }
   return undefined;
@@ -61,7 +62,7 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
   if (!title) {
     return undefined;
   }
-  const head = title.split(":", 1)[0]?.trim();
+  const head = normalizeOptionalString(title.split(":", 1)[0]);
   return head ? normalizeToolName(head) : undefined;
 }
 

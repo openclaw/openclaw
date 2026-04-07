@@ -12,6 +12,7 @@ import type {
   TelegramAccountConfig,
   TelegramDirectConfig,
 } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -568,9 +569,7 @@ export const dispatchTelegramMessage = async ({
         logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
       }
     } catch (err) {
-      logVerbose(
-        `auto-topic-label: session store error: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      logVerbose(`auto-topic-label: session store error: ${formatErrorMessage(err)}`);
     }
   }
 
@@ -957,9 +956,7 @@ export const dispatchTelegramMessage = async ({
             await bot.api.editForumTopic(chatId, topicThreadId, { name: label });
             logVerbose(`auto-topic-label: renamed topic ${chatId}/${topicThreadId}`);
           } catch (err) {
-            logVerbose(
-              `auto-topic-label: failed: ${err instanceof Error ? err.message : String(err)}`,
-            );
+            logVerbose(`auto-topic-label: failed: ${formatErrorMessage(err)}`);
           }
         })();
       }

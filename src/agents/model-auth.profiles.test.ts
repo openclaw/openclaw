@@ -41,11 +41,18 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         return undefined;
       }
       const providerConfig = params.context.providerConfig;
-      const hasApiConfig =
-        Boolean(providerConfig?.api?.trim()) ||
-        Boolean(providerConfig?.baseUrl?.trim()) ||
-        (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
-      if (!hasApiConfig) {
+      const hasMeaningfulOllamaConfig =
+        params.provider !== "ollama"
+          ? Boolean(providerConfig?.api?.trim()) ||
+            Boolean(providerConfig?.baseUrl?.trim()) ||
+            (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0)
+          : (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0) ||
+            Boolean(providerConfig?.api?.trim() && providerConfig.api.trim() !== "ollama") ||
+            Boolean(
+              providerConfig?.baseUrl?.trim() &&
+              providerConfig.baseUrl.trim().replace(/\/+$/, "") !== "http://127.0.0.1:11434",
+            );
+      if (!hasMeaningfulOllamaConfig) {
         return undefined;
       }
       return {
@@ -407,6 +414,28 @@ describe("getApiKeyForModel", () => {
       expect(resolved.apiKey).toBe("ollama-local");
       expect(resolved.mode).toBe("api-key");
       expect(resolved.source).toContain("synthetic local key");
+    });
+  });
+
+  it("does not mint synthetic local auth for default-ish ollama stubs", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      await expect(
+        resolveApiKeyForProvider({
+          provider: "ollama",
+          store: { version: 1, profiles: {} },
+          cfg: {
+            models: {
+              providers: {
+                ollama: {
+                  baseUrl: "http://127.0.0.1:11434",
+                  api: "ollama",
+                  models: [],
+                },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow(/No API key found for provider "ollama"/);
     });
   });
 

@@ -28,6 +28,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -97,8 +98,8 @@ function getTokenForOperation(
   account: ResolvedSlackAccount,
   operation: "read" | "write",
 ): string | undefined {
-  const userToken = account.config.userToken?.trim() || undefined;
-  const botToken = account.botToken?.trim();
+  const userToken = normalizeOptionalString(account.config.userToken);
+  const botToken = normalizeOptionalString(account.botToken);
   const allowUserWrites = account.config.userTokenReadOnly === false;
   if (operation === "read") {
     return userToken ?? botToken;

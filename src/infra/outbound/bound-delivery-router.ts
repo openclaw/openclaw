@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   getSessionBindingService,
   type ConversationRef,
@@ -94,7 +95,7 @@ export function createBoundDeliveryRouter(
         channel: input.requester.channel.trim().toLowerCase(),
         accountId: input.requester.accountId.trim(),
         conversationId: input.requester.conversationId.trim(),
-        parentConversationId: input.requester.parentConversationId?.trim() || undefined,
+        parentConversationId: normalizeOptionalString(input.requester.parentConversationId),
       };
       if (!requester.channel || !requester.conversationId) {
         return {

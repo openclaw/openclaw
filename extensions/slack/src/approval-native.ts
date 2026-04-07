@@ -7,6 +7,10 @@ import {
   createChannelNativeOriginTargetResolver,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { listSlackAccountIds } from "./accounts.js";
 import { isSlackApprovalAuthorizedSender } from "./approval-auth.js";
 import {
@@ -45,7 +49,7 @@ function normalizeSlackThreadMatchKey(threadId?: string): string {
 }
 
 function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
-  const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
   const turnSourceTo = request.request.turnSourceTo?.trim() || "";
   if (turnSourceChannel !== "slack" || !turnSourceTo) {
     return null;
@@ -138,7 +142,8 @@ export const slackApprovalCapability = createApproverRestrictedNativeApprovalCap
     resolveSlackExecApprovalTarget({ cfg, accountId }),
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId: ({ target, request }) =>
-    target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
+    normalizeOptionalString(target.accountId) ??
+    normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveSlackOriginTarget,
   resolveApproverDmTargets: resolveSlackApproverDmTargets,
   notifyOriginWhenDmOnly: true,

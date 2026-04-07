@@ -2,6 +2,7 @@ import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -466,7 +467,7 @@ function shouldUseFromAsSenderFallback(params: {
   if (!from) {
     return false;
   }
-  const chatType = (params.chatType ?? "").trim().toLowerCase();
+  const chatType = normalizeLowercaseStringOrEmpty(params.chatType);
   if (chatType && chatType !== "direct") {
     return false;
   }

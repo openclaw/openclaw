@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -31,7 +35,7 @@ function extractCompactInstructions(params: {
 }
 
 function isCompactionSkipReason(reason?: string): boolean {
-  const text = reason?.trim().toLowerCase() ?? "";
+  const text = normalizeOptionalLowercaseString(reason) ?? "";
   return (
     text.includes("nothing to compact") ||
     text.includes("below threshold") ||
@@ -41,7 +45,7 @@ function isCompactionSkipReason(reason?: string): boolean {
 }
 
 function formatCompactionReason(reason?: string): string | undefined {
-  const text = reason?.trim();
+  const text = normalizeOptionalString(reason);
   if (!text) {
     return undefined;
   }
