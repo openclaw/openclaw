@@ -261,8 +261,8 @@ describe("learning-loop plugin", () => {
       throw new Error("expected learning-loop plugin to register before_agent_start and agent_end");
     }
 
-    beforeAgentStartHandler({ messages: [] }, { runId: "run-a", sessionId: "session-a" });
-    beforeAgentStartHandler({ messages: [] }, { runId: "run-b", sessionId: "session-b" });
+    await beforeAgentStartHandler({ messages: [] }, { runId: "run-a", sessionId: "session-a" });
+    await beforeAgentStartHandler({ messages: [] }, { runId: "run-b", sessionId: "session-b" });
 
     await agentEndHandler(
       {
@@ -342,14 +342,17 @@ describe("learning-loop plugin", () => {
       throw new Error("expected learning-loop plugin to register before_agent_start and agent_end");
     }
 
-    beforeAgentStartHandler(
+    await beforeAgentStartHandler(
       { messages: [] },
       {
         runId: "__openclaw_learning_loop_internal__-1-run",
         sessionId: "__openclaw_learning_loop_internal__-1",
       },
     );
-    beforeAgentStartHandler({ messages: [] }, { runId: "run-normal", sessionId: "session-normal" });
+    await beforeAgentStartHandler(
+      { messages: [] },
+      { runId: "run-normal", sessionId: "session-normal" },
+    );
 
     await agentEndHandler(
       {
@@ -359,6 +362,60 @@ describe("learning-loop plugin", () => {
       { runId: "run-normal", sessionId: "session-normal" },
     );
 
+    expect(pluginMocks.graphiti.closeConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes new run tracking while a shared Graphiti close is in progress", async () => {
+    const { api, on } = createApi();
+
+    let releaseClose: (() => void) | undefined;
+    const closePromise = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    pluginMocks.graphiti.closeConnection.mockImplementation(async () => {
+      pluginMocks.callOrder.push("closeConnection");
+      await closePromise;
+    });
+
+    learningLoopPlugin.register(api);
+
+    const beforeAgentStartHandler = on.mock.calls.find(
+      ([name]) => name === "before_agent_start",
+    )?.[1];
+    const agentEndHandler = on.mock.calls.find(([name]) => name === "agent_end")?.[1];
+    if (typeof beforeAgentStartHandler !== "function" || typeof agentEndHandler !== "function") {
+      throw new Error("expected learning-loop plugin to register before_agent_start and agent_end");
+    }
+
+    await beforeAgentStartHandler({ messages: [] }, { runId: "run-a", sessionId: "session-a" });
+
+    const endPromise = agentEndHandler(
+      {
+        success: false,
+        messages: [],
+      },
+      { runId: "run-a", sessionId: "session-a" },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pluginMocks.graphiti.closeConnection).toHaveBeenCalledTimes(1);
+
+    let startResolved = false;
+    const startPromise = beforeAgentStartHandler(
+      { messages: [] },
+      { runId: "run-b", sessionId: "session-b" },
+    ).then(() => {
+      startResolved = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(startResolved).toBe(false);
+
+    releaseClose?.();
+    await endPromise;
+    await startPromise;
+
+    expect(startResolved).toBe(true);
     expect(pluginMocks.graphiti.closeConnection).toHaveBeenCalledTimes(1);
   });
 

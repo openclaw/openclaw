@@ -266,12 +266,16 @@ export class NudgeManager {
   }
 
   private parseJsonArray(raw: string): Array<Record<string, unknown>> {
-    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/) ?? raw.match(/(\[[\s\S]*\])/);
+    const jsonMatch =
+      raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/) ?? raw.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
     if (!jsonMatch) return [];
 
     try {
       const parsed = JSON.parse(jsonMatch[1]);
-      return Array.isArray(parsed) ? parsed : [];
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+      return parsed && typeof parsed === "object" ? [parsed as Record<string, unknown>] : [];
     } catch {
       return [];
     }

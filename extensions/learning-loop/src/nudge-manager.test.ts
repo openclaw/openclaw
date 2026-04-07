@@ -39,6 +39,34 @@ describe("NudgeManager", () => {
     expect(evolveSkill).not.toHaveBeenCalled();
   });
 
+  it("accepts a single-object memory review response", async () => {
+    const addObservation = vi.fn(async () => "stored");
+    const evolveSkill = vi.fn<(skillName: string, messages: unknown[]) => Promise<null>>(
+      async () => null,
+    );
+    const manager = new NudgeManager(
+      { addObservation } as unknown as GraphitiClient,
+      { evolveSkill, isEnabled: () => true } as unknown as EvolutionService,
+      vi.fn(
+        async () =>
+          '{"category":"preference","observation":"The user prefers concise replies.","importance":0.9}',
+      ),
+      {
+        enabled: true,
+        memoryInterval: 1,
+        skillInterval: 99,
+      },
+      { info: vi.fn(), warn: vi.fn() },
+    );
+
+    expect(manager.checkNudge([{ role: "user", content: "Please keep replies short." }])).toBe(
+      "memory_review",
+    );
+    await waitForReview(manager);
+
+    expect(addObservation).toHaveBeenCalledWith("preference", "The user prefers concise replies.");
+  });
+
   it("drops injection-like observations during background memory reviews", async () => {
     const addObservation = vi.fn(async () => "stored");
     const evolveSkill = vi.fn<(skillName: string, messages: unknown[]) => Promise<null>>(
@@ -128,6 +156,34 @@ describe("NudgeManager", () => {
       "debug-skill",
       "deploy-skill",
     ]);
+    expect(evolveSkill).toHaveBeenCalledWith("search-skill", messages);
+  });
+
+  it("accepts a single-object skill review response", async () => {
+    const addObservation = vi.fn(async () => "stored");
+    const evolveSkill = vi.fn<(skillName: string, messages: unknown[]) => Promise<null>>(
+      async () => null,
+    );
+    const manager = new NudgeManager(
+      { addObservation } as unknown as GraphitiClient,
+      { evolveSkill, isEnabled: () => true } as unknown as EvolutionService,
+      vi.fn(
+        async () =>
+          '{"skill_name":"search-skill","action":"update","content":"Prefer rg over grep.","section":"Instructions","reason":"This correction keeps recurring."}',
+      ),
+      {
+        enabled: true,
+        memoryInterval: 99,
+        skillInterval: 1,
+      },
+      { info: vi.fn(), warn: vi.fn() },
+    );
+
+    const messages = [{ role: "assistant", content: "Use rg instead of grep." }];
+
+    expect(manager.checkNudge(messages)).toBe("skill_review");
+    await waitForReview(manager);
+
     expect(evolveSkill).toHaveBeenCalledWith("search-skill", messages);
   });
 

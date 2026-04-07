@@ -58,6 +58,7 @@ export default definePluginEntry({
     const sessionServices = new Map<string, ScopedServices>();
     const activeRunKeys = new Set<string>();
     let defaultServices: ScopedServices | null = null;
+    let activeRunLock = Promise.resolve();
 
     const listScopedServices = (): ScopedServices[] => {
       const services = new Set<ScopedServices>();
@@ -89,6 +90,23 @@ export default definePluginEntry({
       );
 
       return { evolutionService, nudgeManager };
+    };
+
+    const withActiveRunLock = async <T>(task: () => T | Promise<T>): Promise<T> => {
+      const previousLock = activeRunLock;
+      let releaseLock: (() => void) | undefined;
+      const currentLock = new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      });
+      activeRunLock = previousLock.catch(() => {}).then(() => currentLock);
+
+      await previousLock.catch(() => {});
+
+      try {
+        return await task();
+      } finally {
+        releaseLock?.();
+      }
     };
 
     const getScopedServices = (scope?: LearningLoopScope): ScopedServices => {
@@ -392,11 +410,13 @@ export default definePluginEntry({
     }
 
     // Session lifecycle: clear caches on new sessions
-    api.on("before_agent_start", (_event, ctx) => {
+    api.on("before_agent_start", async (_event, ctx) => {
       if (isLearningLoopInternalSessionId(ctx.sessionId)) return;
       const runKey = ctx.runId?.trim() || ctx.sessionId?.trim();
       if (runKey) {
-        activeRunKeys.add(runKey);
+        await withActiveRunLock(() => {
+          activeRunKeys.add(runKey);
+        });
       }
     });
 
@@ -491,22 +511,28 @@ export default definePluginEntry({
         } finally {
           const runKey = ctx.runId?.trim() || ctx.sessionId?.trim();
           if (runKey) {
-            activeRunKeys.delete(runKey);
+            await withActiveRunLock(() => {
+              activeRunKeys.delete(runKey);
+            });
+          }
+
+          const shouldAttemptClose = await withActiveRunLock(() => activeRunKeys.size === 0);
+          if (!shouldAttemptClose) {
+            return;
           }
 
           // One-shot local agent runs still need cleanup, but concurrent agent
           // turns must not lose the shared transport underneath in-flight work.
-          if (activeRunKeys.size === 0) {
-            await Promise.all(
-              listScopedServices().map((services) => services.nudgeManager.drainPendingReview()),
-            );
+          await Promise.all(
+            listScopedServices().map((services) => services.nudgeManager.drainPendingReview()),
+          );
 
+          await withActiveRunLock(async () => {
             if (activeRunKeys.size > 0) {
               return;
             }
-
             await graphiti.closeConnection();
-          }
+          });
         }
       });
     }
