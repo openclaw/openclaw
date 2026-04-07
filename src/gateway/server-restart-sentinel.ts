@@ -126,13 +126,11 @@ function executePersistedRestartOutbox(params: {
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return;
   }
-  for (const task of tasks) {
-    if (!task || typeof task !== "object") {
+  for (const rawTask of tasks) {
+    if (!rawTask || typeof rawTask !== "object") {
       continue;
     }
-    if (task.kind !== "notify-session" && task.kind !== "message" && task.kind !== "system_event") {
-      continue;
-    }
+    const task = rawTask as Record<string, unknown>;
     const message = typeof task.message === "string" ? task.message.trim() : "";
     const sessionKeyRaw =
       typeof task.sessionKey === "string" && task.sessionKey.trim().length > 0
@@ -141,7 +139,7 @@ function executePersistedRestartOutbox(params: {
     if (!message || !sessionKeyRaw) {
       continue;
     }
-    const deliveryContextRaw = "deliveryContext" in task ? task.deliveryContext : undefined;
+    const deliveryContextRaw = task.deliveryContext;
     const deliveryContext =
       deliveryContextRaw && typeof deliveryContextRaw === "object"
         ? (deliveryContextRaw as {
@@ -165,16 +163,20 @@ function executePersistedRestartOutbox(params: {
       deliveryContext && typeof deliveryContext.threadId === "string"
         ? deliveryContext.threadId
         : undefined;
-    const taskChannel =
-      "channel" in task && typeof task.channel === "string" ? task.channel : undefined;
-    const taskTo = "to" in task && typeof task.to === "string" ? task.to : undefined;
-    const taskAccountId =
-      "accountId" in task && typeof task.accountId === "string" ? task.accountId : undefined;
-    const taskThreadId =
-      "threadId" in task && typeof task.threadId === "string" ? task.threadId : undefined;
+    const taskChannel = typeof task.channel === "string" ? task.channel : undefined;
+    const taskTo = typeof task.to === "string" ? task.to : undefined;
+    const taskAccountId = typeof task.accountId === "string" ? task.accountId : undefined;
+    const taskThreadId = typeof task.threadId === "string" ? task.threadId : undefined;
 
     const hasDeliveryContext =
-      dcChannel || dcTo || dcAccountId || dcThreadId || taskChannel || taskTo || taskAccountId || taskThreadId;
+      dcChannel ||
+      dcTo ||
+      dcAccountId ||
+      dcThreadId ||
+      taskChannel ||
+      taskTo ||
+      taskAccountId ||
+      taskThreadId;
 
     enqueueSystemEvent(message, {
       sessionKey: sessionKeyRaw,

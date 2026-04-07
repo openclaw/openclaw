@@ -8,14 +8,15 @@ type TestGatewayHookEvent = {
   context?: Record<string, unknown>;
 };
 
-const { triggerInternalHook, readRestartSentinel, writeRestartSentinel, subsystemLoggerWarn } = vi.hoisted(() => ({
-  triggerInternalHook: vi.fn(
-    async (_event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => undefined,
-  ),
-  readRestartSentinel: vi.fn(async () => null),
-  writeRestartSentinel: vi.fn(async () => "sentinel.json"),
-  subsystemLoggerWarn: vi.fn(),
-}));
+const { triggerInternalHook, readRestartSentinel, writeRestartSentinel, subsystemLoggerWarn } =
+  vi.hoisted(() => ({
+    triggerInternalHook: vi.fn(
+      async (_event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => undefined,
+    ),
+    readRestartSentinel: vi.fn(async () => null),
+    writeRestartSentinel: vi.fn(async () => "sentinel.json"),
+    subsystemLoggerWarn: vi.fn(),
+  }));
 
 vi.mock("../hooks/internal-hooks.js", async () => {
   const actual = await vi.importActual<typeof import("../hooks/internal-hooks.js")>(
@@ -325,9 +326,7 @@ describe("createGatewayCloseHandler", () => {
         restartExpectedMs: 1500,
       });
 
-      const payload = writeRestartSentinel.mock.calls.at(-1)?.[0] as
-        | RestartSentinelPayload
-        | undefined;
+      const payload = (writeRestartSentinel.mock.calls as Array<[RestartSentinelPayload]>).at(-1)?.[0];
       expect(payload?.outbox).toEqual([
         expect.objectContaining({
           kind: "message",
@@ -338,6 +337,95 @@ describe("createGatewayCloseHandler", () => {
             to: "119707338",
             accountId: "default",
           },
+        }),
+      ]);
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  it("preserves nested deliveryContext threadId for normalized message outbox tasks", async () => {
+    triggerInternalHook.mockImplementation(
+      async (event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => {
+        if (event.type === "gateway" && event.action === "pre-restart") {
+          const outbox = event.context?.outbox as Array<Record<string, unknown>>;
+          outbox.push({
+            message: "Gateway is back after restart",
+            sessionKey: "agent:main:main",
+            deliveryContext: {
+              channel: "telegram",
+              to: "119707338",
+              accountId: "default",
+              threadId: "20",
+            },
+          });
+        }
+      },
+    );
+
+    const harness = createCloseHarness();
+    try {
+      await harness.close({
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      });
+
+      const payload = (writeRestartSentinel.mock.calls as Array<[RestartSentinelPayload]>).at(-1)?.[0];
+      expect(payload?.outbox).toEqual([
+        expect.objectContaining({
+          kind: "message",
+          message: "Gateway is back after restart",
+          sessionKey: "agent:main:main",
+          deliveryContext: {
+            channel: "telegram",
+            to: "119707338",
+            accountId: "default",
+            threadId: "20",
+          },
+        }),
+      ]);
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  it("ignores malformed existing sentinel outbox entries when deciding notice suppression", async () => {
+    readRestartSentinel.mockResolvedValue({
+      payload: {
+        kind: "restart",
+        status: "ok",
+        ts: Date.now(),
+        sessionKey: "agent:main:main",
+        suppressPrimaryNotice: true,
+        outbox: [null],
+      },
+    });
+    triggerInternalHook.mockImplementation(
+      async (event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => {
+        if (event.type === "gateway" && event.action === "pre-restart") {
+          const outbox = event.context?.outbox as Array<Record<string, unknown>>;
+          outbox.push({
+            message: "Gateway is back after restart",
+            sessionKey: "agent:main:main",
+          });
+        }
+      },
+    );
+
+    const harness = createCloseHarness();
+    try {
+      await harness.close({
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      });
+
+      const payload = (writeRestartSentinel.mock.calls as Array<[RestartSentinelPayload]>).at(-1)?.[0];
+      expect(payload?.suppressPrimaryNotice).toBe(true);
+      expect(payload?.outbox).toEqual([
+        expect.objectContaining({
+          kind: "message",
+          message: "Gateway is back after restart",
+          sessionKey: "agent:main:main",
         }),
       ]);
     } finally {
@@ -364,9 +452,7 @@ describe("createGatewayCloseHandler", () => {
         restartExpectedMs: 1500,
       });
 
-      const payload = writeRestartSentinel.mock.calls.at(-1)?.[0] as
-        | RestartSentinelPayload
-        | undefined;
+      const payload = (writeRestartSentinel.mock.calls as Array<[RestartSentinelPayload]>).at(-1)?.[0];
       expect(payload?.outbox).toEqual([
         expect.objectContaining({
           kind: "message",

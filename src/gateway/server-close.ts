@@ -65,7 +65,7 @@ async function closeWssWithTimeout(
 
 function normalizeGatewayDeliveryContext(
   item: Record<string, unknown>,
-): { channel?: string; to?: string; accountId?: string } | undefined {
+): { channel?: string; to?: string; accountId?: string; threadId?: string } | undefined {
   const deliveryContextRaw = item.deliveryContext;
   const deliveryContextRecord =
     deliveryContextRaw && typeof deliveryContextRaw === "object"
@@ -81,6 +81,9 @@ function normalizeGatewayDeliveryContext(
     ...(normalizeNonEmptyString(deliveryContextRecord?.accountId ?? item.accountId)
       ? { accountId: normalizeNonEmptyString(deliveryContextRecord?.accountId ?? item.accountId)! }
       : {}),
+    ...(normalizeNonEmptyString(deliveryContextRecord?.threadId)
+      ? { threadId: normalizeNonEmptyString(deliveryContextRecord?.threadId)! }
+      : {}),
   };
   return Object.keys(deliveryContext).length > 0 ? deliveryContext : undefined;
 }
@@ -90,7 +93,11 @@ function hasDeliverableGatewayOutboxTask(
   fallbackSessionKey?: string,
 ): boolean {
   return outbox.some((task) => {
-    const sessionKey = normalizeNonEmptyString(task.sessionKey) ?? fallbackSessionKey;
+    if (!task || typeof task !== "object") {
+      return false;
+    }
+    const sessionKey =
+      normalizeNonEmptyString((task as { sessionKey?: unknown }).sessionKey) ?? fallbackSessionKey;
     return typeof sessionKey === "string" && sessionKey.length > 0;
   });
 }
@@ -165,7 +172,9 @@ async function persistGatewayRestartOutbox(params: {
 
   const existing = await readRestartSentinel().catch(() => null);
   const existingPayload = existing?.payload;
-  const existingOutbox = Array.isArray(existingPayload?.outbox) ? existingPayload.outbox : [];
+  const existingOutbox = Array.isArray(existingPayload?.outbox)
+    ? normalizeGatewayOutbox(existingPayload.outbox)
+    : [];
   const mergedOutbox: RestartOutboxTask[] = [...existingOutbox, ...normalizedOutbox];
 
   if (!existingPayload && mergedOutbox.length === 0) {

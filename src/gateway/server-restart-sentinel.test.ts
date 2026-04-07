@@ -50,7 +50,7 @@ vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
 }));
 
-vi.mock("../config/sessions/delivery-info.js", () => ({
+vi.mock("../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
@@ -369,12 +369,12 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("ignores malformed persisted outbox entries", async () => {
+  it("executes legacy persisted outbox entries without kind and skips malformed items", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:main",
         suppressPrimaryNotice: true,
-        outbox: [null, { foo: "bar" }, { kind: "notify-session", message: "ok" }],
+        outbox: [null, { foo: "bar" }, { message: "legacy outbox message" }],
       },
     } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
 
@@ -382,8 +382,14 @@ describe("scheduleRestartSentinelWake", () => {
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      "ok",
+      "legacy outbox message",
       expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(mocks.requestHeartbeatNow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "hook:gateway.restart.outbox",
         sessionKey: "agent:main:main",
       }),
     );
