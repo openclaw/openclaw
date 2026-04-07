@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type WindowsSpawnResolution =
   | "direct"
@@ -37,6 +38,7 @@ export type ResolveWindowsSpawnProgramParams = {
   env?: NodeJS.ProcessEnv;
   execPath?: string;
   packageName?: string;
+  /** Trusted compatibility escape hatch for callers that intentionally accept shell-mediated wrapper execution. */
   allowShellFallback?: boolean;
 };
 export type ResolveWindowsSpawnProgramCandidateParams = Omit<
@@ -128,7 +130,7 @@ function resolveBinEntry(
   binField: string | Record<string, string> | undefined,
 ): string | null {
   if (typeof binField === "string") {
-    const trimmed = binField.trim();
+    const trimmed = normalizeOptionalString(binField);
     return trimmed || null;
   }
   if (!binField || typeof binField !== "object") {
@@ -137,14 +139,17 @@ function resolveBinEntry(
 
   if (packageName) {
     const preferred = binField[packageName];
-    if (typeof preferred === "string" && preferred.trim()) {
-      return preferred.trim();
+    const normalizedPreferred =
+      typeof preferred === "string" ? normalizeOptionalString(preferred) : undefined;
+    if (normalizedPreferred) {
+      return normalizedPreferred;
     }
   }
 
   for (const value of Object.values(binField)) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
+    const normalizedValue = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+    if (normalizedValue) {
+      return normalizedValue;
     }
   }
   return null;
@@ -265,7 +270,7 @@ export function applyWindowsSpawnProgramPolicy(params: {
       windowsHide: params.candidate.windowsHide,
     };
   }
-  if (params.allowShellFallback !== false) {
+  if (params.allowShellFallback === true) {
     return {
       command: params.candidate.command,
       leadingArgv: [],

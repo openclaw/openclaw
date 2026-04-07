@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   CircularIncludeError,
   ConfigIncludeError,
@@ -595,8 +595,7 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
 
     it("allows include files when the config root path is a symlink", async () => {
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-symlink-"));
-      try {
+      await withTempDir({ prefix: "openclaw-includes-symlink-" }, async (tempRoot) => {
         const realRoot = path.join(tempRoot, "real");
         const linkRoot = path.join(tempRoot, "link");
         await fs.mkdir(path.join(realRoot, "includes"), { recursive: true });
@@ -612,17 +611,14 @@ describe("security: path traversal protection (CWE-22)", () => {
           path.join(linkRoot, "openclaw.json"),
         );
         expect(result).toEqual({ logging: { redactSensitive: "tools" } });
-      } finally {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }
+      });
     });
 
     it("rejects include files that are hardlinked aliases", async () => {
       if (process.platform === "win32") {
         return;
       }
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-hardlink-"));
-      try {
+      await withTempDir({ prefix: "openclaw-includes-hardlink-" }, async (tempRoot) => {
         const configDir = path.join(tempRoot, "config");
         const outsideDir = path.join(tempRoot, "outside");
         await fs.mkdir(configDir, { recursive: true });
@@ -645,14 +641,11 @@ describe("security: path traversal protection (CWE-22)", () => {
             path.join(configDir, "openclaw.json"),
           ),
         ).toThrow(/security checks|hardlink/i);
-      } finally {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }
+      });
     });
 
     it("rejects oversized include files", async () => {
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-big-"));
-      try {
+      await withTempDir({ prefix: "openclaw-includes-big-" }, async (tempRoot) => {
         const configDir = path.join(tempRoot, "config");
         await fs.mkdir(configDir, { recursive: true });
         const includePath = path.join(configDir, "big.json5");
@@ -662,9 +655,7 @@ describe("security: path traversal protection (CWE-22)", () => {
         expect(() =>
           resolveConfigIncludes({ $include: "./big.json5" }, path.join(configDir, "openclaw.json")),
         ).toThrow(/security checks|max/i);
-      } finally {
-        await fs.rm(tempRoot, { recursive: true, force: true });
-      }
+      });
     });
   });
 });

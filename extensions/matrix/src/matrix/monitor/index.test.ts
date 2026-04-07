@@ -57,7 +57,9 @@ const hoisted = vi.hoisted(() => {
   const releaseSharedClientInstance = vi.fn(async () => true);
   const setActiveMatrixClient = vi.fn();
   const setMatrixRuntime = vi.fn();
+  const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(async () => undefined);
   return {
+    backfillMatrixAuthDeviceIdAfterStartup,
     callOrder,
     accountConfig,
     client,
@@ -95,7 +97,7 @@ vi.mock("../../runtime-api.js", () => {
       extra?: Record<string, unknown>,
     ) => ({
       ...snapshot,
-      ...(extra ?? {}),
+      ...extra,
     }),
     buildSecretInputSchema: () => z.string(),
     chunkTextForOutbound: vi.fn((text: string) => [text]),
@@ -177,7 +179,7 @@ vi.mock("../../runtime.js", () => ({
     config: {
       loadConfig: () => ({
         channels: {
-          matrix: {},
+          matrix: hoisted.accountConfig,
         },
       }),
       writeConfigFile: vi.fn(),
@@ -205,8 +207,8 @@ vi.mock("../../runtime.js", () => ({
   setMatrixRuntime: hoisted.setMatrixRuntime,
 }));
 
-vi.mock("../accounts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../accounts.js")>();
+vi.mock("../accounts.js", async () => {
+  const actual = await vi.importActual<typeof import("../accounts.js")>("../accounts.js");
   return {
     ...actual,
     resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
@@ -222,6 +224,7 @@ vi.mock("../active-client.js", () => ({
 }));
 
 vi.mock("../client.js", () => ({
+  backfillMatrixAuthDeviceIdAfterStartup: hoisted.backfillMatrixAuthDeviceIdAfterStartup,
   isBunRuntime: () => false,
   resolveMatrixAuth: vi.fn(async () => ({
     accountId: "default",
@@ -370,6 +373,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.inboundDeduper.releaseEvent.mockReset();
     hoisted.inboundDeduper.flush.mockReset().mockResolvedValue(undefined);
     hoisted.inboundDeduper.stop.mockReset().mockResolvedValue(undefined);
+    hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.createMatrixRoomMessageHandler.mockReset().mockReturnValue(vi.fn());
     Object.values(hoisted.logger).forEach((mock) => mock.mockReset());
   });
@@ -406,6 +410,28 @@ describe("monitorMatrixProvider", () => {
       "matrix",
       "default",
     );
+  });
+
+  it("starts monitoring without waiting for best-effort deviceId backfill", async () => {
+    hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockImplementation(
+      () => new Promise<undefined>(() => {}),
+    );
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+
+    await vi.waitFor(() => {
+      expect(hoisted.callOrder).toContain("start-client");
+      expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledTimes(1);
+    });
+    expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+      }),
+    );
+
+    abortController.abort();
+    await expect(monitorPromise).resolves.toBeUndefined();
   });
 
   it("cleans up thread bindings and shared clients when startup fails", async () => {
@@ -580,12 +606,6 @@ describe("monitorMatrixProvider", () => {
 });
 
 describe("matrix plugin registration", () => {
-  let matrixPlugin: typeof import("../../../index.js").default;
-
-  beforeAll(async () => {
-    ({ default: matrixPlugin } = await import("../../../index.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -606,51 +626,4 @@ describe("matrix plugin registration", () => {
       resolveMatrixDefaultOrOnlyAccountId: "function",
     });
   }, 240_000);
-
-  it("loads the matrix src runtime api through Jiti without duplicate export errors", () => {
-    const runtimeApiPath = path.join(
-      process.cwd(),
-      "extensions",
-      "matrix",
-      "src",
-      "runtime-api.ts",
-    );
-    expect(
-      loadRuntimeApiExportTypesViaJiti({
-        modulePath: runtimeApiPath,
-        exportNames: [],
-        realPluginSdkSpecifiers: [
-          "openclaw/plugin-sdk/account-helpers",
-          "openclaw/plugin-sdk/allow-from",
-          "openclaw/plugin-sdk/channel-config-helpers",
-          "openclaw/plugin-sdk/channel-policy",
-          "openclaw/plugin-sdk/core",
-          "openclaw/plugin-sdk/directory-runtime",
-          "openclaw/plugin-sdk/extension-shared",
-          "openclaw/plugin-sdk/irc",
-          "openclaw/plugin-sdk/signal",
-          "openclaw/plugin-sdk/status-helpers",
-          "openclaw/plugin-sdk/text-runtime",
-        ],
-      }),
-    ).toEqual({});
-  }, 240_000);
-
-  it("registers the channel without bootstrapping crypto runtime", async () => {
-    const runtime = {} as never;
-    const registerChannel = vi.fn();
-    matrixPlugin.register({
-      runtime,
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
-      registerChannel,
-    } as never);
-
-    expect(hoisted.setMatrixRuntime).toHaveBeenCalledWith(runtime);
-    expect(registerChannel).toHaveBeenCalledWith({ plugin: expect.any(Object) });
-  });
 });

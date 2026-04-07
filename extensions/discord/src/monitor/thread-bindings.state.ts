@@ -4,6 +4,10 @@ import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
   DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS,
@@ -112,14 +116,7 @@ export function normalizeTargetKind(
 }
 
 export function normalizeThreadId(raw: unknown): string | undefined {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return String(Math.floor(raw));
-  }
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalStringifiedId(raw);
 }
 
 export function toBindingRecordKey(params: { accountId: string; threadId: string }): string {
@@ -322,7 +319,7 @@ function unlinkSessionBinding(targetSessionKey: string, bindingKey: string) {
 }
 
 export function toReusableWebhookKey(params: { accountId: string; channelId: string }): string {
-  return `${params.accountId.trim().toLowerCase()}:${params.channelId.trim()}`;
+  return `${normalizeLowercaseStringOrEmpty(params.accountId)}:${params.channelId.trim()}`;
 }
 
 export function rememberReusableWebhook(record: ThreadBindingRecord) {

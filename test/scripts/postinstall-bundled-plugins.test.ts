@@ -1,24 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createNestedNpmInstallEnv,
   discoverBundledPluginRuntimeDeps,
   runBundledPluginPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
 
-const cleanupDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
+const { createTempDirAsync } = createScriptTestHarness();
 
 async function createExtensionsDir() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-postinstall-"));
-  cleanupDirs.push(root);
+  const root = await createTempDirAsync("openclaw-postinstall-");
   const extensionsDir = path.join(root, "dist", "extensions");
   await fs.mkdir(extensionsDir, { recursive: true });
   return extensionsDir;
@@ -38,10 +31,23 @@ async function writePluginPackage(
 }
 
 describe("bundled plugin postinstall", () => {
+  function createBareNpmRunner(args: string[]) {
+    return {
+      command: "npm",
+      args,
+      env: {
+        HOME: "/tmp/home",
+        PATH: "/tmp/node/bin",
+      },
+      shell: false as const,
+    };
+  }
+
   it("clears global npm config before nested installs", () => {
     expect(
       createNestedNpmInstallEnv({
         npm_config_global: "true",
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       }),
@@ -50,22 +56,32 @@ describe("bundled plugin postinstall", () => {
     });
   });
 
-  it("installs bundled plugin deps only during global installs", async () => {
+  it("installs bundled plugin deps outside of source checkouts", async () => {
     const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({
-      env: { npm_config_global: "false" },
+      env: { HOME: "/tmp/home" },
       extensionsDir,
-      execSync,
+      packageRoot,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "acpx@0.4.1",
+      ]),
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).not.toHaveBeenCalled();
+    expect(spawnSync).toHaveBeenCalled();
   });
 
   it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
@@ -73,31 +89,44 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
         npm_config_global: "true",
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "acpx@0.4.1",
+      ]),
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false acpx@0.4.0",
+    expect(spawnSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "acpx@0.4.1"],
       {
         cwd: packageRoot,
+        encoding: "utf8",
         env: {
           HOME: "/tmp/home",
+          PATH: "/tmp/node/bin",
         },
+        shell: false,
         stdio: "pipe",
+        windowsVerbatimArguments: undefined,
       },
     );
   });
@@ -107,7 +136,7 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
     await fs.mkdir(path.join(packageRoot, "node_modules", "acpx"), { recursive: true });
@@ -116,16 +145,16 @@ describe("bundled plugin postinstall", () => {
       "{}\n",
       "utf8",
     );
-    const execSync = vi.fn();
+    const spawnSync = vi.fn();
 
     runBundledPluginPostinstall({
       env: { npm_config_global: "true" },
       extensionsDir,
       packageRoot,
-      execSync,
+      spawnSync,
     });
 
-    expect(execSync).not.toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("discovers bundled plugin runtime deps from extension manifests", async () => {
@@ -197,28 +226,49 @@ describe("bundled plugin postinstall", () => {
         grammy: "1.38.4",
       },
     });
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
         npm_config_global: "true",
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "@slack/web-api@7.11.0",
+        "grammy@1.38.4",
+      ]),
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false @slack/web-api@7.11.0 grammy@1.38.4",
+    expect(spawnSync).toHaveBeenCalledWith(
+      "npm",
+      [
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "@slack/web-api@7.11.0",
+        "grammy@1.38.4",
+      ],
       {
         cwd: packageRoot,
+        encoding: "utf8",
         env: {
           HOME: "/tmp/home",
+          PATH: "/tmp/node/bin",
         },
+        shell: false,
         stdio: "pipe",
+        windowsVerbatimArguments: undefined,
       },
     );
   });
@@ -243,28 +293,84 @@ describe("bundled plugin postinstall", () => {
       path.join(packageRoot, "node_modules", "@slack", "web-api", "package.json"),
       "{}\n",
     );
-    const execSync = vi.fn();
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
 
     runBundledPluginPostinstall({
       env: {
-        npm_config_global: "true",
+        HOME: "/tmp/home",
+      },
+      extensionsDir,
+      packageRoot,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "grammy@1.38.4",
+      ]),
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(spawnSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
+      {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: {
+          HOME: "/tmp/home",
+          PATH: "/tmp/node/bin",
+        },
+        shell: false,
+        stdio: "pipe",
+        windowsVerbatimArguments: undefined,
+      },
+    );
+  });
+
+  it("installs bundled plugin deps when npm location is global", async () => {
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "telegram", {
+      dependencies: {
+        grammy: "1.38.4",
+      },
+    });
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+
+    runBundledPluginPostinstall({
+      env: {
+        npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
         HOME: "/tmp/home",
       },
       extensionsDir,
       packageRoot,
-      execSync,
+      npmRunner: createBareNpmRunner([
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        "grammy@1.38.4",
+      ]),
+      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(execSync).toHaveBeenCalledWith(
-      "npm install --omit=dev --no-save --package-lock=false grammy@1.38.4",
+    expect(spawnSync).toHaveBeenCalledWith(
+      "npm",
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "grammy@1.38.4"],
       {
         cwd: packageRoot,
+        encoding: "utf8",
         env: {
           HOME: "/tmp/home",
+          PATH: "/tmp/node/bin",
         },
+        shell: false,
         stdio: "pipe",
+        windowsVerbatimArguments: undefined,
       },
     );
   });

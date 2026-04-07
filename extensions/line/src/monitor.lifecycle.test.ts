@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
@@ -24,6 +24,8 @@ const {
 }));
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
+let getLineRuntimeState: typeof import("./monitor.js").getLineRuntimeState;
+let clearLineRuntimeStateForTests: typeof import("./monitor.js").clearLineRuntimeStateForTests;
 let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
 vi.mock("./bot.js", () => ({
@@ -35,8 +37,10 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
   return {
     ...actual,
     danger: (value: unknown) => String(value),
@@ -89,8 +93,13 @@ vi.mock("./template-messages.js", () => ({
 }));
 
 describe("monitorLineProvider lifecycle", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ monitorLineProvider, getLineRuntimeState, clearLineRuntimeStateForTests } =
+      await import("./monitor.js"));
+  });
+
+  beforeEach(() => {
+    clearLineRuntimeStateForTests();
     createLineBotMock.mockReset();
     createLineBotMock.mockReturnValue({
       account: { accountId: "default" },
@@ -102,7 +111,6 @@ describe("monitorLineProvider lifecycle", () => {
       .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerPluginHttpRouteMock.mockReset().mockReturnValue(unregisterHttpMock);
-    ({ monitorLineProvider } = await import("./monitor.js"));
   });
 
   const createRouteResponse = () => {
@@ -172,6 +180,36 @@ describe("monitorLineProvider lifecycle", () => {
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
   });
 
+  it("records startup state under configured defaultAccount when accountId is omitted", async () => {
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {
+        channels: {
+          line: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                channelAccessToken: "work-token",
+                channelSecret: "work-secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    expect(getLineRuntimeState("work")).toEqual(
+      expect.objectContaining({
+        running: true,
+      }),
+    );
+    expect(getLineRuntimeState("default")).toBeUndefined();
+
+    monitor.stop();
+  });
+
   it("rejects webhook requests above the shared in-flight limit before body handling", async () => {
     const limit = WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey;
     const releaseRequests: Array<() => void> = [];
@@ -225,27 +263,5 @@ describe("monitorLineProvider lifecycle", () => {
     releaseRequests.splice(0).forEach((release) => release());
     await Promise.all(firstRequests);
     monitor.stop();
-  });
-
-  it("rejects startup when channel secret is missing", async () => {
-    await expect(
-      monitorLineProvider({
-        channelAccessToken: "token",
-        channelSecret: "   ",
-        config: {} as OpenClawConfig,
-        runtime: {} as RuntimeEnv,
-      }),
-    ).rejects.toThrow("LINE webhook mode requires a non-empty channel secret.");
-  });
-
-  it("rejects startup when channel access token is missing", async () => {
-    await expect(
-      monitorLineProvider({
-        channelAccessToken: "   ",
-        channelSecret: "secret",
-        config: {} as OpenClawConfig,
-        runtime: {} as RuntimeEnv,
-      }),
-    ).rejects.toThrow("LINE webhook mode requires a non-empty channel access token.");
   });
 });

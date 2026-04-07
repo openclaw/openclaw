@@ -5,7 +5,18 @@ import {
   runSetupWizardFinalize,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
-import { slackSetupWizard } from "./setup-surface.js";
+import { createSlackSetupWizardBase } from "./setup-core.js";
+
+const slackSetupWizard = createSlackSetupWizardBase({
+  promptAllowFrom: async ({ cfg }) => cfg,
+  resolveAllowFromEntries: async ({ entries }) =>
+    entries.map((entry) => ({
+      input: entry,
+      resolved: false,
+      id: null,
+    })),
+  resolveGroupAllowlist: async ({ entries }) => entries,
+});
 
 describe("slackSetupWizard.finalize", () => {
   const baseCfg = {
@@ -41,24 +52,6 @@ describe("slackSetupWizard.finalize", () => {
     ).toBe(true);
   });
 
-  it("records an explicit false choice when the operator declines interactive replies", async () => {
-    const result = await runSetupWizardFinalize({
-      finalize: slackSetupWizard.finalize,
-      cfg: baseCfg,
-      prompter: createTestWizardPrompter({
-        confirm: vi.fn(async () => false),
-      }),
-    });
-    if (!result?.cfg) {
-      throw new Error("expected finalize to patch config");
-    }
-
-    expect(
-      (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
-        ?.capabilities?.interactiveReplies,
-    ).toBe(false);
-  });
-
   it("auto-enables interactive replies for quickstart defaults without prompting", async () => {
     const confirm = vi.fn(async () => false);
 
@@ -79,5 +72,88 @@ describe("slackSetupWizard.finalize", () => {
       (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
         ?.capabilities?.interactiveReplies,
     ).toBe(true);
+  });
+});
+
+describe("slackSetupWizard.dmPolicy", () => {
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      slackSetupWizard.dmPolicy?.getCurrent(
+        {
+          channels: {
+            slack: {
+              dmPolicy: "disabled",
+              accounts: {
+                alerts: {
+                  dmPolicy: "allowlist",
+                  botToken: "xoxb-alerts",
+                  appToken: "xapp-alerts",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        "alerts",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(slackSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
+      policyKey: "channels.slack.accounts.alerts.dmPolicy",
+      allowFromKey: "channels.slack.accounts.alerts.allowFrom",
+    });
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = slackSetupWizard.dmPolicy?.setPolicy(
+      {
+        channels: {
+          slack: {
+            allowFrom: ["U123"],
+            accounts: {
+              alerts: {
+                botToken: "xoxb-alerts",
+                appToken: "xapp-alerts",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "open",
+      "alerts",
+    );
+
+    expect(next?.channels?.slack?.dmPolicy).toBeUndefined();
+    expect(next?.channels?.slack?.accounts?.alerts?.dmPolicy).toBe("open");
+    expect(next?.channels?.slack?.accounts?.alerts?.allowFrom).toEqual(["U123", "*"]);
+  });
+});
+
+describe("slackSetupWizard.status", () => {
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const configured = await slackSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          slack: {
+            defaultAccount: "work",
+            botToken: "xoxb-root",
+            appToken: "xapp-root",
+            accounts: {
+              alerts: {
+                botToken: "xoxb-alerts",
+                appToken: "xapp-alerts",
+              },
+              work: {
+                botToken: "",
+                appToken: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
   });
 });

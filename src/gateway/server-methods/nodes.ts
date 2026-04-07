@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../../config/config.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   approveNodePairing,
   listNodePairing,
@@ -18,6 +19,7 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   buildCanvasScopedHostUrl,
   CANVAS_CAPABILITY_TTL_MS,
@@ -149,7 +151,7 @@ function shouldQueueAsPendingForegroundAction(params: {
   command: string;
   error: unknown;
 }): boolean {
-  const platform = (params.platform ?? "").trim().toLowerCase();
+  const platform = normalizeLowercaseStringOrEmpty(params.platform);
   if (!platform.startsWith("ios") && !platform.startsWith("ipados")) {
     return false;
   }
@@ -352,7 +354,7 @@ export async function maybeWakeNodeWithApns(
       });
     } catch (err) {
       // Best-effort wake only.
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       if (state.lastWakeAtMs === 0) {
         return withDuration({
           available: false,
@@ -451,7 +453,7 @@ export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNu
       apnsReason: result.reason,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return withDuration({
       sent: false,
       throttled: false,
@@ -657,9 +659,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const list = await listDevicePairing();
+      const [devicePairing, nodePairing] = await Promise.all([
+        listDevicePairing(),
+        listNodePairing(),
+      ]);
       const catalog = createKnownNodeCatalog({
-        pairedDevices: list.paired,
+        pairedDevices: devicePairing.paired,
+        pairedNodes: nodePairing.paired,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
       const nodes = listKnownNodes(catalog);
@@ -682,9 +688,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const list = await listDevicePairing();
+      const [devicePairing, nodePairing] = await Promise.all([
+        listDevicePairing(),
+        listNodePairing(),
+      ]);
       const catalog = createKnownNodeCatalog({
-        pairedDevices: list.paired,
+        pairedDevices: devicePairing.paired,
+        pairedNodes: nodePairing.paired,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
       const node = getKnownNode(catalog, id);

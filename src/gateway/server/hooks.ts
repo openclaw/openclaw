@@ -31,7 +31,7 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(value.text, { sessionKey });
+    enqueueSystemEvent(value.text, { sessionKey, trusted: false });
     if (value.mode === "now") {
       requestHeartbeatNow({ reason: "hook:wake" });
     }
@@ -42,6 +42,13 @@ export function createGatewayHooksRequestHandler(params: {
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
+    const delivery = value.deliver
+      ? {
+          mode: "announce" as const,
+          channel: value.channel,
+          to: value.to,
+        }
+      : { mode: "none" as const };
     const job: CronJob = {
       id: jobId,
       agentId: value.agentId,
@@ -58,12 +65,10 @@ export function createGatewayHooksRequestHandler(params: {
         model: value.model,
         thinking: value.thinking,
         timeoutSeconds: value.timeoutSeconds,
-        deliver: value.deliver,
-        channel: value.channel,
-        to: value.to,
         allowUnsafeExternalContent: value.allowUnsafeExternalContent,
         externalContentSource: value.externalContentSource,
       },
+      delivery,
       state: { nextRunAtMs: now },
     };
 

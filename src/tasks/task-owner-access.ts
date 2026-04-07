@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   findTaskByRunId,
   getTaskById,
@@ -5,16 +6,12 @@ import {
   resolveTaskForLookupToken,
 } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
-
-function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  const trimmed = ownerKey?.trim();
-  return trimmed ? trimmed : undefined;
-}
+import { buildTaskStatusSnapshot } from "./task-status.js";
 
 function canOwnerAccessTask(task: TaskRecord, callerOwnerKey: string): boolean {
   return (
     task.scopeKind === "session" &&
-    normalizeOwnerKey(task.ownerKey) === normalizeOwnerKey(callerOwnerKey)
+    normalizeOptionalString(task.ownerKey) === normalizeOptionalString(callerOwnerKey)
   );
 }
 
@@ -40,6 +37,18 @@ export function listTasksForRelatedSessionKeyForOwner(params: {
 }): TaskRecord[] {
   return listTasksForRelatedSessionKey(params.relatedSessionKey).filter((task) =>
     canOwnerAccessTask(task, params.callerOwnerKey),
+  );
+}
+
+export function buildTaskStatusSnapshotForRelatedSessionKeyForOwner(params: {
+  relatedSessionKey: string;
+  callerOwnerKey: string;
+}) {
+  return buildTaskStatusSnapshot(
+    listTasksForRelatedSessionKeyForOwner({
+      relatedSessionKey: params.relatedSessionKey,
+      callerOwnerKey: params.callerOwnerKey,
+    }),
   );
 }
 

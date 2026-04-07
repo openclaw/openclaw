@@ -45,11 +45,14 @@ If you still pass `--token`, remember it lands in shell history and `ps` output;
 
 ## Model IDs
 
-- `nvidia/llama-3.1-nemotron-70b-instruct` (default)
-- `meta/llama-3.3-70b-instruct`
-- `nvidia/mistral-nemo-minitron-8b-8k-instruct`
+| Model ref                                            | Name                                     | Context | Max output |
+| ---------------------------------------------------- | ---------------------------------------- | ------- | ---------- |
+| `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`      | NVIDIA Llama 3.1 Nemotron 70B Instruct   | 131,072 | 4,096      |
+| `nvidia/meta/llama-3.3-70b-instruct`                 | Meta Llama 3.3 70B Instruct              | 131,072 | 4,096      |
+| `nvidia/nvidia/mistral-nemo-minitron-8b-8k-instruct` | NVIDIA Mistral NeMo Minitron 8B Instruct | 8,192   | 2,048      |
 
 ## Notes
 
 - OpenAI-compatible `/v1` endpoint; use an API key from NVIDIA NGC.
-- Provider auto-enables when `NVIDIA_API_KEY` is set; uses static defaults (131,072-token context window, 4,096 max tokens).
+- Provider auto-enables when `NVIDIA_API_KEY` is set.
+- The bundled catalog is static; costs default to `0` in source.

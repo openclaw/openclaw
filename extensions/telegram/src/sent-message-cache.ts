@@ -1,27 +1,36 @@
-/**
- * In-memory cache of sent message IDs per chat.
- * Used to identify bot's own messages for reaction filtering ("own" mode).
- */
+import fs from "node:fs";
+import path from "node:path";
+import { loadConfig, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 
-const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const TTL_MS = 24 * 60 * 60 * 1000;
+const TELEGRAM_SENT_MESSAGES_STATE_KEY = Symbol.for("openclaw.telegramSentMessagesState");
 
-/**
- * Keep sent-message tracking shared across bundled chunks so Telegram reaction
- * filters see the same sent-message history regardless of which chunk recorded it.
- */
-const TELEGRAM_SENT_MESSAGES_KEY = Symbol.for("openclaw.telegramSentMessages");
+type SentMessageStore = Map<string, Map<string, number>>;
 
-let sentMessages: Map<string, Map<string, number>> | undefined;
+type SentMessageState = {
+  persistedPath?: string;
+  store?: SentMessageStore;
+};
 
-function getSentMessages(): Map<string, Map<string, number>> {
-  if (!sentMessages) {
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    sentMessages =
-      (globalStore[TELEGRAM_SENT_MESSAGES_KEY] as Map<string, Map<string, number>> | undefined) ??
-      new Map<string, Map<string, number>>();
-    globalStore[TELEGRAM_SENT_MESSAGES_KEY] = sentMessages;
+function getSentMessageState(): SentMessageState {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[TELEGRAM_SENT_MESSAGES_STATE_KEY] as SentMessageState | undefined;
+  if (existing) {
+    return existing;
   }
-  return sentMessages;
+  const state: SentMessageState = {};
+  globalStore[TELEGRAM_SENT_MESSAGES_STATE_KEY] = state;
+  return state;
+}
+
+function createSentMessageStore(): SentMessageStore {
+  return new Map<string, Map<string, number>>();
+}
+
+function resolveSentMessageStorePath(): string {
+  const cfg = loadConfig();
+  return `${resolveStorePath(cfg.session?.store)}.telegram-sent-messages.json`;
 }
 
 function cleanupExpired(scopeKey: string, entry: Map<string, number>, now: number): void {
@@ -35,9 +44,72 @@ function cleanupExpired(scopeKey: string, entry: Map<string, number>, now: numbe
   }
 }
 
-/**
- * Record a message ID as sent by the bot.
- */
+function readPersistedSentMessages(filePath: string): SentMessageStore {
+  if (!fs.existsSync(filePath)) {
+    return createSentMessageStore();
+  }
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, Record<string, number>>;
+    const now = Date.now();
+    const store = createSentMessageStore();
+    for (const [chatId, entry] of Object.entries(parsed)) {
+      const messages = new Map<string, number>();
+      for (const [messageId, timestamp] of Object.entries(entry)) {
+        if (
+          typeof timestamp === "number" &&
+          Number.isFinite(timestamp) &&
+          now - timestamp <= TTL_MS
+        ) {
+          messages.set(messageId, timestamp);
+        }
+      }
+      if (messages.size > 0) {
+        store.set(chatId, messages);
+      }
+    }
+    return store;
+  } catch (error) {
+    logVerbose(`telegram: failed to read sent-message cache: ${String(error)}`);
+    return createSentMessageStore();
+  }
+}
+
+function getSentMessages(): SentMessageStore {
+  const state = getSentMessageState();
+  const persistedPath = resolveSentMessageStorePath();
+  if (!state.store || state.persistedPath !== persistedPath) {
+    state.store = readPersistedSentMessages(persistedPath);
+    state.persistedPath = persistedPath;
+  }
+  return state.store;
+}
+
+function persistSentMessages(): void {
+  const state = getSentMessageState();
+  const store = state.store;
+  const filePath = state.persistedPath;
+  if (!store || !filePath) {
+    return;
+  }
+  const now = Date.now();
+  const serialized: Record<string, Record<string, number>> = {};
+  for (const [chatId, entry] of store) {
+    cleanupExpired(chatId, entry, now);
+    if (entry.size > 0) {
+      serialized[chatId] = Object.fromEntries(entry);
+    }
+  }
+  if (Object.keys(serialized).length === 0) {
+    fs.rmSync(filePath, { force: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(serialized), "utf-8");
+  fs.renameSync(tempPath, filePath);
+}
+
 export function recordSentMessage(chatId: number | string, messageId: number): void {
   const scopeKey = String(chatId);
   const idKey = String(messageId);
@@ -52,11 +124,13 @@ export function recordSentMessage(chatId: number | string, messageId: number): v
   if (entry.size > 100) {
     cleanupExpired(scopeKey, entry, now);
   }
+  try {
+    persistSentMessages();
+  } catch (error) {
+    logVerbose(`telegram: failed to persist sent-message cache: ${String(error)}`);
+  }
 }
 
-/**
- * Check if a message was sent by the bot.
- */
 export function wasSentByBot(chatId: number | string, messageId: number): boolean {
   const scopeKey = String(chatId);
   const idKey = String(messageId);
@@ -68,9 +142,14 @@ export function wasSentByBot(chatId: number | string, messageId: number): boolea
   return entry.has(idKey);
 }
 
-/**
- * Clear all cached entries (for testing).
- */
 export function clearSentMessageCache(): void {
+  const state = getSentMessageState();
   getSentMessages().clear();
+  if (state.persistedPath) {
+    fs.rmSync(state.persistedPath, { force: true });
+  }
+}
+
+export function resetSentMessageCacheForTest(): void {
+  getSentMessageState().store = undefined;
 }

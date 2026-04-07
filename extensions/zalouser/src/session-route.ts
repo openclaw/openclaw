@@ -3,6 +3,15 @@ import {
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
 
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeOptionalLowercaseString(value: unknown): string | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized || undefined;
+}
+
 export function stripZalouserTargetPrefix(raw: string): string {
   return raw
     .trim()
@@ -16,7 +25,7 @@ export function normalizeZalouserTarget(raw: string): string | undefined {
     return undefined;
   }
 
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.startsWith("group:")) {
     const id = trimmed.slice("group:".length).trim();
     return id ? `group:${id}` : undefined;
@@ -55,7 +64,7 @@ export function parseZalouserOutboundTarget(raw: string): {
   if (!normalized) {
     throw new Error("Zalouser target is required");
   }
-  const lowered = normalized.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(normalized);
   if (lowered.startsWith("group:")) {
     const threadId = normalized.slice("group:".length).trim();
     if (!threadId) {
@@ -80,7 +89,7 @@ export function parseZalouserDirectoryGroupId(raw: string): string {
   if (!normalized) {
     throw new Error("Zalouser group target is required");
   }
-  const lowered = normalized.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(normalized);
   if (lowered.startsWith("group:")) {
     const groupId = normalized.slice("group:".length).trim();
     if (!groupId) {
@@ -99,7 +108,7 @@ export function resolveZalouserOutboundSessionRoute(params: ChannelOutboundSessi
   if (!normalized) {
     return null;
   }
-  const isGroup = normalized.toLowerCase().startsWith("group:");
+  const isGroup = (normalizeOptionalLowercaseString(normalized) ?? "").startsWith("group:");
   const peerId = normalized.replace(/^(group|user):/i, "").trim();
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -79,10 +80,10 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
   const passwordEntries = [
     ["OPENCLAW_GATEWAY_PASSWORD", await getenv("OPENCLAW_GATEWAY_PASSWORD")],
   ] as const;
-  const tokenEntry = tokenEntries.find(([, value]) => value?.trim());
-  const passwordEntry = passwordEntries.find(([, value]) => value?.trim());
-  const envToken = tokenEntry?.[1]?.trim() ?? "";
-  const envPassword = passwordEntry?.[1]?.trim() ?? "";
+  const tokenEntry = tokenEntries.find(([, value]) => normalizeOptionalString(value));
+  const passwordEntry = passwordEntries.find(([, value]) => normalizeOptionalString(value));
+  const envToken = normalizeOptionalString(tokenEntry?.[1]) ?? "";
+  const envPassword = normalizeOptionalString(passwordEntry?.[1]) ?? "";
   const envTokenKey = tokenEntry?.[0];
   const envPasswordKey = passwordEntry?.[0];
   if (!envToken && !envPassword) {
@@ -106,7 +107,7 @@ export async function noteMacLaunchctlGatewayEnvOverrides(
 }
 
 function isTruthyEnvValue(value: string | undefined): boolean {
-  return typeof value === "string" && value.trim().length > 0;
+  return Boolean(normalizeOptionalString(value));
 }
 
 function isTmpCompileCachePath(cachePath: string): boolean {

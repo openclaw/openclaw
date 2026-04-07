@@ -1,5 +1,5 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
   vi.fn().mockImplementation(async (_to: string, message: string) => ({
@@ -17,31 +17,13 @@ vi.mock("../send.js", () => ({
     sendMessageIMessageMock(to, message, opts),
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig: () => ({}),
-    resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
-    resolveChunkMode: () => resolveChunkModeMock(),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
-  return {
-    ...actual,
-    convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
-  };
-});
+vi.mock("./deliver.runtime.js", () => ({
+  loadConfig: vi.fn(() => ({})),
+  resolveMarkdownTableMode: vi.fn(() => resolveMarkdownTableModeMock()),
+  chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
+  resolveChunkMode: vi.fn(() => resolveChunkModeMock()),
+  convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
+}));
 
 let deliverReplies: typeof import("./deliver.js").deliverReplies;
 
@@ -49,11 +31,13 @@ describe("deliverReplies", () => {
   const runtime = { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv;
   const client = {} as Awaited<ReturnType<typeof import("../client.js").createIMessageRpcClient>>;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ deliverReplies } = await import("./deliver.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     chunkTextWithModeMock.mockImplementation((text: string) => [text]);
-    ({ deliverReplies } = await import("./deliver.js"));
   });
 
   it("propagates payload replyToId through all text chunks", async () => {

@@ -1,4 +1,4 @@
-import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
@@ -19,6 +19,7 @@ import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -53,7 +54,7 @@ export interface MonitorLineProviderOptions {
 
 export interface LineProviderMonitor {
   account: ResolvedLineAccount;
-  handleWebhook: (body: WebhookRequestBody) => Promise<void>;
+  handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
   stop: () => void;
 }
 
@@ -94,6 +95,10 @@ function recordChannelRuntimeState(params: {
 
 export function getLineRuntimeState(accountId: string) {
   return runtimeState.get(`line:${accountId}`);
+}
+
+export function clearLineRuntimeStateForTests() {
+  runtimeState.clear();
 }
 
 function startLineLoadingKeepalive(params: {
@@ -140,7 +145,7 @@ export async function monitorLineProvider(
     abortSignal,
     webhookPath,
   } = opts;
-  const resolvedAccountId = accountId ?? "default";
+  const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
   const token = channelAccessToken.trim();
   const secret = channelSecret.trim();
 

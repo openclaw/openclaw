@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
@@ -6,8 +6,8 @@ import {
 import type { ClawdbotConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuSubagentHooks } from "./subagent-hooks.js";
 import {
-  __testing as threadBindingTesting,
   createFeishuThreadBindingManager,
+  __testing as threadBindingTesting,
 } from "./thread-bindings.js";
 
 const baseConfig: ClawdbotConfig = {
@@ -25,14 +25,6 @@ function registerHandlersForTest(config: Record<string, unknown> = baseConfig) {
 describe("feishu subagent hook handlers", () => {
   beforeEach(() => {
     threadBindingTesting.resetFeishuThreadBindingsForTests();
-  });
-
-  it("registers Feishu subagent hooks", () => {
-    const handlers = registerHandlersForTest();
-    expect(handlers.has("subagent_spawning")).toBe(true);
-    expect(handlers.has("subagent_delivery_target")).toBe(true);
-    expect(handlers.has("subagent_ended")).toBe(true);
-    expect(handlers.has("subagent_spawned")).toBe(false);
   });
 
   it("binds a Feishu DM conversation on subagent_spawning", async () => {

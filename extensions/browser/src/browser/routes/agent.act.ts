@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clickChromeMcpElement,
   closeChromeMcpTab,
@@ -1085,7 +1086,7 @@ export function registerBrowserAgentActRoutes(
             try {
               actions = Array.isArray(body.actions) ? body.actions.map(normalizeBatchAction) : [];
             } catch (err) {
-              return jsonError(res, 400, err instanceof Error ? err.message : String(err));
+              return jsonError(res, 400, formatErrorMessage(err));
             }
             if (!actions.length) {
               return jsonError(res, 400, "actions are required");

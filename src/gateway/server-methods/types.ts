@@ -58,6 +58,7 @@ export type GatewayRequestContext = {
   hasConnectedMobileNode: () => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
+  disconnectClientsUsingSharedGatewayAuth?: () => void;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
