@@ -69,9 +69,6 @@ static void handle_helper_action(const gchar *action) {
         systemd_refresh();
         // Trigger an immediate gateway client health check
         gateway_client_refresh();
-    } else if (g_strcmp0(action, "DIAGNOSTICS") == 0) {
-        gateway_client_refresh();
-        app_window_navigate_to(SECTION_DIAGNOSTICS);
     } else if (g_strcmp0(action, "OPEN_MAIN") == 0) {
         app_window_show();
     } else if (g_strcmp0(action, "OPEN_DASHBOARD") == 0) {
@@ -298,6 +295,7 @@ void tray_update_from_state(const AppState state) {
     switch (state) {
         case STATE_NEEDS_SETUP:
         case STATE_NEEDS_GATEWAY_INSTALL:
+        case STATE_NEEDS_ONBOARDING:
         case STATE_USER_SYSTEMD_UNAVAILABLE:
         case STATE_SYSTEM_UNSUPPORTED:
         case STATE_CONFIG_INVALID:

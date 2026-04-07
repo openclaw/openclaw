@@ -46,9 +46,12 @@ static StatusColor color_for_state(AppState state) {
     case STATE_DEGRADED:
     case STATE_STARTING:
     case STATE_STOPPING:
+    case STATE_NEEDS_ONBOARDING:
         return STATUS_COLOR_ORANGE;
     case STATE_ERROR:
     case STATE_CONFIG_INVALID:
+    case STATE_NEEDS_SETUP:
+    case STATE_NEEDS_GATEWAY_INSTALL:
         return STATUS_COLOR_RED;
     default:
         return STATUS_COLOR_GRAY;
@@ -164,7 +167,8 @@ static const char* tray_status_prefix(AppState state) {
     case STATE_STARTING:               return "\u25CC Starting\u2026";
     case STATE_STOPPING:               return "\u25CC Stopping\u2026";
     case STATE_NEEDS_SETUP:            return "\u25CB Setup Required";
-    case STATE_NEEDS_GATEWAY_INSTALL:  return "\u25CB Gateway Not Installed";
+    case STATE_NEEDS_GATEWAY_INSTALL: return "\u25CB Gateway Not Installed";
+    case STATE_NEEDS_ONBOARDING:       return "\u25CB Onboarding Required";
     case STATE_CONFIG_INVALID:         return "\u25CF Config Invalid";
     case STATE_USER_SYSTEMD_UNAVAILABLE: return "\u25CB Systemd Unavailable";
     case STATE_SYSTEM_UNSUPPORTED:     return "\u25CB System Unsupported";
@@ -261,10 +265,10 @@ void environment_check_build(
     out->rows[i].detail = out->rows[i].passed ? "Reachable" : "Not reachable";
     i++;
 
-    /* 3. Config file readable */
+    /* 3. Config path resolved */
     out->rows[i].label = "Config file";
     if (config_path && config_path[0] != '\0') {
-        out->rows[i].passed = (access(config_path, R_OK) == 0);
+        out->rows[i].passed = TRUE;
         out->rows[i].detail = config_path;
     } else {
         out->rows[i].passed = FALSE;
@@ -272,10 +276,21 @@ void environment_check_build(
     }
     i++;
 
-    /* 4. State directory writable */
+    /* 4. Config file exists */
+    out->rows[i].label = "Config exists";
+    if (config_path && config_path[0] != '\0') {
+        out->rows[i].passed = (access(config_path, F_OK) == 0);
+        out->rows[i].detail = out->rows[i].passed ? "Yes" : "No";
+    } else {
+        out->rows[i].passed = FALSE;
+        out->rows[i].detail = "No (path unresolved)";
+    }
+    i++;
+
+    /* 5. State directory resolved */
     out->rows[i].label = "State directory";
     if (state_dir && state_dir[0] != '\0') {
-        out->rows[i].passed = (access(state_dir, W_OK) == 0);
+        out->rows[i].passed = TRUE;
         out->rows[i].detail = state_dir;
     } else {
         out->rows[i].passed = FALSE;
@@ -283,7 +298,18 @@ void environment_check_build(
     }
     i++;
 
-    /* 5. Expected systemd unit present */
+    /* 6. State directory exists */
+    out->rows[i].label = "State dir exists";
+    if (state_dir && state_dir[0] != '\0') {
+        out->rows[i].passed = (access(state_dir, F_OK) == 0);
+        out->rows[i].detail = out->rows[i].passed ? "Yes" : "No";
+    } else {
+        out->rows[i].passed = FALSE;
+        out->rows[i].detail = "No (path unresolved)";
+    }
+    i++;
+
+    /* 7. Expected systemd unit present */
     out->rows[i].label = "Expected systemd unit";
     if (sys && sys->installed) {
         out->rows[i].passed = TRUE;
@@ -321,6 +347,7 @@ OnboardingRoute onboarding_routing_decide(
 
     case STATE_NEEDS_SETUP:
     case STATE_NEEDS_GATEWAY_INSTALL:
+    case STATE_NEEDS_ONBOARDING:
     case STATE_CONFIG_INVALID:
     case STATE_ERROR:
     case STATE_STOPPED:

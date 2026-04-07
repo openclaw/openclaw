@@ -63,6 +63,15 @@ typedef struct {
     gboolean valid;        /* whether config was loaded successfully */
     GatewayConfigError error_code; /* stable error discriminator */
     gchar *error;          /* human-readable error message */
+    gboolean has_model_config; /* diagnostic only: config has model/provider for runtime */
+
+    /* Feature B: Wizard onboard marker fields */
+    gboolean has_wizard_onboard_marker;
+    gboolean wizard_is_local;
+    gchar *wizard_last_run_command;
+    gchar *wizard_last_run_at;
+    gchar *wizard_last_run_mode;
+    gchar *wizard_marker_fail_reason;
 } GatewayConfig;
 
 GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx);
@@ -73,5 +82,8 @@ gchar* gateway_config_ws_url(const GatewayConfig *config);
 gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *b);
 gchar* gateway_config_dashboard_url(const GatewayConfig *config);
 gchar* gateway_config_dashboard_url_with_route(const gchar *base_url, const gchar *route);
+
+gchar* gateway_config_resolve_path(const GatewayConfigContext *ctx);
+void gateway_config_free_resolved_path(gchar *path);
 
 #endif /* OPENCLAW_LINUX_GATEWAY_CONFIG_H */

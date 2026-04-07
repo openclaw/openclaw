@@ -46,9 +46,19 @@ sources = [
   'src/notify.c',
   'src/diagnostics.c',
   'src/display_model.c',
+  'src/session_filter.c',
+  'src/markdown_render.c',
+  'src/chat_blocks.c',
+  'src/format_utils.c',
   'src/app_window.c',
+  'src/section_chat.c',
+  'src/section_agents.c',
+  'src/section_usage.c',
   'src/section_channels.c',
   'src/section_skills.c',
+  'src/section_workflows.c',
+  'src/section_control_room.c',
+  'src/section_logs.c',
   'src/section_sessions.c',
   'src/section_cron.c',
   'src/section_instances.c',
@@ -103,8 +113,20 @@ test_runtime_mode_pres_exe = executable('test_runtime_mode_presentation',
   dependencies : [glib_dep])
 test('runtime_mode_presentation', test_runtime_mode_pres_exe)
 
+test_config_exe = executable('test_config',
+  ['tests/test_config.c', 'src/gateway_config.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('config', test_config_exe)
+
+test_seams_exe = executable('test_seams',
+  ['tests/test_seams.c', 'src/test_seams.c'],
+  dependencies : [glib_dep, gio_dep, json_glib_dep])
+test('seams', test_seams_exe)
+
 test_gateway_exe = executable('test_gateway',
-  ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c', 'src/log.c'],
+  ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c',
+   'src/state.c', 'src/runtime_mode.c', 'src/readiness.c', 'src/log.c',
+   'src/test_seams.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('gateway', test_gateway_exe)
 
@@ -134,3 +156,23 @@ test_rpc_lifecycle_exe = executable('test_rpc_lifecycle',
    'src/gateway_data.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep])
 test('rpc_lifecycle', test_rpc_lifecycle_exe)
+
+test_session_filter_exe = executable('test_session_filter',
+  ['tests/test_session_filter.c', 'src/session_filter.c', 'src/gateway_data.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('session_filter', test_session_filter_exe)
+
+test_markdown_render_exe = executable('test_markdown_render',
+  ['tests/test_markdown_render.c', 'src/markdown_render.c'],
+  dependencies : [glib_dep])
+test('markdown_render', test_markdown_render_exe)
+
+test_chat_blocks_exe = executable('test_chat_blocks',
+  ['tests/test_chat_blocks.c', 'src/chat_blocks.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('chat_blocks', test_chat_blocks_exe)
+
+test_format_utils_exe = executable('test_format_utils',
+  ['tests/test_format_utils.c', 'src/format_utils.c'],
+  dependencies : [glib_dep])
+test('format_utils', test_format_utils_exe)

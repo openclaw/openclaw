@@ -9,6 +9,11 @@ void notify_on_transition(AppState old_state, AppState new_state) {
 void tray_update_from_state(AppState state) {
     (void)state;
 }
+
+void onboarding_refresh(void) {
+    /* No-op in tests */
+}
+
 void state_on_gateway_refresh_requested(void) {}
 
 /* ── Basic systemd-only state tests ── */
@@ -56,6 +61,9 @@ static void test_full_connectivity_running(void) {
     hs.rpc_ok = TRUE;
     hs.auth_ok = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
@@ -75,6 +83,10 @@ static void test_warning_health(void) {
     hs.ws_connected = TRUE;
     hs.rpc_ok = TRUE;
     hs.auth_ok = TRUE;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    
     hs.config_audit_ok = FALSE;
     hs.config_issues_count = 1;
     state_update_health(&hs);
@@ -179,6 +191,9 @@ static void test_precedence_systemd_active_http_down(void) {
     hs.http_ok = FALSE;
     hs.ws_connected = FALSE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
@@ -370,6 +385,9 @@ static void test_activation_boundary_health_persists_through_stop(void) {
     // Seed connected state (degraded because rpc_ok=FALSE)
     HealthState hs = {0};
     hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
     hs.http_ok = TRUE;
     hs.ws_connected = TRUE;
     hs.rpc_ok = FALSE;
@@ -388,6 +406,8 @@ static void test_activation_boundary_health_persists_through_stop(void) {
     hs_down.http_ok = FALSE;
     hs_down.ws_connected = FALSE;
     hs_down.config_valid = TRUE;
+    hs_down.has_wizard_onboard_marker = TRUE;
+    
     state_update_health(&hs_down);
     // Now systemd says stopped + native says unreachable → STOPPED
     g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
@@ -449,6 +469,9 @@ static void test_readiness_needs_gateway_install(void) {
     hs.last_updated = 12345;
     hs.setup_detected = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_GATEWAY_INSTALL);
@@ -515,7 +538,124 @@ static void test_readiness_startup_hydration_to_running(void) {
     hs.rpc_ok = TRUE;
     hs.auth_ok = TRUE;
     hs.config_valid = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    
+    
     state_update_health(&hs);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
+/* ── Wizard Marker Tests (Task 9) ── */
+
+static void test_wizard_absent_needs_onboarding(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_ONBOARDING);
+}
+
+static void test_wizard_present_service_not_installed(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_GATEWAY_INSTALL);
+}
+
+static void test_wizard_present_gateway_unreachable(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
+}
+
+static void test_wizard_present_runtime_healthy(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
+static void test_wizard_absent_model_config_present(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = FALSE;
+    hs.has_model_config = TRUE; /* Should be ignored */
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_ONBOARDING);
+}
+
+static void test_wizard_present_model_config_absent(void) {
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = TRUE;
+    hs.setup_detected = TRUE;
+    hs.has_wizard_onboard_marker = TRUE;
+    hs.has_model_config = FALSE; /* Should not block readiness */
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    state_update_health(&hs);
+
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
 }
 
@@ -557,6 +697,14 @@ int main(int argc, char **argv) {
     g_test_add_func("/state/readiness/config_invalid_when_active_unreachable", test_readiness_config_invalid_when_active_unreachable);
     g_test_add_func("/state/readiness/startup_hydration_is_starting", test_readiness_startup_hydration_is_starting);
     g_test_add_func("/state/readiness/startup_hydration_to_running", test_readiness_startup_hydration_to_running);
+
+    /* Wizard Marker Tests */
+    g_test_add_func("/state/wizard_marker/absent_needs_onboarding", test_wizard_absent_needs_onboarding);
+    g_test_add_func("/state/wizard_marker/present_service_not_installed", test_wizard_present_service_not_installed);
+    g_test_add_func("/state/wizard_marker/present_gateway_unreachable", test_wizard_present_gateway_unreachable);
+    g_test_add_func("/state/wizard_marker/present_runtime_healthy", test_wizard_present_runtime_healthy);
+    g_test_add_func("/state/wizard_marker/absent_model_config_present", test_wizard_absent_model_config_present);
+    g_test_add_func("/state/wizard_marker/present_model_config_absent", test_wizard_present_model_config_absent);
 
     return g_test_run();
 }

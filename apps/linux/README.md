@@ -46,14 +46,14 @@ Notes:
 
 ## Important scope note
 
-This README intentionally documents the **foundation-first** workflow:
+This README intentionally documents the **current Linux companion workflow**:
 - build OpenClaw
 - build the Linux companion
-- launch the Linux companion **before** `openclaw setup`
-- launch again **before** `openclaw gateway install`
-- then install the gateway service and validate the “ready” state
+- launch the Linux companion at any point, including **before** OpenClaw is installed or onboarded
+- run `openclaw onboard --install-daemon`
+- validate the companion’s transition into the ready state
 
-`openclaw onboard` is **not documented here yet**. That is intentional. The current focus is to verify and stabilize the base lifecycle from a clean machine to a ready local gateway.
+The Linux companion now supports the intended bootstrap flow centered on `openclaw onboard --install-daemon` and does **not** require stop/start or relaunch checkpoints between setup phases.
 
 ---
 
@@ -166,7 +166,7 @@ meson compile -C build
 
 ---
 
-## Run the Linux App before `openclaw setup`
+## Run the Linux App before OpenClaw is onboarded
 
 From `apps/linux`:
 
@@ -176,53 +176,23 @@ From `apps/linux`:
 
 ### What to expect
 
-At this point, there is no initialized local OpenClaw environment yet.
+At this point, there may be no initialized local OpenClaw environment yet.
 
 That is expected.
 
-The purpose of this step is to confirm the Linux companion launches cleanly **even when nothing has been set up yet**. This validates the base desktop/runtime behavior before introducing gateway state.
+The Linux companion should launch cleanly **even when nothing has been installed or onboarded yet**. You can keep it open while completing bootstrap in another terminal.
 
-You should inspect the app and diagnostics at this stage to confirm the “no setup yet” behavior is understandable and stable.
+You should inspect the app and diagnostics at this stage to confirm the pre-bootstrap behavior is understandable and stable.
 
 ---
 
-## Initialize OpenClaw
+## Onboard OpenClaw and install the user gateway service
 
 In another terminal, from the repository root:
 
 ```bash
 cd ~/openclaw
-node openclaw.mjs setup
-```
-
----
-
-## Relaunch the Linux App before `openclaw gateway install`
-
-Return to the Linux app terminal and launch it again:
-
-```bash
-cd ~/openclaw/apps/linux
-./build/openclaw-linux
-```
-
-### What to expect
-
-Now OpenClaw has been initialized, but the user gateway service is still not installed.
-
-This is another intentional checkpoint. It lets you observe how the Linux companion behaves when OpenClaw exists locally, but the gateway service lifecycle has not yet been installed into `systemd --user`.
-
-This stage is useful for validating diagnostics, expected warnings, and transition behavior.
-
----
-
-## Install the OpenClaw user gateway service
-
-From the repository root:
-
-```bash
-cd ~/openclaw
-node openclaw.mjs gateway install
+node openclaw.mjs onboard --install-daemon
 ```
 
 Optional direct inspection:
@@ -236,7 +206,7 @@ journalctl --user -fu openclaw-gateway.service
 
 ## Inspect the Linux App diagnostics
 
-Launch the Linux app again if needed:
+If the Linux app is already open, it should detect the new config and service state without requiring a restart. Launch it again only if needed:
 
 ```bash
 cd ~/openclaw/apps/linux
@@ -248,8 +218,7 @@ At this point, the diagnostics/state should settle into a **ready** baseline for
 This is the current foundational checkpoint:
 - OpenClaw built
 - Linux app built and tested
-- `openclaw setup` completed
-- `openclaw gateway install` completed
+- `openclaw onboard --install-daemon` completed
 - Linux companion can observe and manage the local gateway state
 
 ---
@@ -292,8 +261,8 @@ OPENCLAW_LINUX_LOG=trace ./build/openclaw-linux
 ```
 
 This is especially useful when validating:
-- startup with no setup
-- startup after setup but before gateway install
+- startup before onboarding
+- live transition during `openclaw onboard --install-daemon`
 - gateway service transitions
 - tray/helper lifecycle
 - diagnostics refresh behavior
@@ -328,18 +297,11 @@ cd ~/openclaw/apps/linux
 ./build/openclaw-linux
 ```
 
-### Initialize OpenClaw
+### Onboard OpenClaw and install user gateway service
 
 ```bash
 cd ~/openclaw
-node openclaw.mjs setup
-```
-
-### Install user gateway service
-
-```bash
-cd ~/openclaw
-node openclaw.mjs gateway install
+node openclaw.mjs onboard --install-daemon
 ```
 
 ---
@@ -347,10 +309,9 @@ node openclaw.mjs gateway install
 ## Current limitations / next documentation targets
 
 Not documented here yet:
-- `openclaw onboard`
-- full first-run onboarding UX
+- deeper first-run onboarding UX details
 - macOS companion parity comparisons
 - broader diagnostics polish
 - deeper in-app recovery guidance
 
-Those are valid next steps, but they are intentionally outside this README for now. The current document is meant to lock down the foundational Linux lifecycle first.
+Those are valid next steps, but they are intentionally outside this README for now. The current document is meant to lock down the current Linux lifecycle around `openclaw onboard --install-daemon` first.

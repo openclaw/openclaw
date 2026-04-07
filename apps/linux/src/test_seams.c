@@ -75,3 +75,66 @@ int web_login_start_payload_has_qr(JsonObject *payload_obj,
     if (out_qr_data_url) *out_qr_data_url = qr_data_url;
     return (qr_data_url && *qr_data_url != '\0') ? 1 : 0;
 }
+
+/* ── Config monitor rearm decision logic (from gateway_client.c) ────
+ *
+ * This helper extracts the rearm decision logic so it can be unit tested
+ * without GFileMonitor machinery.
+ */
+
+/* Pure helper for testing rearm decision logic without GFileMonitor machinery.
+ * Returns TRUE if rearm can be skipped given the current state.
+ */
+gboolean config_monitor_can_skip_rearm(
+    const gchar *new_dir,
+    const gchar *old_dir,
+    const gchar *new_path,
+    const gchar *old_path,
+    gboolean have_dir_monitor,
+    gboolean need_file_monitor,
+    gboolean have_file_monitor)
+{
+    gboolean dir_changed = g_strcmp0(new_dir, old_dir) != 0;
+    gboolean file_changed = g_strcmp0(new_path, old_path) != 0;
+
+    /* Can only skip if:
+     * - dir path unchanged
+     * - file path unchanged
+     * - dir monitor exists
+     * - file monitor state matches what's needed
+     */
+    if (!dir_changed &&
+        !file_changed &&
+        have_dir_monitor &&
+        need_file_monitor == have_file_monitor) {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* Pure helper to find the nearest existing ancestor directory.
+ * Used for fallback monitoring when the config directory doesn't exist yet.
+ * Returns a newly allocated string with the path, or NULL if none found.
+ */
+gchar* find_nearest_existing_ancestor(const gchar *path) {
+    if (!path || path[0] == '\0') return NULL;
+    
+    gchar *current = g_strdup(path);
+    while (current && g_strcmp0(current, "/") != 0 && g_strcmp0(current, ".") != 0) {
+        if (g_file_test(current, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_DIR)) {
+            return current; /* found existing ancestor */
+        }
+        
+        gchar *parent = g_path_get_dirname(current);
+        g_free(current);
+        current = parent;
+    }
+    
+    /* Check root or current dir if we reached it */
+    if (current && g_file_test(current, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_DIR)) {
+        return current;
+    }
+    
+    g_free(current);
+    return NULL;
+}

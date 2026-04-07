@@ -34,6 +34,19 @@ static gboolean initial_refresh_fired = FALSE;
 /* Defined in runtime_mode.c — internal to the state module */
 extern RuntimeMode runtime_mode_compute(const SystemdState *sys, const HealthState *health);
 
+/* Feature B: Helper to detect if onboarding is still required
+ * 
+ * Contract: This predicate is independent from setup_detected, 
+ * has_model_config, gateway reachability, and service status.
+ * It strictly answers whether the local bootstrap wizard has completed.
+ */
+static gboolean config_requires_onboarding(const HealthState *health) {
+    if (!health || !health->config_valid) {
+        return FALSE;
+    }
+    return !health->has_wizard_onboard_marker;
+}
+
 static AppState compute_state(void) {
     gboolean has_health_data = (current_health_state.last_updated > 0);
     gboolean gateway_reachable = has_health_data && current_health_state.http_ok;
@@ -83,6 +96,15 @@ static AppState compute_state(void) {
             return STATE_NEEDS_GATEWAY_INSTALL;
         }
         return STATE_NEEDS_SETUP;
+    }
+
+    /* ── LAYER 3b: ONBOARDING STATUS (Feature B) ──
+     * If setup is complete (config valid, service installed), check if
+     * onboarding has established runtime model selections. This state
+     * sits between "setup complete" and "fully ready/running".
+     */
+    if (config_requires_onboarding(&current_health_state)) {
+        return STATE_NEEDS_ONBOARDING;
     }
 
     /* ── LAYER 4: SYSTEMD TRANSITIONS (rows 10-12) ── */
@@ -143,6 +165,7 @@ static const char* state_enum_to_string(AppState s) {
     switch (s) {
         case STATE_NEEDS_SETUP: return "NEEDS_SETUP";
         case STATE_NEEDS_GATEWAY_INSTALL: return "NEEDS_GATEWAY_INSTALL";
+        case STATE_NEEDS_ONBOARDING: return "NEEDS_ONBOARDING";
         case STATE_USER_SYSTEMD_UNAVAILABLE: return "USER_SYSTEMD_UNAVAILABLE";
         case STATE_SYSTEM_UNSUPPORTED: return "SYSTEM_UNSUPPORTED";
         case STATE_CONFIG_INVALID: return "CONFIG_INVALID";
@@ -175,6 +198,12 @@ static void trigger_updates(AppState new_state) {
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates pre-tray state=%s",
               state_enum_to_string(current_state));
     tray_update_from_state(current_state);
+    
+    /* Feature A: State-driven onboarding refresh
+     * Only rebuild onboarding window pages when state materially changes */
+    extern void onboarding_refresh(void);
+    onboarding_refresh();
+    
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_STATE, "trigger_updates post-tray");
 }
 
@@ -190,6 +219,10 @@ void health_state_clear(HealthState *hs) {
     g_free(hs->gateway_version);
     g_free(hs->auth_source);
     g_free(hs->last_error);
+    g_free(hs->wizard_last_run_command);
+    g_free(hs->wizard_last_run_at);
+    g_free(hs->wizard_last_run_mode);
+    g_free(hs->wizard_marker_fail_reason);
     memset(hs, 0, sizeof(HealthState));
 }
 
@@ -237,28 +270,45 @@ void state_update_systemd(const SystemdState *sys_state) {
 }
 
 void state_update_health(const HealthState *health_state) {
+    current_health_state.config_valid = health_state->config_valid;
+    current_health_state.setup_detected = health_state->setup_detected;
+    current_health_state.config_audit_ok = health_state->config_audit_ok;
+    current_health_state.config_issues_count = health_state->config_issues_count;
+    current_health_state.has_model_config = health_state->has_model_config;
+
+    /* Feature B: Wizard onboard marker fields */
+    current_health_state.has_wizard_onboard_marker = health_state->has_wizard_onboard_marker;
+    current_health_state.wizard_is_local = health_state->wizard_is_local;
+
     g_free(current_health_state.endpoint_host);
     g_free(current_health_state.gateway_version);
     g_free(current_health_state.auth_source);
     g_free(current_health_state.last_error);
+    g_free(current_health_state.wizard_last_run_command);
+    g_free(current_health_state.wizard_last_run_at);
+    g_free(current_health_state.wizard_last_run_mode);
+    g_free(current_health_state.wizard_marker_fail_reason);
 
+    current_health_state.endpoint_host = g_strdup(health_state->endpoint_host);
+    current_health_state.gateway_version = g_strdup(health_state->gateway_version);
+    current_health_state.auth_source = g_strdup(health_state->auth_source);
+    current_health_state.last_error = g_strdup(health_state->last_error);
+    current_health_state.wizard_last_run_command = g_strdup(health_state->wizard_last_run_command);
+    current_health_state.wizard_last_run_at = g_strdup(health_state->wizard_last_run_at);
+    current_health_state.wizard_last_run_mode = g_strdup(health_state->wizard_last_run_mode);
+    current_health_state.wizard_marker_fail_reason = g_strdup(health_state->wizard_marker_fail_reason);
+
+    current_health_state.endpoint_port = health_state->endpoint_port;
     current_health_state.last_updated = health_state->last_updated;
     current_health_state.http_ok = health_state->http_ok;
     current_health_state.http_probe_result = health_state->http_probe_result;
     current_health_state.ws_connected = health_state->ws_connected;
     current_health_state.rpc_ok = health_state->rpc_ok;
     current_health_state.auth_ok = health_state->auth_ok;
-    current_health_state.config_valid = health_state->config_valid;
-    current_health_state.setup_detected = health_state->setup_detected;
-    current_health_state.endpoint_port = health_state->endpoint_port;
-    current_health_state.config_audit_ok = health_state->config_audit_ok;
-    current_health_state.config_issues_count = health_state->config_issues_count;
 
-    current_health_state.endpoint_host = g_strdup(health_state->endpoint_host);
-    current_health_state.gateway_version = g_strdup(health_state->gateway_version);
-    current_health_state.auth_source = g_strdup(health_state->auth_source);
-    current_health_state.last_error = g_strdup(health_state->last_error);
-
+    current_health_generation++;
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_STATE, "health updated: gen=%" G_GUINT64_FORMAT " ok=%d ws=%d",
+              current_health_generation, health_state->http_ok, health_state->ws_connected);
     AppState new_state = compute_state();
     current_runtime_mode = runtime_mode_compute(&current_sys_state, &current_health_state);
     trigger_updates(new_state);
@@ -272,6 +322,7 @@ const char* state_get_current_string(void) {
     switch (current_state) {
         case STATE_NEEDS_SETUP: return "Setup Required";
         case STATE_NEEDS_GATEWAY_INSTALL: return "Gateway Not Installed";
+        case STATE_NEEDS_ONBOARDING: return "Onboarding Required";
         case STATE_USER_SYSTEMD_UNAVAILABLE: return "User Systemd Unavailable";
         case STATE_SYSTEM_UNSUPPORTED: return "System Service (Unsupported)";
         case STATE_CONFIG_INVALID: return "Configuration Invalid";

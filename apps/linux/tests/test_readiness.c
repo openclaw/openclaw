@@ -46,22 +46,33 @@ static void test_presenter_needs_setup(void) {
     g_assert_cmpstr(ri.classification, ==, "Setup Required");
     g_assert_nonnull(ri.missing);
     g_assert_nonnull(ri.next_action);
-    assert_contains(ri.next_action, "openclaw setup", "needs_setup.next_action");
+    assert_contains(ri.next_action, "openclaw onboard --install-daemon", "needs_setup.next_action");
 }
 
 /* ── STATE_NEEDS_GATEWAY_INSTALL ── */
 
 static void test_presenter_needs_gateway_install(void) {
     ReadinessInfo ri;
+    readiness_evaluate(STATE_NEEDS_GATEWAY_INSTALL, NULL, NULL, &ri);
+
+    g_assert_cmpstr(ri.classification, ==, "Gateway Service Missing");
+    g_assert_true(g_str_has_prefix(ri.missing, "The expected user systemd service path is not active"));
+    assert_contains(ri.next_action, "onboard --install-daemon", "needs_gateway_install.next_action");
+}
+
+/* ── STATE_NEEDS_ONBOARDING ── */
+
+static void test_presenter_needs_onboarding(void) {
+    ReadinessInfo ri;
     HealthState hs = {0};
     SystemdState sys = {0};
 
-    readiness_evaluate(STATE_NEEDS_GATEWAY_INSTALL, &hs, &sys, &ri);
+    readiness_evaluate(STATE_NEEDS_ONBOARDING, &hs, &sys, &ri);
 
-    g_assert_cmpstr(ri.classification, ==, "Gateway Not Installed");
+    g_assert_cmpstr(ri.classification, ==, "Bootstrap Incomplete");
     g_assert_nonnull(ri.missing);
     g_assert_nonnull(ri.next_action);
-    assert_contains(ri.next_action, "gateway install", "needs_install.next_action");
+    assert_contains(ri.next_action, "openclaw onboard --install-daemon", "needs_onboarding.next_action");
 }
 
 /* ── STATE_USER_SYSTEMD_UNAVAILABLE ── */
@@ -328,6 +339,7 @@ int main(int argc, char **argv) {
     /* Per-state classification tests */
     g_test_add_func("/readiness/needs_setup", test_presenter_needs_setup);
     g_test_add_func("/readiness/needs_gateway_install", test_presenter_needs_gateway_install);
+    g_test_add_func("/readiness/needs_onboarding", test_presenter_needs_onboarding);
     g_test_add_func("/readiness/systemd_unavailable", test_presenter_systemd_unavailable);
     g_test_add_func("/readiness/system_unsupported", test_presenter_system_unsupported);
     g_test_add_func("/readiness/config_invalid_with_error", test_presenter_config_invalid_with_error);

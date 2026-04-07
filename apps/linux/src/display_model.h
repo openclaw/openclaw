@@ -128,7 +128,7 @@ typedef struct {
     const char *detail;            /* path or explanation */
 } EnvironmentCheckRow;
 
-#define ENV_CHECK_MAX_ROWS 6
+#define ENV_CHECK_MAX_ROWS 8
 
 typedef struct {
     EnvironmentCheckRow rows[ENV_CHECK_MAX_ROWS];
@@ -157,4 +157,3 @@ OnboardingRoute onboarding_routing_decide(
 /* ── HTTP probe label ── */
 
 const char* http_probe_result_label(HttpProbeResult probe);
-
