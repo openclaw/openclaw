@@ -97,6 +97,7 @@ const SessionsSpawnToolSchema = Type.Object({
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
   streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
+  lightContext: Type.Optional(Type.Boolean()),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -161,6 +162,7 @@ export function createSessionsSpawnTool(
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const lightContext = params.lightContext === true;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -300,6 +302,7 @@ export function createSessionsSpawnTool(
           mode,
           cleanup,
           sandbox,
+          lightContext,
           expectsCompletionMessage: true,
           attachments,
           attachMountPath:

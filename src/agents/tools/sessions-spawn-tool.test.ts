@@ -103,6 +103,25 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("passes lightContext through to subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-light", {
+      task: "summarize this",
+      lightContext: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "summarize this",
+        lightContext: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("routes to ACP runtime when runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
