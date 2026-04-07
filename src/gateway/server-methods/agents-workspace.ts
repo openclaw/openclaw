@@ -152,7 +152,8 @@ async function workspaceSet(
 ): Promise<{ size: number; updatedAtMs: number }> {
   const data = encoding === "base64" ? Buffer.from(content, "base64") : content;
 
-  if (data.length > WORKSPACE_FILE_SIZE_LIMIT) {
+  const byteLength = data instanceof Buffer ? data.length : Buffer.byteLength(data, "utf8");
+  if (byteLength > WORKSPACE_FILE_SIZE_LIMIT) {
     throw new Error("File exceeds size limit");
   }
 
@@ -206,7 +207,7 @@ async function workspaceDelete(
 async function workspaceMkdir(
   workspaceDir: string,
   relativePath: string,
-  _parents: boolean,
+  _parents: boolean, // mkdirPathWithinRoot always creates intermediate directories (recursive: true)
 ): Promise<boolean> {
   try {
     await mkdirPathWithinRoot({
@@ -237,13 +238,15 @@ async function workspaceMove(
   await fs.access(fromFullPath);
 
   // Check destination doesn't exist (unless overwrite)
+  let destExists = false;
   try {
     await fs.access(toFullPath);
-    if (!overwrite) {
-      throw new Error("Destination already exists");
-    }
+    destExists = true;
   } catch {
     // Destination doesn't exist, ok to proceed
+  }
+  if (destExists && !overwrite) {
+    throw new Error("Destination already exists");
   }
 
   // Ensure parent directory exists
