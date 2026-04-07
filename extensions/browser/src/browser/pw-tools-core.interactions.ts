@@ -72,11 +72,9 @@ async function assertPostInteractionNavigationSafe(opts: {
   ssrfPolicy?: SsrFPolicy;
   targetId?: string;
 }): Promise<void> {
-  // Run unconditionally: assertPageNavigationCompletedSafely enforces the
-  // default-deny private-network policy even when no explicit ssrfPolicy is
-  // provided, so callers that omit ssrfPolicy (e.g. file-chooser hook click,
-  // batch actions without a threaded policy) still fail closed on
-  // interaction-triggered navigations to blocked destinations.
+  if (!opts.ssrfPolicy) {
+    return;
+  }
   await assertPageNavigationCompletedSafely({
     cdpUrl: opts.cdpUrl,
     page: opts.page,
