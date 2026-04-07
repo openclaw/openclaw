@@ -898,6 +898,55 @@ describe("runHeartbeatOnce", () => {
     },
   );
 
+  it("does not propagate AccountId into heartbeat replies when delivery account is unknown", async () => {
+    const tmpDir = await createCaseDir("hb-unknown-account");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.fn();
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "telegram",
+              to: "-100123",
+              accountId: "missing",
+            },
+          },
+        },
+        channels: { telegram: { accounts: { work: { botToken: "token" } } } },
+        session: { store: storePath },
+      };
+
+      replySpy.mockResolvedValue([{ text: "Final alert" }]);
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+          getReplyFromConfig: replySpy,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          OriginatingChannel: undefined,
+          OriginatingTo: undefined,
+          AccountId: undefined,
+          Provider: "heartbeat",
+        }),
+        expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
+        cfg,
+      );
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
     const tmpDir = await createCaseDir("hb-dup-suppress");
     const storePath = path.join(tmpDir, "sessions.json");
