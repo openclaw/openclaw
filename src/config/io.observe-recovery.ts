@@ -215,7 +215,11 @@ async function writeConfigHealthState(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {}
+  } catch (err) {
+    deps.logger.warn(
+      `Failed to write config health state: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 function writeConfigHealthStateSync(deps: ObserveRecoveryDeps, state: ConfigHealthState): void {
@@ -226,7 +230,11 @@ function writeConfigHealthStateSync(deps: ObserveRecoveryDeps, state: ConfigHeal
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {}
+  } catch (err) {
+    deps.logger.warn(
+      `Failed to write config health state: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 function getConfigHealthEntry(state: ConfigHealthState, configPath: string): ConfigHealthEntry {
@@ -365,7 +373,10 @@ async function persistClobberedConfigSnapshot(params: {
       flag: "wx",
     });
     return targetPath;
-  } catch {
+  } catch (err) {
+    params.deps.logger.warn(
+      `Failed to persist clobbered config snapshot: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -384,7 +395,10 @@ function persistClobberedConfigSnapshotSync(params: {
       flag: "wx",
     });
     return targetPath;
-  } catch {
+  } catch (err) {
+    params.deps.logger.warn(
+      `Failed to persist clobbered config snapshot: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return null;
   }
 }
@@ -457,10 +471,16 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
   try {
     await params.deps.fs.promises.copyFile(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {}
+  } catch (err) {
+    params.deps.logger.warn(
+      `Failed to restore config from backup: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   params.deps.logger.warn(
-    `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
+    restoredFromBackup
+      ? `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`
+      : `Config backup restore failed: ${params.configPath} (${suspicious.join(", ")})`,
   );
   await appendConfigAuditRecord({
     fs: params.deps.fs,
@@ -594,10 +614,16 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
   try {
     params.deps.fs.copyFileSync(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {}
+  } catch (err) {
+    params.deps.logger.warn(
+      `Failed to restore config from backup: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   params.deps.logger.warn(
-    `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
+    restoredFromBackup
+      ? `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`
+      : `Config backup restore failed: ${params.configPath} (${suspicious.join(", ")})`,
   );
   appendConfigAuditRecordSync({
     fs: params.deps.fs,
