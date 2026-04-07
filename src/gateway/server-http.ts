@@ -128,6 +128,41 @@ type HookReplayScope = {
   dispatchScope: Record<string, unknown>;
 };
 
+function normalizeReplayScopeValue(value: unknown): unknown {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => {
+      const normalized = normalizeReplayScopeValue(entry);
+      return normalized === undefined ? null : normalized;
+    });
+  }
+  if (typeof value === "object") {
+    const input = value as Record<string, unknown>;
+    const normalized: Record<string, unknown> = {};
+    for (const key of Object.keys(input).toSorted()) {
+      const next = normalizeReplayScopeValue(input[key]);
+      if (next !== undefined) {
+        normalized[key] = next;
+      }
+    }
+    return normalized;
+  }
+  return undefined;
+}
+
+function stringifyReplayScopeStable(value: unknown): string {
+  const normalized = normalizeReplayScopeValue(value);
+  return JSON.stringify(normalized ?? null);
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -431,7 +466,7 @@ export function createHooksRequestHandler(
     const idempotencyFingerprint = createHash("sha256").update(idem, "utf8").digest("hex");
     const scopeFingerprint = createHash("sha256")
       .update(
-        JSON.stringify({
+        stringifyReplayScopeStable({
           pathKey: params.pathKey,
           dispatchScope: params.dispatchScope,
         }),

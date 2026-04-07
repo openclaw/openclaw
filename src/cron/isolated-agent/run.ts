@@ -92,7 +92,7 @@ export type RunCronAgentTurnResult = {
 
 type ResolvedCronDeliveryTarget = Awaited<ReturnType<typeof resolveDeliveryTarget>>;
 
-type IsolatedDeliveryContract = "cron-owned" | "shared";
+export type IsolatedDeliveryContract = "cron-owned" | "shared";
 
 function resolveCronToolPolicy(params: {
   deliveryRequested: boolean;

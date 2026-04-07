@@ -812,6 +812,36 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("dedupes /hooks/message retries when nested metadata key order differs", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const first = await postHook(port, "/hooks/message", {
+        message: "ordered payload",
+        requestId: "msg-ordered-keys",
+        metadata: { alpha: 1, beta: 2 },
+        sender: { id: "sender-1", role: "member" },
+        conversation: { id: "conv-1", context: { a: 1, b: 2 } },
+      });
+      const firstBody = await first.text();
+      expect(first.status, firstBody).toBe(200);
+
+      const second = await postHook(port, "/hooks/message", {
+        message: "ordered payload",
+        requestId: "msg-ordered-keys",
+        metadata: { beta: 2, alpha: 1 },
+        sender: { role: "member", id: "sender-1" },
+        conversation: { context: { b: 2, a: 1 }, id: "conv-1" },
+      });
+      const secondBody = await second.text();
+      expect(second.status, secondBody).toBe(200);
+
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   test("routes /hooks/message kind=event without auto-reply dispatch", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     dispatchInboundMessageMock.mockReset();
