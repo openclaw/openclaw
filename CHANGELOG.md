@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI Codex: surface browser OAuth and device-code login failures instead of treating failed logins as empty successful auth results. Refs #80363.
 - CLI agents: carry runtime-only current-turn sender/reply context into CLI model prompts while keeping prompt-build hook input and transcript text clean.
 - Control UI: keep workspace file presence checks from treating `fs-safe` stat helper failures as missing files, restoring Agents file status for existing Windows workspace files. Fixes #79953. Thanks @lovelefeng-glitch.
+- Microsoft Foundry: report an explicit error when the Azure subscription prompt returns an id that is not present in the enabled subscription list, instead of continuing from an unsafe subscription assertion. (#62742) Thanks @oliviareid-svg.
 - fix(matrix): gate name-based allowlist resolution [AI]. (#79007) Thanks @pgondhi987.
 - Slack: include the bot's own root/parent message in new thread sessions so in-thread replies reach the agent with the parent text the user is responding to, instead of only `reply_to_id` metadata. Fixes #79338. Thanks @sxxtony.
 - Docker: keep image builds on the source pnpm workspace policy so pnpm 11 can prune production dependencies without a Docker-only workspace rewrite.
