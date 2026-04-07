@@ -627,7 +627,6 @@ export const RetryConfigSchema = z
     maxDelayMs: z.number().int().min(0).optional(),
     jitter: z.number().min(0).max(1).optional(),
     backoffFactor: z.number().min(1).optional(),
-    retryOnStatus: z.array(z.number().int().min(100).max(599)).optional(),
   })
   .strict()
   .optional();

@@ -95,6 +95,7 @@ function buildRetryAwareFetch(
       async () => {
         const response = await baseFetch(input, init);
         if (!response.ok && statusCodes.includes(response.status)) {
+          await response.body?.cancel().catch(() => undefined);
           const err = new Error(
             `Provider ${provider} returned HTTP ${response.status}`,
           ) as Error & { status: number };
