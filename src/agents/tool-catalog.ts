@@ -73,6 +73,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     profiles: ["coding"],
   },
   {
+    id: "list",
+    label: "list",
+    description: "List directory contents",
+    sectionId: "fs",
+    profiles: ["coding"],
+  },
+  {
     id: "apply_patch",
     label: "apply_patch",
     description: "Patch files",
