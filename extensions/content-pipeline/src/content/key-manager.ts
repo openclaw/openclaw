@@ -127,16 +127,14 @@ export class KeyManager {
 
   /** Public method: generate a fresh Google API key on demand (called by LLM failover) */
   async generateNewGoogleKey(): Promise<void> {
-    if (!this.config.google?.serviceAccountPath) {
-      throw new Error("No Google service account configured for auto key generation");
+    const sa = this.resolveServiceAccount();
+    if (!sa) {
+      throw new Error(
+        "No Google service account configured (set GOOGLE_SA_CLIENT_EMAIL + GOOGLE_SA_PRIVATE_KEY_B64 in .env, or provide serviceAccountPath)",
+      );
     }
 
-    const { serviceAccountPath, projectIds } = this.config.google;
-    if (!existsSync(serviceAccountPath)) {
-      throw new Error(`Service account not found: ${serviceAccountPath}`);
-    }
-
-    const sa = JSON.parse(readFileSync(serviceAccountPath, "utf-8"));
+    const projectIds = this.config.google?.projectIds ?? [process.env.GOOGLE_SA_PROJECT_ID ?? ""];
     const token = await this.getGoogleOAuthToken(sa);
 
     // Try each project until one works
@@ -163,16 +161,36 @@ export class KeyManager {
 
   // ── Google Cloud API Key Generation ──
 
-  private async generateGoogleKeys(): Promise<void> {
-    const { serviceAccountPath, projectIds, maxKeysPerProject = 2 } = this.config.google!;
+  /** Resolve service account from env vars or JSON file */
+  private resolveServiceAccount(): { client_email: string; private_key: string } | null {
+    // Try env vars first
+    const email = process.env.GOOGLE_SA_CLIENT_EMAIL;
+    const keyB64 = process.env.GOOGLE_SA_PRIVATE_KEY_B64;
+    if (email && keyB64) {
+      return { client_email: email, private_key: Buffer.from(keyB64, "base64").toString("utf-8") };
+    }
 
-    if (!existsSync(serviceAccountPath)) {
-      console.warn(`  🔑 Google service account not found: ${serviceAccountPath}`);
+    // Fallback to JSON file
+    const path = this.config.google?.serviceAccountPath;
+    if (path && existsSync(path)) {
+      return JSON.parse(readFileSync(path, "utf-8"));
+    }
+
+    return null;
+  }
+
+  private async generateGoogleKeys(): Promise<void> {
+    const sa = this.resolveServiceAccount();
+    if (!sa) {
+      console.warn("  🔑 No Google service account configured");
       return;
     }
 
+    const projectIds =
+      this.config.google?.projectIds ?? [process.env.GOOGLE_SA_PROJECT_ID ?? ""].filter(Boolean);
+    const maxKeysPerProject = this.config.google?.maxKeysPerProject ?? 2;
+
     try {
-      const sa = JSON.parse(readFileSync(serviceAccountPath, "utf-8"));
       const token = await this.getGoogleOAuthToken(sa);
 
       for (const projectId of projectIds) {

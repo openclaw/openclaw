@@ -13,11 +13,25 @@ const TOKEN_PATH = join(
 );
 const SCOPES = ["https://www.googleapis.com/auth/youtube.upload"];
 
-async function getAuthClient(clientSecretsPath: string) {
-  const secrets = JSON.parse(await readFile(clientSecretsPath, "utf-8"));
-  const { client_id, client_secret, redirect_uris } = secrets.installed ?? secrets.web;
+async function getAuthClient(clientSecretsPath?: string) {
+  let client_id = process.env.YOUTUBE_CLIENT_ID ?? "";
+  let client_secret = process.env.YOUTUBE_CLIENT_SECRET ?? "";
+  let redirect_uri = "http://localhost";
 
-  const oauth2 = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+  // Fallback to JSON file if env vars not set
+  if (!client_id && clientSecretsPath) {
+    const secrets = JSON.parse(await readFile(clientSecretsPath, "utf-8"));
+    const cfg = secrets.installed ?? secrets.web;
+    client_id = cfg.client_id;
+    client_secret = cfg.client_secret;
+    redirect_uri = cfg.redirect_uris?.[0] ?? redirect_uri;
+  }
+
+  if (!client_id || !client_secret) {
+    throw new Error("Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in .env");
+  }
+
+  const oauth2 = new google.auth.OAuth2(client_id, client_secret, redirect_uri);
 
   // Check for saved token
   if (existsSync(TOKEN_PATH)) {
