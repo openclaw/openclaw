@@ -633,6 +633,27 @@ describe("local embedding normalization", () => {
     }
   });
 
+  it("retries model path resolution after a transient resolveModelFile failure", async () => {
+    const resolveModelFileMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient model resolution failure"))
+      .mockResolvedValueOnce("/fake/model.gguf");
+
+    mockSingleLocalEmbeddingVector([1, 0, 0, 0], resolveModelFileMock);
+
+    const result = await createLocalProviderForTest();
+    const provider = requireProvider(result);
+
+    await expect(provider.embedQuery("first")).rejects.toThrow("transient model resolution failure");
+
+    const embedding = await provider.embedQuery("second");
+
+    expect(embedding).toEqual([1, 0, 0, 0]);
+    expect(resolveModelFileMock).toHaveBeenCalledTimes(2);
+    expect(resolveModelFileMock).toHaveBeenNthCalledWith(1, DEFAULT_LOCAL_MODEL, undefined);
+    expect(resolveModelFileMock).toHaveBeenNthCalledWith(2, DEFAULT_LOCAL_MODEL, undefined);
+  });
+
   it("retries GPU-fit initialization once after a VRAM-style failure", async () => {
     const gpuContext = {
       getEmbeddingFor: vi.fn().mockResolvedValue({

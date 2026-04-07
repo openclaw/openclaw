@@ -134,7 +134,12 @@ export async function createLocalEmbeddingProvider(
 
   const getResolvedModelPath = async (): Promise<string> => {
     if (!resolvedModelPathPromise) {
-      resolvedModelPathPromise = resolveModelFile(modelPath, modelCacheDir || undefined);
+      resolvedModelPathPromise = resolveModelFile(modelPath, modelCacheDir || undefined).catch(
+        (err) => {
+          resolvedModelPathPromise = null;
+          throw err;
+        },
+      );
     }
     return resolvedModelPathPromise;
   };
