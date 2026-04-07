@@ -45,6 +45,7 @@ import {
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../utils.js";
+import type { GatewayMemoryProbe } from "./doctor-gateway-health.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./doctor-workspace.js";
 import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
@@ -414,17 +415,7 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
 export async function noteMemorySearchHealth(
   cfg: OpenClawConfig,
   opts?: {
-    gatewayMemoryProbe?: {
-      checked: boolean;
-      ready: boolean;
-      error?: string;
-      skipped?: boolean;
-      fts?: {
-        enabled: boolean;
-        available: boolean;
-        error?: string;
-      };
-    };
+    gatewayMemoryProbe?: GatewayMemoryProbe;
     noteFn?: typeof note;
     includeWorkspaceMemoryHealth?: boolean;
     skipQmdBinaryProbe?: boolean;

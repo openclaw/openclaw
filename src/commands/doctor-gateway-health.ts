@@ -22,7 +22,7 @@ import {
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import type { StatusSummary } from "./status.types.js";
 
-type GatewayMemoryProbe = {
+export type GatewayMemoryProbe = {
   checked: boolean;
   ready: boolean;
   error?: string;
