@@ -336,21 +336,27 @@ describe("loadDotEnv", () => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            "OPENCLAW_BROWSER_CONTROL_MODULE=data:text/javascript,boom",
             "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
             "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
             "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+            "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1",
           ].join("\n"),
         );
 
+        delete process.env.OPENCLAW_BROWSER_CONTROL_MODULE;
         delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
+        expect(process.env.OPENCLAW_BROWSER_CONTROL_MODULE).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER).toBeUndefined();
       });
     });
   });
@@ -549,22 +555,28 @@ describe("loadCliDotEnv", () => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            "OPENCLAW_BROWSER_CONTROL_MODULE=data:text/javascript,boom",
             "OPENCLAW_BUNDLED_HOOKS_DIR=./attacker-hooks",
             "OPENCLAW_BUNDLED_PLUGINS_DIR=./attacker-plugins",
             "OPENCLAW_BUNDLED_SKILLS_DIR=./attacker-skills",
+            "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1",
           ].join("\n"),
         );
 
+        delete process.env.OPENCLAW_BROWSER_CONTROL_MODULE;
         delete process.env.OPENCLAW_BUNDLED_HOOKS_DIR;
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+        delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
         loadCliDotEnv({ quiet: true });
 
+        expect(process.env.OPENCLAW_BROWSER_CONTROL_MODULE).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_HOOKS_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_SKILLS_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER).toBeUndefined();
       });
     });
   });
