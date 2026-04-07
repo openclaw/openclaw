@@ -24,6 +24,7 @@
     "CHANGELOG.md",
     "LICENSE",
     "openclaw.mjs",
+    "windows-esm-fix.mjs",
     "README.md",
     "assets/",
     "dist/",

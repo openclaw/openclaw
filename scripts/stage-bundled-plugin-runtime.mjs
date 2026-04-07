@@ -12,7 +12,13 @@ function relativeSymlinkTarget(sourcePath, targetPath) {
   return relativeTarget || ".";
 }
 
-function ensureSymlink(targetValue, targetPath, type) {
+function copyFallback(targetValue, targetPath, resolveBase) {
+  const base = resolveBase ?? path.dirname(targetPath);
+  const resolvedSource = path.resolve(base, targetValue);
+  fs.copyFileSync(resolvedSource, targetPath);
+}
+
+function ensureSymlink(targetValue, targetPath, type, resolveBase) {
   try {
     fs.symlinkSync(targetValue, targetPath, type);
     return;
@@ -20,8 +26,7 @@ function ensureSymlink(targetValue, targetPath, type) {
     if (error?.code === "EPERM" && process.platform === "win32") {
       // File symlinks on Windows require Developer Mode or admin privileges.
       // Fall back to copying the file.
-      const resolvedSource = path.resolve(path.dirname(targetPath), targetValue);
-      fs.copyFileSync(resolvedSource, targetPath);
+      copyFallback(targetValue, targetPath, resolveBase);
       return;
     }
     if (error?.code !== "EEXIST") {
@@ -42,8 +47,7 @@ function ensureSymlink(targetValue, targetPath, type) {
     fs.symlinkSync(targetValue, targetPath, type);
   } catch (error) {
     if (error?.code === "EPERM" && process.platform === "win32") {
-      const resolvedSource = path.resolve(path.dirname(targetPath), targetValue);
-      fs.copyFileSync(resolvedSource, targetPath);
+      copyFallback(targetValue, targetPath, resolveBase);
       return;
     }
     throw error;
@@ -101,7 +105,9 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
     }
 
     if (dirent.isSymbolicLink()) {
-      ensureSymlink(fs.readlinkSync(sourcePath), targetPath);
+      // readlink value is relative to sourcePath's directory, pass it as resolveBase
+      // so the EPERM copy fallback resolves from the correct location.
+      ensureSymlink(fs.readlinkSync(sourcePath), targetPath, undefined, path.dirname(sourcePath));
       continue;
     }
 
