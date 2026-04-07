@@ -680,8 +680,12 @@ export async function startGatewayServer(
     );
   const resolveCurrentSharedGatewaySessionGeneration = () =>
     resolveSharedGatewaySessionGeneration(getResolvedAuth());
+  let currentSharedGatewaySessionGeneration = resolveCurrentSharedGatewaySessionGeneration();
   let requiredSharedGatewaySessionGeneration: string | undefined | null = null;
-  const getRequiredSharedGatewaySessionGeneration = () => requiredSharedGatewaySessionGeneration;
+  const getRequiredSharedGatewaySessionGeneration = () =>
+    requiredSharedGatewaySessionGeneration === null
+      ? currentSharedGatewaySessionGeneration
+      : requiredSharedGatewaySessionGeneration;
   let hooksConfig = runtimeConfig.hooksConfig;
   let hookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
@@ -1262,10 +1266,18 @@ export async function startGatewayServer(
         if (!active) {
           throw new Error("Secrets runtime snapshot is not active.");
         }
+        const previousSharedGatewaySessionGeneration = currentSharedGatewaySessionGeneration;
         const prepared = await activateRuntimeSecrets(active.sourceConfig, {
           reason: "reload",
           activate: true,
         });
+        const nextSharedGatewaySessionGeneration = resolveSharedGatewaySessionGenerationForConfig(
+          prepared.config,
+        );
+        currentSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+        if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
+          disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
+        }
         return { warningCount: prepared.warnings.length };
       },
       resolveSecrets: async ({ commandName, targetIds }) => {
@@ -1529,8 +1541,7 @@ export async function startGatewayServer(
             readSnapshot: readConfigFileSnapshot,
             subscribeToWrites: registerConfigWriteListener,
             onHotReload: async (plan, nextConfig) => {
-              const previousSharedGatewaySessionGeneration =
-                resolveCurrentSharedGatewaySessionGeneration();
+              const previousSharedGatewaySessionGeneration = currentSharedGatewaySessionGeneration;
               const previousSnapshot = getActiveSecretsRuntimeSnapshot();
               const prepared = await activateRuntimeSecrets(nextConfig, {
                 reason: "reload",
@@ -1544,10 +1555,12 @@ export async function startGatewayServer(
                 } else {
                   clearSecretsRuntimeSnapshot();
                 }
+                currentSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
                 throw err;
               }
               const nextSharedGatewaySessionGeneration =
                 resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+              currentSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
               if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
                 disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
               }
@@ -1555,8 +1568,7 @@ export async function startGatewayServer(
             onRestart: async (plan, nextConfig) => {
               const previousRequiredSharedGatewaySessionGeneration =
                 requiredSharedGatewaySessionGeneration;
-              const previousSharedGatewaySessionGeneration =
-                resolveCurrentSharedGatewaySessionGeneration();
+              const previousSharedGatewaySessionGeneration = currentSharedGatewaySessionGeneration;
               const optimisticSharedGatewaySessionGeneration =
                 resolveSharedGatewaySessionGenerationForConfig(nextConfig);
               if (
