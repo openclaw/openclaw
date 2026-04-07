@@ -61,6 +61,10 @@ function getFallbackGatewayContext(): GatewayRequestContext | undefined {
   return resolved ?? fallbackGatewayContextState.context;
 }
 
+export function getFallbackGatewayContextForHttpRpc(): GatewayRequestContext | undefined {
+  return getFallbackGatewayContext();
+}
+
 type PluginSubagentOverridePolicy = {
   allowModelOverride: boolean;
   allowAnyModel: boolean;

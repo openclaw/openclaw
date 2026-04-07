@@ -6,8 +6,9 @@ import { AuthRateLimiter } from "./auth-rate-limit.js";
 import { sendJson } from "./http-common.js";
 import { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } from "./http-utils.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { getFallbackGatewayContext } from "./server-plugins.js";
 import { GATEWAY_CLIENT_MODES } from "../utils/message-channel.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
+import { getFallbackGatewayContextForHttpRpc } from "./server-plugins.js";
 
 interface JsonRpcRequest {
   jsonrpc: string;
@@ -144,7 +145,7 @@ export async function handleHttpRpcEndpoint(
   }
 
   // Get the real gateway context
-  const context = getFallbackGatewayContext();
+  const context = getFallbackGatewayContextForHttpRpc();
   if (!context) {
     sendJson(res, 500, createJsonRpcError(undefined, -32603, "Internal error: Gateway context not available"));
     return true;
@@ -214,10 +215,11 @@ async function handleSingleRequest(
   requestAuth: Awaited<ReturnType<typeof authorizeGatewayHttpRequestOrReply>>
 ): Promise<JsonRpcResponse> {
   // Create a client with appropriate scopes based on the auth
-  // Since we don't have access to the original req object here, we'll use a conservative approach
   // For authenticated requests, use default operator scopes; for unauthenticated requests, use no scopes
   const client = {
     connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
       scopes: requestAuth ? ["operator.read", "operator.write"] : [],
       client: {
         id: "http-rpc", // Using a custom client ID for HTTP RPC
@@ -257,6 +259,8 @@ async function handleSingleRequest(
     // Call the gateway handler with the real context
     handleGatewayRequest({
       req: {
+        type: "req",
+        id: request.id ? String(request.id) : "http-rpc-" + Date.now(),
         method: request.method,
         params: request.params,
       },
