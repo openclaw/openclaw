@@ -1212,6 +1212,30 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("reports memory embeddings are ready");
   });
 
+  it("warns when gateway probe reports FTS unavailable", async () => {
+    const noteFn = vi.fn();
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      local: {},
+      remote: { apiKey: "from-config" },
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: true,
+        fts: { enabled: true, available: false, error: "no such module: fts5" },
+      },
+      noteFn,
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    const message = noteFn.mock.calls[0]?.[0] as string;
+    expect(message).toContain("FTS5");
+    expect(message).toContain("no such module: fts5");
+  });
+
   it("uses model configure hint when gateway probe is unavailable and API key is missing", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "gemini",
