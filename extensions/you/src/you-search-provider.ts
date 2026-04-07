@@ -57,6 +57,7 @@ export function createYouWebSearchProvider(): WebSearchProviderPlugin {
     placeholder: "ydc-...",
     signupUrl: "https://you.com/platform",
     docsUrl: "https://docs.openclaw.ai/tools/you",
+    onboardingScopes: ["text-inference"],
     // After Tavily (70), before DuckDuckGo (100)
     autoDetectOrder: 80,
     credentialPath: "plugins.entries.you.config.webSearch.apiKey",

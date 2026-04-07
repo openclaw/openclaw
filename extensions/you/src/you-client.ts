@@ -380,7 +380,18 @@ export async function runYouContents(params: YouContentsParams): Promise<Record<
     ...(r.html
       ? { html: wrapExternalContent(r.html, { source: "web_fetch", includeWarning: false }) }
       : {}),
-    ...(r.metadata ? { metadata: r.metadata } : {}),
+    ...(r.metadata
+      ? {
+          metadata: Object.fromEntries(
+            Object.entries(r.metadata).map(([k, v]) => [
+              k,
+              typeof v === "string"
+                ? wrapExternalContent(v, { source: "web_fetch", includeWarning: false })
+                : v,
+            ]),
+          ),
+        }
+      : {}),
   }));
 
   const result: Record<string, unknown> = {
