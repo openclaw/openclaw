@@ -63,7 +63,7 @@ describe("applyAuthChoice (moonshot)", () => {
       config: {
         agents: {
           defaults: {
-            model: { primary: "anthropic/claude-opus-4-5" },
+            model: { primary: "anthropic/claude-opus-4-6" },
           },
         },
       },
@@ -74,7 +74,7 @@ describe("applyAuthChoice (moonshot)", () => {
       expect.objectContaining({ message: "Enter Moonshot API key (.cn)" }),
     );
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
-      "anthropic/claude-opus-4-5",
+      "anthropic/claude-opus-4-6",
     );
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(result.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");

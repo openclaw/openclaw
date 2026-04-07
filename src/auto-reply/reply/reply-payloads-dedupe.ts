@@ -1,9 +1,9 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
-import { parseExplicitTargetForChannel } from "../../channels/plugins/target-parsing.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 
 export function filterMessagingToolDuplicates(params: {
@@ -61,12 +61,8 @@ export function filterMessagingToolMediaDuplicates(params: {
   });
 }
 
-const PROVIDER_ALIAS_MAP: Record<string, string> = {
-  lark: "feishu",
-};
-
 function normalizeProviderForComparison(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -75,11 +71,11 @@ function normalizeProviderForComparison(value?: string): string | undefined {
   if (normalizedChannel) {
     return normalizedChannel;
   }
-  return PROVIDER_ALIAS_MAP[lowered] ?? lowered;
+  return lowered;
 }
 
 function normalizeThreadIdForComparison(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -106,32 +102,15 @@ function targetsMatchForSuppression(params: {
   targetKey: string;
   targetThreadId?: string;
 }): boolean {
-  if (params.provider !== "telegram") {
-    return params.targetKey === params.originTarget;
+  const pluginMatch = getChannelPlugin(params.provider)?.outbound?.targetsMatchForReplySuppression;
+  if (pluginMatch) {
+    return pluginMatch({
+      originTarget: params.originTarget,
+      targetKey: params.targetKey,
+      targetThreadId: normalizeThreadIdForComparison(params.targetThreadId),
+    });
   }
-
-  const origin = parseExplicitTargetForChannel("telegram", params.originTarget);
-  const target = parseExplicitTargetForChannel("telegram", params.targetKey);
-  if (!origin || !target) {
-    return params.targetKey === params.originTarget;
-  }
-  const explicitTargetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
-  const targetThreadId =
-    explicitTargetThreadId ?? (target.threadId != null ? String(target.threadId) : undefined);
-  const originThreadId = origin.threadId != null ? String(origin.threadId) : undefined;
-  if (origin.to.trim().toLowerCase() !== target.to.trim().toLowerCase()) {
-    return false;
-  }
-  if (originThreadId && targetThreadId != null) {
-    return originThreadId === targetThreadId;
-  }
-  if (originThreadId && targetThreadId == null) {
-    return false;
-  }
-  if (!originThreadId && targetThreadId != null) {
-    return false;
-  }
-  return true;
+  return params.targetKey === params.originTarget;
 }
 
 export function shouldSuppressMessagingToolReplies(params: {

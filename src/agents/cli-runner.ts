@@ -1,6 +1,7 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import type { RunCliAgentParams } from "./cli-runner/types.js";
@@ -33,6 +34,7 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
                 cliSessionBinding: {
                   sessionId: resultParams.effectiveCliSessionId,
                   ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
+                  ...(context.authEpoch ? { authEpoch: context.authEpoch } : {}),
                   ...(context.extraSystemPromptHash
                     ? { extraSystemPromptHash: context.extraSystemPromptHash }
                     : {}),
@@ -72,9 +74,9 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
         }
         throw err;
       }
-      const message = err instanceof Error ? err.message : String(err);
-      if (isFailoverErrorMessage(message)) {
-        const reason = classifyFailoverReason(message) ?? "unknown";
+      const message = formatErrorMessage(err);
+      if (isFailoverErrorMessage(message, { provider: params.provider })) {
+        const reason = classifyFailoverReason(message, { provider: params.provider }) ?? "unknown";
         const status = resolveFailoverStatus(reason);
         throw new FailoverError(message, {
           reason,

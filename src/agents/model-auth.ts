@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -26,7 +27,6 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
-  OLLAMA_LOCAL_AUTH_MARKER,
 } from "./model-auth-markers.js";
 import {
   requireApiKey,
@@ -38,6 +38,7 @@ import { normalizeProviderId } from "./model-selection.js";
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
+export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 const log = createSubsystemLogger("model-auth");
 function resolveProviderConfig(
@@ -111,6 +112,18 @@ export function hasUsableCustomProviderApiKey(
   env?: NodeJS.ProcessEnv,
 ): boolean {
   return Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
+}
+
+export function shouldPreferExplicitConfigApiKeyAuth(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): boolean {
+  const providerConfig = resolveProviderConfig(cfg, provider);
+  return (
+    resolveProviderAuthOverride(cfg, provider) === "api-key" &&
+    providerConfig !== undefined &&
+    hasExplicitProviderApiKeyConfig(providerConfig)
+  );
 }
 
 function resolveProviderAuthOverride(
@@ -305,13 +318,23 @@ function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
   return { mode: "aws-sdk", source: "aws-sdk default chain" };
 }
 
-function shouldDeferSyntheticOllamaProfileAuth(params: {
+function shouldDeferSyntheticProfileAuth(params: {
+  cfg: OpenClawConfig | undefined;
   provider: string;
   resolvedApiKey: string | undefined;
 }): boolean {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   return (
-    normalizeProviderId(params.provider) === "ollama" &&
-    params.resolvedApiKey?.trim() === OLLAMA_LOCAL_AUTH_MARKER
+    shouldDeferProviderSyntheticProfileAuthWithPlugin({
+      provider: params.provider,
+      config: params.cfg,
+      context: {
+        config: params.cfg,
+        provider: params.provider,
+        providerConfig,
+        resolvedApiKey: params.resolvedApiKey,
+      },
+    }) === true
   );
 }
 
@@ -325,6 +348,7 @@ export async function resolveApiKeyForProvider(params: {
   /** When true, treat profileId as a user-locked selection that must not be
    *  silently overridden by env/config credentials (e.g. ollama-local). */
   lockedProfile?: boolean;
+  credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
@@ -346,14 +370,15 @@ export async function resolveApiKeyForProvider(params: {
       source: `profile:${profileId}`,
       mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
     };
-    // When the resolved key is the synthetic ollama-local marker and the
-    // caller has not locked this profile, fall through to env/config
-    // resolution so real cloud credentials take precedence. The auth
+    // When the resolved key is a provider-owned synthetic profile marker and
+    // the caller has not locked this profile, fall through to env/config
+    // resolution so provider-owned real credentials take precedence. The auth
     // controller iterates profile candidates and passes each as an explicit
     // profileId, so we cannot assume explicit === user-locked.
     if (
       !params.lockedProfile &&
-      shouldDeferSyntheticOllamaProfileAuth({
+      shouldDeferSyntheticProfileAuth({
+        cfg,
         provider,
         resolvedApiKey: resolved.apiKey,
       })
@@ -368,7 +393,32 @@ export async function resolveApiKeyForProvider(params: {
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
   }
+  if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
+    const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+    if (customKey) {
+      return {
+        apiKey: customKey.apiKey,
+        source: customKey.source,
+        mode: "api-key",
+      };
+    }
+  }
 
+  if (params.credentialPrecedence === "env-first") {
+    const envResolved = resolveEnvApiKey(provider);
+    if (envResolved) {
+      const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
+        ? "oauth"
+        : "api-key";
+      return {
+        apiKey: envResolved.apiKey,
+        source: envResolved.source,
+        mode: resolvedMode,
+      };
+    }
+  }
+
+  const providerConfig = resolveProviderConfig(cfg, provider);
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -395,7 +445,8 @@ export async function resolveApiKeyForProvider(params: {
           mode: resolvedMode,
         };
         if (
-          shouldDeferSyntheticOllamaProfileAuth({
+          shouldDeferSyntheticProfileAuth({
+            cfg,
             provider,
             resolvedApiKey: resolved.apiKey,
           })
@@ -443,7 +494,6 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  const providerConfig = resolveProviderConfig(cfg, provider);
   const hasInlineConfiguredModels =
     Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
   const owningPluginIds = !hasInlineConfiguredModels
@@ -599,6 +649,7 @@ export async function getApiKeyForModel(params: {
   store?: AuthProfileStore;
   agentDir?: string;
   lockedProfile?: boolean;
+  credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
@@ -608,6 +659,7 @@ export async function getApiKeyForModel(params: {
     store: params.store,
     agentDir: params.agentDir,
     lockedProfile: params.lockedProfile,
+    credentialPrecedence: params.credentialPrecedence,
   });
 }
 
