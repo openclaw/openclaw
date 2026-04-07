@@ -26,16 +26,32 @@ import { parseSlackTarget } from "./targets.js";
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type SlackOriginTarget = { to: string; threadId?: string };
 
-function extractSlackSessionKind(
-  sessionKey?: string | null,
-): "direct" | "channel" | "group" | null {
+type SlackSessionTarget = {
+  kind: "direct" | "channel" | "group";
+  id: string;
+  threadId?: string;
+};
+
+function extractSlackSessionTarget(sessionKey?: string | null): SlackSessionTarget | null {
   if (!sessionKey) {
     return null;
   }
-  const match = sessionKey.match(/slack:(direct|channel|group):/i);
-  return match?.[1]
-    ? (normalizeLowercaseStringOrEmpty(match[1]) as "direct" | "channel" | "group")
-    : null;
+  const match = sessionKey.match(/slack:(direct|channel|group):([^:]+)(?::thread:(.+))?$/i);
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+  const threadId = match[3]?.trim() || undefined;
+  return {
+    kind: match[1].toLowerCase() as "direct" | "channel" | "group",
+    id: match[2].trim().toUpperCase(),
+    threadId,
+  };
+}
+
+function extractSlackSessionKind(
+  sessionKey?: string | null,
+): "direct" | "channel" | "group" | null {
+  return extractSlackSessionTarget(sessionKey)?.kind ?? null;
 }
 
 function normalizeComparableTarget(value: string): string {
@@ -84,10 +100,27 @@ function resolveSessionSlackOriginTarget(sessionTarget: {
     to: sessionTarget.to,
     threadId:
       typeof sessionTarget.threadId === "string"
-        ? sessionTarget.threadId
+        ? sessionTarget.threadId.trim() || undefined
         : typeof sessionTarget.threadId === "number"
           ? String(sessionTarget.threadId)
           : undefined,
+  };
+}
+
+function resolveSlackFallbackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
+  const sessionTarget = extractSlackSessionTarget(request.request.sessionKey ?? undefined);
+  if (!sessionTarget) {
+    return null;
+  }
+  const parsed = parseSlackTarget(sessionTarget.id, {
+    defaultKind: sessionTarget.kind === "direct" ? "user" : "channel",
+  });
+  if (!parsed) {
+    return null;
+  }
+  return {
+    to: `${parsed.kind}:${parsed.id}`,
+    threadId: sessionTarget.threadId,
   };
 }
 
@@ -109,6 +142,7 @@ const resolveSlackOriginTarget = createChannelNativeOriginTargetResolver({
   resolveTurnSourceTarget: resolveTurnSourceSlackOriginTarget,
   resolveSessionTarget: resolveSessionSlackOriginTarget,
   targetsMatch: slackTargetsMatch,
+  resolveFallbackTarget: resolveSlackFallbackOriginTarget,
 });
 
 const resolveSlackApproverDmTargets = createChannelApproverDmTargetResolver({

@@ -69,7 +69,7 @@ describe("matrix native approval adapter", () => {
       preferredSurface: "both",
       supportsOriginSurface: true,
       supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: false,
+      notifyOriginWhenDmOnly: true,
     });
   });
 
@@ -297,7 +297,7 @@ describe("matrix native approval adapter", () => {
       preferredSurface: "both",
       supportsOriginSurface: true,
       supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: false,
+      notifyOriginWhenDmOnly: true,
     });
   });
 
@@ -323,7 +323,7 @@ describe("matrix native approval adapter", () => {
       preferredSurface: "both",
       supportsOriginSurface: true,
       supportsApproverDmSurface: true,
-      notifyOriginWhenDmOnly: false,
+      notifyOriginWhenDmOnly: true,
     });
   });
 });

@@ -129,7 +129,7 @@ describe("exec approval session target", () => {
         channel: "whatsapp",
         to: "+15555550123",
         accountId: "work",
-        threadId: 1739201675,
+        threadId: "1739201675.123",
       });
     });
   });
@@ -153,7 +153,7 @@ describe("exec approval session target", () => {
         channel: "discord",
         to: "channel:123",
         accountId: "work",
-        threadId: 55,
+        threadId: "55",
       },
     },
     {
@@ -189,6 +189,29 @@ describe("exec approval session target", () => {
       });
     },
   );
+
+  it("preserves string thread ids from the session store", () => {
+    withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
+        "agent:main:main": {
+          sessionId: "main",
+          updatedAt: 1,
+          lastChannel: "discord",
+          lastTo: "channel:123",
+          lastAccountId: " Work ",
+          lastThreadId: "777888999111222333",
+        },
+      });
+
+      expect(expectResolvedSessionTarget(cfg, baseRequest)).toEqual({
+        channel: "discord",
+        to: "channel:123",
+        accountId: "work",
+        threadId: "777888999111222333",
+      });
+    });
+  });
 
   it("prefers explicit turn-source account bindings when session store is missing", () => {
     const cfg = {} as OpenClawConfig;

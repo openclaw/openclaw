@@ -8,7 +8,6 @@ import { createChannelNativeOriginTargetResolver } from "openclaw/plugin-sdk/app
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
 import { getMatrixApprovalAuthApprovers, matrixApprovalAuth } from "./approval-auth.js";
@@ -204,6 +203,7 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
   resolveSuppressionAccountId,
   resolveOriginTarget: resolveMatrixOriginTarget,
   resolveApproverDmTargets: resolveMatrixApproverDmTargets,
+  notifyOriginWhenDmOnly: true,
   nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
     eventKinds: ["exec", "plugin"],
     isConfigured: ({ cfg, accountId }) =>

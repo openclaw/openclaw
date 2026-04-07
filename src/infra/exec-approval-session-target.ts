@@ -19,7 +19,7 @@ export type ExecApprovalSessionTarget = {
   channel?: string;
   to: string;
   accountId?: string;
-  threadId?: number;
+  threadId?: string | number;
 };
 
 type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
@@ -34,15 +34,15 @@ type ApprovalRequestOriginTargetResolver<TTarget> = {
   resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
 };
 
-function normalizeOptionalThreadId(value?: string | number | null): number | undefined {
+function normalizeOptionalThreadValue(value?: string | number | null): string | number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = Number.parseInt(value, 10);
-  return Number.isFinite(normalized) ? normalized : undefined;
+  const normalized = value.trim();
+  return normalized ? normalized : undefined;
 }
 
 function isExecApprovalRequest(request: ApprovalRequestLike): request is ExecApprovalRequest {
@@ -99,7 +99,7 @@ export function resolveExecApprovalSessionTarget(params: {
     turnSourceChannel: normalizeOptionalString(params.turnSourceChannel),
     turnSourceTo: normalizeOptionalString(params.turnSourceTo),
     turnSourceAccountId: normalizeOptionalString(params.turnSourceAccountId),
-    turnSourceThreadId: normalizeOptionalThreadId(params.turnSourceThreadId),
+    turnSourceThreadId: normalizeOptionalThreadValue(params.turnSourceThreadId),
   });
   if (!target.to) {
     return null;
@@ -109,7 +109,7 @@ export function resolveExecApprovalSessionTarget(params: {
     channel: normalizeOptionalString(target.channel),
     to: target.to,
     accountId: normalizeOptionalString(target.accountId),
-    threadId: normalizeOptionalThreadId(target.threadId),
+    threadId: normalizeOptionalThreadValue(target.threadId),
   };
 }
 

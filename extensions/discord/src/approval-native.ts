@@ -28,6 +28,14 @@ export function extractDiscordChannelId(sessionKey?: string | null): string | nu
   return match ? match[1] : null;
 }
 
+export function extractDiscordThreadId(sessionKey?: string | null): string | null {
+  if (!sessionKey) {
+    return null;
+  }
+  const match = sessionKey.match(/discord:(?:channel|group):\d+:thread:(\d+)/);
+  return match ? match[1] : null;
+}
+
 function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
   if (!sessionKey) {
     return null;
@@ -52,6 +60,17 @@ function normalizeDiscordOriginChannelId(value?: string | null): string | null {
     return prefixed[1];
   }
   return /^\d+$/.test(trimmed) ? trimmed : null;
+}
+
+function normalizeDiscordThreadId(value?: string | number | null): string | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return /^\d+$/.test(normalized) ? normalized : undefined;
 }
 
 export function shouldHandleDiscordApprovalRequest(params: {
@@ -108,12 +127,16 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
       const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
       const rawTurnSourceTo = request.request.turnSourceTo?.trim() || "";
       const turnSourceTo = normalizeDiscordOriginChannelId(rawTurnSourceTo);
+      const threadId =
+        normalizeDiscordThreadId(request.request.turnSourceThreadId) ??
+        extractDiscordThreadId(request.request.sessionKey?.trim() || null) ??
+        undefined;
       const hasExplicitOriginTarget = /^(?:channel|group):/i.test(rawTurnSourceTo);
       if (turnSourceChannel !== "discord" || !turnSourceTo || sessionKind === "dm") {
         return null;
       }
       return hasExplicitOriginTarget || sessionKind === "channel" || sessionKind === "group"
-        ? { to: turnSourceTo }
+        ? { to: turnSourceTo, threadId }
         : null;
     },
     resolveSessionTarget: (sessionTarget, request) => {
@@ -122,16 +145,30 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
         return null;
       }
       const targetTo = normalizeDiscordOriginChannelId(sessionTarget.to);
-      return targetTo ? { to: targetTo } : null;
+      return targetTo
+        ? {
+            to: targetTo,
+            threadId:
+              normalizeDiscordThreadId(sessionTarget.threadId) ??
+              extractDiscordThreadId(request.request.sessionKey?.trim() || null) ??
+              undefined,
+          }
+        : null;
     },
-    targetsMatch: (a, b) => a.to === b.to,
+    targetsMatch: (a, b) => a.to === b.to && a.threadId === b.threadId,
     resolveFallbackTarget: (request) => {
       const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
       if (sessionKind === "dm") {
         return null;
       }
       const legacyChannelId = extractDiscordChannelId(request.request.sessionKey?.trim() || null);
-      return legacyChannelId ? { to: legacyChannelId } : null;
+      return legacyChannelId
+        ? {
+            to: legacyChannelId,
+            threadId:
+              extractDiscordThreadId(request.request.sessionKey?.trim() || null) ?? undefined,
+          }
+        : null;
     },
   });
 }
