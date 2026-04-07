@@ -186,6 +186,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     requesterSenderId,
     toolContext,
     mediaLocalRoots,
+    mediaReadFile,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -197,6 +198,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       requesterSenderId,
       toolContext,
       mediaLocalRoots,
+      mediaReadFile,
     });
   },
 };
