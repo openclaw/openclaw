@@ -148,14 +148,22 @@ export async function runPipeline(opts: RunOptions, onEvent?: EventCallback) {
 
   const videoLandscapePath = join(outputDir, "video_landscape.mp4");
 
+  // Copy audio to Remotion's public/ directory for staticFile() access
+  const publicDir = join(__dirname, "..", "public");
+  const { mkdirSync, copyFileSync } = await import("node:fs");
+  mkdirSync(publicDir, { recursive: true });
+  const publicAudioName = "narration.wav";
+  if (existsSync(combinedAudioPath)) {
+    copyFileSync(combinedAudioPath, join(publicDir, publicAudioName));
+  }
+
   try {
-    // Dynamic import to avoid loading Remotion at startup
     const { renderVideo } = await import("./remotion/render.js");
 
     await renderVideo(
       {
         slides: slidesWithFrames,
-        audioPath: combinedAudioPath,
+        audioPath: existsSync(combinedAudioPath) ? publicAudioName : "",
         words,
         fps,
       },

@@ -96,7 +96,7 @@ export const NewsVideo: React.FC<VideoProps> = ({
 
   return (
     <AbsoluteFill style={{ background: "#000" }}>
-      {/* Narration audio */}
+      {/* Narration audio — must be in public/ for Remotion */}
       {audioPath && <Audio src={staticFile(audioPath)} volume={1} />}
 
       {/* Background music */}
