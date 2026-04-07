@@ -92,8 +92,10 @@ function buildStoredConversationReference(params: {
   conversationId: string;
   conversationType: string;
   teamId?: string;
+  /** Thread root message ID for channel thread messages. */
+  threadId?: string;
 }): StoredConversationReference {
-  const { activity, conversationId, conversationType, teamId } = params;
+  const { activity, conversationId, conversationType, teamId, threadId } = params;
   const from = activity.from;
   const conversation = activity.conversation;
   const agent = activity.recipient;
@@ -115,6 +117,7 @@ function buildStoredConversationReference(params: {
     serviceUrl: activity.serviceUrl,
     locale: activity.locale,
     ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+    ...(threadId ? { threadId } : {}),
   };
 }
 
@@ -206,11 +209,19 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const teamId = activity.channelData?.team?.id;
+    // For channel thread messages, resolve the thread root message ID so outbound
+    // replies land in the correct thread. The root ID comes from the `messageid=`
+    // portion of conversation.id (preferred) or from activity.replyToId.
+    const threadId =
+      conversationType === "channel"
+        ? (conversationMessageId ?? activity.replyToId ?? undefined)
+        : undefined;
     const conversationRef = buildStoredConversationReference({
       activity,
       conversationId,
       conversationType,
       teamId,
+      threadId,
     });
 
     const {
