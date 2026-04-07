@@ -370,6 +370,11 @@ export function createGatewayCloseHandler(params: {
           /* ignore */
         }
       }
+      try {
+        params.stopTaskRegistryMaintenance?.();
+      } catch {
+        /* ignore */
+      }
       params.chatRunState.clear();
       for (const c of params.clients) {
         try {
@@ -386,8 +391,19 @@ export function createGatewayCloseHandler(params: {
       );
       if (wssCloseResult === "timeout") {
         params.logger?.warn?.(
-          `[gateway] websocket server close timed out after ${GATEWAY_WSS_CLOSE_TIMEOUT_MS}ms, continuing shutdown`,
+          `[gateway] websocket server close timed out after ${GATEWAY_WSS_CLOSE_TIMEOUT_MS}ms, forcing client termination and continuing shutdown`,
         );
+        const wssClients = (params.wss as { clients?: Iterable<{ terminate?: () => void }> })
+          .clients;
+        if (wssClients) {
+          for (const socket of wssClients) {
+            try {
+              socket.terminate?.();
+            } catch {
+              /* ignore */
+            }
+          }
+        }
       }
       const servers =
         params.httpServers && params.httpServers.length > 0

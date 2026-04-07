@@ -52,6 +52,9 @@ function createCloseHarness(params?: {
   const tickInterval = setInterval(() => undefined, 60_000);
   const healthInterval = setInterval(() => undefined, 60_000);
   const dedupeCleanup = setInterval(() => undefined, 60_000);
+  const stopTaskRegistryMaintenance = vi.fn();
+  const loggerWarn = vi.fn();
+  const stalledSocketTerminate = vi.fn();
   const close = createGatewayCloseHandler({
     bonjourStop: null,
     tailscaleCleanup: null,
@@ -72,6 +75,8 @@ function createCloseHarness(params?: {
     heartbeatUnsub: null,
     transcriptUnsub: null,
     lifecycleUnsub: params?.lifecycleUnsub ?? null,
+    stopTaskRegistryMaintenance,
+    logger: { warn: loggerWarn },
     chatRunState: { clear: vi.fn() },
     clients: new Set(),
     configReloader: { stop: vi.fn(async () => undefined) },
@@ -81,6 +86,7 @@ function createCloseHarness(params?: {
           cb();
         }
       },
+      clients: new Set([{ terminate: stalledSocketTerminate }]),
     } as never,
     httpServer: {
       close: (cb: (err?: Error | null) => void) => cb(null),
@@ -89,6 +95,9 @@ function createCloseHarness(params?: {
   });
   return {
     close,
+    stopTaskRegistryMaintenance,
+    loggerWarn,
+    stalledSocketTerminate,
     dispose() {
       clearInterval(tickInterval);
       clearInterval(healthInterval);
@@ -113,6 +122,7 @@ describe("createGatewayCloseHandler", () => {
     try {
       await harness.close({ reason: "test shutdown", initiator: "SIGTERM" });
       expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
+      expect(harness.stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     } finally {
       harness.dispose();
     }
@@ -129,6 +139,11 @@ describe("createGatewayCloseHandler", () => {
     await vi.advanceTimersByTimeAsync(2_100);
     await Promise.resolve();
     expect(settled).toBe(true);
+    expect(harness.stalledSocketTerminate).toHaveBeenCalledTimes(1);
+    expect(harness.loggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining("forcing client termination"),
+    );
+    expect(harness.stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
 
     await closePromise;
     harness.dispose();
