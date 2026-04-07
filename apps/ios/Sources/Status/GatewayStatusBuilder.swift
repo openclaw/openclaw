@@ -4,6 +4,7 @@ enum GatewayStatusBuilder {
     @MainActor
     static func build(appModel: NodeAppModel) -> StatusPill.GatewayState {
         if appModel.gatewayServerName != nil { return .connected }
+        if appModel.lastGatewayProblem != nil { return .error }
 
         let text = appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.localizedCaseInsensitiveContains("connecting") ||

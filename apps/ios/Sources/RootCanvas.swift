@@ -229,7 +229,7 @@ struct RootCanvas: View {
     private func updateCanvasDebugStatus() {
         self.appModel.screen.setDebugStatusEnabled(self.canvasDebugStatusEnabled)
         guard self.canvasDebugStatusEnabled else { return }
-        let title = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = self.appModel.gatewayDisplayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         let subtitle = self.appModel.gatewayServerName ?? self.appModel.gatewayRemoteAddress
         self.appModel.screen.updateDebugStatus(title: title, subtitle: subtitle)
     }
@@ -454,6 +454,7 @@ private struct CanvasContent: View {
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @State private var showGatewayActions: Bool = false
+    @State private var showGatewayProblemDetails: Bool = false
     var systemColorScheme: ColorScheme
     var gatewayStatus: StatusPill.GatewayState
     var voiceWakeEnabled: Bool
@@ -488,6 +489,8 @@ private struct CanvasContent: View {
                 onStatusTap: {
                     if self.gatewayStatus == .connected {
                         self.showGatewayActions = true
+                    } else if self.appModel.lastGatewayProblem != nil {
+                        self.showGatewayProblemDetails = true
                     } else {
                         self.openSettings()
                     }
@@ -504,13 +507,35 @@ private struct CanvasContent: View {
                     self.openSettings()
                 })
         }
+        .overlay(alignment: .top) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem,
+               self.gatewayStatus != .connected
+            {
+                GatewayProblemBanner(
+                    problem: gatewayProblem,
+                    primaryActionTitle: gatewayProblem.retryable ? "Retry" : "Open Settings",
+                    onPrimaryAction: {
+                        if gatewayProblem.retryable {
+                            self.openSettings()
+                        } else {
+                            self.openSettings()
+                        }
+                    },
+                    onShowDetails: {
+                        self.showGatewayProblemDetails = true
+                    })
+                    .padding(.horizontal, 12)
+                    .safeAreaPadding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .overlay(alignment: .topLeading) {
             if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
                 VoiceWakeToast(
                     command: voiceWakeToastText,
                     brighten: self.brightenButtons)
                     .padding(.leading, 10)
-                    .safeAreaPadding(.top, 58)
+                    .safeAreaPadding(.top, self.appModel.lastGatewayProblem == nil ? 58 : 132)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -518,6 +543,16 @@ private struct CanvasContent: View {
             isPresented: self.$showGatewayActions,
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.openSettings() })
+        .sheet(isPresented: self.$showGatewayProblemDetails) {
+            if let gatewayProblem = self.appModel.lastGatewayProblem {
+                GatewayProblemDetailsSheet(
+                    problem: gatewayProblem,
+                    primaryActionTitle: "Open Settings",
+                    onPrimaryAction: {
+                        self.openSettings()
+                    })
+            }
+        }
         .onAppear {
             // Keep the runtime talk state aligned with persisted toggle state on cold launch.
             if self.talkEnabled != self.appModel.talkMode.isEnabled {
