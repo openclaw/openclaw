@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Bot } from "grammy";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveChunkMode as resolveChunkModeRuntime } from "../../../src/auto-reply/chunk.js";
@@ -402,6 +403,49 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const deliveredPayload = (deliverReplies.mock.calls[0]?.[0] as { replies?: Array<unknown> })
       ?.replies?.[0] as { channelData?: unknown } | undefined;
     expect(deliveredPayload?.channelData).toBeUndefined();
+  });
+
+  it("keeps agent workspace roots for final local-media replies", async () => {
+    const workspaceRoot = getAgentScopedMediaLocalRootsRuntime({}, "work").find((root) =>
+      /[\\/]workspace-work$/u.test(root),
+    );
+    if (!workspaceRoot) {
+      throw new Error("expected a workspace-work media root for agent-scoped Telegram replies");
+    }
+    const generatedFile = path.join(workspaceRoot, "generated", "report.pdf");
+
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Here is your file",
+          mediaUrl: generatedFile,
+          mediaUrls: [generatedFile],
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        route: {
+          agentId: "work",
+        } as unknown as TelegramMessageContext["route"],
+      }),
+    });
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([workspaceRoot]),
+        replies: [
+          expect.objectContaining({
+            mediaUrl: generatedFile,
+            mediaUrls: [generatedFile],
+          }),
+        ],
+      }),
+    );
   });
 
   it("uses 30-char preview debounce for legacy block stream mode", async () => {
