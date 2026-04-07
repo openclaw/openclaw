@@ -44,7 +44,7 @@ describe("msteams thread session isolation", () => {
   const channelConversationId = "19:general@thread.tacv2";
 
   function createDeps(cfg: OpenClawConfig) {
-    const recordInboundSession = vi.fn(async () => undefined);
+    const recordInboundSession = vi.fn(async (_params: { sessionKey: string }) => undefined);
     const resolveAgentRoute = vi.fn(({ peer }: { peer: { kind: string; id: string } }) => ({
       sessionKey: `agent:main:msteams:${peer.kind}:${peer.id}`,
       agentId: "main",

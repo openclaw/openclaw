@@ -440,11 +440,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
     });
 
-    // Isolate channel thread sessions: each thread (identified by replyToId)
-    // gets its own session key so context does not bleed across threads.
+    // Isolate channel thread sessions: each thread gets its own session key so
+    // context does not bleed across threads. Prefer conversationMessageId (the
+    // ;messageid= portion of conversation.id, i.e. the thread root) over
+    // activity.replyToId (which may point to a non-root parent in deep threads).
     // DMs and group chats are unaffected — only channel thread replies fork.
-    const replyToId = activity.replyToId ?? undefined;
-    const channelThreadId = isChannel && replyToId ? replyToId : undefined;
+    const channelThreadId = isChannel
+      ? (conversationMessageId ?? activity.replyToId ?? undefined)
+      : undefined;
     const threadKeys = resolveThreadSessionKeys({
       baseSessionKey: route.sessionKey,
       threadId: channelThreadId,
