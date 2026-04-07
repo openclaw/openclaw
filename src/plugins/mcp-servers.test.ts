@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadEnabledPluginMcpServerConfig,
@@ -96,6 +99,41 @@ describe("loadEnabledPluginMcpServerConfig", () => {
         mcpServers: {},
       },
     });
+  });
+
+  it("matches active registry workspace paths by canonical realpath", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-mcp-workspace-"));
+    const workspaceDir = path.join(rootDir, "workspace");
+    const linkedWorkspaceDir = path.join(rootDir, "workspace-link");
+    try {
+      fs.mkdirSync(workspaceDir);
+      fs.symlinkSync(workspaceDir, linkedWorkspaceDir, "dir");
+
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));
+      registry.mcpServers.push({
+        pluginId: "plugin-a",
+        name: "helloWorld",
+        server: { command: "node", args: ["hello.mjs"] },
+        source: "/tmp/plugin-a/index.cjs",
+        rootDir: "/tmp/plugin-a",
+      });
+      setActivePluginRegistry(registry, "mcp-server-test", "default", linkedWorkspaceDir);
+
+      expect(loadEnabledPluginMcpServerConfig({ workspaceDir })).toEqual({
+        config: {
+          mcpServers: {
+            helloWorld: {
+              command: "node",
+              args: ["hello.mjs"],
+              cwd: "/tmp/plugin-a",
+            },
+          },
+        },
+      });
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("fails closed when the active registry has no workspace binding", () => {

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { isRecord } from "../utils.js";
@@ -46,6 +47,16 @@ function isPluginEnabledByConfig(
   }).activated;
 }
 
+function normalizeWorkspacePathForMatch(workspaceDir: string): string {
+  let normalized = path.resolve(workspaceDir);
+  try {
+    normalized = fs.realpathSync.native(normalized);
+  } catch {
+    // Missing workspaces can still be compared by their resolved spelling.
+  }
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
 function isWorkspaceMatch(params: { workspaceDir?: string; activeWorkspaceDir?: string }): boolean {
   if (!params.workspaceDir) {
     return true;
@@ -53,7 +64,10 @@ function isWorkspaceMatch(params: { workspaceDir?: string; activeWorkspaceDir?: 
   if (!params.activeWorkspaceDir) {
     return false;
   }
-  return path.resolve(params.workspaceDir) === path.resolve(params.activeWorkspaceDir);
+  return (
+    normalizeWorkspacePathForMatch(params.workspaceDir) ===
+    normalizeWorkspacePathForMatch(params.activeWorkspaceDir)
+  );
 }
 
 function withDefaultCwd(

@@ -908,7 +908,7 @@ describe("plugin status reports", () => {
 
       expect(inspect.mcpServers).toEqual([
         { name: "bundleOnly", hasStdioTransport: true },
-        { name: "helloWorld", hasStdioTransport: false },
+        { name: "helloWorld", hasStdioTransport: true },
         { name: "unsupportedOnly", hasStdioTransport: false },
       ]);
     });

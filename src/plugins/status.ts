@@ -293,20 +293,26 @@ function mergeBundleMcpInspectEntries(params: {
 }): PluginInspectReport["mcpServers"] {
   const entries = new Map(params.existing.map((entry) => [entry.name, entry]));
 
-  for (const [names, hasStdioTransport] of [
-    [params.supportedServerNames, true] as const,
-    [params.unsupportedServerNames, false] as const,
-  ]) {
-    for (const name of names) {
-      const normalized = name.trim();
-      if (!normalized || entries.has(normalized)) {
-        continue;
-      }
-      entries.set(normalized, {
-        name: normalized,
-        hasStdioTransport,
-      });
+  for (const name of params.supportedServerNames) {
+    const normalized = name.trim();
+    if (!normalized) {
+      continue;
     }
+    entries.set(normalized, {
+      name: normalized,
+      hasStdioTransport: true,
+    });
+  }
+
+  for (const name of params.unsupportedServerNames) {
+    const normalized = name.trim();
+    if (!normalized || entries.has(normalized)) {
+      continue;
+    }
+    entries.set(normalized, {
+      name: normalized,
+      hasStdioTransport: false,
+    });
   }
 
   return [...entries.values()].toSorted((a, b) => a.name.localeCompare(b.name));
