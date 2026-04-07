@@ -340,6 +340,7 @@ export type SlackThreadStarter = {
   botId?: string;
   ts?: string;
   files?: SlackFile[];
+  attachments?: SlackAttachment[];
 };
 
 type SlackThreadStarterCacheEntry = {

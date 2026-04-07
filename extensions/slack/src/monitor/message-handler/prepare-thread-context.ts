@@ -11,6 +11,7 @@ import { resolveSlackAllowListMatch } from "../allow-list.js";
 import { readSessionUpdatedAt } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import {
+  resolveSlackAttachmentContent,
   resolveSlackMedia,
   resolveSlackThreadHistory,
   type SlackMediaResult,
@@ -110,12 +111,25 @@ export async function resolveSlackThreadContextData(params: {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
 
-  if (!params.effectiveDirectMedia && includeStarterContext && starter?.files?.length) {
-    threadStarterMedia = await resolveSlackMedia({
-      files: starter.files,
-      token: params.ctx.botToken,
-      maxBytes: params.ctx.mediaMaxBytes,
-    });
+  if (!params.effectiveDirectMedia && includeStarterContext && (starter?.files?.length || starter?.attachments?.length)) {
+    const [fileMedia, attachmentContent] = await Promise.all([
+      starter?.files?.length
+        ? resolveSlackMedia({
+            files: starter.files,
+            token: params.ctx.botToken,
+            maxBytes: params.ctx.mediaMaxBytes,
+          })
+        : Promise.resolve(null),
+      starter?.attachments?.length
+        ? resolveSlackAttachmentContent({
+            attachments: starter.attachments,
+            token: params.ctx.botToken,
+            maxBytes: params.ctx.mediaMaxBytes,
+          })
+        : Promise.resolve(null),
+    ]);
+    const mergedStarterMedia = [...(fileMedia ?? []), ...(attachmentContent?.media ?? [])];
+    threadStarterMedia = mergedStarterMedia.length > 0 ? mergedStarterMedia : null;
     if (threadStarterMedia) {
       const starterPlaceholders = threadStarterMedia.map((item) => item.placeholder).join(", ");
       logVerbose(`slack: hydrated thread starter file ${starterPlaceholders} from root message`);

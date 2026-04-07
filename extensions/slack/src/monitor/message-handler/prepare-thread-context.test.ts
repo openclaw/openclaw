@@ -15,6 +15,7 @@ vi.mock("../media.js", async (importOriginal) => {
   return {
     ...actual,
     resolveSlackMedia: vi.fn(actual.resolveSlackMedia),
+    resolveSlackAttachmentContent: vi.fn(actual.resolveSlackAttachmentContent),
   };
 });
 
@@ -64,6 +65,52 @@ describe("resolveSlackThreadContextData", () => {
       ...overrides,
     } as SlackMessageEvent;
   }
+
+  it("hydrates forwarded thread-root attachment images when the starter has no files", async () => {
+    const { storePath } = makeTmpStorePath();
+    const resolveSlackAttachmentContentMock = vi.mocked(mediaModule.resolveSlackAttachmentContent);
+    resolveSlackAttachmentContentMock.mockResolvedValueOnce({
+      text: "",
+      media: [
+        {
+          path: "/tmp/thread-root-share.png",
+          contentType: "image/png",
+          placeholder: "[Slack file: thread-root-share.png]",
+        },
+      ],
+    });
+
+    const result = await resolveSlackThreadContextData({
+      ctx: createThreadContext({ replies: vi.fn() }),
+      account: createSlackTestAccount({ thread: { initialHistoryLimit: 0 } }),
+      message: createThreadMessage(),
+      isThreadReply: true,
+      threadTs: "100.000",
+      threadStarter: {
+        userId: "U1",
+        ts: "100.000",
+        attachments: [
+          {
+            is_share: true,
+            image_url: "https://files.slack.com/files-pri/T123-F123/thread-root-share.png",
+            fallback: "shared image",
+          },
+        ],
+      },
+      roomLabel: "#general",
+      storePath,
+      sessionKey: "thread-session",
+      allowFromLower: ["u1"],
+      allowNameMatching: false,
+      contextVisibilityMode: "allowlist",
+      envelopeOptions: resolveEnvelopeFormatOptions({} as OpenClawConfig),
+      effectiveDirectMedia: null,
+    });
+
+    expect(result.threadStarterMedia).toEqual([
+      expect.objectContaining({ path: "/tmp/thread-root-share.png", contentType: "image/png" }),
+    ]);
+  });
 
   it("omits non-allowlisted starter text and thread history messages", async () => {
     const { storePath } = makeTmpStorePath();
