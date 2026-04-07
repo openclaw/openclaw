@@ -268,6 +268,47 @@ describe("task-registry", () => {
     });
   });
 
+  it("does not overwrite operator-cancelled terminal status with lifecycle end", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-cancel-then-end",
+        task: "Do the thing",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "cancelled",
+        endedAt: 200,
+        lastEventAt: 200,
+        error: "Cancelled by operator.",
+      });
+
+      emitAgentEvent({
+        runId: "run-cancel-then-end",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 999,
+        },
+      });
+
+      expect(findTaskByRunId("run-cancel-then-end")).toMatchObject({
+        status: "cancelled",
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
   it("summarizes task pressure by status and runtime", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -1919,6 +1960,39 @@ describe("task-registry", () => {
           }),
         ),
       );
+    });
+  });
+
+  it("cancels CLI-tracked tasks without childSessionKey", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        runId: "run-cli-no-child",
+        task: "Legacy row",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(result).toMatchObject({
+        found: true,
+        cancelled: true,
+        task: expect.objectContaining({
+          taskId: task.taskId,
+          status: "cancelled",
+        }),
+      });
     });
   });
 });

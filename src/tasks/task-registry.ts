@@ -1329,6 +1329,9 @@ function ensureListener() {
       } else if (evt.stream === "error") {
         patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
       }
+      if (isTerminalTaskStatus(current.status)) {
+        delete patch.status;
+      }
       const stateChangeEvent =
         patch.status && patch.status !== current.status
           ? appendTaskEvent({
@@ -1719,7 +1722,7 @@ export async function cancelTaskById(params: {
     };
   }
   const childSessionKey = task.childSessionKey?.trim();
-  if (!childSessionKey) {
+  if (!childSessionKey && task.runtime !== "cli") {
     return {
       found: true,
       cancelled: false,
