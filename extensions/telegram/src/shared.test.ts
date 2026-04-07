@@ -24,7 +24,7 @@ function createCfg(): OpenClawConfig {
 }
 
 function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegramAccount {
-  return telegramPluginBase.config.resolveAccount(cfg, accountId) as ResolvedTelegramAccount;
+  return telegramPluginBase.config.resolveAccount(cfg, accountId);
 }
 
 describe("createTelegramPluginBase config duplicate token guard", () => {

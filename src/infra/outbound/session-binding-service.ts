@@ -1,4 +1,3 @@
-import { normalizeAccountId } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   __testing as genericCurrentConversationBindingTesting,
@@ -9,6 +8,10 @@ import {
   touchGenericCurrentConversationBinding,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
+import {
+  buildChannelAccountKey,
+  normalizeConversationRef,
+} from "./session-binding-normalization.js";
 
 export type BindingTargetKind = "subagent" | "session";
 export type BindingStatus = "active" | "ending" | "ended";
@@ -103,17 +106,8 @@ export type SessionBindingAdapter = {
   unbind?: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
 
-function normalizeConversationRef(ref: ConversationRef): ConversationRef {
-  return {
-    channel: ref.channel.trim().toLowerCase(),
-    accountId: normalizeAccountId(ref.accountId),
-    conversationId: ref.conversationId.trim(),
-    parentConversationId: ref.parentConversationId?.trim() || undefined,
-  };
-}
-
 function toAdapterKey(params: { channel: string; accountId: string }): string {
-  return `${params.channel.trim().toLowerCase()}:${normalizeAccountId(params.accountId)}`;
+  return buildChannelAccountKey(params);
 }
 
 function normalizePlacement(raw: unknown): SessionBindingPlacement | undefined {
@@ -174,8 +168,11 @@ function getActiveAdapterForKey(key: string): SessionBindingAdapter | null {
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   const normalizedAdapter = {
     ...adapter,
-    channel: adapter.channel.trim().toLowerCase(),
-    accountId: normalizeAccountId(adapter.accountId),
+    ...normalizeConversationRef({
+      channel: adapter.channel,
+      accountId: adapter.accountId,
+      conversationId: "unused",
+    }),
   };
   const key = toAdapterKey({
     channel: normalizedAdapter.channel,

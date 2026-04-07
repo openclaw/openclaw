@@ -40,17 +40,18 @@
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
-    "imageGenerationProviders": ["openai"]
+    "imageGenerationProviders": ["openai"],
+    "videoGenerationProviders": ["openai"]
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "personalityOverlay": {
+      "personality": {
         "type": "string",
-        "enum": ["friendly", "off"],
+        "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the default OpenAI-specific prompt overlay used for OpenAI and OpenAI Codex runs."
+        "description": "Controls the default OpenAI-specific personality used for OpenAI and OpenAI Codex runs. `friendly` and `on` enable the overlay; `off` disables it."
       }
     }
   }

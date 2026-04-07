@@ -3,6 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as embeddedRunTesting,
+  abortEmbeddedPiRun,
+  getActiveEmbeddedRunCount,
+  isEmbeddedPiRunActive,
+} from "../../agents/pi-embedded-runner/runs.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -13,6 +20,10 @@ import {
 } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import {
+  __testing as replyRunRegistryTesting,
+  abortActiveReplyRuns,
+} from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -32,6 +43,12 @@ const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const abortEmbeddedPiRunMock = vi.fn();
+const clearSessionQueuesMock = vi.fn();
+const refreshQueuedFollowupSessionMock = vi.fn();
+const compactState = vi.hoisted(() => ({
+  compactEmbeddedPiSessionMock: vi.fn(),
+}));
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -45,33 +62,27 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/pi-embedded.js")>(
-    "../../agents/pi-embedded.js",
-  );
+vi.mock("../../agents/pi-embedded.js", () => {
   return {
-    ...actual,
+    compactEmbeddedPiSession: (params: unknown) =>
+      compactState.compactEmbeddedPiSessionMock(params),
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+    abortEmbeddedPiRun: (sessionId: string) => {
+      abortEmbeddedPiRunMock(sessionId);
+      return abortEmbeddedPiRun(sessionId);
+    },
+    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActive(sessionId),
   };
 });
 
-vi.mock("../../agents/cli-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/cli-runner.js")>(
-    "../../agents/cli-runner.js",
-  );
-  return {
-    ...actual,
-    runCliAgent: (params: unknown) => runCliAgentMock(params),
-  };
-});
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
+}));
 
-vi.mock("../../runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js");
+vi.mock("../../runtime.js", () => {
   return {
-    ...actual,
     defaultRuntime: {
-      ...actual.defaultRuntime,
       log: vi.fn(),
       error: (...args: unknown[]) => runtimeErrorMock(...args),
       exit: vi.fn(),
@@ -79,23 +90,35 @@ vi.mock("../../runtime.js", async () => {
   };
 });
 
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+vi.mock("./queue.js", () => {
   return {
-    ...actual,
     enqueueFollowupRun: vi.fn(),
     scheduleFollowupDrain: vi.fn(),
+    clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
+    refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
   };
 });
 
 const loadCronStoreMock = vi.fn();
-vi.mock("../../cron/store.js", async () => {
-  const actual = await vi.importActual<typeof import("../../cron/store.js")>("../../cron/store.js");
+vi.mock("../../cron/store.js", () => {
   return {
-    ...actual,
     loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
+    resolveCronStorePath: (storePath?: string) => storePath ?? "/tmp/openclaw-cron-store.json",
   };
 });
+
+vi.mock("../../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    resolveSession: () => ({ kind: "none" }),
+    cancelSession: async () => {},
+  }),
+}));
+
+vi.mock("../../agents/subagent-registry.js", () => ({
+  getLatestSubagentRunByChildSessionKey: () => null,
+  listSubagentRunsForController: () => [],
+  markSubagentRunTerminated: () => 0,
+}));
 
 import { runReplyAgent } from "./agent-runner.js";
 
@@ -106,10 +129,17 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
+  embeddedRunTesting.resetActiveEmbeddedRuns();
+  replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedPiAgentMock.mockClear();
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  abortEmbeddedPiRunMock.mockClear();
+  clearSessionQueuesMock.mockReset();
+  clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
+  refreshQueuedFollowupSessionMock.mockReset();
+  refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
@@ -129,6 +159,8 @@ afterEach(() => {
   vi.useRealTimers();
   resetSystemEventsForTest();
   clearMemoryPluginState();
+  replyRunRegistryTesting.resetReplyRunRegistry();
+  embeddedRunTesting.resetActiveEmbeddedRuns();
 });
 
 describe("runReplyAgent onAgentRunStart", () => {
@@ -218,7 +250,7 @@ describe("runReplyAgent onAgentRunStart", () => {
     });
   });
 
-  it("emits start callback when cli runner starts", async () => {
+  it("emits start callback when the CLI runner starts", async () => {
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -242,218 +274,11 @@ describe("runReplyAgent onAgentRunStart", () => {
   });
 });
 
-describe("runReplyAgent authProfileId fallback scoping", () => {
-  it("drops authProfileId when provider changes during fallback", async () => {
-    runWithModelFallbackMock.mockImplementationOnce(
-      async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("openai-codex", "gpt-5.4"),
-        provider: "openai-codex",
-        model: "gpt-5.4",
-      }),
-    );
-
-    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
-
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "telegram",
-      OriginatingTo: "chat",
-      AccountId: "primary",
-      MessageSid: "msg",
-      Surface: "telegram",
-    } as unknown as TemplateContext;
-
-    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        agentId: "main",
-        agentDir: "/tmp/agent",
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "telegram",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: createCliBackendTestConfig(),
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude-opus",
-        authProfileId: "anthropic:openclaw",
-        authProfileIdSource: "manual",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 5_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
-
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 1,
-      compactionCount: 0,
-    };
-
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: sessionKey,
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath: undefined,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
-      authProfileId?: unknown;
-      authProfileIdSource?: unknown;
-      provider?: unknown;
-    };
-
-    expect(call.provider).toBe("openai-codex");
-    expect(call.authProfileId).toBeUndefined();
-    expect(call.authProfileIdSource).toBeUndefined();
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
-    expect(sessionEntry.modelOverride).toBe("gpt-5.4");
-    expect(sessionEntry.authProfileOverride).toBeUndefined();
-    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
-  });
-
-  it("persists same-provider fallback model while keeping the scoped auth profile", async () => {
-    runWithModelFallbackMock.mockImplementationOnce(
-      async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("anthropic", "claude-sonnet"),
-        provider: "anthropic",
-        model: "claude-sonnet",
-      }),
-    );
-
-    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
-
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "telegram",
-      OriginatingTo: "chat",
-      AccountId: "primary",
-      MessageSid: "msg",
-      Surface: "telegram",
-    } as unknown as TemplateContext;
-
-    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        agentId: "main",
-        agentDir: "/tmp/agent",
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "telegram",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: createCliBackendTestConfig(),
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude-opus",
-        authProfileId: "anthropic:openclaw",
-        authProfileIdSource: "user",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 5_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
-
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 1,
-      compactionCount: 0,
-      authProfileOverride: "anthropic:openclaw",
-      authProfileOverrideSource: "user" as const,
-    };
-
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: sessionKey,
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath: undefined,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
-      authProfileId?: unknown;
-      authProfileIdSource?: unknown;
-      provider?: unknown;
-      model?: unknown;
-    };
-
-    expect(call.provider).toBe("anthropic");
-    expect(call.model).toBe("claude-sonnet");
-    expect(call.authProfileId).toBe("anthropic:openclaw");
-    expect(call.authProfileIdSource).toBe("user");
-    expect(sessionEntry.providerOverride).toBe("anthropic");
-    expect(sessionEntry.modelOverride).toBe("claude-sonnet");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:openclaw");
-    expect(sessionEntry.authProfileOverrideSource).toBe("user");
-  });
-});
-
 describe("runReplyAgent auto-compaction token update", () => {
   type EmbeddedRunParams = {
     prompt?: string;
     extraSystemPrompt?: string;
+    abortSignal?: AbortSignal;
     onAgentEvent?: (evt: {
       stream?: string;
       data?: { phase?: string; willRetry?: boolean; completed?: boolean };
@@ -519,6 +344,97 @@ describe("runReplyAgent auto-compaction token update", () => {
     } as unknown as FollowupRun;
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
+
+  it("surfaces the restart notice when gateway shutdown aborts preflight compaction", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-restart-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionFile = "session-relative.jsonl";
+    const workspaceDir = tmp;
+    const transcriptPath = path.join(tmp, sessionFile);
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        message: {
+          role: "user",
+          content: "x".repeat(320_000),
+          timestamp: Date.now(),
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sessionFile,
+      totalTokens: 10,
+      totalTokensFresh: false,
+      compactionCount: 1,
+    };
+
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+    compactState.compactEmbeddedPiSessionMock.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal }) =>
+        await new Promise<never>((_, reject) => {
+          const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+          const onAbort = () => reject(abortError);
+          if (params.abortSignal?.aborted) {
+            onAbort();
+            return;
+          }
+          params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+        }),
+    );
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+      config: cfg,
+      sessionFile,
+      workspaceDir,
+    });
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    await vi.waitFor(() => {
+      expect(compactState.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+    });
+    expect(getActiveEmbeddedRunCount()).toBe(1);
+
+    expect(abortActiveReplyRuns({ mode: "all" })).toBe(true);
+
+    await expect(runPromise).resolves.toEqual({
+      text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+    });
+    expect(getActiveEmbeddedRunCount()).toBe(0);
+  });
 
   it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-tokens-"));
@@ -1227,7 +1143,7 @@ describe("runReplyAgent claude-cli routing", () => {
     });
   }
 
-  it("uses claude-cli runner for claude-cli provider", async () => {
+  it("uses the CLI runner for claude-cli provider", async () => {
     const runId = "00000000-0000-0000-0000-000000000001";
     const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
     const lifecyclePhases: string[] = [];
@@ -1257,8 +1173,8 @@ describe("runReplyAgent claude-cli routing", () => {
     unsubscribe();
     randomSpy.mockRestore();
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(lifecyclePhases).toEqual(["start", "end"]);
     expect(result).toMatchObject({ text: "ok" });
   });

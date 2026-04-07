@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { writeJsonFileAtomically as writeJsonFileAtomicallyImpl } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveConfiguredMatrixAccountIds } from "./account-selection.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import {
   resolveLegacyMatrixFlatStoreTarget,
   resolveMatrixMigrationAccountTarget,
@@ -367,7 +368,7 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
     try {
       inspectLegacyStore = await loadMatrixLegacyCryptoInspector();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatMatrixErrorMessage(err);
       if (!warnings.includes(message)) {
         warnings.push(message);
       }

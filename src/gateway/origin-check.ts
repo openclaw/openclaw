@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isLoopbackHost, normalizeHostHeader } from "./net.js";
 
 type OriginCheckResult =
@@ -39,7 +40,9 @@ export function checkBrowserOrigin(params: {
   }
 
   const allowlist = new Set(
-    (params.allowedOrigins ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean),
+    (params.allowedOrigins ?? [])
+      .map((value) => normalizeOptionalLowercaseString(value))
+      .filter(Boolean),
   );
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
@@ -139,7 +140,9 @@ export async function resolveMSTeamsSendContext(params: {
   const tokenProvider: MSTeamsAccessTokenProvider = createMSTeamsTokenProvider(app);
 
   // Determine conversation type from stored reference
-  const storedConversationType = ref.conversation?.conversationType?.toLowerCase() ?? "";
+  const storedConversationType = normalizeLowercaseStringOrEmpty(
+    ref.conversation?.conversationType ?? "",
+  );
   let conversationType: MSTeamsConversationType;
   if (storedConversationType === "personal") {
     conversationType = "personal";

@@ -38,8 +38,8 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { openUrl } from "../onboard-helpers.js";
 import {
+  applyProviderAuthConfigPatch,
   applyDefaultModel,
-  mergeConfigPatch,
   pickAuthMethod,
   resolveProviderMatch,
 } from "../provider-auth-helpers.js";
@@ -101,7 +101,9 @@ function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlu
   return providers.filter((provider) => listTokenAuthMethods(provider).length > 0);
 }
 
-async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
+async function resolveModelsAuthContext(params?: {
+  requestedProvider?: string;
+}): Promise<ResolvedModelsAuthContext> {
   const config = await loadValidConfigOrThrow();
   const defaultAgentId = resolveDefaultAgentId(config);
   const agentDir = resolveAgentDir(config, defaultAgentId);
@@ -110,10 +112,19 @@ async function resolveModelsAuthContext(): Promise<ResolvedModelsAuthContext> {
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
+    mode: "setup",
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
+    ...(params?.requestedProvider?.trim()
+      ? { providerRefs: [params.requestedProvider], activate: true }
+      : {}),
   });
-  return { config, agentDir, workspaceDir, providers };
+  return {
+    config,
+    agentDir,
+    workspaceDir,
+    providers,
+  };
 }
 
 function resolveRequestedProviderOrThrow(
@@ -230,7 +241,7 @@ async function persistProviderAuthResult(params: {
   await updateConfig((cfg) => {
     let next = cfg;
     if (params.result.configPatch) {
-      next = mergeConfigPatch(next, params.result.configPatch);
+      next = applyProviderAuthConfigPatch(next, params.result.configPatch);
     }
     for (const profile of params.result.profiles) {
       next = applyAuthProfileConfig(next, {
@@ -309,7 +320,9 @@ export async function modelsAuthSetupTokenCommand(
     throw new Error("setup-token requires an interactive TTY.");
   }
 
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext();
+  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
+    requestedProvider: opts.provider,
+  });
   const tokenProviders = listProvidersWithTokenMethods(providers);
   if (tokenProviders.length === 0) {
     throw new Error(
@@ -407,10 +420,9 @@ export async function modelsAuthPasteTokenCommand(
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
   if (provider === "anthropic") {
-    runtime.log("Anthropic setup-token auth is a legacy/manual path in OpenClaw.");
-    runtime.log(
-      "Anthropic told OpenClaw users this path requires Extra Usage on the Claude account.",
-    );
+    runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
+    runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
+    runtime.log("Anthropic staff told us this OpenClaw path is allowed again.");
   }
 }
 
@@ -567,7 +579,9 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     throw new Error("models auth login requires an interactive TTY.");
   }
 
-  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext();
+  const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
+    requestedProvider: opts.provider,
+  });
   const prompter = createClackPrompter();
   const authProviders = listProvidersWithAuthMethods(providers);
   if (authProviders.length === 0) {

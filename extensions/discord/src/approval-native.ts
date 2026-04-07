@@ -1,5 +1,6 @@
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
   createChannelApproverDmTargetResolver,
@@ -103,7 +104,7 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
       }),
     resolveTurnSourceTarget: (request) => {
       const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
-      const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
+      const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
       const rawTurnSourceTo = request.request.turnSourceTo?.trim() || "";
       const turnSourceTo = normalizeDiscordOriginChannelId(rawTurnSourceTo);
       const hasExplicitOriginTarget = /^(?:channel|group):/i.test(rawTurnSourceTo);
@@ -153,6 +154,13 @@ export function createDiscordApprovalCapability(configOverride?: DiscordExecAppr
   return createApproverRestrictedNativeApprovalCapability({
     channel: "discord",
     channelLabel: "Discord",
+    describeExecApprovalSetup: ({ accountId }) => {
+      const prefix =
+        accountId && accountId !== "default"
+          ? `channels.discord.accounts.${accountId}`
+          : "channels.discord";
+      return `Approve it from the Web UI or terminal UI for now. Discord supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+    },
     listAccountIds: listDiscordAccountIds,
     hasApprovers: ({ cfg, accountId }) =>
       getDiscordExecApprovalApprovers({ cfg, accountId, configOverride }).length > 0,

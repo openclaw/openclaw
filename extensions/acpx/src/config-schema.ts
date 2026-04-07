@@ -22,9 +22,8 @@ export type AcpxMcpServer = {
 };
 
 export type AcpxPluginConfig = {
-  command?: string;
-  expectedVersion?: string;
   cwd?: string;
+  stateDir?: string;
   permissionMode?: AcpxPermissionMode;
   nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge?: boolean;
@@ -32,22 +31,24 @@ export type AcpxPluginConfig = {
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
   mcpServers?: Record<string, McpServerConfig>;
+  agents?: Record<string, { command: string }>;
 };
 
 export type ResolvedAcpxPluginConfig = {
-  command: string;
-  expectedVersion?: string;
-  allowPluginLocalInstall: boolean;
-  stripProviderAuthEnvVars: boolean;
-  installCommand: string;
   cwd: string;
+  stateDir: string;
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge: boolean;
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
+  legacyCompatibilityConfig: {
+    strictWindowsCmdWrapper?: boolean;
+    queueOwnerTtlSeconds?: number;
+  };
   mcpServers: Record<string, McpServerConfig>;
+  agents: Record<string, string>;
 };
 
 const nonEmptyTrimmedString = (message: string) =>
@@ -72,9 +73,8 @@ const McpServerConfigSchema = z.object({
 });
 
 export const AcpxPluginConfigSchema = z.strictObject({
-  command: nonEmptyTrimmedString("command must be a non-empty string").optional(),
-  expectedVersion: nonEmptyTrimmedString("expectedVersion must be a non-empty string").optional(),
   cwd: nonEmptyTrimmedString("cwd must be a non-empty string").optional(),
+  stateDir: nonEmptyTrimmedString("stateDir must be a non-empty string").optional(),
   permissionMode: z
     .enum(ACPX_PERMISSION_MODES, {
       error: `permissionMode must be one of: ${ACPX_PERMISSION_MODES.join(", ")}`,
@@ -98,6 +98,14 @@ export const AcpxPluginConfigSchema = z.strictObject({
     .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
     .optional(),
   mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
+  agents: z
+    .record(
+      z.string(),
+      z.strictObject({
+        command: nonEmptyTrimmedString("agents.<id>.command must be a non-empty string"),
+      }),
+    )
+    .optional(),
 });
 
 export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {

@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { syncPluginVersions } from "../../scripts/sync-plugin-versions.js";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 
@@ -13,14 +13,11 @@ function writeJson(filePath: string, value: unknown) {
 
 describe("syncPluginVersions", () => {
   afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    cleanupTempDirs(tempDirs);
   });
 
   it("preserves workspace openclaw devDependencies while bumping plugin host constraints", () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sync-plugin-versions-"));
-    tempDirs.push(rootDir);
+    const rootDir = makeTempDir(tempDirs, "openclaw-sync-plugin-versions-");
 
     writeJson(path.join(rootDir, "package.json"), {
       name: "openclaw",

@@ -8,6 +8,11 @@ import {
   createChannelNativeOriginTargetResolver,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMatrixApprovalAuthApprovers, matrixApprovalAuth } from "./approval-auth.js";
 import {
   getMatrixExecApprovalApprovers,
@@ -34,7 +39,7 @@ const MATRIX_PLUGIN_NATIVE_DELIVERY_DISABLED = {
 function normalizeComparableTarget(value: string): string {
   const target = resolveMatrixTargetIdentity(value);
   if (!target) {
-    return value.trim().toLowerCase();
+    return normalizeLowercaseStringOrEmpty(value);
   }
   if (target.kind === "user") {
     return `user:${normalizeMatrixUserId(target.id)}`;
@@ -50,13 +55,8 @@ function resolveMatrixNativeTarget(raw: string): string | null {
   return target.kind === "user" ? `user:${target.id}` : `room:${target.id}`;
 }
 
-function normalizeThreadId(value?: string | number | null): string | undefined {
-  const trimmed = value == null ? "" : String(value).trim();
-  return trimmed || undefined;
-}
-
 function resolveTurnSourceMatrixOriginTarget(request: ApprovalRequest): MatrixOriginTarget | null {
-  const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
   const turnSourceTo = request.request.turnSourceTo?.trim() || "";
   const target = resolveMatrixNativeTarget(turnSourceTo);
   if (turnSourceChannel !== "matrix" || !target) {
@@ -64,7 +64,7 @@ function resolveTurnSourceMatrixOriginTarget(request: ApprovalRequest): MatrixOr
   }
   return {
     to: target,
-    threadId: normalizeThreadId(request.request.turnSourceThreadId),
+    threadId: normalizeOptionalStringifiedId(request.request.turnSourceThreadId),
   };
 }
 
@@ -78,7 +78,7 @@ function resolveSessionMatrixOriginTarget(sessionTarget: {
   }
   return {
     to: target,
-    threadId: normalizeThreadId(sessionTarget.threadId),
+    threadId: normalizeOptionalStringifiedId(sessionTarget.threadId),
   };
 }
 
@@ -123,6 +123,13 @@ const resolveMatrixApproverDmTargets = createChannelApproverDmTargetResolver({
 const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "matrix",
   channelLabel: "Matrix",
+  describeExecApprovalSetup: ({ accountId }) => {
+    const prefix =
+      accountId && accountId !== "default"
+        ? `channels.matrix.accounts.${accountId}`
+        : "channels.matrix";
+    return `Approve it from the Web UI or terminal UI for now. Matrix supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`${prefix}.dm.allowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+  },
   listAccountIds: listMatrixAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
     getMatrixExecApprovalApprovers({ cfg, accountId }).length > 0,
@@ -134,7 +141,8 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
     resolveMatrixExecApprovalTarget({ cfg, accountId }),
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId: ({ target, request }) =>
-    target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
+    normalizeOptionalString(target.accountId) ??
+    normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveMatrixOriginTarget,
   resolveApproverDmTargets: resolveMatrixApproverDmTargets,
 });
@@ -203,6 +211,7 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
       ? ({ kind: "enabled" } as const)
       : (matrixNativeApprovalCapability.getActionAvailabilityState?.(params) ??
         ({ kind: "disabled" } as const)),
+  describeExecApprovalSetup: matrixNativeApprovalCapability.describeExecApprovalSetup,
   approvals: {
     delivery: matrixDeliveryAdapter,
     native: matrixExecOnlyNativeApprovalAdapter,

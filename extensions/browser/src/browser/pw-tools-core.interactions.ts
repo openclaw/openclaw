@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
@@ -880,7 +881,7 @@ export async function batchViaPlaywright(opts: {
       await executeSingleAction(action, opts.cdpUrl, opts.targetId, opts.evaluateEnabled, depth);
       results.push({ ok: true });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       results.push({ ok: false, error: message });
       if (opts.stopOnError !== false) {
         break;

@@ -10,7 +10,6 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import {
   redactConfigObject,
@@ -21,6 +20,7 @@ import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
@@ -29,7 +29,11 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { resolveEffectiveSharedGatewayAuth } from "../auth.js";
-import { diffConfigPaths } from "../config-reload.js";
+import {
+  buildGatewayReloadPlan,
+  diffConfigPaths,
+  resolveGatewayReloadSettings,
+} from "../config-reload.js";
 import {
   formatControlPlaneActor,
   resolveControlPlaneActor,
@@ -265,6 +269,21 @@ function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationI
   }`;
 }
 
+function shouldScheduleDirectConfigRestart(params: {
+  changedPaths: string[];
+  nextConfig: OpenClawConfig;
+}): boolean {
+  const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
+  if (reloadSettings.mode === "off") {
+    return true;
+  }
+  const plan = buildGatewayReloadPlan(params.changedPaths);
+  if (reloadSettings.mode === "hot" && plan.restartGateway) {
+    return true;
+  }
+  return false;
+}
+
 async function ensureResolvableSecretRefsOrRespond(params: {
   config: OpenClawConfig;
   respond: RespondFn;
@@ -276,7 +295,7 @@ async function ensureResolvableSecretRefsOrRespond(params: {
     });
     return true;
   } catch (error) {
-    const details = error instanceof Error ? error.message : String(error);
+    const details = formatErrorMessage(error);
     params.respond(
       false,
       undefined,
@@ -489,9 +508,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const migrated = applyLegacyMigrations(restoredMerge.result);
-    const resolved = migrated.next ?? restoredMerge.result;
-    const validated = validateConfigObjectWithPlugins(resolved);
+    const validated = validateConfigObjectWithPlugins(restoredMerge.result);
     if (!validated.ok) {
       respond(
         false,
@@ -551,17 +568,22 @@ export const configHandlers: GatewayRequestHandlers = {
       note,
     });
     const sentinelPath = await tryWriteRestartSentinelPayload(payload);
-    const restart = scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "config.patch",
-      audit: {
-        actor: actor.actor,
-        deviceId: actor.deviceId,
-        clientIp: actor.clientIp,
-        changedPaths,
-      },
-    });
-    if (restart.coalesced) {
+    const restart = shouldScheduleDirectConfigRestart({
+      changedPaths,
+      nextConfig: validated.config,
+    })
+      ? scheduleGatewaySigusr1Restart({
+          delayMs: restartDelayMs,
+          reason: "config.patch",
+          audit: {
+            actor: actor.actor,
+            deviceId: actor.deviceId,
+            clientIp: actor.clientIp,
+            changedPaths,
+          },
+        })
+      : undefined;
+    if (restart?.coalesced) {
       context?.logGateway?.warn(
         `config.patch restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
       );
@@ -618,17 +640,22 @@ export const configHandlers: GatewayRequestHandlers = {
       note,
     });
     const sentinelPath = await tryWriteRestartSentinelPayload(payload);
-    const restart = scheduleGatewaySigusr1Restart({
-      delayMs: restartDelayMs,
-      reason: "config.apply",
-      audit: {
-        actor: actor.actor,
-        deviceId: actor.deviceId,
-        clientIp: actor.clientIp,
-        changedPaths,
-      },
-    });
-    if (restart.coalesced) {
+    const restart = shouldScheduleDirectConfigRestart({
+      changedPaths,
+      nextConfig: parsed.config,
+    })
+      ? scheduleGatewaySigusr1Restart({
+          delayMs: restartDelayMs,
+          reason: "config.apply",
+          audit: {
+            actor: actor.actor,
+            deviceId: actor.deviceId,
+            clientIp: actor.clientIp,
+            changedPaths,
+          },
+        })
+      : undefined;
+    if (restart?.coalesced) {
       context?.logGateway?.warn(
         `config.apply restart coalesced ${formatControlPlaneActor(actor)} delayMs=${restart.delayMs}`,
       );

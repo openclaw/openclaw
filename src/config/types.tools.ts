@@ -138,6 +138,13 @@ export type MediaToolsConfig = {
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
+  asyncCompletion?: {
+    /**
+     * Enable direct channel sends for completed async media generation tasks.
+     * Default: false.
+     */
+    directSend?: boolean;
+  };
   image?: MediaUnderstandingConfig;
   audio?: MediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;
@@ -626,5 +633,10 @@ export type ToolsConfig = {
       alsoAllow?: string[];
       deny?: string[];
     };
+  };
+  /** Experimental tool flags. Default off unless explicitly enabled. */
+  experimental?: {
+    /** Enable the structured `update_plan` tool for all providers. OpenAI-family runs auto-enable it. */
+    planTool?: boolean;
   };
 };

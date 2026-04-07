@@ -1,5 +1,6 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -43,7 +44,7 @@ export function normalizeReplyPayload(
         trimText: true,
       },
     );
-  const trimmed = payload.text?.trim() ?? "";
+  const trimmed = normalizeOptionalString(payload.text) ?? "";
   if (!hasContent(trimmed)) {
     opts.onSkip?.("empty");
     return null;

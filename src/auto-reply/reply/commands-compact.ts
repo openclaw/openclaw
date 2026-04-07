@@ -1,21 +1,11 @@
-import {
-  abortEmbeddedPiRun,
-  compactEmbeddedPiSession,
-  isEmbeddedPiRunActive,
-  waitForEmbeddedPiRunEnd,
-} from "../../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { formatContextUsageShort, formatTokenCount } from "../status.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import { incrementCompactionCount } from "./session-updates.js";
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -45,7 +35,7 @@ function extractCompactInstructions(params: {
 }
 
 function isCompactionSkipReason(reason?: string): boolean {
-  const text = reason?.trim().toLowerCase() ?? "";
+  const text = normalizeOptionalLowercaseString(reason) ?? "";
   return (
     text.includes("nothing to compact") ||
     text.includes("below threshold") ||
@@ -55,7 +45,7 @@ function isCompactionSkipReason(reason?: string): boolean {
 }
 
 function formatCompactionReason(reason?: string): string | undefined {
-  const text = reason?.trim();
+  const text = normalizeOptionalString(reason);
   if (!text) {
     return undefined;
   }
@@ -95,10 +85,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       reply: { text: "⚙️ Compaction unavailable (missing session id)." },
     };
   }
+  const runtime = await import("./commands-compact.runtime.js");
   const sessionId = params.sessionEntry.sessionId;
-  if (isEmbeddedPiRunActive(sessionId)) {
-    abortEmbeddedPiRun(sessionId);
-    await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+  if (runtime.isEmbeddedPiRunActive(sessionId)) {
+    runtime.abortEmbeddedPiRun(sessionId);
+    await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
   }
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
@@ -107,7 +98,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     agentId: params.agentId,
     isGroup: params.isGroup,
   });
-  const result = await compactEmbeddedPiSession({
+  const result = await runtime.compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,
@@ -116,10 +107,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     groupChannel: params.sessionEntry.groupChannel,
     groupSpace: params.sessionEntry.space,
     spawnedBy: params.sessionEntry.spawnedBy,
-    sessionFile: resolveSessionFilePath(
+    sessionFile: runtime.resolveSessionFilePath(
       sessionId,
       params.sessionEntry,
-      resolveSessionFilePathOptions({
+      runtime.resolveSessionFilePathOptions({
         agentId: params.agentId,
         storePath: params.storePath,
       }),
@@ -146,14 +137,14 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     result.ok || isCompactionSkipReason(result.reason)
       ? result.compacted
         ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
+          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
           : result.result?.tokensBefore
-            ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
+            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
             : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
   if (result.ok && result.compacted) {
-    await incrementCompactionCount({
+    await runtime.incrementCompactionCount({
       cfg: params.cfg,
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
@@ -165,8 +156,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens = tokensAfterCompaction ?? resolveFreshSessionTotalTokens(params.sessionEntry);
-  const contextSummary = formatContextUsageShort(
+  const totalTokens =
+    tokensAfterCompaction ?? runtime.resolveFreshSessionTotalTokens(params.sessionEntry);
+  const contextSummary = runtime.formatContextUsageShort(
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
   );
@@ -174,6 +166,6 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const line = reason
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;
-  enqueueSystemEvent(line, { sessionKey: params.sessionKey });
+  runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
   return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
 };

@@ -11,17 +11,15 @@ import { createCliJsonlStreamingParser, parseCliOutput, type CliOutput } from ".
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import {
-  appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
   buildCliArgs,
   resolveCliRunQueueKey,
   enqueueCliRun,
-  loadPromptRefImages,
+  prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
-  writeCliImages,
 } from "./helpers.js";
 import {
   cliBackendLog,
@@ -38,6 +36,12 @@ const executeDeps = {
 
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);
+}
+
+function createCliAbortError(): Error {
+  const error = new Error("CLI run aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 function buildCliLogArgs(params: {
@@ -88,6 +92,9 @@ export async function executePreparedCliRun(
   cliSessionIdToUse?: string,
 ): Promise<CliOutput> {
   const params = context.params;
+  if (params.abortSignal?.aborted) {
+    throw createCliAbortError();
+  }
   const backend = context.preparedBackend.backend;
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
@@ -102,23 +109,20 @@ export async function executePreparedCliRun(
     systemPrompt: context.systemPrompt,
   });
 
-  let imagePaths: string[] | undefined;
-  let cleanupImages: (() => Promise<void>) | undefined;
   let prompt = prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
     preserveExactPrompt: context.heartbeatPrompt,
   });
-  const resolvedImages =
-    params.images && params.images.length > 0
-      ? params.images
-      : await loadPromptRefImages({ prompt, workspaceDir: context.workspaceDir });
-  if (resolvedImages.length > 0) {
-    const imagePayload = await writeCliImages(resolvedImages);
-    imagePaths = imagePayload.paths;
-    cleanupImages = imagePayload.cleanup;
-    if (!backend.imageArg) {
-      prompt = appendImagePathsToPrompt(prompt, imagePaths);
-    }
-  }
+  const {
+    prompt: promptWithImages,
+    imagePaths,
+    cleanupImages,
+  } = await prepareCliPromptImagePayload({
+    backend,
+    prompt,
+    workspaceDir: context.workspaceDir,
+    images: params.images,
+  });
+  prompt = promptWithImages;
 
   const { argsPrompt, stdin } = resolvePromptInput({
     backend,
@@ -171,11 +175,20 @@ export async function executePreparedCliRun(
       const env = (() => {
         const next = sanitizeHostExecEnv({
           baseEnv: process.env,
-          overrides: backend.env,
           blockPathOverrides: true,
         });
         for (const key of backend.clearEnv ?? []) {
           delete next[key];
+        }
+        if (backend.env && Object.keys(backend.env).length > 0) {
+          Object.assign(
+            next,
+            sanitizeHostExecEnv({
+              baseEnv: {},
+              overrides: backend.env,
+              blockPathOverrides: true,
+            }),
+          );
         }
         Object.assign(next, context.preparedBackend.env);
         return next;
@@ -223,8 +236,38 @@ export async function executePreparedCliRun(
         input: stdinPayload,
         onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
       });
-      const result = await managedRun.wait();
+      const replyBackendHandle = params.replyOperation
+        ? {
+            kind: "cli" as const,
+            cancel: () => {
+              managedRun.cancel("manual-cancel");
+            },
+            isStreaming: () => false,
+          }
+        : undefined;
+      if (replyBackendHandle) {
+        params.replyOperation?.attachBackend(replyBackendHandle);
+      }
+      const abortManagedRun = () => {
+        managedRun.cancel("manual-cancel");
+      };
+      params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
+      if (params.abortSignal?.aborted) {
+        abortManagedRun();
+      }
+      let result: Awaited<ReturnType<typeof managedRun.wait>>;
+      try {
+        result = await managedRun.wait();
+      } finally {
+        if (replyBackendHandle) {
+          params.replyOperation?.detachBackend(replyBackendHandle);
+        }
+        params.abortSignal?.removeEventListener("abort", abortManagedRun);
+      }
       streamingParser?.finish();
+      if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
+        throw createCliAbortError();
+      }
 
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();

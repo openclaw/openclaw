@@ -5,6 +5,7 @@ import type {
 } from "../media-understanding/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandArgs } from "./commands-registry.types.js";
+import type { ReplyThreadingPolicy } from "./types.js";
 
 /** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId;
@@ -64,6 +65,8 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  /** Per-turn reply-threading overrides. */
+  ReplyThreading?: ReplyThreadingPolicy;
   ReplyToId?: string;
   /**
    * Root message id for thread reconstruction (used by Feishu for root_id).
@@ -161,6 +164,8 @@ export type MsgContext = {
   MessageThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */
+  NativeDirectUserId?: string;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
   /** Warning: DM has topics enabled but this message is not in a topic. */

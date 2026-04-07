@@ -146,8 +146,24 @@ async function executeCompact(
   sessionKey: string,
 ): Promise<SlashCommandResult> {
   try {
-    await client.request("sessions.compact", { key: sessionKey });
-    return { content: "Context compacted successfully.", action: "refresh" };
+    const result = await client.request<{
+      compacted?: boolean;
+      reason?: string;
+      result?: { tokensBefore?: number; tokensAfter?: number };
+    }>("sessions.compact", { key: sessionKey });
+    if (result?.compacted) {
+      const before = result.result?.tokensBefore;
+      const after = result.result?.tokensAfter;
+      const tokenSummary =
+        typeof before === "number" && typeof after === "number"
+          ? ` (${before.toLocaleString()} -> ${after.toLocaleString()} tokens)`
+          : "";
+      return { content: `Context compacted successfully${tokenSummary}.`, action: "refresh" };
+    }
+    if (typeof result?.reason === "string" && result.reason.trim()) {
+      return { content: `Compaction skipped: ${result.reason}`, action: "refresh" };
+    }
+    return { content: "Compaction skipped.", action: "refresh" };
   } catch (err) {
     return { content: `Compaction failed: ${String(err)}` };
   }
