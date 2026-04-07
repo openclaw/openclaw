@@ -49,6 +49,13 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   agentProviderPolicy?: ToolPolicyLike;
   groupPolicy?: ToolPolicyLike;
   agentId?: string;
+  /**
+   * When true, plugin-only tools are preserved in agent/group policy steps
+   * instead of being stripped. This allows subagent scopes to inherit
+   * plugin tools that were explicitly allowed in the parent agent's config.
+   * @see https://github.com/openclaw/openclaw/issues/50131
+   */
+  preservePluginTools?: boolean;
 }): ToolPolicyPipelineStep[] {
   const agentId = params.agentId?.trim();
   const profile = params.profile?.trim();
@@ -78,14 +85,18 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
     {
       policy: params.agentPolicy,
       label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-      stripPluginOnlyAllowlist: true,
+      stripPluginOnlyAllowlist: !params.preservePluginTools,
     },
     {
       policy: params.agentProviderPolicy,
       label: agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-      stripPluginOnlyAllowlist: true,
+      stripPluginOnlyAllowlist: !params.preservePluginTools,
     },
-    { policy: params.groupPolicy, label: "group tools.allow", stripPluginOnlyAllowlist: true },
+    {
+      policy: params.groupPolicy,
+      label: "group tools.allow",
+      stripPluginOnlyAllowlist: !params.preservePluginTools,
+    },
   ];
 }
 

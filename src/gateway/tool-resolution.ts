@@ -107,6 +107,10 @@ export function resolveGatewayScopedTools(params: {
         agentProviderPolicy,
         groupPolicy,
         agentId,
+        // Preserve plugin tools for subagent scopes so they can inherit
+        // tools explicitly allowed in the parent agent's config.
+        // See: https://github.com/openclaw/openclaw/issues/50131
+        preservePluginTools: isSubagentSessionKey(params.sessionKey),
       }),
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
