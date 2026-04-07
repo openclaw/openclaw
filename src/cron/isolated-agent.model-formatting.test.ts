@@ -50,6 +50,7 @@ type AgentTurnPayload = {
 type SelectModelOptions = {
   cfg?: Record<string, unknown>;
   agentConfigOverride?: {
+    model?: unknown;
     subagents?: {
       model?: unknown;
     };
