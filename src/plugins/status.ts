@@ -286,6 +286,32 @@ function buildNativeMcpInspectEntries(
   return [...entries.values()].toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
+function mergeBundleMcpInspectEntries(params: {
+  existing: PluginInspectReport["mcpServers"];
+  supportedServerNames: string[];
+  unsupportedServerNames: string[];
+}): PluginInspectReport["mcpServers"] {
+  const entries = new Map(params.existing.map((entry) => [entry.name, entry]));
+
+  for (const [names, hasStdioTransport] of [
+    [params.supportedServerNames, true] as const,
+    [params.unsupportedServerNames, false] as const,
+  ]) {
+    for (const name of names) {
+      const normalized = name.trim();
+      if (!normalized || entries.has(normalized)) {
+        continue;
+      }
+      entries.set(normalized, {
+        name: normalized,
+        hasStdioTransport,
+      });
+    }
+  }
+
+  return [...entries.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
 function deriveInspectShape(params: {
   capabilityCount: number;
   typedHookCount: number;
@@ -372,16 +398,11 @@ export function buildPluginInspectReport(params: {
       rootDir: plugin.rootDir,
       bundleFormat: plugin.bundleFormat,
     });
-    mcpServers = [
-      ...mcpSupport.supportedServerNames.map((name) => ({
-        name,
-        hasStdioTransport: true,
-      })),
-      ...mcpSupport.unsupportedServerNames.map((name) => ({
-        name,
-        hasStdioTransport: false,
-      })),
-    ];
+    mcpServers = mergeBundleMcpInspectEntries({
+      existing: nativeMcpServers,
+      supportedServerNames: mcpSupport.supportedServerNames,
+      unsupportedServerNames: mcpSupport.unsupportedServerNames,
+    });
   }
   const capabilities = buildCapabilityEntries(
     plugin,

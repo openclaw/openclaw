@@ -1,4 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
@@ -265,7 +268,8 @@ function expectBundleInspectState(
 }
 
 describe("plugin status reports", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({
       buildAllPluginInspectReports,
       buildPluginCompatibilityNotices,
@@ -276,9 +280,6 @@ describe("plugin status reports", () => {
       formatPluginCompatibilityNotice,
       summarizePluginCompatibility,
     } = await import("./status.js"));
-  });
-
-  beforeEach(() => {
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     loadPluginMetadataRegistrySnapshotMock.mockReset();
@@ -874,6 +875,42 @@ describe("plugin status reports", () => {
       shape: "plain-capability",
       capabilityMode: "plain",
       capabilityKinds: ["mcp-server"],
+    });
+  });
+
+  it("dedupes bundle MCP inspect names against native ownership and preserves native status", async () => {
+    await withTempDir("openclaw-status-bundle-mcp-", async (rootDir) => {
+      await fs.mkdir(path.join(rootDir, ".claude-plugin"), { recursive: true });
+      await fs.writeFile(path.join(rootDir, ".claude-plugin", "plugin.json"), "{}", "utf8");
+      await fs.writeFile(
+        path.join(rootDir, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            helloWorld: { command: "node", args: ["hello.mjs"] },
+            bundleOnly: { command: "node", args: ["bundle-only.mjs"] },
+            unsupportedOnly: { url: "https://example.com/mcp" },
+          },
+        }),
+        "utf8",
+      );
+      setSinglePluginLoadResult(
+        createPluginRecord({
+          id: "bundle-mcp",
+          name: "Bundle MCP",
+          format: "bundle",
+          bundleFormat: "claude",
+          rootDir,
+          mcpServerNames: ["helloWorld"],
+        }),
+      );
+
+      const inspect = expectInspectReport("bundle-mcp");
+
+      expect(inspect.mcpServers).toEqual([
+        { name: "bundleOnly", hasStdioTransport: true },
+        { name: "helloWorld", hasStdioTransport: false },
+        { name: "unsupportedOnly", hasStdioTransport: false },
+      ]);
     });
   });
 
