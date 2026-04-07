@@ -1,4 +1,5 @@
 import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
+import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
@@ -8,6 +9,7 @@ import {
   resolveFreshSessionTotalTokens,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
@@ -27,6 +29,127 @@ function formatSignedInt(n: number): string {
 
 function formatDeltaCharsAndTokens(chars: number, estimatedTokens: number): string {
   return `${formatSignedInt(chars)} chars (~${formatSignedInt(estimatedTokens)} tok)`;
+}
+
+function normalizeInlineText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+type MemorySearchInspectorSnapshot =
+  | {
+      enabled: false;
+      summaryLine: string;
+      detailLines: string[];
+      json: {
+        enabled: false;
+        error?: string;
+      };
+    }
+  | {
+      enabled: true;
+      summaryLine: string;
+      detailLines: string[];
+      json: {
+        enabled: true;
+        provider: string;
+        sources: Array<"memory" | "sessions">;
+        fallback: string;
+        experimental: {
+          sessionMemory: boolean;
+        };
+        sync: {
+          onSessionStart: boolean;
+          onSearch: boolean;
+          watch: boolean;
+          postCompactionForce: boolean;
+        };
+        multimodal: {
+          enabled: boolean;
+          modalities: string[];
+          maxFileBytes?: number;
+        };
+        store: {
+          driver: string;
+          path: string;
+          tokenizer: string;
+          vectorEnabled: boolean;
+        };
+      };
+    };
+
+function resolveMemorySearchInspectorSnapshot(
+  params: HandleCommandsParams,
+): MemorySearchInspectorSnapshot {
+  const agentId = params.agentId ?? parseAgentSessionKey(params.sessionKey)?.agentId ?? "main";
+  try {
+    const resolved = resolveMemorySearchConfig(params.cfg, agentId);
+    if (!resolved) {
+      return {
+        enabled: false,
+        summaryLine: "Memory search: disabled",
+        detailLines: ["Memory search is disabled for this agent."],
+        json: { enabled: false },
+      };
+    }
+    const multimodalEnabled =
+      Boolean(resolved.multimodal.enabled) && resolved.multimodal.modalities.length > 0;
+    const sourceLabel = resolved.sources.join(", ");
+    const sessionSourceEnabled = resolved.sources.includes("sessions");
+    const summaryLine = `Memory search: enabled | provider=${resolved.provider} | sources=${sourceLabel} | fallback=${resolved.fallback}`;
+    const detailLines = [
+      summaryLine,
+      `Memory session sync: sessionMemory=${resolved.experimental.sessionMemory ? "on" : "off"} | onSessionStart=${resolved.sync.onSessionStart ? "on" : "off"} | onSearch=${resolved.sync.onSearch ? "on" : "off"} | watch=${resolved.sync.watch ? "on" : "off"}`,
+      `Memory post-compaction sync: ${sessionSourceEnabled && resolved.sync.sessions.postCompactionForce ? "forced when session sources are enabled" : "not forced"}`,
+      `Memory store: ${resolved.store.driver} | tokenizer=${resolved.store.fts.tokenizer} | vector=${resolved.store.vector.enabled ? "on" : "off"} | path=${resolved.store.path}`,
+      multimodalEnabled
+        ? `Memory multimodal: ${resolved.multimodal.modalities.join(", ")} | maxFileBytes=${formatInt(resolved.multimodal.maxFileBytes ?? 0)}`
+        : "Memory multimodal: off",
+    ];
+    return {
+      enabled: true,
+      summaryLine,
+      detailLines,
+      json: {
+        enabled: true,
+        provider: resolved.provider,
+        sources: resolved.sources,
+        fallback: resolved.fallback,
+        experimental: {
+          sessionMemory: resolved.experimental.sessionMemory,
+        },
+        sync: {
+          onSessionStart: resolved.sync.onSessionStart,
+          onSearch: resolved.sync.onSearch,
+          watch: resolved.sync.watch,
+          postCompactionForce: resolved.sync.sessions.postCompactionForce,
+        },
+        multimodal: {
+          enabled: multimodalEnabled,
+          modalities: [...resolved.multimodal.modalities],
+          ...(resolved.multimodal.maxFileBytes != null
+            ? { maxFileBytes: resolved.multimodal.maxFileBytes }
+            : {}),
+        },
+        store: {
+          driver: resolved.store.driver,
+          path: resolved.store.path,
+          tokenizer: resolved.store.fts.tokenizer,
+          vectorEnabled: resolved.store.vector.enabled,
+        },
+      },
+    };
+  } catch (error) {
+    const message = normalizeInlineText(error instanceof Error ? error.message : String(error));
+    return {
+      enabled: false,
+      summaryLine: `Memory search: invalid config (${message})`,
+      detailLines: [`Memory search config error: ${message}`],
+      json: {
+        enabled: false,
+        error: message,
+      },
+    };
+  }
 }
 
 function resolveTrackedPrompt(report: SessionSystemPromptReport): {
@@ -213,6 +336,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     outputTokens: params.sessionEntry?.outputTokens ?? null,
     contextTokens: params.contextTokens ?? null,
   } as const;
+  const memorySearch = resolveMemorySearchInspectorSnapshot(params);
   const runReport = resolveRunContextReport(params);
 
   if (sub === "json") {
@@ -224,6 +348,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
             report: runReport,
             estimateReport,
             comparison: compareContextReports(runReport, estimateReport),
+            memorySearch: memorySearch.json,
             session,
           },
           null,
@@ -232,7 +357,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       };
     }
     const report = await resolveContextReport(params);
-    return { text: JSON.stringify({ report, session }, null, 2) };
+    return { text: JSON.stringify({ report, memorySearch: memorySearch.json, session }, null, 2) };
   }
 
   if (sub === "delta") {
@@ -486,6 +611,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ...(perSkill.lines.length ? ["Top skills (prompt entry size):", ...perSkill.lines] : []),
         ...(perSkill.omitted ? [`… (+${perSkill.omitted} more skills)`] : []),
         "",
+        ...memorySearch.detailLines,
+        "",
         toolListLine,
         toolSchemaLine,
         toolsNamesLine,
@@ -517,6 +644,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     text: [
       "🧠 Context breakdown",
       ...sharedContextLines,
+      memorySearch.summaryLine,
       toolListLine,
       toolSchemaLine,
       toolsNamesLine,

@@ -10,6 +10,7 @@ function makeParams(
     contextTokens?: number | null;
     totalTokens?: number | null;
     totalTokensFresh?: boolean;
+    cfg?: Record<string, unknown>;
   },
 ): HandleCommandsParams {
   return {
@@ -66,7 +67,7 @@ function makeParams(
         },
       },
     },
-    cfg: {},
+    cfg: (options?.cfg ?? {}) as never,
     ctx: {},
     commandBody: "",
     commandArgs: [],
@@ -130,6 +131,77 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Actual context usage (cached): unavailable");
     expect(result.text).toContain("Session tokens (cached): unknown / ctx=8,192");
     expect(result.text).not.toContain("~645 tok");
+  });
+
+  it("surfaces memory-search config and post-compaction session sync in detail output", async () => {
+    const result = await buildContextReply(
+      makeParams("/context detail", false, {
+        cfg: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "auto",
+                sources: ["memory", "sessions"],
+                experimental: { sessionMemory: true },
+                sync: {
+                  onSessionStart: true,
+                  onSearch: true,
+                  watch: true,
+                  sessions: { postCompactionForce: true },
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+    expect(result.text).toContain(
+      "Memory search: enabled | provider=auto | sources=memory, sessions | fallback=none",
+    );
+    expect(result.text).toContain(
+      "Memory session sync: sessionMemory=on | onSessionStart=on | onSearch=on | watch=on",
+    );
+    expect(result.text).toContain(
+      "Memory post-compaction sync: forced when session sources are enabled",
+    );
+    expect(result.text).toContain("Memory multimodal: off");
+  });
+
+  it("includes memory-search snapshot in json output", async () => {
+    const result = await buildContextReply(
+      makeParams("/context json", false, {
+        cfg: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "auto",
+                sources: ["memory", "sessions"],
+                experimental: { sessionMemory: true },
+                sync: {
+                  onSessionStart: true,
+                  onSearch: true,
+                  watch: true,
+                  sessions: { postCompactionForce: true },
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+    const payload = JSON.parse(result.text);
+    expect(payload.memorySearch).toMatchObject({
+      enabled: true,
+      provider: "auto",
+      sources: ["memory", "sessions"],
+      experimental: { sessionMemory: true },
+      sync: {
+        onSessionStart: true,
+        onSearch: true,
+        watch: true,
+        postCompactionForce: true,
+      },
+    });
   });
 
   it("shows estimate-vs-run drift in deep output", async () => {
