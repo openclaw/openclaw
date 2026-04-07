@@ -412,5 +412,28 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent };
+  const handleEventGap = (opts?: { reload?: boolean }) => {
+    const shouldReload = opts?.reload !== false;
+    syncSessionKey();
+    const previousRunId = state.activeChatRunId;
+    if (!previousRunId) {
+      if (shouldReload) {
+        void loadHistory?.();
+        void refreshSessionInfo?.();
+      }
+      return;
+    }
+    streamAssembler.drop(previousRunId);
+    sessionRuns.clear();
+    state.activeChatRunId = null;
+    pendingHistoryRefresh = false;
+    forgetLocalRunId?.(previousRunId);
+    setActivityStatus("idle");
+    if (shouldReload) {
+      void loadHistory?.();
+      void refreshSessionInfo?.();
+    }
+  };
+
+  return { handleChatEvent, handleAgentEvent, handleBtwEvent, handleEventGap };
 }

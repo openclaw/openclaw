@@ -551,6 +551,65 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBe("run-active");
   });
 
+  it("stale streaming resets on event gap", () => {
+    const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent, handleEventGap } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handleChatEvent({
+      runId: "run-stale",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "partial" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-stale");
+    setActivityStatus.mockClear();
+    loadHistory.mockClear();
+
+    handleEventGap();
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    handleChatEvent({
+      runId: "run-fresh",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "fresh" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-fresh");
+    expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("fresh", "run-fresh");
+  });
+
+  it("does not clear active streaming run while still receiving events", () => {
+    const { state, chatLog, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-live",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "first" },
+    });
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-live",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "second" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-live");
+    expect(setActivityStatus).toHaveBeenCalledWith("streaming");
+    expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("second", "run-live");
+  });
+
   it("renders final error text when chat final has no content but includes event errorMessage", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
