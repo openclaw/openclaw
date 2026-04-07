@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
@@ -10,6 +9,7 @@ import {
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { SafeOpenError, readPathWithinRoot } from "../infra/fs-safe.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
@@ -56,7 +56,6 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
 
@@ -922,26 +921,29 @@ async function validateScriptFileForShellBleed(params: {
       ? path.resolve(relOrAbsPath)
       : path.resolve(params.workdir, relOrAbsPath);
 
-    // Best-effort: only validate if file exists and is reasonably small.
-    let stat: { isFile(): boolean; size: number };
+    // Best-effort: only validate files that safely resolve within workdir and
+    // are reasonably small. This keeps preflight checks on a pinned file
+    // identity instead of trusting mutable pathnames across multiple ops.
+    let content: string;
     try {
-      await assertSandboxPath({
+      const safeRead = await readPathWithinRoot({
+        rootDir: params.workdir,
         filePath: absPath,
-        cwd: params.workdir,
-        root: params.workdir,
+        maxBytes: 512 * 1024,
       });
-      stat = await fs.stat(absPath);
-    } catch {
-      continue;
+      content = safeRead.buffer.toString("utf-8");
+    } catch (error) {
+      if (
+        error instanceof SafeOpenError &&
+        (error.code === "invalid-path" ||
+          error.code === "not-found" ||
+          error.code === "outside-workspace" ||
+          error.code === "too-large")
+      ) {
+        continue;
+      }
+      throw error;
     }
-    if (!stat.isFile()) {
-      continue;
-    }
-    if (stat.size > 512 * 1024) {
-      continue;
-    }
-
-    const content = await fs.readFile(absPath, "utf-8");
 
     // Common failure mode: shell env var syntax leaking into Python/JS.
     // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.

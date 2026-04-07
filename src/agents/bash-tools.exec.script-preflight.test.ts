@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createExecTool } from "./bash-tools.exec.js";
 
@@ -265,6 +265,43 @@ describeNonWin("exec script preflight", () => {
       });
       const text = result.content.find((block) => block.type === "text")?.text ?? "";
       expect(text).not.toMatch(/exec preflight:/);
+    });
+  });
+
+  it("does not trust a swapped script pathname between validation and read", async () => {
+    await withTempDir("openclaw-exec-preflight-race-", async (parent) => {
+      const workdir = path.join(parent, "workdir");
+      const scriptPath = path.join(workdir, "script.js");
+      const outsidePath = path.join(parent, "outside.js");
+      await fs.mkdir(workdir, { recursive: true });
+      await fs.writeFile(scriptPath, 'console.log("inside")', "utf-8");
+      await fs.writeFile(outsidePath, 'console.log("$DM_JSON outside")', "utf-8");
+
+      const originalStat = fs.stat.bind(fs);
+      let swapped = false;
+      const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+        const target = args[0];
+        if (!swapped && typeof target === "string" && path.resolve(target) === scriptPath) {
+          const original = await originalStat(target);
+          await fs.rm(scriptPath, { force: true });
+          await fs.symlink(outsidePath, scriptPath);
+          swapped = true;
+          return original;
+        }
+        return await originalStat(...args);
+      });
+
+      try {
+        const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+        const result = await tool.execute("call-swapped-pathname", {
+          command: "node script.js",
+          workdir,
+        });
+        const text = result.content.find((block) => block.type === "text")?.text ?? "";
+        expect(text).not.toMatch(/exec preflight:/);
+      } finally {
+        statSpy.mockRestore();
+      }
     });
   });
 
