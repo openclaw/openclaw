@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "../../agents/context-cache.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { loadModelCatalog } from "../../agents/model-catalog.runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
-vi.mock("../../agents/model-catalog.js", () => ({
+vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadModelCatalog: vi.fn(async () => [
     { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
     { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
@@ -19,9 +19,7 @@ vi.mock("../../agents/model-catalog.js", () => ({
 
 vi.mock("../../channels/plugins/session-conversation.js", () => ({
   resolveSessionParentSessionKey: (sessionKey?: string) =>
-    sessionKey
-      ?.replace(/:thread:[^:]+$/, "")
-      .replace(/:topic:[^:]+$/, "") ?? null,
+    sessionKey?.replace(/:thread:[^:]+$/, "").replace(/:topic:[^:]+$/, "") ?? null,
 }));
 
 afterEach(() => {
@@ -533,7 +531,7 @@ describe("createModelSelectionState respects session model override", () => {
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   it("returns on when catalog model has reasoning true", async () => {
-    const { loadModelCatalog } = await import("../../agents/model-catalog.js");
+    const { loadModelCatalog } = await import("../../agents/model-catalog.runtime.js");
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([
       { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },
     ]);

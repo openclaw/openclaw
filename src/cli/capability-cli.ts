@@ -35,6 +35,7 @@ import {
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
@@ -1184,7 +1185,7 @@ export function registerCapabilityCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/capability", "docs.openclaw.ai/cli/capability")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/infer", "docs.openclaw.ai/cli/infer")}\n`,
     );
 
   registerCapabilityListAndInspect(capability);
@@ -1725,11 +1726,11 @@ export function registerCapabilityCli(program: Command) {
         const cfg = loadConfig();
         const selectedSearchProvider =
           typeof cfg.tools?.web?.search?.provider === "string"
-            ? cfg.tools.web.search.provider.trim().toLowerCase()
+            ? normalizeLowercaseStringOrEmpty(cfg.tools.web.search.provider)
             : "";
         const selectedFetchProvider =
           typeof cfg.tools?.web?.fetch?.provider === "string"
-            ? cfg.tools.web.fetch.provider.trim().toLowerCase()
+            ? normalizeLowercaseStringOrEmpty(cfg.tools.web.fetch.provider)
             : "";
         const result = {
           search: listWebSearchProviders({ config: cfg }).map((provider) => ({

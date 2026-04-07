@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import http2 from "node:http2";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
@@ -350,8 +353,7 @@ function normalizeStoredRegistration(record: unknown): ApnsRegistration | null {
     return null;
   }
   const candidate = record as Record<string, unknown>;
-  const transport =
-    typeof candidate.transport === "string" ? candidate.transport.trim().toLowerCase() : "direct";
+  const transport = normalizeLowercaseStringOrEmpty(candidate.transport) || "direct";
   if (transport === "relay") {
     return normalizeRelayRegistration(candidate as Partial<RelayApnsRegistration>);
   }
@@ -398,7 +400,7 @@ export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null
   if (typeof value !== "string") {
     return null;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (normalized === "sandbox" || normalized === "production") {
     return normalized;
   }

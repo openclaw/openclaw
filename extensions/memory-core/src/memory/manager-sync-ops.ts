@@ -37,6 +37,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -91,7 +92,9 @@ const log = createSubsystemLogger("memory");
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
-  const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
+  const parts = normalized
+    .split(path.sep)
+    .map((segment) => normalizeLowercaseStringOrEmpty(segment));
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
 }
 

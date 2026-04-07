@@ -18,13 +18,19 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { createForumTopicTelegram } from "./send.js";
 import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
 const STORE_VERSION = 1;
+
+let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
+
+async function loadTelegramSendModule() {
+  telegramSendModulePromise ??= import("./send.js");
+  return await telegramSendModulePromise;
+}
 
 type TelegramBindingTargetKind = "subagent" | "acp";
 
@@ -593,6 +599,7 @@ export function createTelegramThreadBindingManager(
           if (!tokenResolution.token) {
             return null;
           }
+          const { createForumTopicTelegram } = await loadTelegramSendModule();
           const result = await createForumTopicTelegram(chatId, threadName, {
             cfg,
             token: tokenResolution.token,

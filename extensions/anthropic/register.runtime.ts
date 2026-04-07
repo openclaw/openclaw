@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
@@ -217,7 +218,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
     templateIds,
     ctx: params.ctx,
     patch:
-      params.ctx.provider.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID
+      normalizeLowercaseStringOrEmpty(params.ctx.provider) === CLAUDE_CLI_BACKEND_ID
         ? { provider: CLAUDE_CLI_BACKEND_ID }
         : undefined,
   });
@@ -247,7 +248,7 @@ function resolveAnthropicForwardCompatModel(
 }
 
 function matchesAnthropicModernModel(modelId: string): boolean {
-  const lower = modelId.trim().toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
 }
 
@@ -459,7 +460,7 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
     resolveSyntheticAuth: ({ provider }) =>
-      provider.trim().toLowerCase() === CLAUDE_CLI_BACKEND_ID
+      normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
     buildReplayPolicy: buildAnthropicReplayPolicy,

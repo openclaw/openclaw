@@ -218,7 +218,7 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
     return true;
   }
   const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
+  if (tailnetIPv6 && normalizeLowercaseStringOrEmpty(ip) === tailnetIPv6.toLowerCase()) {
     return true;
   }
   return false;
@@ -484,7 +484,7 @@ function parseHostForAddressChecks(
   if (!host) {
     return null;
   }
-  const normalizedHost = host.trim().toLowerCase();
+  const normalizedHost = normalizeLowercaseStringOrEmpty(host);
   const canonicalHost = normalizedHost.replace(/\.+$/, "");
   if (canonicalHost === "localhost") {
     return { isLocalhost: true, unbracketedHost: canonicalHost };

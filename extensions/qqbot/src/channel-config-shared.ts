@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/core";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   applyQQBotAccountConfig,
@@ -160,7 +161,7 @@ export const qqbotConfigAdapter = {
 
 export const qqbotSetupAdapterShared = {
   resolveAccountId: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-    accountId?.trim().toLowerCase() || resolveDefaultQQBotAccountId(cfg),
+    normalizeLowercaseStringOrEmpty(accountId) || resolveDefaultQQBotAccountId(cfg),
   applyAccountName: ({
     cfg,
     accountId,

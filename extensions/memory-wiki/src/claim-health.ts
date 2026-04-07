@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -120,7 +121,7 @@ function resolveLatestTimestamp(candidates: Array<string | undefined>): string |
 }
 
 export function normalizeClaimStatus(status?: string): string {
-  return status?.trim().toLowerCase() || "supported";
+  return normalizeLowercaseStringOrEmpty(status) || "supported";
 }
 
 export function isClaimContestedStatus(status?: string): boolean {

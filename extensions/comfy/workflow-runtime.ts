@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   resolveUserPath,
 } from "openclaw/plugin-sdk/text-runtime";
@@ -263,7 +264,7 @@ async function readJsonResponse<T>(params: {
 }
 
 function inferFileExtension(params: { fileName?: string; mimeType?: string }): string {
-  const normalizedMime = params.mimeType?.toLowerCase().trim();
+  const normalizedMime = normalizeOptionalLowercaseString(params.mimeType);
   if (normalizedMime?.includes("jpeg")) {
     return "jpg";
   }
