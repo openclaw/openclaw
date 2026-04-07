@@ -1234,6 +1234,7 @@
                   "providers/arcee",
                   "providers/bedrock",
                   "providers/bedrock-mantle",
+                  "providers/cheapestinference",
                   "providers/chutes",
                   "providers/comfy",
                   "providers/claude-max-api-proxy",
