@@ -3,6 +3,7 @@
 // events ephemeral. Events are session-scoped and require an explicit key.
 
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -45,14 +46,7 @@ function requireSessionKey(key?: string | null): string {
 }
 
 function normalizeContextKey(key?: string | null): string | null {
-  if (!key) {
-    return null;
-  }
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.toLowerCase();
+  return normalizeOptionalLowercaseString(key) ?? null;
 }
 
 function getSessionQueue(sessionKey: string): SessionQueue | undefined {

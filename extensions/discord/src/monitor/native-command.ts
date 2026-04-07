@@ -47,6 +47,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
@@ -298,8 +299,7 @@ function buildDiscordCommandOptions(params: {
             return;
           }
           const focused = interaction.options.getFocused();
-          const focusValue =
-            typeof focused?.value === "string" ? focused.value.trim().toLowerCase() : "";
+          const focusValue = normalizeLowercaseStringOrEmpty(focused?.value);
           const context =
             typeof arg.choices === "function" && resolveChoiceContext
               ? await resolveChoiceContext(interaction)
@@ -340,14 +340,14 @@ function buildDiscordCommandOptions(params: {
 }
 
 function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
-  const normalized = commandName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(commandName);
   // Recovery slash commands still need configured ACP readiness so stale dead
   // bindings are recreated before /new or /reset dispatches through them.
   return normalized === "acp";
 }
 
 function shouldBypassConfiguredAcpGuildGuards(commandName: string): boolean {
-  const normalized = commandName.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(commandName);
   return normalized === "new" || normalized === "reset";
 }
 

@@ -1,5 +1,6 @@
 import type { ChannelStatusIssue } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedTarget,
@@ -83,7 +84,7 @@ function stripBlueBubblesPrefix(value: string): string {
   if (!trimmed) {
     return "";
   }
-  if (!trimmed.toLowerCase().startsWith("bluebubbles:")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("bluebubbles:")) {
     return trimmed;
   }
   return trimmed.slice("bluebubbles:".length).trim();
@@ -135,7 +136,7 @@ function normalizeBlueBubblesHandle(raw: string): string {
   if (!trimmed) {
     return "";
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (lowered.startsWith("imessage:")) {
     return normalizeBlueBubblesHandle(trimmed.slice(9));
   }
@@ -146,7 +147,7 @@ function normalizeBlueBubblesHandle(raw: string): string {
     return normalizeBlueBubblesHandle(trimmed.slice(5));
   }
   if (trimmed.includes("@")) {
-    return trimmed.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return trimmed.replace(/\s+/g, "");
 }
@@ -167,7 +168,7 @@ function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
   if (!trimmed) {
     throw new Error("BlueBubbles target is required");
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
 
   const servicePrefixed = resolveServicePrefixedTarget({
     trimmed,

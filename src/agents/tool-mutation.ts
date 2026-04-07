@@ -70,10 +70,10 @@ function normalizeActionName(value: unknown): string | undefined {
 function normalizeFingerprintValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     const normalized = value.trim();
-    return normalized ? normalized.toLowerCase() : undefined;
+    return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
   }
   if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return String(value).toLowerCase();
+    return normalizeLowercaseStringOrEmpty(String(value));
   }
   return undefined;
 }
@@ -189,7 +189,7 @@ export function buildToolActionFingerprint(
     appendFingerprintAlias(parts, record, "jobid", ["jobId", "job_id"]) || hasStableTarget;
   hasStableTarget = appendFingerprintAlias(parts, record, "id", ["id"]) || hasStableTarget;
   hasStableTarget = appendFingerprintAlias(parts, record, "model", ["model"]) || hasStableTarget;
-  const normalizedMeta = meta?.trim().replace(/\s+/g, " ").toLowerCase();
+  const normalizedMeta = normalizeOptionalLowercaseString(meta?.trim().replace(/\s+/g, " "));
   // Meta text often carries volatile details (for example "N chars").
   // Prefer stable arg-derived keys for matching; only fall back to meta
   // when no stable target key is available.

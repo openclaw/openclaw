@@ -428,7 +428,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     changes.push({
       pluginId: webFetchPluginId,
       kind: "web-fetch-provider-selected",
-      providerId: String(webFetchProvider).trim().toLowerCase(),
+      providerId: normalizeOptionalLowercaseString(webFetchProvider) ?? "",
     });
   }
 

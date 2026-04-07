@@ -45,7 +45,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   deliveryContextFromSession,
@@ -491,7 +494,7 @@ function resolveConversationIdForThreadBinding(params: {
   threadId?: string | number;
   groupId?: string;
 }): string | undefined {
-  const channel = params.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(params.channel);
   const normalizedChannelId = channel ? normalizeChannelId(channel) : null;
   const channelKey = normalizedChannelId ?? channel ?? null;
   const pluginResolvedConversationId = normalizedChannelId
@@ -532,7 +535,7 @@ function resolveAcpSpawnChannelAccountId(params: {
   channel?: string;
   accountId?: string;
 }): string | undefined {
-  const channel = params.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(params.channel);
   const explicitAccountId = params.accountId?.trim();
   if (explicitAccountId) {
     return explicitAccountId;
@@ -555,7 +558,7 @@ function prepareAcpThreadBinding(params: {
   threadId?: string | number;
   groupId?: string;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
-  const channel = params.channel?.trim().toLowerCase();
+  const channel = normalizeOptionalLowercaseString(params.channel);
   if (!channel) {
     return {
       ok: false,

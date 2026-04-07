@@ -3,6 +3,7 @@ import {
   createManagedRun,
   enqueueSystemEventMock,
   requestHeartbeatNowMock,
+  EXISTING_CODEX_CONFIG,
   setupCliRunnerTestModule,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
@@ -174,6 +175,7 @@ describe("runCliAgent reliability", () => {
         prompt: "hi",
         provider: "codex-cli",
         model: "gpt-5.4",
+        config: EXISTING_CODEX_CONFIG,
         timeoutMs: 1_000,
         runId: "run-retry-failure",
         cliSessionId: "thread-123",

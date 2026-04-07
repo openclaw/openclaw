@@ -5,6 +5,7 @@ import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackAttachment, SlackFile } from "../types.js";
 
 function isSlackHostname(hostname: string): boolean {
@@ -239,7 +240,7 @@ export async function resolveSlackMedia(params: {
         const isExpectedHtml =
           fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
         if (!isExpectedHtml) {
-          const detectedMime = fetched.contentType?.split(";")[0]?.trim().toLowerCase();
+          const detectedMime = normalizeOptionalLowercaseString(fetched.contentType?.split(";")[0]);
           if (detectedMime === "text/html" || looksLikeHtmlBuffer(fetched.buffer)) {
             return null;
           }

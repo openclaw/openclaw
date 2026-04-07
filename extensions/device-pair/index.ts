@@ -1,7 +1,10 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   clearDeviceBootstrapTokens,
   definePluginEntry,
@@ -563,7 +566,7 @@ export default definePluginEntry({
       handler: async (ctx) => {
         const args = normalizeOptionalString(ctx.args) ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
-        const action = tokens[0]?.toLowerCase() ?? "";
+        const action = normalizeLowercaseStringOrEmpty(tokens[0]);
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
           : undefined;
@@ -583,7 +586,7 @@ export default definePluginEntry({
         }
 
         if (action === "notify") {
-          const notifyAction = normalizeOptionalString(tokens[1])?.toLowerCase() ?? "status";
+          const notifyAction = normalizeLowercaseStringOrEmpty(tokens[1]) || "status";
           return await handleNotifyCommand({
             api,
             ctx,

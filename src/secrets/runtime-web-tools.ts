@@ -82,6 +82,31 @@ function hasPluginScopedWebToolConfig(
   });
 }
 
+function inferSingleBundledPluginScopedWebToolConfigOwner(
+  config: OpenClawConfig,
+  key: "webSearch" | "webFetch",
+): string | undefined {
+  const entries = config.plugins?.entries;
+  if (!entries) {
+    return undefined;
+  }
+  const matches: string[] = [];
+  for (const [pluginId, entry] of Object.entries(entries)) {
+    if (!isRecord(entry) || entry.enabled === false) {
+      continue;
+    }
+    const pluginConfig = isRecord(entry.config) ? entry.config : undefined;
+    if (!isRecord(pluginConfig?.[key])) {
+      continue;
+    }
+    matches.push(pluginId);
+    if (matches.length > 1) {
+      return undefined;
+    }
+  }
+  return matches[0];
+}
+
 function hasCustomWebSearchPluginRisk(config: OpenClawConfig): boolean {
   const plugins = config.plugins;
   if (!plugins) {
@@ -490,6 +515,10 @@ export async function resolveRuntimeWebTools(params: {
     };
   }
   const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
+  const configuredBundledWebSearchPluginIdHint =
+    rawProvider && hasPluginWebSearchConfig && !hasCustomWebSearchPluginRisk(params.sourceConfig)
+      ? inferSingleBundledPluginScopedWebToolConfigOwner(params.sourceConfig, "webSearch")
+      : undefined;
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",
     diagnostics: [],
@@ -518,6 +547,7 @@ export async function resolveRuntimeWebTools(params: {
       invalidAutoDetectCode: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
       sourceConfig: params.sourceConfig,
       context: params.context,
+      configuredBundledPluginIdHint: configuredBundledWebSearchPluginIdHint,
       resolveProviders: ({ configuredBundledPluginId }) =>
         resolveBundledWebSearchProviders({
           sourceConfig: params.sourceConfig,

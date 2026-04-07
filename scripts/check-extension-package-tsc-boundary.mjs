@@ -1,10 +1,18 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
-import { dirname, join, resolve } from "node:path";
+import path, { dirname, join, resolve } from "node:path";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -15,6 +23,10 @@ const prepareBoundaryArtifactsBin = resolve(
 );
 const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.json";
 const FAILURE_OUTPUT_TAIL_LINES = 40;
+const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".json"]);
+const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
+  "../../src/plugins/contracts/rootdir-boundary-canary.ts";
+const ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT = "src/plugins/contracts/rootdir-boundary-canary.ts";
 
 function parseMode(argv) {
   const modeArg = argv.find((arg) => arg.startsWith("--mode="));
@@ -76,6 +88,9 @@ export function formatBoundaryCheckSuccessSummary(params = {}) {
   if (Number.isInteger(params.compileCount)) {
     lines.push(`compiled plugins: ${params.compileCount}`);
   }
+  if (Number.isInteger(params.skippedCompileCount) && params.skippedCompileCount > 0) {
+    lines.push(`skipped plugins: ${params.skippedCompileCount}`);
+  }
   if (Number.isInteger(params.canaryCount)) {
     lines.push(`canary plugins: ${params.canaryCount}`);
   }
@@ -92,6 +107,20 @@ export function formatBoundaryCheckSuccessSummary(params = {}) {
     lines.push(`elapsed: ${params.elapsedMs}ms`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+export function formatSkippedCompileProgress(params = {}) {
+  const skippedCount = params.skippedCount ?? 0;
+  const totalCount = params.totalCount ?? 0;
+  if (!Number.isInteger(skippedCount) || skippedCount <= 0) {
+    return "";
+  }
+
+  const staleCount = Math.max(0, totalCount - skippedCount);
+  if (staleCount > 0) {
+    return `skipped ${skippedCount} fresh plugin compiles before running ${staleCount} stale plugin checks\n`;
+  }
+  return `skipped ${skippedCount} fresh plugin compiles\n`;
 }
 
 export function formatStepFailure(label, params = {}) {
@@ -146,6 +175,91 @@ function collectCanaryExtensionIds(extensionIds) {
       ]),
     ).values(),
   ];
+}
+
+function isRelevantCompileInput(filePath) {
+  const basename = path.basename(filePath);
+  if (
+    basename === "__rootdir_boundary_canary__.ts" ||
+    basename === "tsconfig.rootdir-canary.json"
+  ) {
+    return false;
+  }
+  if (basename.endsWith(".tsbuildinfo")) {
+    return false;
+  }
+  return COMPILE_INPUT_EXTENSIONS.has(path.extname(filePath));
+}
+
+function collectNewestMtime(entryPath, params = {}) {
+  const includeFile = params.includeFile ?? (() => true);
+  const skipDistDirectories = params.skipDistDirectories ?? true;
+  let newestMtimeMs = 0;
+
+  function visit(currentPath) {
+    if (!existsSync(currentPath)) {
+      return;
+    }
+    const stats = statSync(currentPath);
+    if (stats.isDirectory()) {
+      const basename = path.basename(currentPath);
+      if ((skipDistDirectories && basename === "dist") || basename === "node_modules") {
+        return;
+      }
+      for (const child of readdirSync(currentPath)) {
+        visit(path.join(currentPath, child));
+      }
+      return;
+    }
+    if (!includeFile(currentPath)) {
+      return;
+    }
+    newestMtimeMs = Math.max(newestMtimeMs, stats.mtimeMs);
+  }
+
+  visit(entryPath);
+  return newestMtimeMs;
+}
+
+function collectOldestMtime(paths) {
+  let oldestMtimeMs = Number.POSITIVE_INFINITY;
+
+  for (const entryPath of paths) {
+    if (!existsSync(entryPath)) {
+      return null;
+    }
+    oldestMtimeMs = Math.min(oldestMtimeMs, statSync(entryPath).mtimeMs);
+  }
+
+  return Number.isFinite(oldestMtimeMs) ? oldestMtimeMs : null;
+}
+
+export function isBoundaryCompileFresh(extensionId, params = {}) {
+  const rootDir = params.rootDir ?? repoRoot;
+  const extensionRoot = resolve(rootDir, "extensions", extensionId);
+  const extensionNewestInputMtimeMs =
+    params.extensionNewestInputMtimeMs ??
+    collectNewestMtime(extensionRoot, { includeFile: isRelevantCompileInput });
+  const sharedNewestInputMtimeMs =
+    params.sharedNewestInputMtimeMs ??
+    Math.max(
+      collectNewestMtime(resolve(rootDir, "dist/plugin-sdk"), {
+        skipDistDirectories: false,
+      }),
+      collectNewestMtime(resolve(rootDir, "packages/plugin-sdk/dist"), {
+        skipDistDirectories: false,
+      }),
+    );
+  const newestInputMtimeMs = Math.max(extensionNewestInputMtimeMs, sharedNewestInputMtimeMs);
+  const oldestOutputMtimeMs = collectOldestMtime([
+    resolveBoundaryTsStampPath(extensionId, rootDir),
+  ]);
+  return oldestOutputMtimeMs !== null && oldestOutputMtimeMs >= newestInputMtimeMs;
+}
+
+function writeStampFile(filePath) {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
 }
 
 function runNodeStep(label, args, timeoutMs) {
@@ -346,6 +460,7 @@ export async function runNodeStepsWithConcurrency(steps, concurrency) {
           firstFailure ??= error;
         },
       });
+      step.onSuccess?.();
     }
   });
   await Promise.allSettled(workers);
@@ -389,6 +504,10 @@ export function installCanaryArtifactCleanup(extensionIds, params = {}) {
 
 function resolveBoundaryTsBuildInfoPath(extensionId) {
   return resolve(repoRoot, "extensions", extensionId, "dist", ".boundary-tsc.tsbuildinfo");
+}
+
+function resolveBoundaryTsStampPath(extensionId, rootDir = repoRoot) {
+  return resolve(rootDir, "extensions", extensionId, "dist", ".boundary-tsc.stamp");
 }
 
 export function resolveBoundaryCheckLockPath(rootDir = repoRoot) {
@@ -442,81 +561,136 @@ async function runCompileCheck(extensionIds) {
   runNodeStep("plugin-sdk boundary prep", [prepareBoundaryArtifactsBin], 420_000);
   const prepElapsedMs = Date.now() - prepStartedAt;
   const concurrency = resolveCompileConcurrency();
+  const verboseFreshLogs = process.env.OPENCLAW_EXTENSION_BOUNDARY_VERBOSE_FRESH === "1";
+  const sharedNewestInputMtimeMs = Math.max(
+    collectNewestMtime(resolve(repoRoot, "dist/plugin-sdk"), {
+      skipDistDirectories: false,
+    }),
+    collectNewestMtime(resolve(repoRoot, "packages/plugin-sdk/dist"), {
+      skipDistDirectories: false,
+    }),
+  );
   process.stdout.write(`compile concurrency ${concurrency}\n`);
   const compileStartedAt = Date.now();
-  const steps = extensionIds.map((extensionId, index) => {
-    const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
-    mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
-    return {
-      label: extensionId,
-      onStart() {
-        process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
-      },
-      args: [
-        tscBin,
-        "-p",
-        resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
-        "--noEmit",
-        "--incremental",
-        "--tsBuildInfoFile",
-        tsBuildInfoPath,
-      ],
-      timeoutMs: 120_000,
-    };
-  });
-  await runNodeStepsWithConcurrency(steps, concurrency);
+  let skippedCompileCount = 0;
+  const steps = extensionIds
+    .map((extensionId, index) => {
+      const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
+      const extensionNewestInputMtimeMs = collectNewestMtime(
+        resolve(repoRoot, "extensions", extensionId),
+        {
+          includeFile: isRelevantCompileInput,
+        },
+      );
+      mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
+      if (
+        isBoundaryCompileFresh(extensionId, {
+          extensionNewestInputMtimeMs,
+          sharedNewestInputMtimeMs,
+        })
+      ) {
+        skippedCompileCount += 1;
+        if (verboseFreshLogs) {
+          process.stdout.write(
+            `[${index + 1}/${extensionIds.length}] ${extensionId} (fresh; skipping)\n`,
+          );
+        }
+        return null;
+      }
+      return {
+        label: extensionId,
+        onStart() {
+          process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
+        },
+        onSuccess() {
+          writeStampFile(resolveBoundaryTsStampPath(extensionId));
+        },
+        args: [
+          tscBin,
+          "-p",
+          resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
+          "--noEmit",
+          "--incremental",
+          "--tsBuildInfoFile",
+          tsBuildInfoPath,
+        ],
+        timeoutMs: 120_000,
+      };
+    })
+    .filter(Boolean);
+  if (!verboseFreshLogs && skippedCompileCount > 0) {
+    process.stdout.write(
+      formatSkippedCompileProgress({
+        skippedCount: skippedCompileCount,
+        totalCount: extensionIds.length,
+      }),
+    );
+  }
+  if (steps.length > 0) {
+    await runNodeStepsWithConcurrency(steps, concurrency);
+  }
   return {
     prepElapsedMs,
+    compileCount: steps.length,
+    skippedCompileCount,
     compileElapsedMs: Date.now() - compileStartedAt,
   };
 }
 
-function runCanaryCheck(extensionIds) {
+async function runCanaryCheck(extensionIds) {
   const startedAt = Date.now();
-  for (const extensionId of extensionIds) {
-    const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId);
+  await Promise.all(
+    extensionIds.map(async (extensionId, index) => {
+      const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId);
 
-    cleanupCanaryArtifacts(extensionId);
-    try {
-      writeFileSync(
-        canaryPath,
-        'import * as foo from "../../src/cli/acp-cli.ts";\nvoid foo;\nexport {};\n',
-        "utf8",
-      );
-      writeFileSync(
-        tsconfigPath,
-        `${JSON.stringify(
-          {
-            extends: "./tsconfig.json",
-            include: ["./__rootdir_boundary_canary__.ts"],
-            exclude: [],
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-
-      const result = runNodeStep(
-        `${extensionId} canary`,
-        [tscBin, "-p", tsconfigPath, "--noEmit"],
-        120_000,
-      );
-      throw new Error(
-        `${extensionId} canary unexpectedly passed\n${result.stdout}${result.stderr}`,
-      );
-    } catch (error) {
-      const output =
-        error instanceof Error && typeof error.fullOutput === "string"
-          ? error.fullOutput
-          : String(error);
-      if (!output.includes("TS6059") || !output.includes("src/cli/acp-cli.ts")) {
-        throw error;
-      }
-    } finally {
       cleanupCanaryArtifacts(extensionId);
-    }
-  }
+      process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId} canary\n`);
+      try {
+        writeFileSync(
+          canaryPath,
+          [
+            `import { ROOTDIR_BOUNDARY_CANARY } from "${ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH}";`,
+            "void ROOTDIR_BOUNDARY_CANARY;",
+            "export {};",
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        writeFileSync(
+          tsconfigPath,
+          `${JSON.stringify(
+            {
+              extends: "./tsconfig.json",
+              include: ["./__rootdir_boundary_canary__.ts"],
+              exclude: [],
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+
+        const result = await runNodeStepAsync(
+          `${extensionId} canary`,
+          [tscBin, "-p", tsconfigPath, "--noEmit"],
+          120_000,
+        );
+        throw new Error(
+          `${extensionId} canary unexpectedly passed\n${result.stdout}${result.stderr}`,
+        );
+      } catch (error) {
+        const output =
+          error instanceof Error && typeof error.fullOutput === "string"
+            ? error.fullOutput
+            : String(error);
+        if (!output.includes("TS6059") || !output.includes(ROOTDIR_BOUNDARY_CANARY_OUTPUT_HINT)) {
+          throw error;
+        }
+      } finally {
+        cleanupCanaryArtifacts(extensionId);
+      }
+    }),
+  );
   return {
     canaryElapsedMs: Date.now() - startedAt,
   };
@@ -532,21 +706,25 @@ export async function main(argv = process.argv.slice(2)) {
   const releaseBoundaryLock = acquireBoundaryCheckLock();
   const teardownCanaryCleanup = installCanaryArtifactCleanup(cleanupExtensionIds);
   let prepElapsedMs;
+  let compileCount = 0;
+  let skippedCompileCount = 0;
   let compileElapsedMs;
   let canaryElapsedMs;
 
   try {
     cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
     if (mode === "all" || mode === "compile") {
-      ({ prepElapsedMs, compileElapsedMs } = await runCompileCheck(optInExtensionIds));
+      ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs } =
+        await runCompileCheck(optInExtensionIds));
     }
     if (shouldRunCanary) {
-      ({ canaryElapsedMs } = runCanaryCheck(canaryExtensionIds));
+      ({ canaryElapsedMs } = await runCanaryCheck(canaryExtensionIds));
     }
     process.stdout.write(
       formatBoundaryCheckSuccessSummary({
         mode,
-        compileCount: mode === "canary" ? 0 : optInExtensionIds.length,
+        compileCount,
+        skippedCompileCount,
         canaryCount: shouldRunCanary ? canaryExtensionIds.length : 0,
         prepElapsedMs,
         compileElapsedMs,

@@ -31,7 +31,10 @@ import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -460,15 +463,15 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
     const slashIndex = runtimeModelRaw.indexOf("/");
-    const embeddedProvider = runtimeModelRaw.slice(0, slashIndex).trim().toLowerCase();
+    const embeddedProvider =
+      normalizeOptionalLowercaseString(runtimeModelRaw.slice(0, slashIndex)) ?? "";
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
-      runtimeModelRaw.toLowerCase() ===
-        String(entry?.fallbackNoticeActiveModel ?? "")
-          .trim()
-          .toLowerCase();
+      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
+        normalizeLowercaseStringOrEmpty(String(entry?.fallbackNoticeActiveModel ?? "").trim());
     const runtimeMatchesSelectedModel =
-      runtimeModelRaw.toLowerCase() === (modelRefs.selected.label || "unknown").toLowerCase();
+      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
+      normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
     // Legacy fallback sessions can persist provider-qualified runtime ids
     // without a separate modelProvider field. Preserve provider-aware lookup
     // when the stored slash id is the selected model or the active fallback
@@ -476,7 +479,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     // slash ids.
     if (
       (fallbackMatchesRuntimeModel || runtimeMatchesSelectedModel) &&
-      embeddedProvider === activeProvider.toLowerCase()
+      embeddedProvider === normalizeLowercaseStringOrEmpty(activeProvider)
     ) {
       contextLookupProvider = activeProvider;
       contextLookupModel = activeModel;
@@ -997,9 +1000,12 @@ function formatCommandEntry(command: ChatCommandDefinition): string {
   const aliases = command.textAliases
     .map((alias) => alias.trim())
     .filter(Boolean)
-    .filter((alias) => alias.toLowerCase() !== primary.toLowerCase())
+    .filter(
+      (alias) =>
+        normalizeLowercaseStringOrEmpty(alias) !== normalizeLowercaseStringOrEmpty(primary),
+    )
     .filter((alias) => {
-      const key = alias.toLowerCase();
+      const key = normalizeLowercaseStringOrEmpty(alias);
       if (seen.has(key)) {
         return false;
       }
@@ -1078,7 +1084,7 @@ export function buildCommandsMessagePaginated(
   options?: CommandsMessageOptions,
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
-  const surface = options?.surface?.toLowerCase();
+  const surface = normalizeOptionalLowercaseString(options?.surface);
   const prefersPaginatedList =
     options?.forcePaginatedList === true ||
     Boolean(surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData);

@@ -1,8 +1,10 @@
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 function isLocalFileUrlHost(hostname: string): boolean {
-  return hostname === "" || hostname.toLowerCase() === "localhost";
+  const normalized = normalizeLowercaseStringOrEmpty(hostname);
+  return normalized === "" || normalized === "localhost";
 }
 
 export function isWindowsNetworkPath(filePath: string): boolean {

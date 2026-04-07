@@ -8,7 +8,10 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "openclaw/plugin-sdk/text-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
 import {
   createFixedWindowRateLimiter,
@@ -291,7 +294,9 @@ function enforceLoopbackMutationGuards(
     return false;
   }
 
-  const secFetchSite = firstHeaderValue(req.headers["sec-fetch-site"])?.trim().toLowerCase();
+  const secFetchSite = normalizeOptionalLowercaseString(
+    firstHeaderValue(req.headers["sec-fetch-site"]),
+  );
   if (secFetchSite === "cross-site") {
     ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
     sendJson(res, 403, { ok: false, error: "Forbidden" });

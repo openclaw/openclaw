@@ -1816,8 +1816,8 @@ for usage/billing and raise limits as needed.
 
     - `config.schema.lookup`: inspect one config subtree with its shallow schema node, matched UI hint, and immediate child summaries before writing
     - `config.get`: fetch the current snapshot + hash
-    - `config.patch`: safe partial update (preferred for most RPC edits)
-    - `config.apply`: validate + replace the full config, then restart
+    - `config.patch`: safe partial update (preferred for most RPC edits); hot-reloads when possible and restarts when required
+    - `config.apply`: validate + replace the full config; hot-reloads when possible and restarts when required
     - The owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
 
   </Accordion>

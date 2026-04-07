@@ -132,6 +132,7 @@ import {
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
+  createOpenAIStringContentWrapper,
   createOpenAITextVerbosityWrapper,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
@@ -170,6 +171,7 @@ function createTestOpenAIProviderWrapper(
     config: params.context.config,
     agentDir: params.context.agentDir,
   });
+  streamFn = createOpenAIStringContentWrapper(streamFn);
   return createOpenAIResponsesContextManagementWrapper(
     createOpenAIReasoningCompatibilityWrapper(streamFn),
     params.context.extraParams,
@@ -560,6 +562,54 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "inferrs",
+      applyModelId: "gg-hf-gg/gemma-4-E2B-it",
+      model: {
+        api: "openai-completions",
+        provider: "inferrs",
+        id: "gg-hf-gg/gemma-4-E2B-it",
+        name: "Gemma 4 E2B (inferrs)",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 4096,
+        compat: {
+          requiresStringContent: true,
+        } as Record<string, unknown>,
+      } as unknown as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "system",
+            content: [{ type: "text", text: "System text" }],
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Line one" },
+              { type: "text", text: "Line two" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: "System text",
+      },
+      {
+        role: "user",
+        content: "Line one\nLine two",
+      },
+    ]);
   });
 
   it("injects parallel_tool_calls for openai-responses payloads when configured", () => {

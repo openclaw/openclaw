@@ -260,9 +260,17 @@
       "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
       "default": "./dist/plugin-sdk/plugin-runtime.js"
     },
+    "./plugin-sdk/channel-secret-basic-runtime": {
+      "types": "./dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-secret-basic-runtime.js"
+    },
     "./plugin-sdk/channel-secret-runtime": {
       "types": "./dist/plugin-sdk/channel-secret-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-secret-runtime.js"
+    },
+    "./plugin-sdk/channel-secret-tts-runtime": {
+      "types": "./dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-secret-tts-runtime.js"
     },
     "./plugin-sdk/secret-ref-runtime": {
       "types": "./dist/plugin-sdk/secret-ref-runtime.d.ts",

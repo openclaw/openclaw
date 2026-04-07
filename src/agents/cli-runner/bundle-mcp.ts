@@ -12,7 +12,10 @@ import {
   type BundleMcpServerConfig,
 } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -142,7 +145,7 @@ function normalizeCodexServerConfig(server: BundleMcpServerConfig): Record<strin
         staticHeaders[name] = value;
         continue;
       }
-      if (decoded.bearer && name.toLowerCase() === "authorization") {
+      if (decoded.bearer && normalizeOptionalLowercaseString(name) === "authorization") {
         next.bearer_token_env_var = decoded.envVar;
         continue;
       }

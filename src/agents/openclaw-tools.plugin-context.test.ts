@@ -22,6 +22,21 @@ describe("openclaw plugin tool context", () => {
     );
   });
 
+  it("forwards fs policy for plugin tool sandbox enforcement", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        fsPolicy: { workspaceOnly: true },
+      },
+    });
+
+    expect(result.context).toEqual(
+      expect.objectContaining({
+        fsPolicy: { workspaceOnly: true },
+      }),
+    );
+  });
+
   it("forwards ephemeral sessionId", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

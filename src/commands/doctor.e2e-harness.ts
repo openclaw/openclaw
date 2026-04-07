@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import {
   readEmbeddedGatewayTokenForTest,
@@ -307,7 +308,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
   DEFAULT_CONTEXT_TOKENS: 32768,
-  normalizeProviderId: (value: string) => value.trim().toLowerCase(),
+  normalizeProviderId: (value: string) => normalizeLowercaseStringOrEmpty(value),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-stream-shared", () => ({

@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { loadBundledEntryExportSync } from "./channel-entry-contract.js";
 
 const tempDirs: string[] = [];
@@ -11,6 +12,8 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+  vi.resetModules();
+  vi.doUnmock("jiti");
 });
 
 describe("loadBundledEntryExportSync", () => {
@@ -41,5 +44,44 @@ describe("loadBundledEntryExportSync", () => {
     expect(message).toContain(`plugin root "${pluginRoot}"`);
     expect(message).toContain('reason "path"');
     expect(message).toContain("ENOENT");
+  });
+
+  it("keeps Windows dist sidecar loads off Jiti native import", async () => {
+    const createJiti = vi.fn(() => vi.fn(() => ({ load: 42 })));
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    try {
+      const channelEntryContract = await importFreshModule<
+        typeof import("./channel-entry-contract.js")
+      >(import.meta.url, "./channel-entry-contract.js?scope=windows-dist-jiti");
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+      tempDirs.push(tempRoot);
+
+      const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+
+      const importerPath = path.join(pluginRoot, "index.js");
+      const helperPath = path.join(pluginRoot, "helper.ts");
+      fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+      fs.writeFileSync(helperPath, "export const load = 42;\n", "utf8");
+
+      expect(
+        channelEntryContract.loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
+          specifier: "./helper.ts",
+          exportName: "load",
+        }),
+      ).toBe(42);
+      expect(createJiti).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          tryNative: false,
+        }),
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });

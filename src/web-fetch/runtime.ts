@@ -41,6 +41,10 @@ export function resolveWebFetchEnabled(params: {
   return true;
 }
 
+function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
+  return resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(config, "fetch");
+}
+
 function hasEntryCredential(
   provider: Pick<
     PluginWebFetchProviderEntry,
@@ -59,6 +63,16 @@ function hasEntryCredential(
     resolveEnvValue: ({ provider: currentProvider }) =>
       readWebProviderEnvValue(currentProvider.envVars),
   });
+}
+
+export function isWebFetchProviderConfigured(params: {
+  provider: Pick<
+    PluginWebFetchProviderEntry,
+    "envVars" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential"
+  >;
+  config?: OpenClawConfig;
+}): boolean {
+  return hasEntryCredential(params.provider, params.config, resolveFetchConfig(params.config));
 }
 
 export function listWebFetchProviders(params?: {

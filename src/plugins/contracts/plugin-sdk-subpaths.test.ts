@@ -317,6 +317,19 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
     expectSourceMentions("channel-actions", ["optionalStringEnum", "stringEnum"]);
+    expectSourceContract("channel-secret-basic-runtime", {
+      mentions: [
+        "collectSimpleChannelFieldAssignments",
+        "collectConditionalChannelFieldAssignments",
+        "collectSecretInputAssignment",
+        "getChannelSurface",
+        "pushAssignment",
+        "pushInactiveSurfaceWarning",
+        "ResolverContext",
+        "SecretTargetRegistryEntry",
+      ],
+      omits: ["collectNestedChannelTtsAssignments"],
+    });
     expectSourceContract("channel-secret-runtime", {
       mentions: [
         "collectSimpleChannelFieldAssignments",
@@ -334,6 +347,10 @@ describe("plugin-sdk subpath exports", () => {
         "resolvePinnedMainDmOwnerFromAllowlist",
         "safeMatchRegex",
       ],
+    });
+    expectSourceContract("channel-secret-tts-runtime", {
+      mentions: ["collectNestedChannelTtsAssignments"],
+      omits: ["collectSimpleChannelFieldAssignments", "collectConditionalChannelFieldAssignments"],
     });
     expectSourceContract("provider-web-search-contract", {
       mentions: [

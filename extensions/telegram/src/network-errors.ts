@@ -4,6 +4,7 @@ import {
   formatErrorMessage,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
 
@@ -254,7 +255,7 @@ export function isRecoverableTelegramNetworkError(
       return true;
     }
 
-    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
     if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
       return true;
     }

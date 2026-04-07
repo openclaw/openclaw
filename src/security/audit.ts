@@ -23,6 +23,10 @@ import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -398,9 +402,7 @@ export function collectGatewayConfigFindings(
     ? cfg.gateway?.tools?.allow
     : [];
   const gatewayToolsAllow = new Set(
-    gatewayToolsAllowRaw
-      .map((v) => (typeof v === "string" ? v.trim().toLowerCase() : ""))
-      .filter(Boolean),
+    gatewayToolsAllowRaw.map((v) => normalizeOptionalLowercaseString(v) ?? "").filter(Boolean),
   );
   const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) =>
     gatewayToolsAllow.has(name),
@@ -692,7 +694,7 @@ function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
     return rawIp.trim() === "127.0.0.1" && prefix === 32;
   }
   if (ipVersion === 6) {
-    return prefix === 128 && rawIp.trim().toLowerCase() === "::1";
+    return prefix === 128 && normalizeLowercaseStringOrEmpty(rawIp) === "::1";
   }
   return false;
 }
@@ -962,7 +964,7 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
     return Array.from(
       new Set(
         entries
-          .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+          .map((entry) => normalizeOptionalLowercaseString(entry) ?? "")
           .filter((entry) => entry.length > 0),
       ),
     ).toSorted();

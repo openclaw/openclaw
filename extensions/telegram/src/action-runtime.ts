@@ -11,6 +11,7 @@ import {
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import {
   fitsTelegramCallbackData,
@@ -125,7 +126,7 @@ export function readTelegramButtons(
         );
       }
       const styleRaw = rawButton.style;
-      const style = typeof styleRaw === "string" ? styleRaw.trim().toLowerCase() : undefined;
+      const style = normalizeOptionalLowercaseString(styleRaw);
       if (styleRaw !== undefined && !style) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] style must be string`);
       }

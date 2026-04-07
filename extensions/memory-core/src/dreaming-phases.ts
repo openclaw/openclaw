@@ -18,9 +18,15 @@ import {
   type MemoryLightDreamingConfig,
   type MemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
-import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import {
+  asRecord,
+  formatErrorMessage,
+  includesSystemEventToken,
+  normalizeTrimmedString,
+} from "./dreaming-shared.js";
 import {
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
@@ -1109,7 +1115,7 @@ function jaccardSimilarity(left: string, right: string): number {
   const leftTokens = tokenizeSnippet(left);
   const rightTokens = tokenizeSnippet(right);
   if (leftTokens.size === 0 || rightTokens.size === 0) {
-    return left.trim().toLowerCase() === right.trim().toLowerCase() ? 1 : 0;
+    return normalizeLowercaseStringOrEmpty(left) === normalizeLowercaseStringOrEmpty(right) ? 1 : 0;
   }
   let intersection = 0;
   for (const token of leftTokens) {
@@ -1521,7 +1527,10 @@ async function runPhaseIfTriggered(params: {
         storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
       });
 }): Promise<{ handled: true; reason: string } | undefined> {
-  if (params.trigger !== "heartbeat" || params.cleanedBody.trim() !== params.eventText) {
+  if (
+    params.trigger !== "heartbeat" ||
+    !includesSystemEventToken(params.cleanedBody, params.eventText)
+  ) {
     return undefined;
   }
   if (!params.config.enabled) {
