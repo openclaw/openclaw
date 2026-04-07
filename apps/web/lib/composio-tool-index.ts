@@ -474,17 +474,33 @@ function ensureRecord(parent: Record<string, unknown>, key: string): Record<stri
 function syncAllowedComposioTools(index: ComposioToolIndex): void {
   const config = readConfig();
   const tools = ensureRecord(config, "tools");
-  const allow = new Set(readStringList(tools.allow));
-  allow.add("composio_resolve_tool");
+
+  // OpenClaw 2026.4+ treats `tools.allow` as a strict whitelist (only listed
+  // tools are available). Composio tools must go into `tools.alsoAllow` so
+  // they are added *on top of* the profile (e.g. "full") instead of replacing
+  // core tools like exec/read/write/filesystem.
+  // Migrate any stale `tools.allow` entries into `alsoAllow` to fix sessions
+  // that were broken by the semantics change.
+  const legacyAllow = readStringList(tools.allow);
+  const alsoAllow = new Set(readStringList(tools.alsoAllow));
+
+  if (legacyAllow.length > 0) {
+    for (const name of legacyAllow) {
+      alsoAllow.add(name);
+    }
+    delete tools.allow;
+  }
+
+  alsoAllow.add("composio_resolve_tool");
   for (const app of index.connected_apps) {
     for (const tool of app.tools) {
-      allow.add(tool.name);
+      alsoAllow.add(tool.name);
     }
     for (const toolName of Object.values(app.recipes)) {
-      allow.add(toolName);
+      alsoAllow.add(toolName);
     }
   }
-  tools.allow = Array.from(allow);
+  tools.alsoAllow = Array.from(alsoAllow);
   writeConfig(config);
 }
 
