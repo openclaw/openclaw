@@ -966,4 +966,66 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectEnvProxy: true,
     });
   });
+
+  it("allows explicit proxy on localhost when allowPrivateProxy is true even with restrictive hostnameAllowlist", async () => {
+    // Reproduces #61906: Telegram media downloads fail because the SSRF guard
+    // checks the proxy hostname (localhost) against a target-scoped allowlist
+    // (api.telegram.org) and rejects it.
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
+      if (hostname === "localhost") return [{ address: "127.0.0.1", family: 4 }];
+      return [{ address: "149.154.167.220", family: 4 }];
+    }) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+      fetchImpl,
+      lookupFn,
+      policy: { hostnameAllowlist: ["api.telegram.org"] },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://localhost:6152",
+        allowPrivateProxy: true,
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(proxyAgentCtor).toHaveBeenCalled();
+    await result.release();
+  });
+
+  it("still blocks explicit proxy on localhost when allowPrivateProxy is false", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const lookupFn: LookupFn = vi.fn(async (hostname: string) => {
+      if (hostname === "localhost") return [{ address: "127.0.0.1", family: 4 }];
+      return [{ address: "149.154.167.220", family: 4 }];
+    }) as unknown as LookupFn;
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+        fetchImpl,
+        lookupFn,
+        policy: { hostnameAllowlist: ["api.telegram.org"] },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://localhost:6152",
+          allowPrivateProxy: false,
+        },
+      }),
+    ).rejects.toThrow(/blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
