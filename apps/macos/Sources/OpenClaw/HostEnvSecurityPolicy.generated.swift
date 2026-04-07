@@ -46,7 +46,8 @@ enum HostEnvSecurityPolicy {
         "MAVEN_OPTS",
         "SBT_OPTS",
         "GRADLE_OPTS",
-        "ANT_OPTS"
+        "ANT_OPTS",
+        "OPENCLAW_SYSTEMD_UNIT"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
@@ -155,6 +156,7 @@ enum HostEnvSecurityPolicy {
     static let blockedPrefixes: [String] = [
         "DYLD_",
         "LD_",
-        "BASH_FUNC_"
+        "BASH_FUNC_",
+        "OPENCLAW_SERVICE_"
     ]
 }

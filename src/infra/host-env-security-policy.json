@@ -40,7 +40,8 @@
     "MAVEN_OPTS",
     "SBT_OPTS",
     "GRADLE_OPTS",
-    "ANT_OPTS"
+    "ANT_OPTS",
+    "OPENCLAW_SYSTEMD_UNIT"
   ],
   "blockedOverrideKeys": [
     "HOME",
@@ -139,5 +140,5 @@
     "AWS_CONFIG_FILE"
   ],
   "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_", "CARGO_REGISTRIES_"],
-  "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]
+  "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_", "OPENCLAW_SERVICE_"]
 }

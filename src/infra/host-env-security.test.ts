@@ -537,6 +537,25 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
   });
+
+  it("strips leaked OPENCLAW_SERVICE_* runtime markers from inherited env", () => {
+    const result = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_VERSION: "2026.3.13",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+        OPENCLAW_SHELL: "exec",
+      },
+    });
+    expect(result.PATH).toBe("/usr/bin");
+    expect(result.OPENCLAW_SHELL).toBe("exec");
+    expect(result.OPENCLAW_SERVICE_KIND).toBeUndefined();
+    expect(result.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+    expect(result.OPENCLAW_SERVICE_VERSION).toBeUndefined();
+    expect(result.OPENCLAW_SYSTEMD_UNIT).toBeUndefined();
+  });
 });
 
 describe("sanitizeHostExecEnvWithDiagnostics", () => {
