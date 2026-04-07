@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/startup: scope packaged Node compile-cache directories by install root and OpenClaw version, so package updates avoid reusing stale install cache entries while preserving source-checkout cache disablement. Refs #71348. Thanks @JIRBOY.
 - Channels/Discord: remove Discord-owned queued-run timeout replies through the shared channel lifecycle queue while preserving message ordering and compatibility timeout constants, so long Discord turns stay governed by session/tool/runtime lifecycle instead of channel fallback errors. Thanks @codexGW.
 - Agents/tools: clamp `process.poll` waits to 30 seconds and honor abort signals while waiting, so long command polls cannot pin agent responsiveness after cancellation. Thanks @vincentkoc.
 - Plugin SDK: add tracked Discord component-message helpers and a Telegram account-resolution compatibility facade, so existing plugins using those subpaths resolve while new plugins stay on generic channel SDK contracts. Thanks @vincentkoc.

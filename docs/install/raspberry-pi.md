@@ -131,6 +131,8 @@ EOF
 source ~/.bashrc
 ```
 
+OpenClaw treats `NODE_COMPILE_CACHE` as a base directory and creates install/version-scoped cache entries under it for packaged installs.
+
 **Reduce memory usage** -- For headless setups, free GPU memory and disable unused services:
 
 ```bash

@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MIN_NODE_MAJOR = 22;
@@ -39,6 +42,8 @@ const ensureSupportedNodeVersion = () => {
 
 ensureSupportedNodeVersion();
 
+const OPENCLAW_COMPILE_CACHE_DIR_ENV = "OPENCLAW_COMPILE_CACHE_DIR";
+
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));
@@ -46,6 +51,56 @@ const isSourceCheckoutLauncher = () =>
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
   process.env.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled();
+
+const trimToUndefined = (value) => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+const sanitizeCompileCachePathSegment = (value, fallback) => {
+  const sanitized = (value ?? "")
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return sanitized || fallback;
+};
+
+const hashCompileCacheInstallRoot = (root) =>
+  createHash("sha256").update(path.resolve(root)).digest("hex").slice(0, 12);
+
+const resolveCompileCacheBaseDir = () => {
+  const configured = trimToUndefined(process.env.NODE_COMPILE_CACHE);
+  if (configured) {
+    // OpenClaw scopes the Node cache under this configured base by install root and version.
+    return path.resolve(configured);
+  }
+  return path.join(os.tmpdir(), "node-compile-cache", "openclaw");
+};
+
+const resolveCompileCacheVersion = () => {
+  try {
+    const raw = readFileSync(new URL("./package.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw);
+    return sanitizeCompileCachePathSegment(parsed?.version, "unknown-version");
+  } catch {
+    return "unknown-version";
+  }
+};
+
+const prepareOpenClawCompileCacheDirectory = () => {
+  const prepared = trimToUndefined(process.env[OPENCLAW_COMPILE_CACHE_DIR_ENV]);
+  if (prepared) {
+    return prepared;
+  }
+  const packageRoot = fileURLToPath(new URL(".", import.meta.url));
+  const directory = path.join(
+    resolveCompileCacheBaseDir(),
+    hashCompileCacheInstallRoot(packageRoot),
+    resolveCompileCacheVersion(),
+  );
+  process.env[OPENCLAW_COMPILE_CACHE_DIR_ENV] = directory;
+  return directory;
+};
 
 const respawnWithoutCompileCacheIfNeeded = () => {
   if (!isSourceCheckoutLauncher()) {
@@ -82,7 +137,7 @@ respawnWithoutCompileCacheIfNeeded();
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !isNodeCompileCacheDisabled() && !isSourceCheckoutLauncher()) {
   try {
-    module.enableCompileCache();
+    module.enableCompileCache(prepareOpenClawCompileCacheDirectory());
   } catch {
     // Ignore errors
   }

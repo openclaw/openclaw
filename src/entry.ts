@@ -18,6 +18,7 @@ import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import { VERSION } from "./version.js";
 
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
@@ -94,6 +95,7 @@ if (
   normalizeEnv();
   enableOpenClawCompileCache({
     installRoot,
+    version: VERSION,
   });
   gatewayEntryStartupTrace.mark("bootstrap");
 
