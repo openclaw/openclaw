@@ -18,6 +18,11 @@ export function normalizeMinimaxTtsBaseUrl(baseUrl?: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
+/** MiniMax t2a_v2 expects int64 for voice_setting numeric fields (floats yield base_resp 2013). */
+function minimaxTtsVoiceSettingInt(value: number): number {
+  return Math.round(Number.isFinite(value) ? value : 0);
+}
+
 export async function minimaxTTS(params: {
   text: string;
   apiKey: string;
@@ -60,13 +65,13 @@ export async function minimaxTTS(params: {
         text,
         voice_setting: {
           voice_id: voiceId,
-          speed,
-          vol,
-          pitch,
+          speed: minimaxTtsVoiceSettingInt(speed),
+          vol: minimaxTtsVoiceSettingInt(vol),
+          pitch: minimaxTtsVoiceSettingInt(pitch),
         },
         audio_setting: {
           format,
-          sample_rate: sampleRate,
+          sample_rate: minimaxTtsVoiceSettingInt(sampleRate),
         },
       }),
       signal: controller.signal,

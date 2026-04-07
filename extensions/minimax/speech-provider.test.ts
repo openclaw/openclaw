@@ -250,6 +250,10 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
       expect(body.voice_setting.voice_id).toBe("English_expressive_narrator");
+      expect(body.voice_setting.speed).toBe(1);
+      expect(body.voice_setting.vol).toBe(1);
+      expect(body.voice_setting.pitch).toBe(0);
+      expect(body.audio_setting.sample_rate).toBe(32000);
     });
 
     it("applies overrides", async () => {
@@ -271,7 +275,7 @@ describe("buildMinimaxSpeechProvider", () => {
       const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
       expect(body.model).toBe("speech-01-240228");
       expect(body.voice_setting.voice_id).toBe("custom_voice");
-      expect(body.voice_setting.speed).toBe(1.5);
+      expect(body.voice_setting.speed).toBe(2);
     });
 
     it("throws when API key is missing", async () => {
