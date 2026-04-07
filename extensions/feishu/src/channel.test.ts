@@ -497,6 +497,21 @@ describe("feishuPlugin actions", () => {
     expect(result?.details).toMatchObject({ messageId: "om_media" });
   });
 
+  it("treats streamed block text as visible for ACP fallback suppression", () => {
+    expect(
+      feishuPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({
+        kind: "block",
+        text: "streamed answer",
+      }),
+    ).toBe(true);
+    expect(
+      feishuPlugin.outbound?.shouldTreatDeliveredTextAsVisible?.({
+        kind: "final",
+        text: "final answer",
+      }),
+    ).toBe(false);
+  });
+
   it("reads messages", async () => {
     getMessageFeishuMock.mockResolvedValueOnce({
       messageId: "om_1",

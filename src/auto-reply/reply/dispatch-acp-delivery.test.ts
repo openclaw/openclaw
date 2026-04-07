@@ -31,7 +31,7 @@ const channelPluginMocks = vi.hoisted(() => ({
     | ((params: { kind: "tool" | "block" | "final"; text?: string }) => boolean)
     | undefined,
   getChannelPlugin: vi.fn((channelId: string) => {
-    if (channelId !== "discord" && channelId !== "telegram") {
+    if (channelId !== "discord" && channelId !== "feishu" && channelId !== "telegram") {
       return undefined;
     }
     return {
@@ -207,6 +207,26 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
   it("treats direct discord block text as visible", async () => {
     const coordinator = createCoordinator();
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+    await coordinator.settleVisibleText();
+
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+  });
+
+  it("treats direct feishu block text as visible", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
     await coordinator.settleVisibleText();

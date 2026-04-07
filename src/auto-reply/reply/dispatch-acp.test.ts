@@ -36,7 +36,12 @@ const routeMocks = vi.hoisted(() => ({
 
 const channelPluginMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn((channelId: string) => {
-    if (channelId !== "discord" && channelId !== "slack" && channelId !== "telegram") {
+    if (
+      channelId !== "discord" &&
+      channelId !== "slack" &&
+      channelId !== "feishu" &&
+      channelId !== "telegram"
+    ) {
       return undefined;
     }
     return {
@@ -1142,6 +1147,35 @@ describe("tryDispatchAcpReply", () => {
     expect(counts.final).toBe(0);
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Slack says hi." }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver final fallback text when direct feishu block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "Received your Feishu message." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    mockVisibleTextTurn("Received your Feishu message.");
+
+    const { dispatcher, counts } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: {
+        Provider: "feishu",
+        Surface: "feishu",
+      },
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(counts.block).toBe(0);
+    expect(counts.final).toBe(0);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Received your Feishu message." }),
     );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
