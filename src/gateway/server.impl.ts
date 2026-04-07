@@ -680,6 +680,8 @@ export async function startGatewayServer(
     );
   const resolveCurrentSharedGatewaySessionGeneration = () =>
     resolveSharedGatewaySessionGeneration(getResolvedAuth());
+  let requiredSharedGatewaySessionGeneration: string | undefined | null = null;
+  const getRequiredSharedGatewaySessionGeneration = () => requiredSharedGatewaySessionGeneration;
   let hooksConfig = runtimeConfig.hooksConfig;
   let hookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
@@ -805,6 +807,21 @@ export async function startGatewayServer(
     logPlugins,
     getReadiness,
   });
+  const disconnectStaleSharedGatewayAuthClients = (expectedGeneration: string | undefined) => {
+    for (const gatewayClient of clients) {
+      if (!gatewayClient.usesSharedGatewayAuth) {
+        continue;
+      }
+      if (gatewayClient.sharedGatewaySessionGeneration === expectedGeneration) {
+        continue;
+      }
+      try {
+        gatewayClient.socket.close(4001, "gateway auth changed");
+      } catch {
+        /* ignore */
+      }
+    }
+  };
   let bonjourStop: (() => Promise<void>) | null = null;
   const noopInterval = () => setInterval(() => {}, 1 << 30);
   let tickInterval = noopInterval();
@@ -1265,21 +1282,6 @@ export async function startGatewayServer(
     });
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
-    const disconnectStaleSharedGatewayAuthClients = (expectedGeneration: string | undefined) => {
-      for (const gatewayClient of clients) {
-        if (!gatewayClient.usesSharedGatewayAuth) {
-          continue;
-        }
-        if (gatewayClient.sharedGatewaySessionGeneration === expectedGeneration) {
-          continue;
-        }
-        try {
-          gatewayClient.socket.close(4001, "gateway auth changed");
-        } catch {
-          /* ignore */
-        }
-      }
-    };
 
     const gatewayRequestContext: import("./server-methods/types.js").GatewayRequestContext = {
       deps,
@@ -1391,6 +1393,7 @@ export async function startGatewayServer(
       canvasHostServerPort,
       resolvedAuth,
       getResolvedAuth,
+      getRequiredSharedGatewaySessionGeneration,
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       gatewayMethods,
@@ -1550,18 +1553,38 @@ export async function startGatewayServer(
               }
             },
             onRestart: async (plan, nextConfig) => {
+              const previousRequiredSharedGatewaySessionGeneration =
+                requiredSharedGatewaySessionGeneration;
               const previousSharedGatewaySessionGeneration =
                 resolveCurrentSharedGatewaySessionGeneration();
-              const prepared = await activateRuntimeSecrets(nextConfig, {
-                reason: "restart-check",
-                activate: false,
-              });
-              const nextSharedGatewaySessionGeneration =
-                resolveSharedGatewaySessionGenerationForConfig(prepared.config);
-              if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
-                disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
+              const optimisticSharedGatewaySessionGeneration =
+                resolveSharedGatewaySessionGenerationForConfig(nextConfig);
+              if (
+                previousSharedGatewaySessionGeneration !== optimisticSharedGatewaySessionGeneration
+              ) {
+                requiredSharedGatewaySessionGeneration = optimisticSharedGatewaySessionGeneration;
+                disconnectStaleSharedGatewayAuthClients(optimisticSharedGatewaySessionGeneration);
               }
-              requestGatewayRestart(plan, nextConfig);
+              try {
+                const prepared = await activateRuntimeSecrets(nextConfig, {
+                  reason: "restart-check",
+                  activate: false,
+                });
+                const nextSharedGatewaySessionGeneration =
+                  resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+                if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
+                  requiredSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+                  disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
+                } else {
+                  requiredSharedGatewaySessionGeneration =
+                    previousRequiredSharedGatewaySessionGeneration;
+                }
+                requestGatewayRestart(plan, nextConfig);
+              } catch (error) {
+                requiredSharedGatewaySessionGeneration =
+                  previousRequiredSharedGatewaySessionGeneration;
+                throw error;
+              }
             },
             log: {
               info: (msg) => logReload.info(msg),

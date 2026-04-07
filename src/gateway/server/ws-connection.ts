@@ -69,6 +69,7 @@ export type GatewayWsSharedHandlerParams = {
   canvasHostServerPort?: number;
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
+  getRequiredSharedGatewaySessionGeneration?: () => string | undefined | null;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
@@ -104,6 +105,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     canvasHostServerPort,
     resolvedAuth,
     getResolvedAuth = () => resolvedAuth,
+    getRequiredSharedGatewaySessionGeneration = () => null,
     rateLimiter,
     browserRateLimiter,
     gatewayMethods,
@@ -316,6 +318,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       canvasHostUrl,
       connectNonce,
       getResolvedAuth,
+      getRequiredSharedGatewaySessionGeneration,
       rateLimiter,
       browserRateLimiter,
       gatewayMethods,

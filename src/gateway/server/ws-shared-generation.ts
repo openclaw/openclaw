@@ -4,6 +4,7 @@ import type { ResolvedGatewayAuth } from "../auth.js";
 function resolveSharedSecret(
   auth: ResolvedGatewayAuth,
 ): { mode: "token" | "password"; secret: string } | null {
+  // trim() is only a blank-value guard; generation must hash the exact raw secret bytes.
   if (auth.mode === "token" && typeof auth.token === "string" && auth.token.trim().length > 0) {
     return { mode: "token", secret: auth.token };
   }

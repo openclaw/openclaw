@@ -168,6 +168,7 @@ export function attachGatewayWsMessageHandler(params: {
   canvasHostUrl?: string;
   connectNonce: string;
   getResolvedAuth: () => ResolvedGatewayAuth;
+  getRequiredSharedGatewaySessionGeneration: () => string | undefined | null;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
@@ -203,6 +204,7 @@ export function attachGatewayWsMessageHandler(params: {
     canvasHostUrl,
     connectNonce,
     getResolvedAuth,
+    getRequiredSharedGatewaySessionGeneration,
     rateLimiter,
     browserRateLimiter,
     gatewayMethods,
@@ -1337,8 +1339,11 @@ export function attachGatewayWsMessageHandler(params: {
       }
 
       if (client.usesSharedGatewayAuth) {
+        const requiredSharedGatewaySessionGeneration = getRequiredSharedGatewaySessionGeneration();
         const activeSharedGatewaySessionGeneration =
-          resolveSharedGatewaySessionGeneration(getResolvedAuth());
+          requiredSharedGatewaySessionGeneration === null
+            ? resolveSharedGatewaySessionGeneration(getResolvedAuth())
+            : requiredSharedGatewaySessionGeneration;
         if (client.sharedGatewaySessionGeneration !== activeSharedGatewaySessionGeneration) {
           setCloseCause("gateway-auth-rotated", {
             authGenerationStale: true,
