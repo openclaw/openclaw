@@ -6,10 +6,13 @@
   "dependencies": {
     "@microsoft/teams.api": "2.0.6",
     "@microsoft/teams.apps": "2.0.6",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "jwks-rsa": "^4.0.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
+    "@types/jsonwebtoken": "^9.0.9",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
