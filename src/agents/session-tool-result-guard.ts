@@ -21,6 +21,7 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 import {
   applyToolResultReplayMetadata,
   consumePendingToolResultReplayMetadata,
+  resolveToolResultReplaySessionKey,
 } from "./tool-result-replay-metadata.js";
 
 /**
@@ -73,6 +74,8 @@ export function installSessionToolResultGuard(
   opts?: {
     /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
+    /** Optional session id fallback when no session key exists. */
+    sessionId?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -127,6 +130,10 @@ export function installSessionToolResultGuard(
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
   const beforeWrite = opts?.beforeMessageWriteHook;
+  const replaySessionKey = resolveToolResultReplaySessionKey({
+    sessionKey: opts?.sessionKey,
+    sessionId: opts?.sessionId,
+  });
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -150,35 +157,39 @@ export function installSessionToolResultGuard(
     if (pendingState.size() === 0) {
       return;
     }
-    if (allowSyntheticToolResults) {
-      for (const [id, name] of pendingState.entries()) {
-        const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
-        const replayMeta = consumePendingToolResultReplayMetadata({
-          sessionKey: opts?.sessionKey,
-          toolCallId: id,
-        });
-        const flushed = applyBeforeWriteHook(
-          applyToolResultReplayMetadata(
-            persistToolResult(
-              applyToolResultReplayMetadata(persistMessage(synthetic), replayMeta),
-              {
-                toolCallId: id,
-                toolName: name,
-                isSynthetic: true,
-              },
-            ),
-            replayMeta,
-          ),
-        );
-        if (flushed) {
-          originalAppend(flushed as never);
-        }
+    for (const [id, name] of pendingState.entries()) {
+      const replayMeta = consumePendingToolResultReplayMetadata({
+        sessionKey: replaySessionKey,
+        toolCallId: id,
+      });
+      if (!allowSyntheticToolResults) {
+        continue;
+      }
+      const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
+      const flushed = applyBeforeWriteHook(
+        applyToolResultReplayMetadata(
+          persistToolResult(applyToolResultReplayMetadata(persistMessage(synthetic), replayMeta), {
+            toolCallId: id,
+            toolName: name,
+            isSynthetic: true,
+          }),
+          replayMeta,
+        ),
+      );
+      if (flushed) {
+        originalAppend(flushed as never);
       }
     }
     pendingState.clear();
   };
 
   const clearPendingToolResults = () => {
+    for (const [id] of pendingState.entries()) {
+      consumePendingToolResultReplayMetadata({
+        sessionKey: replaySessionKey,
+        toolCallId: id,
+      });
+    }
     pendingState.clear();
   };
 
@@ -203,7 +214,7 @@ export function installSessionToolResultGuard(
       const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pendingState.getToolName(id) : undefined;
       const replayMeta = consumePendingToolResultReplayMetadata({
-        sessionKey: opts?.sessionKey,
+        sessionKey: replaySessionKey,
         toolCallId: id ?? undefined,
       });
       if (id) {

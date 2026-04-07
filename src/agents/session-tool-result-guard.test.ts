@@ -227,6 +227,40 @@ describe("installSessionToolResultGuard", () => {
     expect(messages[1]?.__openclaw?.sourceTool).toBe("exec");
   });
 
+  it("uses sessionId fallback when sessionKey is unavailable", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, { sessionId: "session-only" });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      }),
+    );
+    recordPendingToolResultReplayMetadata({
+      sessionId: "session-only",
+      toolCallId: "call_1",
+      toolName: "exec",
+      args: { command: "openclaw status" },
+    });
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "status output" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]) as Array<
+      AgentMessage & { __openclaw?: Record<string, unknown> }
+    >;
+    expect(messages[1]?.__openclaw?.transient).toBe(true);
+    expect(messages[1]?.__openclaw?.diagnosticType).toBe("openclaw.status");
+  });
+
   it("re-applies replay metadata after tool_result_persist transformations", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
@@ -275,6 +309,103 @@ describe("installSessionToolResultGuard", () => {
     expect(messages[1]?.__openclaw?.transient).toBe(true);
     expect(messages[1]?.__openclaw?.diagnosticType).toBe("openclaw.config_snapshot");
     expect(messages[1]?.__openclaw?.sourceTool).toBe("read");
+  });
+
+  it("drains replay metadata when clearing pending tool calls", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, { sessionKey: "agent:main:main" });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      }),
+    );
+    recordPendingToolResultReplayMetadata({
+      sessionKey: "agent:main:main",
+      toolCallId: "call_1",
+      toolName: "exec",
+      args: { command: "openclaw plugins list" },
+    });
+
+    guard.clearPendingToolResults();
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "fresh output" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "assistant", "toolResult"]) as Array<
+      AgentMessage & { __openclaw?: Record<string, unknown> }
+    >;
+    expect(messages[2]?.__openclaw?.transient).not.toBe(true);
+  });
+
+  it("drains replay metadata when synthetic tool results are disabled", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      sessionKey: "agent:main:main",
+      allowSyntheticToolResults: false,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      }),
+    );
+    recordPendingToolResultReplayMetadata({
+      sessionKey: "agent:main:main",
+      toolCallId: "call_1",
+      toolName: "exec",
+      args: { command: "openclaw plugins list" },
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "interrupt",
+        timestamp: Date.now(),
+      }),
+    );
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "fresh output" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, [
+      "assistant",
+      "user",
+      "assistant",
+      "toolResult",
+    ]) as Array<AgentMessage & { __openclaw?: Record<string, unknown> }>;
+    expect(guard.getPendingIds()).toEqual([]);
+    expect(messages[3]?.__openclaw?.transient).not.toBe(true);
   });
 
   it("preserves ordering with multiple tool calls and partial results", () => {

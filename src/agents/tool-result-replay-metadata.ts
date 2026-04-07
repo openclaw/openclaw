@@ -27,6 +27,13 @@ type OpenClawReplayMetaEnvelope = {
 
 const pendingToolResultReplayMeta = new Map<string, ToolResultReplayPolicyMeta>();
 
+export function resolveToolResultReplaySessionKey(params: {
+  sessionKey?: string;
+  sessionId?: string;
+}): string | undefined {
+  return trimString(params.sessionKey) ?? trimString(params.sessionId);
+}
+
 function buildPendingKey(sessionKey: string, toolCallId: string): string {
   return `${sessionKey}:${toolCallId}`;
 }
@@ -121,12 +128,13 @@ export function detectToolResultReplayPolicyMeta(params: {
 
 export function recordPendingToolResultReplayMetadata(params: {
   sessionKey?: string;
+  sessionId?: string;
   toolCallId?: string;
   toolName: string;
   args: unknown;
   taggedAt?: number;
 }): void {
-  const sessionKey = trimString(params.sessionKey);
+  const sessionKey = resolveToolResultReplaySessionKey(params);
   const toolCallId = trimString(params.toolCallId);
   if (!sessionKey || !toolCallId) {
     return;
@@ -144,9 +152,10 @@ export function recordPendingToolResultReplayMetadata(params: {
 
 export function consumePendingToolResultReplayMetadata(params: {
   sessionKey?: string;
+  sessionId?: string;
   toolCallId?: string;
 }): ToolResultReplayPolicyMeta | null {
-  const sessionKey = trimString(params.sessionKey);
+  const sessionKey = resolveToolResultReplaySessionKey(params);
   const toolCallId = trimString(params.toolCallId);
   if (!sessionKey || !toolCallId) {
     return null;
@@ -211,7 +220,7 @@ export function replaceToolResultReplayContent(
       ? replacementText
       : Array.isArray(next.content)
         ? [{ type: "text", text: replacementText }]
-        : next.content;
+        : replacementText;
   return {
     ...next,
     ...(replacement !== undefined ? { content: replacement } : {}),

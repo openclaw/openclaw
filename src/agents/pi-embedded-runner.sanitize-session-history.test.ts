@@ -944,6 +944,47 @@ describe("sanitizeSessionHistory", () => {
     ).not.toBe(true);
   });
 
+  it("replaces stale transient diagnostic tool results even when content has an unexpected shape", async () => {
+    setNonGoogleModelApi();
+    const oldTimestamp = Date.now() - 2 * 60 * 60 * 1000;
+    const messages = castAgentMessages([
+      makeAssistantMessage([{ type: "toolCall", id: "call_old", name: "exec", arguments: {} }], {
+        stopReason: "toolUse",
+        timestamp: oldTimestamp - 1,
+      }),
+      {
+        role: "toolResult",
+        toolCallId: "call_old",
+        toolName: "exec",
+        content: { stale: true },
+        isError: false,
+        timestamp: oldTimestamp,
+        __openclaw: {
+          transient: true,
+          diagnosticType: "openclaw.plugins_list",
+          taggedAt: oldTimestamp,
+          sourceTool: "exec",
+        },
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[1]).toMatchObject({
+      role: "toolResult",
+      content: "[Previous environment diagnostic output omitted from replay for accuracy.]",
+      __openclaw: expect.objectContaining({
+        replayOmitted: true,
+      }),
+    });
+  });
+
   it("preserves latest assistant thinking blocks for github-copilot models", async () => {
     setNonGoogleModelApi();
 
