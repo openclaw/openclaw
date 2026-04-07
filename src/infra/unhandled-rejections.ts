@@ -389,13 +389,13 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
   return false;
 }
 
-export function installUnhandledRejectionHandler(): void {
+export function installUnhandledRejectionHandler(): () => void {
   const exitWithTerminalRestore = (reason: string) => {
     restoreTerminalState(reason, { resumeStdinIfPaused: false });
     process.exit(1);
   };
 
-  process.on("unhandledRejection", (reason, _promise) => {
+  const handleUnhandledRejection = (reason: unknown, _promise: Promise<unknown>) => {
     if (isUnhandledRejectionHandled(reason)) {
       return;
     }
@@ -437,5 +437,10 @@ export function installUnhandledRejectionHandler(): void {
 
     console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
     exitWithTerminalRestore("unhandled rejection");
-  });
+  };
+
+  process.on("unhandledRejection", handleUnhandledRejection);
+  return () => {
+    process.off("unhandledRejection", handleUnhandledRejection);
+  };
 }

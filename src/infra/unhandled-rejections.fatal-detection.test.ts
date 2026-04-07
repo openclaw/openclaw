@@ -14,10 +14,11 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
   let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
   let originalExit: typeof process.exit;
+  let uninstallUnhandledRejectionHandler: (() => void) | undefined;
 
   beforeAll(() => {
     originalExit = process.exit.bind(process);
-    installUnhandledRejectionHandler();
+    uninstallUnhandledRejectionHandler = installUnhandledRejectionHandler();
   });
 
   beforeEach(() => {
@@ -41,6 +42,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   });
 
   afterAll(() => {
+    uninstallUnhandledRejectionHandler?.();
     process.exit = originalExit;
   });
 
