@@ -309,9 +309,12 @@ export async function createModelSelectionState(params: {
       return;
     }
     const suffix = extra ? ` ${extra}` : "";
-    logDebug(
-      `[model-selection] session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`,
-    );
+    const msg = `[model-selection] session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`;
+    // Write to file logger (level-filtered) for structured log collection.
+    logDebug(msg);
+    // Also emit to console unconditionally: this env-var gate is an explicit
+    // opt-in debug flag, so operators expect visible stdout output.
+    console.log(msg);
   };
   const {
     cfg,
