@@ -13,7 +13,12 @@ import {
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
-import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import {
+  asRecord,
+  formatErrorMessage,
+  includesSystemEventToken,
+  normalizeTrimmedString,
+} from "./dreaming-shared.js";
 import {
   applyShortTermPromotions,
   repairShortTermPromotionArtifacts,
@@ -418,7 +423,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   if (params.trigger !== "heartbeat") {
     return undefined;
   }
-  if (params.cleanedBody.trim() !== DREAMING_SYSTEM_EVENT_TEXT) {
+  if (!includesSystemEventToken(params.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)) {
     return undefined;
   }
   if (!params.config.enabled) {

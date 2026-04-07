@@ -96,7 +96,7 @@ describe("gateway cli backend live helpers", () => {
       clientDisplayName: "vitest-live",
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.TEST,
-      connectChallengeTimeoutMs: 30_000,
+      connectChallengeTimeoutMs: 45_000,
     });
     expect(gatewayClientState.lastOptions).not.toHaveProperty("requestTimeoutMs");
   });

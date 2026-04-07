@@ -26,7 +26,7 @@ export type CommandRegistrationResult = {
 };
 
 export function validateCommandName(name: string): string | null {
-  const trimmed = name.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
 
   if (!trimmed) {
     return "Command name cannot be empty";

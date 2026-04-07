@@ -29,6 +29,7 @@ import {
   type PluginStatusReport,
 } from "../../plugins/status.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -128,12 +129,14 @@ function formatPluginsList(report: PluginStatusReport): string {
 }
 
 function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord | undefined {
-  const target = rawName.trim().toLowerCase();
+  const target = normalizeOptionalLowercaseString(rawName);
   if (!target) {
     return undefined;
   }
   return report.plugins.find(
-    (plugin) => plugin.id.toLowerCase() === target || plugin.name.toLowerCase() === target,
+    (plugin) =>
+      normalizeOptionalLowercaseString(plugin.id) === target ||
+      normalizeOptionalLowercaseString(plugin.name) === target,
   );
 }
 

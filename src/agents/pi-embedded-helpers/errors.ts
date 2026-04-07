@@ -8,6 +8,7 @@ import {
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -483,7 +484,7 @@ function hasRetryable402TransientSignal(text: string): boolean {
 }
 
 function normalize402Message(raw: string): string {
-  return raw.trim().toLowerCase().replace(LEADING_402_WRAPPER_RE, "").trim();
+  return normalizeOptionalLowercaseString(raw)?.replace(LEADING_402_WRAPPER_RE, "").trim() ?? "";
 }
 
 function classify402Message(message: string): PaymentRequiredFailoverReason {
@@ -664,7 +665,7 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
 }
 
 function isProvider(provider: string | undefined, match: string): boolean {
-  const normalized = provider?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(provider);
   return Boolean(normalized && normalized.includes(match));
 }
 
@@ -894,7 +895,7 @@ export function isRawApiErrorPayload(raw?: string): boolean {
 }
 
 function isLikelyProviderErrorType(type?: string): boolean {
-  const normalized = type?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(type);
   if (!normalized) {
     return false;
   }

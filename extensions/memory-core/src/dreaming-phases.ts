@@ -20,7 +20,12 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
-import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import {
+  asRecord,
+  formatErrorMessage,
+  includesSystemEventToken,
+  normalizeTrimmedString,
+} from "./dreaming-shared.js";
 import {
   readShortTermRecallEntries,
   recordDreamingPhaseSignals,
@@ -1521,7 +1526,10 @@ async function runPhaseIfTriggered(params: {
         storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
       });
 }): Promise<{ handled: true; reason: string } | undefined> {
-  if (params.trigger !== "heartbeat" || params.cleanedBody.trim() !== params.eventText) {
+  if (
+    params.trigger !== "heartbeat" ||
+    !includesSystemEventToken(params.cleanedBody, params.eventText)
+  ) {
     return undefined;
   }
   if (!params.config.enabled) {

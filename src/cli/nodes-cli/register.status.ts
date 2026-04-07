@@ -2,7 +2,10 @@ import type { Command } from "commander";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { shortenHomeInString } from "../../utils.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -38,7 +41,7 @@ function resolveNodeVersions(node: {
   if (!legacy) {
     return { core: undefined, ui: undefined };
   }
-  const platform = node.platform?.trim().toLowerCase() ?? "";
+  const platform = normalizeOptionalLowercaseString(node.platform) ?? "";
   const headless =
     platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
   return headless ? { core: legacy, ui: undefined } : { core: undefined, ui: legacy };

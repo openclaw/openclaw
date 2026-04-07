@@ -2,7 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import { readStringValue } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
@@ -121,10 +121,10 @@ function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
     return value;
   }
-  if (typeof value !== "string") {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
   if (
     normalized === "on" ||
     normalized === "true" ||

@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
@@ -46,7 +50,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
   conversationMessageId?: string | null;
   channelData?: unknown;
 }): string[] {
-  const conversationType = params.conversationType?.trim().toLowerCase() ?? "";
+  const conversationType = normalizeLowercaseStringOrEmpty(params.conversationType ?? "");
   const messageIdCandidates = new Set<string>();
   const pushCandidate = (value: string | null | undefined) => {
     const trimmed = typeof value === "string" ? value.trim() : "";
@@ -382,7 +386,7 @@ export async function downloadMSTeamsGraphMedia(params: {
   const filteredAttachments =
     sharePointMedia.length > 0
       ? normalizedAttachments.filter((att) => {
-          const contentType = att.contentType?.toLowerCase();
+          const contentType = normalizeOptionalLowercaseString(att.contentType);
           if (contentType !== "reference") {
             return true;
           }

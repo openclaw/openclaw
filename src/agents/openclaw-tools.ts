@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
@@ -44,7 +45,7 @@ const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
 let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
 
 function isOpenAIProvider(provider?: string): boolean {
-  const normalized = provider?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(provider);
   return normalized === "openai" || normalized === "openai-codex";
 }
 

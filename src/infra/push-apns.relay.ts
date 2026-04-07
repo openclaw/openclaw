@@ -7,6 +7,7 @@ import {
   type DeviceIdentity,
 } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
+import { normalizeHostname } from "./net/hostname.js";
 
 export type ApnsRelayPushType = "alert" | "background";
 
@@ -74,7 +75,7 @@ function readAllowHttp(value: string | undefined): boolean {
 }
 
 function isLoopbackRelayHostname(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
+  const normalized = normalizeHostname(hostname);
   return (
     normalized === "localhost" ||
     normalized === "::1" ||

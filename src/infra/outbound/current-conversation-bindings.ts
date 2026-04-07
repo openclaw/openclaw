@@ -6,8 +6,8 @@ import { resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
 import { writeJsonFileAtomically } from "../../plugin-sdk/json-store.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-state.js";
-import { normalizeAccountId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
   ConversationRef,
   SessionBindingBindInput,
@@ -27,15 +27,6 @@ const CURRENT_BINDINGS_ID_PREFIX = "generic:";
 let bindingsLoaded = false;
 let persistPromise: Promise<void> = Promise.resolve();
 const bindingsByConversationKey = new Map<string, SessionBindingRecord>();
-
-function normalizeConversationRef(ref: ConversationRef): ConversationRef {
-  return {
-    channel: ref.channel.trim().toLowerCase(),
-    accountId: normalizeAccountId(ref.accountId),
-    conversationId: ref.conversationId.trim(),
-    parentConversationId: normalizeOptionalString(ref.parentConversationId),
-  };
-}
 
 function buildConversationKey(ref: ConversationRef): string {
   const normalized = normalizeConversationRef(ref);
@@ -121,13 +112,16 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
 
 function resolveChannelSupportsCurrentConversationBinding(channel: string): boolean {
   const normalized =
-    normalizeAnyChannelId(channel) ?? normalizeConversationText(channel)?.trim().toLowerCase();
+    normalizeAnyChannelId(channel) ??
+    normalizeOptionalLowercaseString(normalizeConversationText(channel));
   if (!normalized) {
     return false;
   }
   const matchesPluginId = (plugin: { id: string; meta?: { aliases?: readonly string[] } }) =>
     plugin.id === normalized ||
-    (plugin.meta?.aliases ?? []).some((alias) => alias.trim().toLowerCase() === normalized);
+    (plugin.meta?.aliases ?? []).some(
+      (alias) => normalizeOptionalLowercaseString(alias) === normalized,
+    );
   // Read the already-installed runtime channel registry from shared state only.
   // Importing plugins/runtime here creates a module cycle through plugin-sdk
   // surfaces during bundled channel discovery.

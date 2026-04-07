@@ -14,6 +14,7 @@ import {
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
   normalizeJitiAliasTargetPath,
+  resolvePluginLoaderJitiTryNative,
   resolveExtensionApiAlias,
   resolvePluginRuntimeModulePath,
   resolvePluginSdkAliasFile,
@@ -690,6 +691,45 @@ describe("plugin sdk alias helpers", () => {
         value: originalPlatform,
       });
     }
+  });
+
+  it("keeps plugin loader dist shortcuts off on Windows", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+
+    try {
+      expect(
+        resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
+          preferBuiltDist: true,
+        }),
+      ).toBe(false);
+      expect(
+        resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
+          preferBuiltDist: true,
+        }),
+      ).toBe(false);
+    } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
+    }
+  });
+
+  it("allows plugin loader dist shortcuts on non-Windows hosts", () => {
+    expect(
+      resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "index.js")}`, {
+        preferBuiltDist: true,
+      }),
+    ).toBe(true);
+    expect(
+      resolvePluginLoaderJitiTryNative(`/repo/${bundledDistPluginFile("browser", "helper.ts")}`, {
+        preferBuiltDist: true,
+      }),
+    ).toBe(true);
   });
 
   it("normalizes Windows alias targets before handing them to Jiti", () => {

@@ -8,7 +8,10 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -722,14 +725,13 @@ export function resolveThinkingDefault(params: {
   const canonicalKey = modelKey(params.provider, params.model);
   const legacyKey = legacyModelKey(params.provider, params.model);
   const primarySelection = normalizeModelSelection(params.cfg.agents?.defaults?.model);
-  const normalizedPrimarySelection =
-    typeof primarySelection === "string" ? primarySelection.trim().toLowerCase() : undefined;
+  const normalizedPrimarySelection = normalizeOptionalLowercaseString(primarySelection);
   const explicitModelConfigured =
     (configuredModels ? canonicalKey in configuredModels : false) ||
     Boolean(legacyKey && configuredModels && legacyKey in configuredModels) ||
     normalizedPrimarySelection === canonicalKey.toLowerCase() ||
     Boolean(legacyKey && normalizedPrimarySelection === legacyKey.toLowerCase()) ||
-    normalizedPrimarySelection === params.model.trim().toLowerCase();
+    normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
   const perModelThinking =
     configuredModels?.[canonicalKey]?.params?.thinking ??
     (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);

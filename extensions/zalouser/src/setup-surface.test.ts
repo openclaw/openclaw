@@ -30,8 +30,8 @@ const zalouserSetupPlugin = {
   config: {
     listAccountIds: (cfg: unknown) => listZalouserAccountIds(cfg as never),
     defaultAccountId: (cfg: unknown) => resolveDefaultZalouserAccountId(cfg as never),
-    resolveAccount: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
-      resolveZalouserAccountSync(params),
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
+      resolveZalouserAccountSync({ cfg, accountId }),
   },
   security: {
     resolveDmPolicy: createScopedDmSecurityResolver({

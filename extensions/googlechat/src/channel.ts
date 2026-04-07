@@ -21,6 +21,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { googlechatMessageActions } from "./actions.js";
 import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
@@ -73,12 +74,13 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 );
 
 const formatAllowFromEntry = (entry: string) =>
-  entry
-    .trim()
-    .replace(/^(googlechat|google-chat|gchat):/i, "")
-    .replace(/^user:/i, "")
-    .replace(/^users\//i, "")
-    .toLowerCase();
+  normalizeLowercaseStringOrEmpty(
+    entry
+      .trim()
+      .replace(/^(googlechat|google-chat|gchat):/i, "")
+      .replace(/^user:/i, "")
+      .replace(/^users\//i, ""),
+  );
 
 const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleChatAccount>({
   sectionKey: "googlechat",

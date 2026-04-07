@@ -7,7 +7,11 @@ import {
   normalizeHostnameSuffixAllowlist,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-policy";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -119,9 +123,9 @@ export function inferPlaceholder(params: {
   fileName?: string;
   fileType?: string;
 }): string {
-  const mime = params.contentType?.toLowerCase() ?? "";
-  const name = params.fileName?.toLowerCase() ?? "";
-  const fileType = params.fileType?.toLowerCase() ?? "";
+  const mime = normalizeLowercaseStringOrEmpty(params.contentType ?? "");
+  const name = normalizeLowercaseStringOrEmpty(params.fileName ?? "");
+  const fileType = normalizeLowercaseStringOrEmpty(params.fileType ?? "");
 
   const looksLikeImage =
     mime.startsWith("image/") || IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(`x.${fileType}`);
@@ -232,7 +236,7 @@ function decodeDataImageWithLimits(
   if (!match) {
     return { candidate: null, estimatedBytes: 0 };
   }
-  const contentType = match[1]?.toLowerCase();
+  const contentType = normalizeLowercaseStringOrEmpty(match[1] ?? "");
   const isBase64 = Boolean(match[2]);
   if (!isBase64) {
     return { candidate: null, estimatedBytes: 0 };

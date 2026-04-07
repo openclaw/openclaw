@@ -37,7 +37,7 @@ function normalizeToolErrorText(text: string): string | undefined {
 }
 
 function isErrorLikeStatus(status: string): boolean {
-  const normalized = status.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(status);
   if (!normalized) {
     return false;
   }

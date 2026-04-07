@@ -24,6 +24,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
@@ -69,10 +70,10 @@ type ExaSearchResponse = {
 };
 
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
-  if (!value) {
+  const trimmed = normalizeOptionalLowercaseString(value);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = value.trim().toLowerCase();
   return EXA_FRESHNESS_VALUES.includes(trimmed as ExaFreshness)
     ? (trimmed as ExaFreshness)
     : undefined;

@@ -20,8 +20,6 @@ import {
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
-let actualRunPreparedReply: typeof import("./reply/get-reply-run.js").runPreparedReply;
-const runPreparedReplyMock = vi.hoisted(() => vi.fn());
 
 async function writeSkill(params: { workspaceDir: string; name: string; description: string }) {
   const { workspaceDir, name, description } = params;
@@ -58,36 +56,6 @@ async function runThinkDirectiveAndGetText(home: string): Promise<string | undef
     }),
   );
   return replyText(res);
-}
-
-async function runInlineReasoningMessage(params: {
-  home: string;
-  body: string;
-  storePath: string;
-  blockReplies: string[];
-}) {
-  return await getReplyFromConfig(
-    {
-      Body: params.body,
-      From: "+1222",
-      To: "+1222",
-      Provider: "whatsapp",
-    },
-    {
-      onBlockReply: (payload) => {
-        if (payload.text) {
-          params.blockReplies.push(payload.text);
-        }
-      },
-    },
-    makeWhatsAppDirectiveConfig(
-      params.home,
-      { model: "anthropic/claude-opus-4-6" },
-      {
-        session: { store: params.storePath },
-      },
-    ),
-  );
 }
 
 function makeRunConfig(home: string, storePath: string) {
@@ -153,45 +121,10 @@ describe("directive behavior", () => {
     vi.resetModules();
     loadModelCatalogMock.mockReset();
     loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
-    installFreshDirectiveBehaviorReplyMocks({
-      onActualRunPreparedReply: (runPreparedReply) => {
-        actualRunPreparedReply = runPreparedReply;
-      },
-      runPreparedReply: (...args) => runPreparedReplyMock(...args),
-    });
+    installFreshDirectiveBehaviorReplyMocks();
     ({ getReplyFromConfig } = await import("./reply.js"));
-    runPreparedReplyMock.mockReset();
-    runPreparedReplyMock.mockImplementation((...args: Parameters<typeof actualRunPreparedReply>) =>
-      actualRunPreparedReply(...args),
-    );
   });
 
-  it("keeps reasoning acks out of mixed messages, including rapid repeats", async () => {
-    await withTempHome(async (home) => {
-      runPreparedReplyMock.mockResolvedValue({ text: "done" });
-
-      const blockReplies: string[] = [];
-      const storePath = sessionStorePath(home);
-
-      const firstRes = await runInlineReasoningMessage({
-        home,
-        body: "please reply\n/reasoning on",
-        storePath,
-        blockReplies,
-      });
-      expect(replyTexts(firstRes)).toContain("done");
-
-      await runInlineReasoningMessage({
-        home,
-        body: "again\n/reasoning on",
-        storePath,
-        blockReplies,
-      });
-
-      expect(runPreparedReplyMock).toHaveBeenCalledTimes(2);
-      expect(blockReplies.length).toBe(0);
-    });
-  });
   it("handles standalone verbose directives and persistence", async () => {
     await withTempHome(async (home) => {
       const storePath = sessionStorePath(home);

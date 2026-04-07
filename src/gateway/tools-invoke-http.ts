@@ -8,7 +8,10 @@ import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -52,8 +55,7 @@ function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): st
   const reasons: string[] = [];
   const plugins = cfg.plugins;
   const slotRaw = plugins?.slots?.memory;
-  const slotDisabled =
-    slotRaw === null || (typeof slotRaw === "string" && slotRaw.trim().toLowerCase() === "none");
+  const slotDisabled = slotRaw === null || normalizeOptionalLowercaseString(slotRaw) === "none";
   const pluginsDisabled = plugins?.enabled === false;
   const defaultDisabled = isTestDefaultMemorySlotDisabled(cfg);
 
