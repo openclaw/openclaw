@@ -151,7 +151,9 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       googleTemplateIds: GEMMA_TEMPLATE_IDS,
       cliTemplateIds: GEMMA_TEMPLATE_IDS,
     };
-    patch = { reasoning: true };
+    if (lower.startsWith("gemma-4")) {
+      patch = { reasoning: true };
+    }
   } else {
     return undefined;
   }
