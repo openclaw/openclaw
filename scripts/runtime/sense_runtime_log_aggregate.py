@@ -164,6 +164,23 @@ def derive_digest_sort_key(
     return f'{rank:03d}:{timestamp_key}:{normalized_count:06d}:{normalized_group_key}'
 
 
+def derive_notification_bucket_from_group_key(notification_group_key: object) -> str:
+    if not isinstance(notification_group_key, str) or not notification_group_key.strip():
+        return 'unknown'
+    return notification_group_key.split('.', 1)[0].strip() or 'unknown'
+
+
+def derive_digest_order_key(item: dict[str, object]) -> tuple[int, int, int, str]:
+    parsed_dt, _ = parse_timestamp(item.get('latest_timestamp'))
+    timestamp_value = int(parsed_dt.timestamp()) if parsed_dt is not None else 0
+    return (
+        -int(item.get('max_recovery_rank', 0)),
+        -timestamp_value,
+        -int(item.get('count', 0)),
+        str(item.get('notification_group_key') or ''),
+    )
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -517,19 +534,25 @@ def main() -> int:
                 'notification_title_short': aggregate['notification_title_short'],
                 'count': aggregate['count'],
                 'digest_bucket_total': aggregate['digest_bucket_total'],
+                'digest_bucket_rank': 0,
                 'latest_timestamp': aggregate['latest_timestamp'],
                 'max_recovery_rank': aggregate['max_recovery_rank'],
                 'band': aggregate['band'],
                 'sample_error_code': aggregate['sample_error_code'],
             }
         )
-    notification_digest_summary.sort(
-        key=lambda item: (
-            -int(item.get('max_recovery_rank', 0)),
-            -int(item.get('count', 0)),
-            str(item.get('notification_group_key') or ''),
-        )
-    )
+
+    digest_bucket_groups: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for item in notification_digest_summary:
+        digest_bucket_groups[
+            derive_notification_bucket_from_group_key(item.get('notification_group_key'))
+        ].append(item)
+    for bucket_items in digest_bucket_groups.values():
+        bucket_items.sort(key=derive_digest_order_key)
+        for index, item in enumerate(bucket_items, start=1):
+            item['digest_bucket_rank'] = index
+
+    notification_digest_summary.sort(key=derive_digest_order_key)
 
     output = {
         'total_records': len(filtered_records),
