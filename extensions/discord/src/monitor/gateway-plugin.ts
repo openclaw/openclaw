@@ -270,10 +270,12 @@ function createGatewayPlugin(params: {
     }
 
     override createWebSocket(url: string) {
-      if (!params.wsAgent) {
-        return super.createWebSocket(url);
-      }
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
+      if (!params.wsAgent) {
+        // Always use the ws npm module to ensure Node.js-style .on() event API
+        // (Node 22's native globalThis.WebSocket only has .addEventListener).
+        return new WebSocketCtor(url);
+      }
       return new WebSocketCtor(url, { agent: params.wsAgent });
     }
   }
