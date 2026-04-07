@@ -35,7 +35,15 @@ export async function ensureLoaded(
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
   for (const job of jobs) {
-    normalizeCronJobIdentityFields(job as unknown as Record<string, unknown>);
+    const raw = job as unknown as Record<string, unknown>;
+    const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
+    if (legacyJobIdIssue) {
+      const resolvedId = typeof raw.id === "string" ? raw.id : undefined;
+      state.deps.log.warn(
+        { storePath: state.deps.storePath, jobId: resolvedId },
+        "cron: job used legacy jobId field; normalized id in memory (run openclaw doctor --fix to persist canonical shape)",
+      );
+    }
     // Persisted legacy jobs may predate the required `enabled` field.
     // Keep runtime behavior backward-compatible without rewriting the store.
     if (typeof job.enabled !== "boolean") {

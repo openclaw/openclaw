@@ -134,6 +134,11 @@ describe("cron service store seam coverage", () => {
 
     await ensureLoaded(state);
 
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ storePath, jobId: "repro-stable-id" }),
+      expect.stringContaining("legacy jobId"),
+    );
+
     const job = findJobOrThrow(state, "repro-stable-id");
     expect(job.id).toBe("repro-stable-id");
     expect((job as { jobId?: unknown }).jobId).toBeUndefined();
