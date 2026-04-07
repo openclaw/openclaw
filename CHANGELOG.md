@@ -58,7 +58,7 @@ Docs: https://docs.openclaw.ai
 - Slack/media: keep attachment downloads on the SSRF-guarded dispatcher path so Slack media fetching works on Node 22 without dropping pinned transport enforcement. (#62239) Thanks @openperf.
 - Docker/plugins: stop forcing bundled plugin discovery to `/app/extensions` in runtime images so packaged installs use compiled `dist/extensions` artifacts again and Node 24 containers do not boot through source-only plugin entry paths. Fixes #62044. (#62316) Thanks @gumadeiras.
 - Cron: load `jobId` into `id` when the on-disk store omits `id`, matching doctor migration and fixing `unknown cron job id` for hand-edited `jobs.json`. (#62246) Thanks @neeravmakwana.
-- Agents/model fallback: classify minimal HTTP 404 API errors (for example `404 status code (no body)`) as `model_not_found` so assistant failures throw into the fallback chain instead of stopping at the first fallback candidate. (#62119)
+- Agents/model fallback: classify minimal HTTP 404 API errors (for example `404 status code (no body)`) as `model_not_found` so assistant failures throw into the fallback chain instead of stopping at the first fallback candidate. (#62119) Thanks @neeravmakwana.
 
 ## 2026.4.5
 
