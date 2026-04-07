@@ -331,16 +331,23 @@ export function stripAnalysisScratchpad(text: string): string {
   // Removes <analysis>...</analysis> blocks (case-insensitive, handles newlines)
   let stripped = text.replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").trim();
 
-  // Extracts content from <summary>...</summary> if it exists, otherwise keeps the rest
-  const summaryRegex = /<summary>([\s\S]*?)<\/summary>/gi;
+  // Extracts content from top-level <summary>...</summary> if it exists.
+  // We avoid <summary> tags that are children of <details> to prevent stripping
+  // valid HTML disclosure widgets from the output.
+  const summaryRegex = /<(summary)>([\s\S]*?)<\/summary>|<(\/?)details[^>]*>/gi;
   let match;
   let extracted: string | null = null;
+  let detailsDepth = 0;
 
   while ((match = summaryRegex.exec(stripped)) !== null) {
-    const before = stripped.substring(0, match.index);
-    // Ignore <summary> if it's immediately preceded by a <details> tag
-    if (!/<details[^>]*>\s*$/i.test(before)) {
-      extracted = match[1];
+    const [fullMatch, isSummary, summaryContent, isDetailsClose] = match;
+
+    if (fullMatch.toLowerCase().startsWith("<details")) {
+      detailsDepth++;
+    } else if (isDetailsClose === "/") {
+      detailsDepth = Math.max(0, detailsDepth - 1);
+    } else if (isSummary && detailsDepth === 0) {
+      extracted = summaryContent;
       break; // Take the first valid top-level <summary>
     }
   }

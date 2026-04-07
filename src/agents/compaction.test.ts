@@ -274,9 +274,21 @@ describe("stripAnalysisScratchpad", () => {
     expect(stripAnalysisScratchpad(input)).toBe("No tags here.");
   });
 
-  it("removes analysis even if summary tag is missing", () => {
-    const input = "Plain text <analysis>Thinking</analysis>";
-    expect(stripAnalysisScratchpad(input)).toBe("Plain text");
+  it("returns plain text unchanged when no tags are present", () => {
+    expect(stripAnalysisScratchpad("Plain text with no tags.")).toBe("Plain text with no tags.");
+  });
+
+  it("extracts summary content even when no analysis tags are present", () => {
+    expect(stripAnalysisScratchpad("<summary>Just a summary.</summary>")).toBe("Just a summary.");
+  });
+
+  it("strips multiple analysis blocks", () => {
+    const input = "<analysis>First.</analysis> Middle. <analysis>Second.</analysis> End.";
+    expect(stripAnalysisScratchpad(input)).toBe("Middle. End.");
+  });
+
+  it("returns empty string when stripping leaves nothing", () => {
+    expect(stripAnalysisScratchpad("<analysis>Everything.</analysis>")).toBe("");
   });
 
   it("passes through text with no tags", () => {
@@ -309,5 +321,9 @@ describe("stripAnalysisScratchpad", () => {
     const input2 = "Check this <details><summary>Details</summary> info</details> tag.";
     // If no top-level summary is found, it falls back to keeping everything (minus analysis tags).
     expect(stripAnalysisScratchpad(input2)).toBe(input2);
+
+    const input3 =
+      "<details> <p> <summary>Inner</summary> </p> </details> <summary>Outer</summary>";
+    expect(stripAnalysisScratchpad(input3)).toBe("Outer");
   });
 });
