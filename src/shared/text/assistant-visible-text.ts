@@ -635,8 +635,9 @@ function stripLeakedReasoningPreamble(text: string): string {
 // Structural contamination detector
 // ---------------------------------------------------------------------------
 
+// Match leaked metadata envelopes: handles fenced schema blocks with optional trailing debris
 const CONTAM_ENVELOPE_RE =
-  /\{\s*"schema"[^}]*\}(?:[^]*?\{\s*"(?:message_id|sender_id|label|name|username)"[^}]*\})+/gs;
+  /(?:Conversation info[^\n]*\n)?```json[\s\S]*?"schema"[\s\S]*?```(?:[\s\S]*?```[^\n]*```)?/gs;
 const CONTAM_CSS_RE = /(?:^|\n)\s*(?:[\w.-]+\s*\{\s*)?(?:[a-z-]+\s*:\s*[^;]+;\s*){2,}(?:\}\s*)?(?:\n|$)/gm;
 const CONTAM_FENCE_RE = /```\s*```/g;
 const CONTAM_CODE_DEBRIS_RE = /(?:^|\n)\s*\.\w+\([^)]*\)\)?;?/gm;
@@ -660,12 +661,8 @@ function stripStructuralContamination(text: string): string {
     return text;
   }
 
-  let result = text.replace(CONTAM_ENVELOPE_RE, (match, offset) => {
-    if (isInsideCodeAt(offset, match.length, text)) {
-      return match;
-    }
-    return "";
-  });
+  // Always strip envelope matches (they're always contamination, never legitimate code)
+  let result = text.replace(CONTAM_ENVELOPE_RE, "");
   result = result.replace(CONTAM_CSS_RE, (match, offset) => {
     if (isInsideCodeAt(offset, match.length, result)) {
       return match;
