@@ -251,7 +251,16 @@ export function createChannelNativeApprovalRuntime<
         approvalKind,
         request,
       });
-      const shouldHandle = adapter.shouldHandle(request);
+      let shouldHandle: boolean;
+      try {
+        shouldHandle = adapter.shouldHandle(request);
+      } catch (error) {
+        void routeReporter.reportSkipped({
+          approvalKind,
+          request,
+        });
+        throw error;
+      }
       if (shouldHandle) {
         return shouldHandle;
       }

@@ -246,6 +246,116 @@ describe("createChannelNativeApprovalRuntime", () => {
     await runtime.stop();
   });
 
+  it("does not block routed-elsewhere notices when another runtime throws in shouldHandle", async () => {
+    mockGatewayClientStarts.mockReset();
+    mockGatewayClientStops.mockReset();
+    mockGatewayClientRequests.mockReset();
+    mockCreateOperatorApprovalsGatewayClient.mockReset().mockResolvedValue({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
+    const failingRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-throwing-should-handle",
+      clientDisplayName: "Slack",
+      channel: "slack",
+      channelLabel: "Slack",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({ to: "channel:C123", threadId: "1712345678.123456" }),
+        resolveApproverDmTargets: async () => [{ to: "user:owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => {
+        throw new Error("boom");
+      },
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "slack-dm:owner",
+        target: { chatId: "owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+    const deliveringRuntime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-delivering",
+      clientDisplayName: "Slack",
+      channel: "slack",
+      channelLabel: "Slack",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({ to: "channel:C123", threadId: "1712345678.123456" }),
+        resolveApproverDmTargets: async () => [{ to: "user:owner" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "slack-dm:owner",
+        target: { chatId: "owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+
+    await failingRuntime.start();
+    await deliveringRuntime.start();
+
+    await expect(
+      failingRuntime.handleRequested({
+        id: "req-throwing-should-handle",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "slack",
+          turnSourceTo: "channel:C123",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: "1712345678.123456",
+        },
+        createdAtMs: 0,
+        expiresAtMs: Date.now() + 60_000,
+      }),
+    ).rejects.toThrow("boom");
+
+    await deliveringRuntime.handleRequested({
+      id: "req-throwing-should-handle",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: "1712345678.123456",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("send", {
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "1712345678.123456",
+      message: "Approval required. I sent the approval request to Slack DMs, not this chat.",
+      idempotencyKey: "approval-route-notice:req-throwing-should-handle",
+    });
+
+    await failingRuntime.stop();
+    await deliveringRuntime.stop();
+  });
+
   it("inherits fallback account and thread when the request omits them", async () => {
     mockGatewayClientStarts.mockReset();
     mockGatewayClientStops.mockReset();
