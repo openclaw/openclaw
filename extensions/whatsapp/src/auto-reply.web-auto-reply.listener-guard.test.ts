@@ -113,7 +113,15 @@ describe("WA listener guard", () => {
       });
 
     try {
-      const sleep = vi.fn(async () => {});
+      // Make sleep never resolve so the reconnect loop stalls after
+      // closeListener — this keeps the safety timer alive long enough to fire.
+      let resolveSleep: () => void = () => {};
+      const sleep = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveSleep = resolve;
+          }),
+      );
       const scripted = createScriptedWebListenerFactory();
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const controller = new AbortController();
@@ -152,7 +160,8 @@ describe("WA listener guard", () => {
         spies,
       });
 
-      // Trigger watchdog → closeListener fires
+      // Trigger watchdog → closeListener fires → safety timer starts.
+      // sleep() never resolves so the reconnect loop stalls, keeping the timer alive.
       await vi.advanceTimersByTimeAsync(200);
       await Promise.resolve();
 
@@ -166,6 +175,8 @@ describe("WA listener guard", () => {
       );
       expect(stuckWarn).toBeDefined();
 
+      // Unblock sleep so the monitor can shut down cleanly
+      resolveSleep();
       controller.abort();
       for (let i = 0; i < scripted.getListenerCount(); i++) {
         scripted.resolveClose(i, { status: 499, isLoggedOut: false });
