@@ -3,10 +3,12 @@ import {
   resolveChannelApprovalCapability,
 } from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
+import { timedApprovalStore } from "../../gateway/timed-approval-store.js";
 import { logVerbose } from "../../globals.js";
 import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { formatDurationMs, parseDuration } from "../../infra/parse-duration.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
@@ -14,6 +16,9 @@ import type { CommandHandler } from "./commands-types.js";
 
 const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
+
+/** Duration suffixes recognised as timed approvals, e.g. "30m", "1h". */
+const DURATION_REGEX = /^\d+(?:\.\d+)?[smhd]$/i;
 
 const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
   allow: "allow-once",
@@ -30,6 +35,7 @@ const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> =
 
 type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
+  | { ok: true; id: string; decision: "timed"; durationMs: number }
   | { ok: false; error: string };
 
 const APPROVE_USAGE_TEXT =
@@ -55,6 +61,23 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
 
   const first = tokens[0].toLowerCase();
   const second = tokens[1].toLowerCase();
+
+  // Check for duration-style token (e.g. "30m", "1h") in either position
+  const firstIsDuration = DURATION_REGEX.test(first);
+  const secondIsDuration = DURATION_REGEX.test(second);
+
+  if (firstIsDuration) {
+    const durationMs = parseDuration(first);
+    if (durationMs !== null) {
+      return { ok: true, decision: "timed", durationMs, id: tokens.slice(1).join(" ").trim() };
+    }
+  }
+  if (secondIsDuration) {
+    const durationMs = parseDuration(second);
+    if (durationMs !== null) {
+      return { ok: true, decision: "timed", durationMs, id: tokens[0] };
+    }
+  }
 
   if (DECISION_ALIASES[first]) {
     return {
@@ -190,10 +213,12 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const resolvedBy = buildResolvedByLabel(params);
+  // Timed approvals handled separately; for normal flow decision is a real ExecApprovalDecision.
+  const resolvedDecision = parsed.decision === "timed" ? ("allow-once" as const) : parsed.decision;
   const callApprovalMethod = async (method: string): Promise<void> => {
     await callGateway({
       method,
-      params: { id: parsed.id, decision: parsed.decision },
+      params: { id: parsed.id, decision: resolvedDecision },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: `Chat approval (${resolvedBy})`,
       mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -214,6 +239,55 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
           execAuthorization: execApprovalAuthorization,
           pluginAuthorization: pluginApprovalAuthorization,
         }),
+      },
+    };
+  }
+
+  // Handle timed approvals separately: store in memory and auto-resolve the current request
+  if (parsed.ok && parsed.decision === "timed") {
+    const resolvedBy = buildResolvedByLabel(params);
+    // Retrieve the pending approval to get the command pattern
+    let commandText: string | undefined;
+    try {
+      const snapshot = await callGateway({
+        method: "exec.approval.get",
+        params: { id: parsed.id },
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientDisplayName: `Chat approval (${resolvedBy})`,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      });
+      const result = snapshot as { commandText?: string; agentId?: string | null };
+      commandText = result?.commandText;
+      const agentId = result?.agentId ?? null;
+      timedApprovalStore.add({
+        commandPattern: commandText ?? parsed.id,
+        agentId,
+        grantedBy: resolvedBy,
+        approvedUntil: Date.now() + parsed.durationMs,
+      });
+    } catch {
+      // Fall through to normal allow-once if we can't look up the command
+    }
+    // Also submit allow-once for the immediate request so it runs right away
+    try {
+      await callGateway({
+        method: "exec.approval.resolve",
+        params: { id: parsed.id, decision: "allow-once" },
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientDisplayName: `Chat approval (${resolvedBy})`,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      });
+    } catch (err) {
+      return {
+        shouldContinue: false,
+        reply: { text: `❌ Failed to submit approval: ${formatErrorMessage(err)}` },
+      };
+    }
+    const durationLabel = formatDurationMs(parsed.durationMs);
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `✅ Timed approval granted for ${durationLabel}: \`${commandText ?? parsed.id}\`. Future matching commands will be auto-approved until the window expires.`,
       },
     };
   }
@@ -245,6 +319,6 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   return {
     shouldContinue: false,
-    reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
+    reply: { text: `✅ Approval ${resolvedDecision} submitted for ${parsed.id}.` },
   };
 };
