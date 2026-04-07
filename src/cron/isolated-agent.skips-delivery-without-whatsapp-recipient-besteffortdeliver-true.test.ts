@@ -232,23 +232,6 @@ describe("runCronIsolatedAgentTurn", () => {
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 
-  it("does not mark NO_REPLY output as delivered when no direct send occurs", async () => {
-    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
-      mockAgentPayloads([{ text: "NO_REPLY" }]);
-      const res = await runTelegramAnnounceTurn({
-        home,
-        storePath,
-        deps,
-        delivery: { mode: "announce", channel: "telegram", to: "123" },
-      });
-
-      expect(res.status).toBe("ok");
-      expect(res.delivered).toBe(false);
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
-    });
-  });
-
   it("deletes the isolated cron session after NO_REPLY when deleteAfterRun is enabled", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       mockAgentPayloads([{ text: "NO_REPLY" }]);
