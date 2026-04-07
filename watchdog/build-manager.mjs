@@ -250,18 +250,18 @@ export function buildCommit(repoRoot, commitHash, { onProgress } = {}) {
     fs.cpSync(srcModules, destModules, { recursive: true });
   }
 
-  // Copy skills/ directory
-  const srcSkills = path.join(repoRoot, "skills");
-  const destSkills = path.join(buildDir, "skills");
-  if (fs.existsSync(srcSkills)) {
-    fs.cpSync(srcSkills, destSkills, { recursive: true });
-  }
-
-  // Copy extensions/ directory
-  const srcExtensions = path.join(repoRoot, "extensions");
-  const destExtensions = path.join(buildDir, "extensions");
-  if (fs.existsSync(srcExtensions)) {
-    fs.cpSync(srcExtensions, destExtensions, { recursive: true });
+  // Link skills/ and extensions/ directories.
+  // On Windows, use junctions to avoid recursive copy following symlinks in node_modules.
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  for (const dirName of ["skills", "extensions"]) {
+    const src = path.join(repoRoot, dirName);
+    const dest = path.join(buildDir, dirName);
+    if (!fs.existsSync(src)) continue;
+    try {
+      fs.symlinkSync(src, dest, linkType);
+    } catch {
+      fs.cpSync(src, dest, { recursive: true });
+    }
   }
 
   // Copy docs/reference/templates/ directory (workspace templates like AGENTS.md)
