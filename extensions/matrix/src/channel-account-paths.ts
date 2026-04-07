@@ -20,7 +20,7 @@ type ProbeMatrix = (params: {
   accessToken: string;
   userId: string;
   deviceId?: string;
-  timeoutMs?: number;
+  timeoutMs: number;
   accountId?: string;
   allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;
@@ -56,7 +56,7 @@ export function createMatrixProbeAccount(params: {
         accessToken: auth.accessToken,
         userId: auth.userId,
         deviceId: auth.deviceId,
-        timeoutMs,
+        timeoutMs: timeoutMs ?? 5_000,
         accountId: account.accountId,
         allowPrivateNetwork: auth.allowPrivateNetwork,
         ssrfPolicy: auth.ssrfPolicy,
