@@ -97,7 +97,12 @@ const SessionsSpawnToolSchema = Type.Object({
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
   streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
-  lightContext: Type.Optional(Type.Boolean()),
+  lightContext: Type.Optional(
+    Type.Boolean({
+      description:
+        "When true, spawned subagent runs use lightweight bootstrap context. Only applies to runtime='subagent'.",
+    }),
+  ),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -163,6 +168,9 @@ export function createSessionsSpawnTool(
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
+      if (runtime === "acp" && lightContext) {
+        throw new Error("lightContext is only supported for runtime='subagent'.");
+      }
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
