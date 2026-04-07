@@ -717,6 +717,16 @@ describe("installSessionToolResultGuard", () => {
       diagnosticType: "openclaw.plugin_path_probe",
       sourceTool: "exec",
     });
+    expect(
+      detectToolResultReplayPolicyMeta({
+        toolName: "read",
+        args: { path: "C:\\repo\\extensions\\telegram\\package.json" },
+      }),
+    ).toMatchObject({
+      transient: true,
+      diagnosticType: "openclaw.plugin_path_probe",
+      sourceTool: "read",
+    });
   });
 
   it("applies before_message_write to synthetic tool-result flushes", () => {
