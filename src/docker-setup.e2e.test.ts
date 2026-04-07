@@ -299,6 +299,24 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).not.toMatch(/--build-arg OPENCLAW_IMAGE_APT_PACKAGES=curl wget(?! httpie)/);
   });
 
+  it("explicitly empty OPENCLAW_IMAGE_APT_PACKAGES suppresses legacy fallback", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    await resetDockerLog(activeSandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_IMAGE_APT_PACKAGES: "",
+      OPENCLAW_DOCKER_APT_PACKAGES: "curl wget",
+    });
+    expect(result.status).toBe(0);
+
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_IMAGE_APT_PACKAGES=");
+    expect(envFile).not.toContain("curl wget");
+
+    const log = await readDockerLog(activeSandbox);
+    expect(log).not.toContain("--build-arg OPENCLAW_IMAGE_APT_PACKAGES=curl wget");
+  });
+
   it("avoids shared-network openclaw-cli before the gateway is started", async () => {
     const activeSandbox = requireSandbox(sandbox);
 
