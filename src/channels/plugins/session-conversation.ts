@@ -6,7 +6,7 @@ import {
   type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
-import { getChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
+import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 
 export type ResolvedSessionConversation = {
   id: string;
@@ -61,7 +61,7 @@ function normalizeResolvedChannel(channel: string): string {
 function getMessagingAdapter(channel: string) {
   const normalizedChannel = normalizeResolvedChannel(channel);
   try {
-    return getChannelPlugin(normalizedChannel)?.messaging;
+    return getLoadedChannelPlugin(normalizedChannel)?.messaging;
   } catch {
     return undefined;
   }

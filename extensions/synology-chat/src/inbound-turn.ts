@@ -61,7 +61,7 @@ export async function dispatchSynologyChatInboundTurn(params: {
   log?: SynologyChannelLog;
 }): Promise<null> {
   const rt = getSynologyRuntime();
-  const currentCfg = await rt.config.loadConfig();
+  const currentCfg = rt.config.loadConfig();
 
   // The Chat API user_id (for sending) may differ from the webhook
   // user_id (used for sessions/pairing). Use chatUserId for API calls.

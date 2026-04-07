@@ -258,6 +258,7 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Diff PNG/PDF rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
+        { cause: error },
       );
     } finally {
       await page?.close().catch(() => {});

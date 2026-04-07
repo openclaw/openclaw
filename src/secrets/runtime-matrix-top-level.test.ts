@@ -1,9 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+
+const matrixSecrets = loadBundledChannelSecretContractApi("matrix");
+if (!matrixSecrets?.collectRuntimeConfigAssignments) {
+  throw new Error("Missing Matrix secret contract api");
+}
 
 type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
 
@@ -14,6 +19,25 @@ const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
+
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
+  return {
+    getBootstrapChannelPlugin: (id: string) =>
+      id === "matrix"
+        ? {
+            secrets: {
+              collectRuntimeConfigAssignments: matrixSecrets.collectRuntimeConfigAssignments,
+            },
+          }
+        : undefined,
+    getBootstrapChannelSecrets: (id: string) =>
+      id === "matrix"
+        ? {
+            collectRuntimeConfigAssignments: matrixSecrets.collectRuntimeConfigAssignments,
+          }
+        : undefined,
+  };
+});
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -88,13 +112,6 @@ let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntim
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
-
 describe("secrets runtime snapshot matrix access token", () => {
   beforeAll(async () => {
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
@@ -135,9 +152,8 @@ describe("secrets runtime snapshot matrix access token", () => {
       env: {
         MATRIX_ACCESS_TOKEN: "default-matrix-token",
       },
-      agentDirs: ["/tmp/openclaw-agent-main"],
+      includeAuthStoreRefs: false,
       loadablePluginOrigins: new Map(),
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
     expect(snapshot.config.channels?.matrix?.accessToken).toBe("default-matrix-token");

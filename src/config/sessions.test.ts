@@ -125,7 +125,7 @@ describe("sessions", () => {
     {
       name: "keeps group chats distinct",
       scope: "per-sender" as const,
-      ctx: { From: "12345-678@g.us" },
+      ctx: { From: "12345-678@g.us", ChatType: "group", Provider: "whatsapp" },
       expected: "whatsapp:group:12345-678@g.us",
     },
     {
@@ -200,7 +200,7 @@ describe("sessions", () => {
     {
       name: "leaves groups untouched even with main key",
       scope: "per-sender" as const,
-      ctx: { From: "12345-678@g.us" },
+      ctx: { From: "12345-678@g.us", ChatType: "group", Provider: "whatsapp" },
       mainKey: "main",
       expected: "agent:main:whatsapp:group:12345-678@g.us",
     },

@@ -7,6 +7,7 @@ import {
 } from "../../config/talk.js";
 import type { TalkConfigResponse, TalkProviderConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
 import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
 import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
@@ -20,6 +21,7 @@ import {
   validateTalkSpeakParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import { asRecord } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type TalkSpeakReason =
@@ -36,20 +38,6 @@ type TalkSpeakErrorDetails = {
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
-}
-
-function trimString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function asStringRecord(value: unknown): Record<string, string> | undefined {
@@ -185,7 +173,10 @@ function buildTalkSpeakOverrides(
     return { provider };
   }
   const resolvedSpeed = resolveTalkSpeed(params);
-  const resolvedVoiceId = resolveTalkVoiceId(providerConfig, trimString(params.voiceId));
+  const resolvedVoiceId = resolveTalkVoiceId(
+    providerConfig,
+    normalizeOptionalString(params.voiceId),
+  );
   const providerOverrides = speechProvider.resolveTalkOverrides({
     talkProviderConfig: providerConfig,
     params: {
@@ -353,7 +344,7 @@ export const talkHandlers: GatewayRequestHandlers = {
     }
 
     const typedParams = params;
-    const text = trimString(typedParams.text);
+    const text = normalizeOptionalString(typedParams.text);
     if (!text) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "talk.speak requires text"));
       return;

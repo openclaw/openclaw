@@ -13,12 +13,12 @@ ACP_AGENT="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 
 case "$ACP_AGENT" in
   claude)
-    AUTH_PROVIDER="anthropic"
+    AUTH_PROVIDER="claude-cli"
     CLI_PACKAGE="@anthropic-ai/claude-code"
     CLI_BIN="claude"
     ;;
   codex)
-    AUTH_PROVIDER="openai-codex"
+    AUTH_PROVIDER="codex-cli"
     CLI_PACKAGE="@openai/codex"
     CLI_BIN="codex"
     ;;
@@ -150,9 +150,11 @@ cleanup() {
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
-source /app/scripts/lib/live-docker-stage.sh
+source /src/scripts/lib/live-docker-stage.sh
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
+openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
+openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
 pnpm test:live src/gateway/gateway-acp-bind.live.test.ts

@@ -1,8 +1,34 @@
 import path from "node:path";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
+import { runQaDockerUp } from "./docker-up.runtime.js";
 import { startQaLabServer } from "./lab-server.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
 import { runQaSuite } from "./suite.js";
+
+type InterruptibleServer = {
+  baseUrl: string;
+  stop(): Promise<void>;
+};
+
+async function runInterruptibleServer(label: string, server: InterruptibleServer) {
+  process.stdout.write(`${label}: ${server.baseUrl}\n`);
+  process.stdout.write("Press Ctrl+C to stop.\n");
+
+  const shutdown = async () => {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    await server.stop();
+    process.exit(0);
+  };
+
+  const onSignal = () => {
+    void shutdown();
+  };
+
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  await new Promise(() => undefined);
+}
 
 export async function runQaLabSelfCheckCommand(opts: { output?: string }) {
   const server = await startQaLabServer({
@@ -59,23 +85,7 @@ export async function runQaLabUiCommand(opts: {
     embeddedGateway: opts.embeddedGateway,
     sendKickoffOnStart: opts.sendKickoffOnStart,
   });
-  process.stdout.write(`QA Lab UI: ${server.baseUrl}\n`);
-  process.stdout.write("Press Ctrl+C to stop.\n");
-
-  const shutdown = async () => {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await server.stop();
-    process.exit(0);
-  };
-
-  const onSignal = () => {
-    void shutdown();
-  };
-
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  await new Promise(() => undefined);
+  await runInterruptibleServer("QA Lab UI", server);
 }
 
 export async function runQaDockerScaffoldCommand(opts: {
@@ -107,26 +117,35 @@ export async function runQaDockerBuildImageCommand(opts: { image?: string }) {
   process.stdout.write(`QA docker image: ${result.imageName}\n`);
 }
 
+export async function runQaDockerUpCommand(opts: {
+  outputDir?: string;
+  gatewayPort?: number;
+  qaLabPort?: number;
+  providerBaseUrl?: string;
+  image?: string;
+  usePrebuiltImage?: boolean;
+  skipUiBuild?: boolean;
+}) {
+  const result = await runQaDockerUp({
+    repoRoot: process.cwd(),
+    outputDir: opts.outputDir ? path.resolve(opts.outputDir) : undefined,
+    gatewayPort: Number.isFinite(opts.gatewayPort) ? opts.gatewayPort : undefined,
+    qaLabPort: Number.isFinite(opts.qaLabPort) ? opts.qaLabPort : undefined,
+    providerBaseUrl: opts.providerBaseUrl,
+    image: opts.image,
+    usePrebuiltImage: opts.usePrebuiltImage,
+    skipUiBuild: opts.skipUiBuild,
+  });
+  process.stdout.write(`QA docker dir: ${result.outputDir}\n`);
+  process.stdout.write(`QA Lab UI: ${result.qaLabUrl}\n`);
+  process.stdout.write(`Gateway UI: ${result.gatewayUrl}\n`);
+  process.stdout.write(`Stop: ${result.stopCommand}\n`);
+}
+
 export async function runQaMockOpenAiCommand(opts: { host?: string; port?: number }) {
   const server = await startQaMockOpenAiServer({
     host: opts.host,
     port: Number.isFinite(opts.port) ? opts.port : undefined,
   });
-  process.stdout.write(`QA mock OpenAI: ${server.baseUrl}\n`);
-  process.stdout.write("Press Ctrl+C to stop.\n");
-
-  const shutdown = async () => {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await server.stop();
-    process.exit(0);
-  };
-
-  const onSignal = () => {
-    void shutdown();
-  };
-
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  await new Promise(() => undefined);
+  await runInterruptibleServer("QA mock OpenAI", server);
 }

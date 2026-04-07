@@ -414,8 +414,41 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     params.command.channelId ??
     normalizeChannelId(resolveCommandSurfaceChannel(params)) ??
     undefined;
-  const channelPlugin = channelId ? getChannelPlugin(channelId) : undefined;
-  const conversationBindings = channelPlugin?.conversationBindings;
+  const commandConversationBindings = channelId
+    ? getChannelPlugin(channelId)?.conversationBindings
+    : undefined;
+  const commandSupportsCurrentConversationBinding = Boolean(
+    commandConversationBindings?.supportsCurrentConversationBinding,
+  );
+  const commandSupportsLifecycleUpdate =
+    action === SESSION_ACTION_IDLE
+      ? typeof commandConversationBindings?.setIdleTimeoutBySessionKey === "function"
+      : typeof commandConversationBindings?.setMaxAgeBySessionKey === "function";
+  const bindingContext = resolveConversationBindingContextFromAcpCommand(params);
+  if (!bindingContext) {
+    if (
+      !channelId ||
+      !commandSupportsCurrentConversationBinding ||
+      !commandSupportsLifecycleUpdate
+    ) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ /session idle and /session max-age are currently available only on channels that support focused conversation bindings.",
+        },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ /session idle and /session max-age must be run inside a focused conversation.",
+      },
+    };
+  }
+  const resolvedChannelId = bindingContext.channel || channelId;
+  const conversationBindings = resolvedChannelId
+    ? getChannelPlugin(resolvedChannelId)?.conversationBindings
+    : undefined;
   const supportsCurrentConversationBinding = Boolean(
     conversationBindings?.supportsCurrentConversationBinding,
   );
@@ -423,7 +456,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     action === SESSION_ACTION_IDLE
       ? typeof conversationBindings?.setIdleTimeoutBySessionKey === "function"
       : typeof conversationBindings?.setMaxAgeBySessionKey === "function";
-  if (!channelId || !supportsCurrentConversationBinding || !supportsLifecycleUpdate) {
+  if (!resolvedChannelId || !supportsCurrentConversationBinding || !supportsLifecycleUpdate) {
     return {
       shouldContinue: false,
       reply: {
@@ -433,15 +466,6 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   }
 
   const sessionBindingService = getSessionBindingService();
-  const bindingContext = resolveConversationBindingContextFromAcpCommand(params);
-  if (!bindingContext) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ /session idle and /session max-age must be run inside a focused conversation.",
-      },
-    };
-  }
 
   const activeBinding = sessionBindingService.resolveByConversation(bindingContext);
   if (!activeBinding) {

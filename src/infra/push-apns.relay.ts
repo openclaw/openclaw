@@ -5,6 +5,7 @@ import {
   signDevicePayload,
   type DeviceIdentity,
 } from "./device-identity.js";
+import { formatErrorMessage } from "./errors.js";
 
 export type ApnsRelayPushType = "alert" | "background";
 
@@ -145,7 +146,7 @@ export function resolveApnsRelayConfigFromEnv(
       },
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return {
       ok: false,
       error: `invalid ${baseUrlSource} (${baseUrl}): ${message}`,

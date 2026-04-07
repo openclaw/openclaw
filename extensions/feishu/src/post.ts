@@ -1,7 +1,8 @@
+import { isRecord } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
 const FALLBACK_POST_TEXT = "[Rich text message]";
-const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}\[\]()#+\-!|>~])/g;
+const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
 
 type PostParseResult = {
   textContent: string;
@@ -14,10 +15,6 @@ type PostPayload = {
   title: string;
   content: unknown[];
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function toStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value : "";

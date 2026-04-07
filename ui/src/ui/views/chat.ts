@@ -323,8 +323,8 @@ function renderContextNotice(
     <div class="context-notice" role="status" style="--ctx-color:${color};--ctx-bg:${bg}">
       <svg
         class="context-notice__icon"
-        width="24"
-        height="24"
+        width="16"
+        height="16"
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"

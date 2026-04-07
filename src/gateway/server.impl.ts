@@ -568,8 +568,15 @@ export async function startGatewayServer(
     const startupSnapshot = await readConfigFileSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
   }
+  const startupMaintenanceConfig =
+    cfgAtStart.channels === undefined && startupRuntimeConfig.channels !== undefined
+      ? {
+          ...cfgAtStart,
+          channels: startupRuntimeConfig.channels,
+        }
+      : cfgAtStart;
   await runChannelPluginStartupMaintenance({
-    cfg: cfgAtStart,
+    cfg: startupMaintenanceConfig,
     env: process.env,
     log,
   });
@@ -971,6 +978,7 @@ export async function startGatewayServer(
             clearAgentRunContext,
             toolEventRecipients,
             sessionEventSubscribers,
+            isChatSendRunActive: (runId) => chatAbortControllers.has(runId),
           }),
         );
 
@@ -1051,6 +1059,8 @@ export async function startGatewayServer(
                 startedAt: sessionRow.startedAt,
                 endedAt: sessionRow.endedAt,
                 runtimeMs: sessionRow.runtimeMs,
+                compactionCheckpointCount: sessionRow.compactionCheckpointCount,
+                latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
               }
             : {};
           const message = attachOpenClawTranscriptMeta(update.message, {
@@ -1152,6 +1162,8 @@ export async function startGatewayServer(
                     startedAt: sessionRow.startedAt,
                     endedAt: sessionRow.endedAt,
                     runtimeMs: sessionRow.runtimeMs,
+                    compactionCheckpointCount: sessionRow.compactionCheckpointCount,
+                    latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
                   }
                 : {}),
             },

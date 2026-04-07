@@ -1,12 +1,12 @@
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
+import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import {
   makeSnapshot,
   restoreRedactedValues,
   type TestSnapshot,
 } from "./redact-snapshot.test-helpers.js";
-import { redactSnapshotTestHints as mainSchemaHints } from "./redact-snapshot.test-hints.js";
 import { buildConfigSchema, type ConfigUiHints } from "./schema.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 

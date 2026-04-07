@@ -305,6 +305,24 @@ async function loadPluginCommandState(
   };
 }
 
+async function loadPluginCommandConfig(): Promise<
+  { ok: true; path: string; config: OpenClawConfig } | { ok: false; path: string; error: string }
+> {
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    return {
+      ok: false,
+      path: snapshot.path,
+      error: "Config file is invalid; fix it before using /plugins.",
+    };
+  }
+  return {
+    ok: true,
+    path: snapshot.path,
+    config: structuredClone(snapshot.resolved),
+  };
+}
+
 export const handlePluginsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -403,9 +421,16 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   }
 
   if (pluginsCommand.action === "install") {
+    const loadedConfig = await loadPluginCommandConfig();
+    if (!loadedConfig.ok) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${loadedConfig.error}` },
+      };
+    }
     const installed = await installPluginFromPluginsCommand({
       raw: pluginsCommand.spec,
-      config: structuredClone(loaded.config),
+      config: loadedConfig.config,
     });
     if (!installed.ok) {
       return {

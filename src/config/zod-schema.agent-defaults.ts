@@ -9,6 +9,7 @@ import {
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
+  CliBackendSchema,
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
@@ -22,6 +23,7 @@ export const AgentDefaultsSchema = z
     imageGenerationModel: AgentModelSchema.optional(),
     videoGenerationModel: AgentModelSchema.optional(),
     musicGenerationModel: AgentModelSchema.optional(),
+    mediaGenerationAutoProviderFallback: z.boolean().optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
@@ -55,6 +57,7 @@ export const AgentDefaultsSchema = z
     envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
     envelopeElapsed: z.union([z.literal("on"), z.literal("off")]).optional(),
     contextTokens: z.number().int().positive().optional(),
+    cliBackends: z.record(z.string(), CliBackendSchema).optional(),
     memorySearch: MemorySearchSchema,
     contextPruning: z
       .object({

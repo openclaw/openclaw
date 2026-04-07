@@ -190,8 +190,8 @@ Control how group/room messages are handled per channel:
       groupPolicy: "allowlist",
       groupAllowFrom: ["@owner:example.org"],
       groups: {
-        "!roomId:example.org": { allow: true },
-        "#alias:example.org": { allow: true },
+        "!roomId:example.org": { enabled: true },
+        "#alias:example.org": { enabled: true },
       },
     },
   },

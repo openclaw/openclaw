@@ -1,7 +1,7 @@
 import path from "node:path";
 import * as tar from "tar";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { resolveUserPath } from "../utils.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
@@ -50,10 +50,6 @@ export type BackupVerifyResult = {
   assetCount: number;
   entryCount: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function stripTrailingSlashes(value: string): string {
   return value.replace(/\/+$/u, "");

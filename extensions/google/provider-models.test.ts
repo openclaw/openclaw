@@ -216,4 +216,26 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     expect(isModernGoogleModel("gemini-2.5-flash-lite")).toBe(true);
     expect(isModernGoogleModel("gemini-1.5-pro")).toBe(false);
   });
+
+  it("treats gemma models as modern google models", () => {
+    expect(isModernGoogleModel("gemma-4-26b-a4b-it")).toBe(true);
+    expect(isModernGoogleModel("gemma-3-4b-it")).toBe(true);
+  });
+
+  it("resolves gemma model with reasoning forced off regardless of template", () => {
+    const model = resolveGoogleGeminiForwardCompatModel({
+      providerId: "google",
+      ctx: createContext({
+        provider: "google",
+        modelId: "gemma-4-26b-a4b-it",
+        models: [createTemplateModel("google", "gemini-3-flash-preview", { reasoning: true })],
+      }),
+    });
+
+    expect(model).toMatchObject({
+      provider: "google",
+      id: "gemma-4-26b-a4b-it",
+      reasoning: false, // patch must override the template value
+    });
+  });
 });

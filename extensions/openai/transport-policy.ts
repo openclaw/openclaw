@@ -5,19 +5,11 @@ import type {
   ProviderWebSocketSessionPolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { isOpenAIApiBaseUrl } from "./shared.js";
+import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS = 60_000;
 const AZURE_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
-
-function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
-}
 
 function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();

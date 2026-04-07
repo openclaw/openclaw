@@ -1,6 +1,6 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { createPiAiStreamSimpleMock } from "./extra-params.pi-ai-mock.js";
+import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 vi.mock("@mariozechner/pi-ai", async () =>

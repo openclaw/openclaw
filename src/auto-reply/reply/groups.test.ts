@@ -59,12 +59,12 @@ describe("group runtime loading", () => {
         cfg: {
           channels: {
             slack: {
-              channels: {
+              groups: {
                 C123: { requireMention: false },
               },
             },
           },
-        },
+        } as unknown as OpenClawConfig,
         ctx: {
           Provider: "slack",
           From: "slack:channel:C123",

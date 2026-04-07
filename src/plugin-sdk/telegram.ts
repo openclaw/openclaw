@@ -15,3 +15,12 @@ export const parseTelegramTopicConversation: FacadeModule["parseTelegramTopicCon
   loadFacadeModule().parseTelegramTopicConversation(
     ...args,
   )) as FacadeModule["parseTelegramTopicConversation"];
+
+export const singleAccountKeysToMove: FacadeModule["singleAccountKeysToMove"] =
+  loadFacadeModule().singleAccountKeysToMove;
+
+export const collectTelegramSecurityAuditFindings: FacadeModule["collectTelegramSecurityAuditFindings"] =
+  ((...args) =>
+    loadFacadeModule().collectTelegramSecurityAuditFindings(
+      ...args,
+    )) as FacadeModule["collectTelegramSecurityAuditFindings"];

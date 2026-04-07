@@ -4,6 +4,7 @@ import {
   discoverGatewayBeacons,
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { pickAutoSshTargetFromDiscovery } from "./discovery.js";
 import {
   extractConfigSummary,
@@ -37,6 +38,7 @@ export async function runGatewayStatusProbePass(params: {
   sshTarget: string | null;
   sshIdentity: string | null;
   loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
+  localTlsFingerprint?: string;
 }): Promise<{
   discovery: GatewayBonjourBeacon[];
   probed: GatewayStatusProbedTarget[];
@@ -69,7 +71,7 @@ export async function runGatewayStatusProbePass(params: {
       sshTunnelStarted = true;
       return tunnel;
     } catch (err) {
-      sshTunnelError = err instanceof Error ? err.message : String(err);
+      sshTunnelError = formatErrorMessage(err);
       return null;
     }
   };
@@ -124,6 +126,10 @@ export async function runGatewayStatusProbePass(params: {
             token: authResolution.token,
             password: authResolution.password,
           },
+          tlsFingerprint:
+            target.kind === "localLoopback" && target.url.startsWith("wss://")
+              ? params.localTlsFingerprint
+              : undefined,
           timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
         });
         return {

@@ -20,6 +20,8 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { styleHealthChannelLine } from "../terminal/health-style.js";
 import { isRich } from "../terminal/theme.js";
+import { isRecord } from "../utils.js";
+import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 
 export type ChannelAccountHealthSummary = {
   accountId: string;
@@ -163,7 +165,7 @@ const buildSessionSummary = (storePath: string) => {
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
-  value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  isRecord(value) ? value : null;
 
 async function inspectHealthAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
   return (
@@ -624,10 +626,11 @@ export async function healthCommand(
     const rich = isRich();
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails({ config: cfg });
-      runtime.log(info("Gateway connection:"));
-      for (const line of details.message.split("\n")) {
-        runtime.log(`  ${line}`);
-      }
+      logGatewayConnectionDetails({
+        runtime,
+        info,
+        message: details.message,
+      });
     }
     const localAgents = resolveAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;

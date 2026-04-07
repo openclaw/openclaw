@@ -2,7 +2,9 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 export const DEFAULT_LIVE_IMAGE_MODELS: Record<string, string> = {
+  fal: "fal/fal-ai/flux/dev",
   google: "google/gemini-3.1-flash-image-preview",
+  minimax: "minimax/image-01",
   openai: "openai/gpt-image-1",
   vydra: "vydra/grok-imagine",
 };

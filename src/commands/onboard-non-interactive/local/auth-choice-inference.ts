@@ -41,7 +41,7 @@ export function inferAuthChoiceFromFlags(
     cliFlag: string;
   }>;
   const matches: AuthChoiceFlag[] = flags
-    .filter(({ optionKey }) => hasStringValue(opts[optionKey as keyof OnboardOptions]))
+    .filter(({ optionKey }) => hasStringValue(opts[optionKey]))
     .map((flag) => ({
       optionKey: flag.optionKey,
       authChoice: flag.authChoice as AuthChoice,
