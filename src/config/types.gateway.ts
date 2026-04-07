@@ -127,6 +127,13 @@ export type GatewayTrustedProxyConfig = {
    * Example: ["nick@example.com", "admin@company.org"]
    */
   allowUsers?: string[];
+  /**
+   * Allow loopback addresses (127.0.0.1, ::1) in trusted-proxy mode.
+   * Useful for same-pod or same-host deployments where agent and gateway
+   * share the same network namespace.
+   * @default false
+   */
+  allowLoopback?: boolean;
 };
 
 export type GatewayAuthConfig = {

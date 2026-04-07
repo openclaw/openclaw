@@ -386,7 +386,9 @@ function authorizeTrustedProxy(params: {
     return { reason: "trusted_proxy_untrusted_source" };
   }
   if (isLoopbackAddress(remoteAddr)) {
-    return { reason: "trusted_proxy_loopback_source" };
+    if (!trustedProxyConfig.allowLoopback) {
+      return { reason: "trusted_proxy_loopback_source" };
+    }
   }
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];

@@ -928,6 +928,32 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
+    it("allows loopback when allowLoopback is true", async () => {
+      // authorizeLocalDirect doesn't pass required headers, so use authorizeGatewayConnect directly
+      const res2 = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            allowLoopback: true,
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "test@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+      });
+      expect(res2.ok).toBe(true);
+      expect(res2.method).toBe("trusted-proxy");
+    });
+
     it("rejects trusted-proxy identity headers from loopback sources", async () => {
       const res = await authorizeGatewayConnect({
         auth: {
@@ -1016,6 +1042,31 @@ describe("trusted-proxy auth", () => {
       });
       expect(res.ok).toBe(false);
       expect(res.reason).toBe("trusted_proxy_loopback_source");
+    });
+
+    it("allows same-host proxy request when allowLoopback is true", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            allowLoopback: true,
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+      });
+      expect(res.ok).toBe(true);
+      expect(res.method).toBe("trusted-proxy");
     });
 
     it("still fails closed when trusted-proxy config is missing", async () => {
