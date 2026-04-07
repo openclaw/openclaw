@@ -16,6 +16,7 @@
 #define OPENCLAW_LINUX_GATEWAY_WS_H
 
 #include <glib.h>
+#include <json-glib/json-glib.h>
 
 typedef enum {
     GATEWAY_WS_DISCONNECTED,
@@ -35,6 +36,9 @@ typedef struct {
 } GatewayWsStatus;
 
 typedef void (*GatewayWsStatusCallback)(const GatewayWsStatus *status, gpointer user_data);
+typedef void (*GatewayWsEventCallback)(const gchar *event_type,
+                                       const JsonNode *payload,
+                                       gpointer user_data);
 
 void gateway_ws_init(void);
 void gateway_ws_connect(const gchar *ws_url, const gchar *auth_mode,
@@ -52,5 +56,14 @@ const gchar* gateway_ws_state_to_string(GatewayWsState state);
  * Returns TRUE if the frame was sent, FALSE if the connection is not open.
  */
 gboolean gateway_ws_send_text(const gchar *text);
+
+/*
+ * Subscribe to gateway event frames (type="event").
+ * Returns a listener id (0 on failure). Callback runs on main thread.
+ */
+guint gateway_ws_event_subscribe(GatewayWsEventCallback callback, gpointer user_data);
+
+/* Unsubscribe a previously registered listener id. */
+void gateway_ws_event_unsubscribe(guint listener_id);
 
 #endif /* OPENCLAW_LINUX_GATEWAY_WS_H */
