@@ -169,6 +169,43 @@ describe("systemd availability", () => {
 
     await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
   });
+
+  it("does not fall back to machine scope when --user fails with permission denied", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["--user", "status"]);
+      cb(
+        createExecFileError("Failed to connect to bus: Permission denied", {
+          stderr: "Failed to connect to bus: Permission denied",
+          code: 1,
+        }),
+        "",
+        "",
+      );
+    });
+    // Only one call should be made — no machine-scope fallback for permission denied errors.
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to direct --user when machine scope fails under sudo", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertMachineUserSystemctlArgs(args, "ai", "status");
+        cb(
+          createExecFileError("Failed to connect to bus: Permission denied", {
+            stderr: "Failed to connect to bus: Permission denied",
+            code: 1,
+          }),
+          "",
+          "",
+        );
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      });
+    await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(true);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
