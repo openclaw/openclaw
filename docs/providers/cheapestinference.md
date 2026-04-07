@@ -10,13 +10,17 @@ read_when:
 
 [CheapestInference](https://cheapestinference.com) is a unified AI inference proxy that provides access to many models behind a single OpenAI-compatible endpoint. It offers competitive pricing with optional pay-per-request via USDC on Base L2.
 
-## Quick start
+## Setup
+
+1. Get an API key at [cheapestinference.com](https://cheapestinference.com)
+
+2. Set the env var:
 
 ```bash
-openclaw onboard --auth-choice cheapestinference-api-key
+export CHEAPESTINFERENCE_API_KEY="sk-..."
 ```
 
-## Config snippet
+3. Add the provider to your OpenClaw config:
 
 ```json5
 {
@@ -36,14 +40,6 @@ openclaw onboard --auth-choice cheapestinference-api-key
     },
   },
 }
-```
-
-## Manual setup
-
-Set the env var directly:
-
-```bash
-export CHEAPESTINFERENCE_API_KEY="sk-..."
 ```
 
 ## Notes
