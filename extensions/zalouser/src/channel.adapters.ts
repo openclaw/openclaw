@@ -1,12 +1,12 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   createEmptyChannelResult,
   createRawChannelSendResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   checkZcaAuthenticated,
@@ -327,8 +327,7 @@ export const zalouserSecurityAdapter = {
     account: ResolvedZalouserAccount;
     orderedAccountIds: string[];
     hasExplicitAccountPath: boolean;
-  }) =>
-    (await loadZalouserChannelRuntime()).collectZalouserSecurityAuditFindings(params),
+  }) => (await loadZalouserChannelRuntime()).collectZalouserSecurityAuditFindings(params),
 };
 
 export const zalouserThreadingAdapter = {
@@ -356,13 +355,13 @@ export const zalouserOutboundAdapter = {
   deliveryMode: "direct" as const,
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown" as const,
-  sendPayload: async (ctx: { payload: object } & Parameters<
-    NonNullable<typeof zalouserRawSendResultAdapter.sendText>
-  >[0]) =>
+  sendPayload: async (
+    ctx: { payload: object } & Parameters<
+      NonNullable<typeof zalouserRawSendResultAdapter.sendText>
+    >[0],
+  ) =>
     await sendPayloadWithChunkedTextAndMedia({
       ctx,
-      textChunkLimit: resolveZalouserOutboundTextChunkLimit(ctx.cfg, ctx.accountId ?? undefined),
-      chunker: chunkTextForOutbound,
       sendText: (nextCtx) => zalouserRawSendResultAdapter.sendText!(nextCtx),
       sendMedia: (nextCtx) => zalouserRawSendResultAdapter.sendMedia!(nextCtx),
       emptyResult: createEmptyChannelResult("zalouser"),
