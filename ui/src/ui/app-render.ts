@@ -2426,13 +2426,20 @@ export function renderApp(state: AppViewState) {
                       {
                         agentId: resolvedAgentId,
                         path: downloadPath,
+                        encoding: "base64",
                       },
                     )
                     .then((result) => {
                       if (result?.content) {
                         const fileName = downloadPath.split("/").pop() || "download";
-                        const blob = new Blob([result.content], {
-                          type: "text/plain;charset=utf-8",
+                        // Decode base64 to binary for correct file download
+                        const binaryStr = atob(result.content);
+                        const bytes = new Uint8Array(binaryStr.length);
+                        for (let i = 0; i < binaryStr.length; i++) {
+                          bytes[i] = binaryStr.charCodeAt(i);
+                        }
+                        const blob = new Blob([bytes], {
+                          type: "application/octet-stream",
                         });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement("a");

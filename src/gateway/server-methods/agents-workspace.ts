@@ -140,6 +140,10 @@ async function workspaceGet(
     relativePath,
   });
 
+  if (result.stat.size > WORKSPACE_FILE_SIZE_LIMIT) {
+    throw new Error("File exceeds size limit");
+  }
+
   const content =
     encoding === "base64" ? result.buffer.toString("base64") : result.buffer.toString("utf8");
 
@@ -288,6 +292,14 @@ async function workspaceStat(
   isWritable: boolean;
 }> {
   const fullPath = path.join(workspaceDir, relativePath);
+
+  // Enforce workspace root boundary via realpath
+  const realRoot = await fs.realpath(workspaceDir);
+  const realPath = await fs.realpath(fullPath).catch(() => null);
+  if (realPath && !realPath.startsWith(realRoot + path.sep) && realPath !== realRoot) {
+    throw new Error("Path resolves outside workspace root");
+  }
+
   const [stat, lstat] = await Promise.all([
     fs.stat(fullPath).catch(() => null),
     fs.lstat(fullPath).catch(() => null),
