@@ -681,6 +681,7 @@ describe("local embedding normalization", () => {
 
   it("falls back to CPU-only for one operation after repeated VRAM-style failures", async () => {
     const gpuModelDispose = vi.fn();
+    const cpuLlamaDispose = vi.fn();
     const cpuContext = {
       getEmbeddingFor: vi.fn().mockResolvedValue({
         vector: new Float32Array([0, 1, 0, 0]),
@@ -704,6 +705,7 @@ describe("local embedding normalization", () => {
           createEmbeddingContext: vi.fn().mockResolvedValue(cpuContext),
           dispose: gpuModelDispose,
         }),
+        dispose: cpuLlamaDispose,
       });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -728,6 +730,7 @@ describe("local embedding normalization", () => {
     );
     expect(cpuContext.dispose).toHaveBeenCalledTimes(1);
     expect(gpuModelDispose).toHaveBeenCalledTimes(1);
+    expect(cpuLlamaDispose).toHaveBeenCalledTimes(1);
   });
 });
 

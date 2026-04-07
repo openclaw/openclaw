@@ -213,6 +213,9 @@ export async function createLocalEmbeddingProvider(
         try {
           await cpuModel.dispose();
         } catch {}
+        try {
+          await cpuLlama.dispose();
+        } catch {}
       },
     };
   };
