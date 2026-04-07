@@ -3,12 +3,10 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  coerceImageModelConfig,
-  type ImageModelConfig,
-  resolveProviderVisionModelFromConfig,
-} from "./image-tool.helpers.js";
+import { type ImageModelConfig } from "./image-tool.helpers.js";
+import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
@@ -17,7 +15,6 @@ import {
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
-import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
@@ -43,8 +40,6 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
-const ANTHROPIC_PDF_PRIMARY = "anthropic/claude-opus-4-6";
-const ANTHROPIC_PDF_FALLBACK = "anthropic/claude-opus-4-5";
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
@@ -53,79 +48,7 @@ const PDF_MAX_PIXELS = 4_000_000;
 // Model resolution (mirrors image tool pattern)
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve the effective PDF model config.
- * Falls back to the image model config, then to provider-specific defaults.
- */
-export function resolvePdfModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  agentDir: string;
-}): ImageModelConfig | null {
-  // Check for explicit PDF model config first
-  const explicitPdf = coercePdfModelConfig(params.cfg);
-  if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
-    return explicitPdf;
-  }
-
-  // Fall back to the image model config
-  const explicitImage = coerceImageModelConfig(params.cfg);
-  if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
-    return explicitImage;
-  }
-
-  // Auto-detect from available providers
-  const primary = resolveDefaultModelRef(params.cfg);
-  const anthropicOk = hasAuthForProvider({ provider: "anthropic", agentDir: params.agentDir });
-  const googleOk = hasAuthForProvider({ provider: "google", agentDir: params.agentDir });
-  const openaiOk = hasAuthForProvider({ provider: "openai", agentDir: params.agentDir });
-
-  const fallbacks: string[] = [];
-  const addFallback = (ref: string) => {
-    const trimmed = ref.trim();
-    if (trimmed && !fallbacks.includes(trimmed)) {
-      fallbacks.push(trimmed);
-    }
-  };
-
-  // Prefer providers with native PDF support
-  let preferred: string | null = null;
-
-  const providerOk = hasAuthForProvider({ provider: primary.provider, agentDir: params.agentDir });
-  const providerVision = resolveProviderVisionModelFromConfig({
-    cfg: params.cfg,
-    provider: primary.provider,
-  });
-
-  if (primary.provider === "anthropic" && anthropicOk) {
-    preferred = ANTHROPIC_PDF_PRIMARY;
-  } else if (primary.provider === "google" && googleOk && providerVision) {
-    preferred = providerVision;
-  } else if (providerOk && providerVision) {
-    preferred = providerVision;
-  } else if (anthropicOk) {
-    preferred = ANTHROPIC_PDF_PRIMARY;
-  } else if (googleOk) {
-    preferred = "google/gemini-2.5-pro";
-  } else if (openaiOk) {
-    preferred = "openai/gpt-5-mini";
-  }
-
-  if (preferred?.trim()) {
-    if (anthropicOk && preferred !== ANTHROPIC_PDF_PRIMARY) {
-      addFallback(ANTHROPIC_PDF_PRIMARY);
-    }
-    if (anthropicOk) {
-      addFallback(ANTHROPIC_PDF_FALLBACK);
-    }
-    if (openaiOk) {
-      addFallback("openai/gpt-5-mini");
-    }
-    const pruned = fallbacks.filter((ref) => ref !== preferred);
-    return { primary: preferred, ...(pruned.length > 0 ? { fallbacks: pruned } : {}) };
-  }
-
-  return null;
-}
+export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 // ---------------------------------------------------------------------------
 // Build context for extraction fallback path
@@ -401,8 +324,7 @@ export function createPdfTool(options?: {
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
-      const pagesRaw =
-        typeof record.pages === "string" && record.pages.trim() ? record.pages.trim() : undefined;
+      const pagesRaw = normalizeOptionalString(record.pages);
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options.sandbox.root.trim()

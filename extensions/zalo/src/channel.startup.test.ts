@@ -16,18 +16,14 @@ const hoisted = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
+vi.mock("./monitor.js", () => {
   return {
-    ...actual,
     monitorZaloProvider: hoisted.monitorZaloProvider,
   };
 });
 
-vi.mock("./probe.js", async () => {
-  const actual = await vi.importActual<typeof import("./probe.js")>("./probe.js");
+vi.mock("./probe.js", () => {
   return {
-    ...actual,
     probeZalo: hoisted.probeZalo,
   };
 });

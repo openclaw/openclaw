@@ -6,8 +6,8 @@ const listChannelPluginsMock = vi.hoisted(() => vi.fn());
 const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: (...args: unknown[]) => loadConfigMock(...args),
@@ -63,6 +63,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         kind: "enabled",
         channel: undefined,
         channelLabel: "this platform",
+        accountId: undefined,
       },
     },
     {
@@ -71,6 +72,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         kind: "enabled",
         channel: "tui",
         channelLabel: "terminal UI",
+        accountId: undefined,
       },
     },
     {
@@ -79,6 +81,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
         kind: "enabled",
         channel: "web",
         channelLabel: "Web UI",
+        accountId: undefined,
       },
     },
   ])("treats built-in initiating surface %j", ({ channel, expected }) => {
@@ -89,12 +92,14 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
+            meta: { label: "Telegram" },
             auth: {
               getActionAvailabilityState: () => ({ kind: "enabled" }),
             },
           }
         : channel === "discord"
           ? {
+              meta: { label: "Discord" },
               auth: {
                 getActionAvailabilityState: () => ({ kind: "disabled" }),
               },
@@ -113,6 +118,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "enabled",
       channel: "telegram",
       channelLabel: "Telegram",
+      accountId: "main",
     });
     expect(
       resolveExecApprovalInitiatingSurfaceState({
@@ -124,6 +130,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "disabled",
       channel: "discord",
       channelLabel: "Discord",
+      accountId: "main",
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
@@ -131,6 +138,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
 
   it("reads approval availability from approvalCapability when auth is omitted", () => {
     getChannelPluginMock.mockReturnValue({
+      meta: { label: "Discord" },
       approvalCapability: {
         getActionAvailabilityState: () => ({ kind: "disabled" }),
       },
@@ -146,6 +154,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "disabled",
       channel: "discord",
       channelLabel: "Discord",
+      accountId: "main",
     });
   });
 
@@ -154,6 +163,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
+            meta: { label: "Telegram" },
             auth: {
               getActionAvailabilityState: () => ({ kind: "disabled" }),
             },
@@ -170,6 +180,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "disabled",
       channel: "telegram",
       channelLabel: "Telegram",
+      accountId: "main",
     });
     expect(loadConfigMock).toHaveBeenCalledOnce();
 
@@ -177,6 +188,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "unsupported",
       channel: "signal",
       channelLabel: "Signal",
+      accountId: undefined,
     });
   });
 
@@ -185,6 +197,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       kind: "enabled",
       channel: "slack",
       channelLabel: "Slack",
+      accountId: undefined,
     });
   });
 });

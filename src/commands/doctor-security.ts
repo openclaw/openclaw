@@ -183,6 +183,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   // Check for dangerous gateway binding configurations
   // that expose the gateway to network without proper auth
 
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const gatewayBind = (cfg.gateway?.bind ?? "loopback") as string;
   const customBindHost = cfg.gateway?.customBindHost?.trim();
   const bindModes: GatewayBindMode[] = ["auto", "lan", "loopback", "custom", "tailnet"];
@@ -197,7 +198,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const resolvedAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
     env: process.env,
-    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+    tailscaleMode,
   });
   const authToken = resolvedAuth.token?.trim() ?? "";
   const authPassword = resolvedAuth.password?.trim() ?? "";

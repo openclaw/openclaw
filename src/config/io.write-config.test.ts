@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -9,53 +10,77 @@ import type { OpenClawConfig } from "./types.js";
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
 // test exercise the exact code path that caused the bug: AJV injecting
 // defaults during the write-back validation pass.
-const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const mockLoadPluginManifestRegistry = vi.hoisted(() =>
+  vi.fn(
+    (): PluginManifestRegistry => ({
+      diagnostics: [],
+      plugins: [],
+    }),
+  ),
+);
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+  loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
 }));
 
 describe("config io write", () => {
-  let fixtureRoot = "";
-  let homeCaseId = 0;
+  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-io-" });
   const silentLogger = {
     warn: () => {},
     error: () => {},
   };
 
+  function createBlueBubblesManifestRecord(): PluginManifestRecord {
+    return {
+      id: "bluebubbles",
+      origin: "bundled",
+      channels: ["bluebubbles"],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      rootDir: "/virtual/plugins/bluebubbles",
+      source: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
+      manifestPath: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
+      channelCatalogMeta: {
+        id: "bluebubbles",
+        label: "BlueBubbles",
+        blurb: "BlueBubbles channel",
+      },
+      channelConfigs: {
+        bluebubbles: {
+          schema: {
+            type: "object",
+            properties: {
+              enrichGroupParticipantsFromContacts: { type: "boolean", default: true },
+              serverUrl: { type: "string" },
+            },
+            additionalProperties: true,
+          },
+          uiHints: {},
+        },
+      },
+    };
+  }
+
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-    const home = path.join(fixtureRoot, `case-${homeCaseId++}`);
-    await fs.mkdir(home, { recursive: true });
+    const home = await suiteRootTracker.make("case");
     return fn(home);
   }
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-io-"));
+    await suiteRootTracker.setup();
 
     // Default: return an empty plugin list so existing tests that don't need
     // plugin-owned channel schemas keep working unchanged.
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [],
-    });
+    } satisfies PluginManifestRegistry);
   });
 
   afterAll(async () => {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      try {
-        await fs.rm(fixtureRoot, { recursive: true, force: true });
-        return;
-      } catch (error) {
-        const code =
-          error && typeof error === "object" && "code" in error
-            ? String((error as { code?: unknown }).code)
-            : "";
-        if ((code !== "ENOTEMPTY" && code !== "EBUSY") || attempt === 4) {
-          throw error;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
-      }
-    }
+    await suiteRootTracker.cleanup();
   });
 
   async function writeConfigAndCreateIo(params: {
@@ -194,6 +219,46 @@ describe("config io write", () => {
       });
     },
   );
+
+  it("keeps writes inside an OPENCLAW_STATE_DIR override even when the real home config exists", async () => {
+    await withSuiteHome(async (home) => {
+      const liveConfigPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(liveConfigPath), { recursive: true });
+      await fs.writeFile(
+        liveConfigPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const overrideDir = path.join(home, "isolated-state");
+      const env = { OPENCLAW_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;
+      const io = createConfigIO({
+        env,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      expect(io.configPath).toBe(path.join(overrideDir, "openclaw.json"));
+
+      await io.writeConfigFile({
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: { mode: "local" },
+        session: { mainKey: "main", store: path.join(overrideDir, "sessions.json") },
+      });
+
+      const livePersisted = JSON.parse(await fs.readFile(liveConfigPath, "utf-8")) as {
+        gateway?: { mode?: unknown; port?: unknown };
+      };
+      expect(livePersisted.gateway).toEqual({ mode: "local", port: 18789 });
+
+      const overridePersisted = JSON.parse(
+        await fs.readFile(path.join(overrideDir, "openclaw.json"), "utf-8"),
+      ) as {
+        session?: { store?: unknown };
+      };
+      expect(overridePersisted.session?.store).toBe(path.join(overrideDir, "sessions.json"));
+    });
+  });
 
   it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
     await withSuiteHome(async (home) => {
@@ -376,36 +441,7 @@ describe("config io write", () => {
     // write-back leak.
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
-      plugins: [
-        {
-          id: "bluebubbles",
-          origin: "bundled",
-          channels: ["bluebubbles"],
-          channelCatalogMeta: {
-            id: "bluebubbles",
-            label: "BlueBubbles",
-            blurb: "BlueBubbles channel",
-          },
-          channelConfigs: {
-            bluebubbles: {
-              schema: {
-                type: "object",
-                properties: {
-                  enrichGroupParticipantsFromContacts: {
-                    type: "boolean",
-                    default: true,
-                  },
-                  serverUrl: {
-                    type: "string",
-                  },
-                },
-                additionalProperties: true,
-              },
-              uiHints: {},
-            },
-          },
-        },
-      ],
+      plugins: [createBlueBubblesManifestRecord()],
     });
 
     await withSuiteHome(async (home) => {
@@ -416,6 +452,7 @@ describe("config io write", () => {
           channels: {
             bluebubbles: {
               serverUrl: "http://localhost:1234",
+              password: "test-password",
             },
           },
         },
@@ -450,13 +487,14 @@ describe("config io write", () => {
       expect(channels?.bluebubbles).toBeDefined();
       expect(channels?.bluebubbles).not.toHaveProperty("enrichGroupParticipantsFromContacts");
       expect(channels?.bluebubbles?.serverUrl).toBe("http://localhost:1234");
+      expect(channels?.bluebubbles?.password).toBe("test-password");
     });
 
     // Restore the default empty-plugins mock for subsequent tests.
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [],
-    });
+    } satisfies PluginManifestRegistry);
   });
 
   it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {
@@ -481,11 +519,9 @@ describe("config io write", () => {
       const next = structuredClone(snapshot.config);
       // Simulate doctor removing legacy keys while keeping dm enabled.
       if (next.channels?.discord?.dm && typeof next.channels.discord.dm === "object") {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
         delete (next.channels.discord.dm as any).policy;
       }
       if (next.channels?.slack?.dm && typeof next.channels.slack.dm === "object") {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper
         delete (next.channels.slack.dm as any).policy;
       }
 
@@ -539,7 +575,19 @@ describe("config io write", () => {
       const snapshot = await io.readConfigFileSnapshot();
       expect(snapshot.valid).toBe(true);
 
-      const next = structuredClone(snapshot.config);
+      const next = structuredClone(snapshot.config) as {
+        agents?: {
+          defaults?: {
+            cliBackends?: Record<
+              string,
+              {
+                command?: string;
+                args?: string[];
+              }
+            >;
+          };
+        };
+      };
       const codexBackend = next.agents?.defaults?.cliBackends?.codex;
       const args = Array.isArray(codexBackend?.args) ? codexBackend?.args : [];
       next.agents = {
@@ -557,7 +605,7 @@ describe("config io write", () => {
         },
       };
 
-      await io.writeConfigFile(next);
+      await io.writeConfigFile(next as OpenClawConfig);
 
       const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
         agents: {
@@ -692,6 +740,85 @@ describe("config io write", () => {
       expect(last.watchMode).toBe(true);
       expect(last.watchSession).toBe("watch-session-1");
       expect(last.watchCommand).toBe("gateway --force");
+    });
+  });
+
+  it("accepts unrelated writes when the file still contains legacy nested allow aliases", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          channels: {
+            slack: {
+              channels: {
+                ops: {
+                  allow: false,
+                },
+              },
+            },
+            googlechat: {
+              groups: {
+                "spaces/aaa": {
+                  allow: true,
+                },
+              },
+            },
+            discord: {
+              guilds: {
+                "100": {
+                  channels: {
+                    general: {
+                      allow: false,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const next = structuredClone(snapshot.config);
+      next.gateway = {
+        ...next.gateway,
+        auth: { mode: "token" },
+      };
+
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        channels?: Record<string, unknown>;
+        gateway?: Record<string, unknown>;
+      };
+      expect(persisted.gateway).toEqual({
+        auth: { mode: "token" },
+      });
+      expect(
+        (
+          (persisted.channels?.slack as { channels?: Record<string, unknown> } | undefined)
+            ?.channels?.ops as Record<string, unknown> | undefined
+        )?.enabled,
+      ).toBe(false);
+      expect(
+        (
+          (persisted.channels?.googlechat as { groups?: Record<string, unknown> } | undefined)
+            ?.groups?.["spaces/aaa"] as Record<string, unknown> | undefined
+        )?.enabled,
+      ).toBe(true);
+      expect(
+        (
+          (
+            (persisted.channels?.discord as { guilds?: Record<string, unknown> } | undefined)
+              ?.guilds?.["100"] as { channels?: Record<string, unknown> } | undefined
+          )?.channels?.general as Record<string, unknown> | undefined
+        )?.enabled,
+      ).toBe(false);
+      expect(
+        (
+          (persisted.channels?.slack as { channels?: Record<string, unknown> } | undefined)
+            ?.channels?.ops as Record<string, unknown> | undefined
+        )?.allow,
+      ).toBeUndefined();
     });
   });
 });

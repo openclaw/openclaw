@@ -529,7 +529,6 @@ export const AgentSandboxSchema = z
     workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
     sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
     scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
-    perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
     ssh: SandboxSshSchema,
@@ -896,6 +895,12 @@ export const ToolsSchema = z
           })
           .strict()
           .optional(),
+      })
+      .strict()
+      .optional(),
+    experimental: z
+      .object({
+        planTool: z.boolean().optional(),
       })
       .strict()
       .optional(),

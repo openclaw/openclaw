@@ -3,9 +3,9 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
 import {
   createWebInboundDeliverySpies,
   createMockWebListener,
@@ -23,7 +23,7 @@ import {
 installWebAutoReplyTestHomeHooks();
 
 async function startWatchdogScenario(params: {
-  monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+  monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
 }) {
   const sleep = vi.fn(async () => {});
   const scripted = createScriptedWebListenerFactory();
@@ -61,9 +61,9 @@ async function startWatchdogScenario(params: {
 describe("web auto-reply connection", () => {
   installWebAutoReplyUnitTestHooks();
 
-  let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+  let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
   beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply.js"));
+    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
   });
 
   it("handles helper envelope timestamps with trimmed timezones (regression)", () => {
@@ -188,7 +188,7 @@ describe("web auto-reply connection", () => {
     }
   });
 
-  it("keeps watchdog message age across reconnects", async () => {
+  it("gives a reconnected listener a fresh watchdog window", async () => {
     vi.useFakeTimers();
     try {
       const { scripted, controller, run } = await startWatchdogScenario({
@@ -203,7 +203,11 @@ describe("web auto-reply connection", () => {
         { timeout: 250, interval: 2 },
       );
 
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      expect(scripted.getListenerCount()).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(20);
       await Promise.resolve();
       await vi.waitFor(
         () => {

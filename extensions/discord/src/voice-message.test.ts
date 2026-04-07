@@ -1,15 +1,15 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runFfprobeMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string>>());
 const runFfmpegMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>());
 
-vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/temp-path", async () => {
   return {
     resolvePreferredOpenClawTmpDir: () => "/tmp",
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   return {
     runFfprobe: runFfprobeMock,
     runFfmpeg: runFfmpegMock,
@@ -36,12 +36,6 @@ describe("ensureOggOpus", () => {
     runFfprobeMock.mockReset();
     runFfmpegMock.mockReset();
   });
-
-  afterEach(() => {
-    runFfprobeMock.mockReset();
-    runFfmpegMock.mockReset();
-  });
-
   it("rejects URL/protocol input paths", async () => {
     await expect(ensureOggOpus("https://example.com/audio.ogg")).rejects.toThrow(
       /local file path/i,

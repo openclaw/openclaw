@@ -17,8 +17,8 @@ const sshMocks = vi.hoisted(() => ({
   buildSshSandboxArgv: vi.fn(),
 }));
 
-vi.mock("./ssh.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./ssh.js")>();
+vi.mock("./ssh.js", async () => {
+  const actual = await vi.importActual<typeof import("./ssh.js")>("./ssh.js");
   return {
     ...actual,
     createSshSandboxSessionFromSettings: sshMocks.createSshSandboxSessionFromSettings,
@@ -29,24 +29,7 @@ vi.mock("./ssh.js", async (importOriginal) => {
   };
 });
 
-let createSshSandboxBackend: typeof import("./ssh-backend.js").createSshSandboxBackend;
-let sshSandboxBackendManager: typeof import("./ssh-backend.js").sshSandboxBackendManager;
-
-async function loadFreshSshBackendModuleForTest() {
-  vi.resetModules();
-  vi.doMock("./ssh.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./ssh.js")>();
-    return {
-      ...actual,
-      createSshSandboxSessionFromSettings: sshMocks.createSshSandboxSessionFromSettings,
-      disposeSshSandboxSession: sshMocks.disposeSshSandboxSession,
-      runSshSandboxCommand: sshMocks.runSshSandboxCommand,
-      uploadDirectoryToSshTarget: sshMocks.uploadDirectoryToSshTarget,
-      buildSshSandboxArgv: sshMocks.buildSshSandboxArgv,
-    };
-  });
-  ({ createSshSandboxBackend, sshSandboxBackendManager } = await import("./ssh-backend.js"));
-}
+const { createSshSandboxBackend, sshSandboxBackendManager } = await import("./ssh-backend.js");
 
 function createConfig(): OpenClawConfig {
   return {
@@ -137,7 +120,7 @@ async function expectBackendCreationToReject(params: {
 describe("ssh sandbox backend", () => {
   const originalEnv = { ...process.env };
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
     sshMocks.createSshSandboxSessionFromSettings.mockResolvedValue(createSession());
     sshMocks.disposeSshSandboxSession.mockResolvedValue(undefined);
@@ -155,7 +138,6 @@ describe("ssh sandbox backend", () => {
       session.host,
       remoteCommand,
     ]);
-    await loadFreshSshBackendModuleForTest();
   });
 
   afterEach(() => {

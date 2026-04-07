@@ -70,6 +70,52 @@ import UIKit
         }
     }
 
+    @Test @MainActor func operatorConnectOptionsOnlyRequestApprovalScopeWhenEnabled() {
+        let appModel = NodeAppModel()
+        let withoutApprovalScope = appModel._test_makeOperatorConnectOptions(
+            clientId: "openclaw-ios",
+            displayName: "OpenClaw iOS",
+            includeApprovalScope: false)
+        let withApprovalScope = appModel._test_makeOperatorConnectOptions(
+            clientId: "openclaw-ios",
+            displayName: "OpenClaw iOS",
+            includeApprovalScope: true)
+
+        #expect(withoutApprovalScope.role == "operator")
+        #expect(withoutApprovalScope.scopes.contains("operator.read"))
+        #expect(withoutApprovalScope.scopes.contains("operator.write"))
+        #expect(!withoutApprovalScope.scopes.contains("operator.approvals"))
+        #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
+
+        #expect(withApprovalScope.scopes.contains("operator.approvals"))
+    }
+
+    @Test func operatorApprovalScopeRequestsStayBackwardCompatible() {
+        #expect(
+            !NodeAppModel._test_shouldRequestOperatorApprovalScope(
+                token: nil,
+                password: nil,
+                storedOperatorScopes: ["operator.read", "operator.write", "operator.talk.secrets"])
+        )
+        #expect(
+            NodeAppModel._test_shouldRequestOperatorApprovalScope(
+                token: nil,
+                password: nil,
+                storedOperatorScopes: [
+                    "operator.approvals",
+                    "operator.read",
+                    "operator.write",
+                    "operator.talk.secrets",
+                ])
+        )
+        #expect(
+            NodeAppModel._test_shouldRequestOperatorApprovalScope(
+                token: "shared-token",
+                password: nil,
+                storedOperatorScopes: [])
+        )
+    }
+
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
         let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
         defer {

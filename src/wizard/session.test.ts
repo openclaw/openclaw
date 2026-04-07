@@ -71,4 +71,23 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
     expect(done.status).toBe("cancelled");
   });
+
+  test("does not lose terminal completion when the last answer finishes the runner immediately", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.text({ message: "Token" });
+    });
+
+    const first = await session.next();
+    expect(first.step?.type).toBe("text");
+    if (!first.step) {
+      throw new Error("expected first step");
+    }
+
+    await session.answer(first.step.id, "ok");
+    await Promise.resolve();
+
+    const done = await session.next();
+    expect(done.done).toBe(true);
+    expect(done.status).toBe("done");
+  });
 });

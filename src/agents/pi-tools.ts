@@ -12,6 +12,8 @@ import { createApplyPatchTool } from "./apply-patch.js";
 import {
   createExecTool,
   createProcessTool,
+  describeExecTool,
+  describeProcessTool,
   type ExecToolDefaults,
   type ProcessToolDefaults,
 } from "./bash-tools.js";
@@ -36,12 +38,11 @@ import {
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
+  getToolParamsRecord,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
-  wrapToolParamNormalization,
+  wrapToolParamValidation,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -121,6 +122,28 @@ function applyModelProviderToolPolicy(
   }
 
   return tools;
+}
+
+function applyDeferredFollowupToolDescriptions(
+  tools: AnyAgentTool[],
+  params?: { agentId?: string },
+): AnyAgentTool[] {
+  const hasCronTool = tools.some((tool) => tool.name === "cron");
+  return tools.map((tool) => {
+    if (tool.name === "exec") {
+      return {
+        ...tool,
+        description: describeExecTool({ agentId: params?.agentId, hasCronTool }),
+      };
+    }
+    if (tool.name === "process") {
+      return {
+        ...tool,
+        description: describeProcessTool({ hasCronTool }),
+      };
+    }
+    return tool;
+  });
 }
 
 function isApplyPatchAllowedForModel(params: {
@@ -210,9 +233,8 @@ export function resolveToolLoopDetectionConfig(params: {
 
 export const __testing = {
   cleanToolSchemaForGemini,
-  normalizeToolParams,
-  patchToolSchemaForClaudeCompatibility,
-  wrapToolParamNormalization,
+  getToolParamsRecord,
+  wrapToolParamValidation,
   assertRequiredParams,
   applyModelProviderToolPolicy,
 } as const;
@@ -282,7 +304,7 @@ export function createOpenClawCodingTools(options?: {
   senderUsername?: string | null;
   senderE164?: string | null;
   /** Reply-to mode for Slack auto-threading. */
-  replyToMode?: "off" | "first" | "all";
+  replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
   /** Allow plugin tools for this run to late-bind the gateway subagent. */
@@ -559,6 +581,7 @@ export function createOpenClawCodingTools(options?: {
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
       currentMessageId: options?.currentMessageId,
+      modelProvider: options?.modelProvider,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
       modelHasVision: options?.modelHasVision,
@@ -617,10 +640,10 @@ export function createOpenClawCodingTools(options?: {
       ...buildDefaultToolPolicyPipelineSteps({
         profilePolicy: profilePolicyWithAlsoAllow,
         profile,
-        profileAlsoAllow,
+        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
-        providerProfileAlsoAllow,
+        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
         globalPolicy,
         globalProviderPolicy,
         agentPolicy,
@@ -654,9 +677,12 @@ export function createOpenClawCodingTools(options?: {
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : withHooks;
+  const withDeferredFollowupDescriptions = applyDeferredFollowupToolDescriptions(withAbort, {
+    agentId,
+  });
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withAbort;
+  return withDeferredFollowupDescriptions;
 }

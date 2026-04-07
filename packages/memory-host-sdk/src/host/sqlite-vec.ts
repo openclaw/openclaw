@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "../../../../src/infra/errors.js";
 
 export async function loadSqliteVecExtension(params: {
   db: DatabaseSync;
@@ -18,7 +19,7 @@ export async function loadSqliteVecExtension(params: {
 
     return { ok: true, extensionPath };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return { ok: false, error: message };
   }
 }

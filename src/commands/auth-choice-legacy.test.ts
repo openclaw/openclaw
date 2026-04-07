@@ -19,11 +19,6 @@ describe("auth choice legacy aliases", () => {
   });
 
   it("sources deprecated cli aliases from plugin manifests", () => {
-    expect(resolveLegacyAuthChoiceAliasesForCli()).toEqual([
-      "setup-token",
-      "oauth",
-      "claude-cli",
-      "codex-cli",
-    ]);
+    expect(resolveLegacyAuthChoiceAliasesForCli()).toEqual(["claude-cli", "codex-cli"]);
   });
 });

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
@@ -135,6 +136,7 @@ export async function resolveCopilotApiToken(params: {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${params.githubToken}`,
+      ...buildCopilotIdeHeaders({ includeApiVersion: true }),
     },
   });
 

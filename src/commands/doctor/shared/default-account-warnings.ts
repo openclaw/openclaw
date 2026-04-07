@@ -1,4 +1,4 @@
-import { normalizeChatChannelId } from "../../../channels/registry.js";
+import { normalizeChatChannelId } from "../../../channels/ids.js";
 import { listRouteBindings } from "../../../config/bindings.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {

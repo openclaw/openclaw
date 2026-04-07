@@ -15,25 +15,55 @@ OpenClaw runs work in the background through tasks, scheduled jobs, event hooks,
 
 ```mermaid
 flowchart TD
-    A{Run on a schedule?} -->|Yes| B{Exact timing needed?}
-    A -->|No| C{React to events?}
-    B -->|Yes| D[Cron]
-    B -->|No| E[Heartbeat]
-    C -->|Yes| F[Hooks]
-    C -->|No| G[Standing Orders]
+    START([What do you need?]) --> Q1{Schedule work?}
+    START --> Q2{Track detached work?}
+    START --> Q3{Orchestrate multi-step flows?}
+    START --> Q4{React to lifecycle events?}
+    START --> Q5{Give the agent persistent instructions?}
+
+    Q1 -->|Yes| Q1a{Exact timing or flexible?}
+    Q1a -->|Exact| CRON["Scheduled Tasks (Cron)"]
+    Q1a -->|Flexible| HEARTBEAT[Heartbeat]
+
+    Q2 -->|Yes| TASKS[Background Tasks]
+    Q3 -->|Yes| FLOW[Task Flow]
+    Q4 -->|Yes| HOOKS[Hooks]
+    Q5 -->|Yes| SO[Standing Orders]
 ```
 
-| Use case                             | Recommended         | Why                                      |
-| ------------------------------------ | ------------------- | ---------------------------------------- |
-| Check inbox every 30 min             | Heartbeat           | Batches with other checks, context-aware |
-| Send daily report at 9 AM sharp      | Cron (isolated)     | Exact timing needed                      |
-| Monitor calendar for upcoming events | Heartbeat           | Natural fit for periodic awareness       |
-| Run weekly deep analysis             | Cron (isolated)     | Standalone task, can use different model |
-| Remind me in 20 minutes              | Cron (main, `--at`) | One-shot with precise timing             |
-| React to commands or lifecycle       | Hooks               | Event-driven, runs custom scripts        |
-| Persistent agent instructions        | Standing orders     | Injected into every session              |
+| Use case                                | Recommended            | Why                                              |
+| --------------------------------------- | ---------------------- | ------------------------------------------------ |
+| Send daily report at 9 AM sharp         | Scheduled Tasks (Cron) | Exact timing, isolated execution                 |
+| Remind me in 20 minutes                 | Scheduled Tasks (Cron) | One-shot with precise timing (`--at`)            |
+| Run weekly deep analysis                | Scheduled Tasks (Cron) | Standalone task, can use different model         |
+| Check inbox every 30 min                | Heartbeat              | Batches with other checks, context-aware         |
+| Monitor calendar for upcoming events    | Heartbeat              | Natural fit for periodic awareness               |
+| Inspect status of a subagent or ACP run | Background Tasks       | Tasks ledger tracks all detached work            |
+| Audit what ran and when                 | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
+| Multi-step research then summarize      | Task Flow              | Durable orchestration with revision tracking     |
+| Run a script on session reset           | Hooks                  | Event-driven, fires on lifecycle events          |
+| Execute code on every tool call         | Hooks                  | Hooks can filter by event type                   |
+| Always check compliance before replying | Standing Orders        | Injected into every session automatically        |
+
+### Scheduled Tasks (Cron) vs Heartbeat
+
+| Dimension       | Scheduled Tasks (Cron)              | Heartbeat                             |
+| --------------- | ----------------------------------- | ------------------------------------- |
+| Timing          | Exact (cron expressions, one-shot)  | Approximate (default every 30 min)    |
+| Session context | Fresh (isolated) or shared          | Full main-session context             |
+| Task records    | Always created                      | Never created                         |
+| Delivery        | Channel, webhook, or silent         | Inline in main session                |
+| Best for        | Reports, reminders, background jobs | Inbox checks, calendar, notifications |
+
+Use Scheduled Tasks (Cron) when you need precise timing or isolated execution. Use Heartbeat when the work benefits from full session context and approximate timing is fine.
 
 ## Core concepts
+
+### Scheduled tasks (cron)
+
+Cron is the Gateway's built-in scheduler for precise timing. It persists jobs, wakes the agent at the right time, and can deliver output to a chat channel or webhook endpoint. Supports one-shot reminders, recurring expressions, and inbound webhook triggers.
+
+See [Scheduled Tasks](/automation/cron-jobs).
 
 ### Tasks
 
@@ -41,29 +71,11 @@ The background task ledger tracks all detached work: ACP runs, subagent spawns, 
 
 See [Background Tasks](/automation/tasks).
 
-### Scheduled tasks (cron)
-
-Cron is the Gateway's built-in scheduler for precise timing. It persists jobs, wakes the agent at the right time, and can deliver output to a chat channel or webhook. Supports one-shot reminders, recurring expressions, and inbound webhook triggers.
-
-See [Scheduled Tasks](/automation/cron-jobs).
-
 ### Task Flow
 
 Task Flow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|cancel` for inspection.
 
 See [Task Flow](/automation/taskflow).
-
-### Heartbeat
-
-Heartbeat is a periodic main-session turn (default every 30 minutes). It batches multiple checks (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records. Use `HEARTBEAT.md` to define what the agent checks.
-
-See [Heartbeat](/gateway/heartbeat).
-
-### Hooks
-
-Hooks are event-driven scripts triggered by agent lifecycle events (`/new`, `/reset`, `/stop`), session compaction, gateway startup, message flow, and tool calls. Hooks are automatically discovered from directories and can be managed with `openclaw hooks`.
-
-See [Hooks](/automation/hooks).
 
 ### Standing orders
 
@@ -71,10 +83,22 @@ Standing orders grant the agent permanent operating authority for defined progra
 
 See [Standing Orders](/automation/standing-orders).
 
+### Hooks
+
+Hooks are event-driven scripts triggered by agent lifecycle events (`/new`, `/reset`, `/stop`), session compaction, gateway startup, message flow, and tool calls. Hooks are automatically discovered from directories and can be managed with `openclaw hooks`.
+
+See [Hooks](/automation/hooks).
+
+### Heartbeat
+
+Heartbeat is a periodic main-session turn (default every 30 minutes). It batches multiple checks (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records. Use `HEARTBEAT.md` for a small checklist, or a `tasks:` block when you want due-only periodic checks inside heartbeat itself. Empty heartbeat files skip as `empty-heartbeat-file`; due-only task mode skips as `no-tasks-due`.
+
+See [Heartbeat](/gateway/heartbeat).
+
 ## How they work together
 
-- **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
 - **Cron** handles precise schedules (daily reports, weekly reviews) and one-shot reminders. All cron executions create task records.
+- **Heartbeat** handles routine monitoring (inbox, calendar, notifications) in one batched turn every 30 minutes.
 - **Hooks** react to specific events (tool calls, session resets, compaction) with custom scripts.
 - **Standing orders** give the agent persistent context and authority boundaries.
 - **Task Flow** coordinates multi-step flows above individual tasks.
@@ -82,6 +106,10 @@ See [Standing Orders](/automation/standing-orders).
 
 ## Related
 
-- [Task Flow](/automation/taskflow) — flow orchestration above tasks
+- [Scheduled Tasks](/automation/cron-jobs) — precise scheduling and one-shot reminders
+- [Background Tasks](/automation/tasks) — task ledger for all detached work
+- [Task Flow](/automation/taskflow) — durable multi-step flow orchestration
+- [Hooks](/automation/hooks) — event-driven lifecycle scripts
+- [Standing Orders](/automation/standing-orders) — persistent agent instructions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Configuration Reference](/gateway/configuration-reference) — all config keys

@@ -1,6 +1,25 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 
+type TelegramMediaMessage = Pick<
+  Message,
+  "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker"
+>;
+
+type TelegramMediaFileRef =
+  | NonNullable<Message["photo"]>[number]
+  | NonNullable<Message["video"]>
+  | NonNullable<Message["video_note"]>
+  | NonNullable<Message["audio"]>
+  | NonNullable<Message["voice"]>
+  | NonNullable<Message["document"]>
+  | NonNullable<Message["sticker"]>;
+
+export type TelegramPrimaryMedia = {
+  placeholder: string;
+  fileRef: TelegramMediaFileRef;
+};
+
 export function buildSenderName(msg: Message) {
   const name =
     [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim() ||
@@ -8,31 +27,41 @@ export function buildSenderName(msg: Message) {
   return name || undefined;
 }
 
-export function resolveTelegramMediaPlaceholder(
-  msg:
-    | Pick<Message, "photo" | "video" | "video_note" | "audio" | "voice" | "document" | "sticker">
-    | undefined
-    | null,
-): string | undefined {
+export function resolveTelegramPrimaryMedia(
+  msg: TelegramMediaMessage | undefined | null,
+): TelegramPrimaryMedia | undefined {
   if (!msg) {
     return undefined;
   }
-  if (msg.photo) {
-    return "<media:image>";
+  const photo = msg.photo?.[msg.photo.length - 1];
+  if (photo) {
+    return { placeholder: "<media:image>", fileRef: photo };
   }
-  if (msg.video || msg.video_note) {
-    return "<media:video>";
+  if (msg.video) {
+    return { placeholder: "<media:video>", fileRef: msg.video };
   }
-  if (msg.audio || msg.voice) {
-    return "<media:audio>";
+  if (msg.video_note) {
+    return { placeholder: "<media:video>", fileRef: msg.video_note };
+  }
+  if (msg.audio) {
+    return { placeholder: "<media:audio>", fileRef: msg.audio };
+  }
+  if (msg.voice) {
+    return { placeholder: "<media:audio>", fileRef: msg.voice };
   }
   if (msg.document) {
-    return "<media:document>";
+    return { placeholder: "<media:document>", fileRef: msg.document };
   }
   if (msg.sticker) {
-    return "<media:sticker>";
+    return { placeholder: "<media:sticker>", fileRef: msg.sticker };
   }
   return undefined;
+}
+
+export function resolveTelegramMediaPlaceholder(
+  msg: TelegramMediaMessage | undefined | null,
+): string | undefined {
+  return resolveTelegramPrimaryMedia(msg)?.placeholder;
 }
 
 export function buildSenderLabel(msg: Message, senderId?: number | string) {

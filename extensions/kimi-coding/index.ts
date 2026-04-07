@@ -1,15 +1,35 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider } from "./provider-catalog.js";
+import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
+import { wrapKimiProviderStream } from "./stream.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function findExplicitProviderConfig(
+  providers: Record<string, unknown> | undefined,
+  providerId: string,
+): Record<string, unknown> | undefined {
+  if (!providers) {
+    return undefined;
+  }
+  const normalizedProviderId = normalizeProviderId(providerId);
+  const match = Object.entries(providers).find(
+    ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === normalizedProviderId,
+  );
+  return isRecord(match?.[1]) ? match[1] : undefined;
 }
 
+function _buildKimiReplayPolicy() {
+  return {
+    preserveSignatures: false,
+  };
+}
 export default definePluginEntry({
   id: PLUGIN_ID,
   name: "Kimi Provider",
@@ -55,12 +75,15 @@ export default definePluginEntry({
           if (!apiKey) {
             return null;
           }
-          const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
+          const explicitProvider = findExplicitProviderConfig(
+            ctx.config.models?.providers as Record<string, unknown> | undefined,
+            PROVIDER_ID,
+          );
           const builtInProvider = buildKimiCodingProvider();
           const explicitBaseUrl =
             typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
           const explicitHeaders = isRecord(explicitProvider?.headers)
-            ? explicitProvider.headers
+            ? (explicitProvider.headers as Record<string, SecretInput>)
             : undefined;
           return {
             provider: {
@@ -79,12 +102,8 @@ export default definePluginEntry({
           };
         },
       },
-      capabilities: {
-        anthropicToolSchemaMode: "openai-functions",
-        anthropicToolChoiceMode: "openai-string-modes",
-        openAiPayloadNormalizationMode: "moonshot-thinking",
-        preserveAnthropicThinkingSignatures: false,
-      },
+      buildReplayPolicy: () => KIMI_REPLAY_POLICY,
+      wrapStreamFn: wrapKimiProviderStream,
     });
   },
 });
