@@ -311,6 +311,8 @@ export function createOpenClawCodingTools(options?: {
   allowGatewaySubagentBinding?: boolean;
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
+  /** If true, the current run already carries prompt images for native vision input. */
+  currentTurnHasImages?: boolean;
   /** Require explicit message targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
@@ -617,8 +619,17 @@ export function createOpenClawCodingTools(options?: {
           return [tool];
         })
       : tools;
+  // When the current run already includes uploaded images and the selected model
+  // can see them natively, hide the explicit image tool for this turn. This keeps
+  // the model from re-opening transient attachment cache paths that may not exist
+  // on the host anymore, while preserving the tool for text-only models or
+  // follow-up turns without prompt-local images.
+  const toolsForPromptImages =
+    options?.modelHasVision === true && options?.currentTurnHasImages === true
+      ? toolsForMemoryFlush.filter((tool) => tool.name !== "image")
+      : toolsForMemoryFlush;
   const toolsForMessageProvider = applyMessageProviderToolPolicy(
-    toolsForMemoryFlush,
+    toolsForPromptImages,
     options?.messageProvider,
   );
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {

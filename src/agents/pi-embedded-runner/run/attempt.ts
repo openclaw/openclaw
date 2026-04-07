@@ -508,6 +508,8 @@ export async function runEmbeddedAttempt(
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             modelHasVision,
+            currentTurnHasImages:
+              (params.images?.length ?? 0) > 0 || (params.imageOrder?.length ?? 0) > 0,
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             disableMessageTool: params.disableMessageTool,
