@@ -10,15 +10,8 @@ import {
 } from "../../infra/push-apns.js";
 import { ErrorCodes, errorShape, validatePushTestParams } from "../protocol/index.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 export const pushHandlers: GatewayRequestHandlers = {
   "push.test": async ({ params, respond }) => {
@@ -37,8 +30,8 @@ export const pushHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const title = normalizeOptionalString(params.title) ?? "OpenClaw";
-    const body = normalizeOptionalString(params.body) ?? `Push test for node ${nodeId}`;
+    const title = normalizeTrimmedString(params.title) ?? "OpenClaw";
+    const body = normalizeTrimmedString(params.body) ?? `Push test for node ${nodeId}`;
 
     await respondUnavailableOnThrow(respond, async () => {
       const registration = await loadApnsRegistration(nodeId);

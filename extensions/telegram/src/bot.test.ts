@@ -1,10 +1,11 @@
 import { rm } from "node:fs/promises";
-import type { PluginInteractiveTelegramHandlerContext } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -350,6 +351,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
+          botToken: "tok",
           dmPolicy: "open",
           allowFrom: ["*"],
           capabilities: ["vision"],
@@ -753,12 +755,18 @@ describe("createTelegramBot", () => {
     const [chatId, messageId, text, params] = editMessageTextSpy.mock.calls[0] ?? [];
     expect(chatId).toBe(1234);
     expect(messageId).toBe(12);
-    expect(String(text)).toContain(`${INFO_EMOJI} Commands`);
-    expect(params).toEqual(
-      expect.objectContaining({
-        reply_markup: expect.any(Object),
-      }),
-    );
+    expect(String(text)).toContain(`${INFO_EMOJI} Commands (2/`);
+    expect(params).toEqual({
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "◀ Prev", callback_data: "commands_page_1:main" },
+            { text: "2/5", callback_data: "commands_page_noop:main" },
+            { text: "Next ▶", callback_data: "commands_page_3:main" },
+          ],
+        ],
+      },
+    });
   });
 
   it("falls back to default agent for pagination callbacks without agent suffix", async () => {
@@ -840,7 +848,7 @@ describe("createTelegramBot", () => {
 
     const modelId = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
     const storePath = `/tmp/openclaw-telegram-model-compact-${process.pid}-${Date.now()}.json`;
-    const config = {
+    const config: OpenClawConfig = {
       agents: {
         defaults: {
           model: `bedrock/${modelId}`,
@@ -905,30 +913,32 @@ describe("createTelegramBot", () => {
     editMessageTextSpy.mockClear();
 
     const storePath = `/tmp/openclaw-telegram-model-default-${process.pid}-${Date.now()}.json`;
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "claude-opus-4-6",
+          models: {
+            "anthropic/claude-opus-4-6": {},
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+      session: {
+        store: storePath,
+      },
+    };
 
     await rm(storePath, { force: true });
     try {
+      loadConfig.mockReturnValue(config);
       createTelegramBot({
         token: "tok",
-        config: {
-          agents: {
-            defaults: {
-              model: "claude-opus-4-6",
-              models: {
-                "anthropic/claude-opus-4-6": {},
-              },
-            },
-          },
-          channels: {
-            telegram: {
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-          session: {
-            store: storePath,
-          },
-        },
+        config,
       });
       const callbackHandler = onSpy.mock.calls.find(
         (call) => call[0] === "callback_query",
@@ -960,6 +970,79 @@ describe("createTelegramBot", () => {
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-default-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
+  it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-model-html-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      const config = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(callbackHandler).toBeDefined();
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-html-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 17,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      expect(editMessageTextSpy).toHaveBeenCalledWith(
+        1234,
+        17,
+        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nThis model will be used for your next message.`,
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+
+      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(entry?.providerOverride).toBe("openai");
+      expect(entry?.modelOverride).toBe("gpt-5.4");
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
     } finally {
       await rm(storePath, { force: true });
     }
@@ -1743,12 +1826,12 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("codex-plugin", {
       channel: "telegram",
       namespace: "codexapp",
-      handler: async ({ respond, callback }: PluginInteractiveTelegramHandlerContext) => {
+      handler: (async ({ respond, callback }: TelegramInteractiveHandlerContext) => {
         await respond.editMessage({
           text: `Handled ${callback.payload}`,
         });
         return { handled: true };
-      },
+      }) as never,
     });
 
     createTelegramBot({
@@ -1790,7 +1873,7 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     getChatSpy.mockResolvedValue({ id: -100123456789, type: "supergroup", is_forum: true });
     const handler = vi.fn(
-      async ({ respond, conversationId, threadId }: PluginInteractiveTelegramHandlerContext) => {
+      async ({ respond, conversationId, threadId }: TelegramInteractiveHandlerContext) => {
         expect(conversationId).toBe("-100123456789:topic:1");
         expect(threadId).toBe(1);
         await respond.editMessage({
@@ -1802,7 +1885,7 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("codex-plugin", {
       channel: "telegram",
       namespace: "codexapp",
-      handler,
+      handler: handler as never,
     });
 
     createTelegramBot({

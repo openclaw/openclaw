@@ -1,4 +1,8 @@
 import { sanitizeAgentId } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import {
   TimeoutSecondsFieldSchema,
@@ -8,6 +12,7 @@ import {
 } from "./delivery-field-schemas.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { inferLegacyName } from "./service/normalize.js";
+import { assertSafeCronSessionTargetId } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -60,7 +65,7 @@ function normalizeTrimmedStringArray(
 
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
-  const rawKind = typeof schedule.kind === "string" ? schedule.kind.trim().toLowerCase() : "";
+  const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
   const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
   const exprRaw = typeof schedule.expr === "string" ? schedule.expr.trim() : "";
   const legacyCronRaw = typeof schedule.cron === "string" ? schedule.cron.trim() : "";
@@ -140,7 +145,7 @@ function coerceSchedule(schedule: UnknownRecord) {
 
 function coercePayload(payload: UnknownRecord) {
   const next: UnknownRecord = { ...payload };
-  const kindRaw = typeof next.kind === "string" ? next.kind.trim().toLowerCase() : "";
+  const kindRaw = normalizeLowercaseStringOrEmpty(next.kind);
   if (kindRaw === "agentturn") {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
@@ -315,16 +320,13 @@ function normalizeSessionTarget(raw: unknown) {
     return undefined;
   }
   const trimmed = raw.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower === "main" || lower === "isolated" || lower === "current") {
     return lower;
   }
   // Support custom session IDs with "session:" prefix
   if (lower.startsWith("session:")) {
-    const sessionId = trimmed.slice(8).trim();
-    if (sessionId) {
-      return `session:${sessionId}`;
-    }
+    return `session:${assertSafeCronSessionTargetId(trimmed.slice(8))}`;
   }
   return undefined;
 }
@@ -333,7 +335,7 @@ function normalizeWakeMode(raw: unknown) {
   if (typeof raw !== "string") {
     return undefined;
   }
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (trimmed === "now" || trimmed === "next-heartbeat") {
     return trimmed;
   }
@@ -441,7 +443,7 @@ export function normalizeCronJobInput(
     if (typeof enabled === "boolean") {
       next.enabled = enabled;
     } else if (typeof enabled === "string") {
-      const trimmed = enabled.trim().toLowerCase();
+      const trimmed = normalizeOptionalLowercaseString(enabled);
       if (trimmed === "true") {
         next.enabled = true;
       }
@@ -539,7 +541,7 @@ export function normalizeCronJobInput(
         const sessionKey = options.sessionContext.sessionKey.trim();
         if (sessionKey) {
           // Store as session:customId format for persistence
-          next.sessionTarget = `session:${sessionKey}`;
+          next.sessionTarget = `session:${assertSafeCronSessionTargetId(sessionKey)}`;
         }
       }
       // If "current" wasn't resolved, fall back to "isolated" behavior
@@ -551,7 +553,7 @@ export function normalizeCronJobInput(
     if (next.sessionTarget === "current") {
       const sessionKey = options.sessionContext?.sessionKey?.trim();
       if (sessionKey) {
-        next.sessionTarget = `session:${sessionKey}`;
+        next.sessionTarget = `session:${assertSafeCronSessionTargetId(sessionKey)}`;
       } else {
         next.sessionTarget = "isolated";
       }

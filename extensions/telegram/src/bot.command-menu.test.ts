@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 
 const {
   getLoadConfigMock,
@@ -75,34 +76,34 @@ describe("createTelegramBot command menu", () => {
 
   it("merges custom commands with native commands", async () => {
     const config = {
+      commands: {
+        native: true,
+      },
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       channels: {
         telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
           customCommands: [
             { command: "custom_backup", description: "Git backup" },
             { command: "/Custom_Generate", description: "Create an image" },
           ],
         },
       },
-    };
+    } satisfies OpenClawConfig;
     loadConfig.mockReturnValue(config);
     const commandsSynced = waitForNextSetMyCommands();
 
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "open",
-            allowFrom: ["*"],
-            execApprovals: {
-              enabled: true,
-              approvers: ["9"],
-              target: "dm",
-            },
-          },
-        },
-      },
-    });
+    createTelegramBot({ token: "tok" });
 
     await commandsSynced;
 
@@ -121,15 +122,25 @@ describe("createTelegramBot command menu", () => {
   it("ignores custom commands that collide with native commands", async () => {
     const errorSpy = vi.fn();
     const config = {
+      commands: {
+        native: true,
+      },
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       channels: {
         telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
           customCommands: [
             { command: "status", description: "Custom status" },
             { command: "custom_backup", description: "Git backup" },
           ],
         },
       },
-    };
+    } satisfies OpenClawConfig;
     loadConfig.mockReturnValue(config);
     const commandsSynced = waitForNextSetMyCommands();
 
@@ -166,15 +177,22 @@ describe("createTelegramBot command menu", () => {
   it("registers custom commands when native commands are disabled", async () => {
     const config = {
       commands: { native: false },
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
       channels: {
         telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
           customCommands: [
             { command: "custom_backup", description: "Git backup" },
             { command: "custom_generate", description: "Create an image" },
           ],
         },
       },
-    };
+    } satisfies OpenClawConfig;
     loadConfig.mockReturnValue(config);
     const commandsSynced = waitForNextSetMyCommands();
 

@@ -8,7 +8,7 @@ import {
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
-type RegisteredRoute = {
+type _RegisteredRoute = {
   path: string;
   accountId: string;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
@@ -58,7 +58,9 @@ describe("Synology channel wiring integration", () => {
 
     const firstCall = registerPluginHttpRouteMock.mock.calls[0];
     expect(firstCall).toBeTruthy();
-    if (!firstCall) throw new Error("Expected registerPluginHttpRoute to be called");
+    if (!firstCall) {
+      throw new Error("Expected registerPluginHttpRoute to be called");
+    }
     const registered = firstCall[0];
     expect(registered.path).toBe("/webhook/synology-alerts");
     expect(registered.accountId).toBe("alerts");

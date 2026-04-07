@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { normalizeProviderId } from "../model-selection.js";
 
@@ -69,6 +69,17 @@ export async function resolveSessionAuthProfileOverride(params: {
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return sessionEntry?.authProfileOverride;
+  }
+
+  const hasConfiguredAuthProfiles =
+    Boolean(params.cfg.auth?.profiles && Object.keys(params.cfg.auth.profiles).length > 0) ||
+    Boolean(params.cfg.auth?.order && Object.keys(params.cfg.auth.order).length > 0);
+  if (
+    !sessionEntry.authProfileOverride?.trim() &&
+    !hasConfiguredAuthProfiles &&
+    !hasAnyAuthProfileStoreSource(agentDir)
+  ) {
+    return undefined;
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });

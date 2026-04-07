@@ -3,7 +3,7 @@ import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
 } from "../../../test/helpers/plugins/directory.ts";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 
 const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
@@ -318,6 +318,31 @@ describe("googlechatPlugin outbound sendMedia", () => {
       messageId: "spaces/AAA/messages/msg-2",
       chatId: "spaces/AAA",
     });
+  });
+});
+
+describe("googlechatPlugin threading", () => {
+  it("honors per-account replyToMode overrides", () => {
+    const resolveReplyToMode = googlechatPlugin.threading?.resolveReplyToMode;
+    if (!resolveReplyToMode) {
+      throw new Error("Expected googlechatPlugin.threading.resolveReplyToMode to be defined");
+    }
+
+    const cfg = {
+      channels: {
+        googlechat: {
+          replyToMode: "all",
+          accounts: {
+            work: {
+              replyToMode: "first",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
+    expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
   });
 });
 

@@ -1,12 +1,11 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import { resolveBundledPluginPublicSurfacePath } from "../plugins/bundled-plugin-metadata.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { resolveBundledPluginPublicSurfacePath } from "../plugins/public-surface-runtime.js";
+import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
@@ -29,25 +28,19 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
-const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
-  "image-generation-core",
-  "media-understanding-core",
-  "speech-core",
-]);
-const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
-const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
-const loadedFacadeModules = new Map<string, unknown>();
-const loadedFacadePluginIds = new Set<string>();
-let cachedBoundaryRawConfig: OpenClawConfig | undefined;
-let cachedBoundaryResolvedConfig:
-  | {
-      rawConfig: OpenClawConfig;
-      config: OpenClawConfig;
-      normalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
-      sourceNormalizedPluginsConfig: ReturnType<typeof normalizePluginsConfig>;
-      autoEnabledReasons: Record<string, string[]>;
-    }
-  | undefined;
+const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
+const cachedFacadeModuleLocationsByKey = new Map<
+  string,
+  {
+    modulePath: string;
+    boundaryRoot: string;
+  } | null
+>();
+
+function createFacadeResolutionKey(params: { dirName: string; artifactBasename: string }): string {
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  return `${params.dirName}::${params.artifactBasename}::${bundledPluginsDir ? path.resolve(bundledPluginsDir) : "<default>"}`;
+}
 
 const bundledFacadeIdentityCache = new Map<
   string,
@@ -70,7 +63,48 @@ function resolveSourceFirstPublicSurfacePath(params: {
   return null;
 }
 
-function resolveFacadeModuleLocation(params: {
+function resolveRegistryPluginModuleLocationFromRegistry(params: {
+  registry: readonly Pick<PluginManifestRecord, "id" | "rootDir" | "channels">[];
+  dirName: string;
+  artifactBasename: string;
+}): { modulePath: string; boundaryRoot: string } | null {
+  type RegistryRecord = (typeof params.registry)[number];
+  const tiers: Array<(plugin: RegistryRecord) => boolean> = [
+    (plugin) => plugin.id === params.dirName,
+    (plugin) => path.basename(plugin.rootDir) === params.dirName,
+    (plugin) => plugin.channels.includes(params.dirName),
+  ];
+  const artifactBasename = params.artifactBasename.replace(/^\.\//u, "");
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
+  for (const matchFn of tiers) {
+    for (const record of params.registry.filter(matchFn)) {
+      const rootDir = path.resolve(record.rootDir);
+      const builtCandidate = path.join(rootDir, artifactBasename);
+      if (fs.existsSync(builtCandidate)) {
+        return { modulePath: builtCandidate, boundaryRoot: rootDir };
+      }
+      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+        const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
+        if (fs.existsSync(sourceCandidate)) {
+          return { modulePath: sourceCandidate, boundaryRoot: rootDir };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function resolveRegistryPluginModuleLocation(params: {
+  dirName: string;
+  artifactBasename: string;
+}): { modulePath: string; boundaryRoot: string } | null {
+  return loadFacadeActivationCheckRuntime().resolveRegistryPluginModuleLocation({
+    ...params,
+    resolutionKey: createFacadeResolutionKey(params),
+  });
+}
+
+function resolveFacadeModuleLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
 }): { modulePath: string; boundaryRoot: string } | null {
@@ -89,9 +123,24 @@ function resolveFacadeModuleLocation(params: {
         dirName: params.dirName,
         artifactBasename: params.artifactBasename,
       });
-    if (!modulePath) {
-      return null;
+    if (modulePath) {
+      return {
+        modulePath,
+        boundaryRoot:
+          bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
+            ? path.resolve(bundledPluginsDir)
+            : OPENCLAW_PACKAGE_ROOT,
+      };
     }
+    return resolveRegistryPluginModuleLocation(params);
+  }
+  const modulePath = resolveBundledPluginPublicSurfacePath({
+    rootDir: OPENCLAW_PACKAGE_ROOT,
+    ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
+    dirName: params.dirName,
+    artifactBasename: params.artifactBasename,
+  });
+  if (modulePath) {
     return {
       modulePath,
       boundaryRoot:
@@ -100,58 +149,29 @@ function resolveFacadeModuleLocation(params: {
           : OPENCLAW_PACKAGE_ROOT,
     };
   }
-  const modulePath = resolveBundledPluginPublicSurfacePath({
-    rootDir: OPENCLAW_PACKAGE_ROOT,
-    ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
-    dirName: params.dirName,
-    artifactBasename: params.artifactBasename,
-  });
-  if (!modulePath) {
-    return null;
-  }
-  return {
-    modulePath,
-    boundaryRoot:
-      bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
-        ? path.resolve(bundledPluginsDir)
-        : OPENCLAW_PACKAGE_ROOT,
-  };
+  return resolveRegistryPluginModuleLocation(params);
 }
 
-function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-  });
-  const cached = jitiLoaders.get(cacheKey);
-  if (cached) {
-    return cached;
+function resolveFacadeModuleLocation(params: {
+  dirName: string;
+  artifactBasename: string;
+}): { modulePath: string; boundaryRoot: string } | null {
+  const key = createFacadeResolutionKey(params);
+  if (cachedFacadeModuleLocationsByKey.has(key)) {
+    return cachedFacadeModuleLocationsByKey.get(key) ?? null;
   }
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
-  jitiLoaders.set(cacheKey, loader);
-  return loader;
+  const resolved = resolveFacadeModuleLocationUncached(params);
+  cachedFacadeModuleLocationsByKey.set(key, resolved);
+  return resolved;
 }
 
-function readFacadeBoundaryConfigSafely(): OpenClawConfig {
-  try {
-    const config = loadConfig();
-    return config && typeof config === "object" ? config : EMPTY_FACADE_BOUNDARY_CONFIG;
-  } catch {
-    return EMPTY_FACADE_BOUNDARY_CONFIG;
-  }
-}
+type BundledPluginPublicSurfaceParams = {
+  dirName: string;
+  artifactBasename: string;
+};
 
-function getFacadeBoundaryResolvedConfig() {
-  const rawConfig = readFacadeBoundaryConfigSafely();
-  if (cachedBoundaryResolvedConfig && cachedBoundaryRawConfig === rawConfig) {
-    return cachedBoundaryResolvedConfig;
-  }
+type FacadeActivationCheckRuntimeModule = typeof import("./facade-activation-check.runtime.js");
+type JitiLoader = ReturnType<(typeof import("jiti"))["createJiti"]>;
 
   bundledFacadeIdentityCache.clear();
 
@@ -223,18 +243,9 @@ function resolveTrackedFacadePluginId(dirName: string): string {
   return resolveBundledFacadeIdentityByDirName(dirName)?.id ?? dirName;
 }
 
-function resolveBundledPluginPublicSurfaceAccess(params: {
-  dirName: string;
-  artifactBasename: string;
-}): { allowed: boolean; pluginId?: string; reason?: string } {
-  if (
-    params.artifactBasename === "runtime-api.js" &&
-    ALWAYS_ALLOWED_RUNTIME_DIR_NAMES.has(params.dirName)
-  ) {
-    return {
-      allowed: true,
-      pluginId: params.dirName,
-    };
+function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {
+  if (facadeActivationCheckRuntimeModule) {
+    return facadeActivationCheckRuntimeModule;
   }
 
   const {
@@ -285,134 +296,66 @@ function createLazyFacadeValueLoader<T>(load: () => T): () => T {
       value = load();
       loaded = true;
     }
-    return value;
+  }
+  throw new Error("Unable to load facade activation check runtime");
+}
+
+function loadFacadeModuleAtLocationSync<T extends object>(params: {
+  location: FacadeModuleLocation;
+  trackedPluginId: string | (() => string);
+  loadModule?: (modulePath: string) => T;
+}): T {
+  return loadFacadeModuleAtLocationSyncShared(params);
+}
+
+function buildFacadeActivationCheckParams(
+  params: BundledPluginPublicSurfaceParams,
+  location: FacadeModuleLocation | null = resolveFacadeModuleLocation(params),
+) {
+  return {
+    ...params,
+    location,
+    sourceExtensionsRoot: OPENCLAW_SOURCE_EXTENSIONS_ROOT,
+    resolutionKey: createFacadeResolutionKey(params),
   };
 }
 
-function createLazyFacadeProxyValue<T extends object>(params: {
-  load: () => T;
-  target: object;
-}): T {
-  const resolve = createLazyFacadeValueLoader(params.load);
-  return new Proxy(params.target, {
-    defineProperty(_target, property, descriptor) {
-      return Reflect.defineProperty(resolve(), property, descriptor);
-    },
-    deleteProperty(_target, property) {
-      return Reflect.deleteProperty(resolve(), property);
-    },
-    get(_target, property, receiver) {
-      return Reflect.get(resolve(), property, receiver);
-    },
-    getOwnPropertyDescriptor(_target, property) {
-      return Reflect.getOwnPropertyDescriptor(resolve(), property);
-    },
-    getPrototypeOf() {
-      return Reflect.getPrototypeOf(resolve());
-    },
-    has(_target, property) {
-      return Reflect.has(resolve(), property);
-    },
-    isExtensible() {
-      return Reflect.isExtensible(resolve());
-    },
-    ownKeys() {
-      return Reflect.ownKeys(resolve());
-    },
-    preventExtensions() {
-      return Reflect.preventExtensions(resolve());
-    },
-    set(_target, property, value, receiver) {
-      return Reflect.set(resolve(), property, value, receiver);
-    },
-    setPrototypeOf(_target, prototype) {
-      return Reflect.setPrototypeOf(resolve(), prototype);
-    },
-  }) as T;
-}
-
-export function createLazyFacadeObjectValue<T extends object>(load: () => T): T {
-  return createLazyFacadeProxyValue({ load, target: {} });
-}
-
-export function createLazyFacadeArrayValue<T extends readonly unknown[]>(load: () => T): T {
-  return createLazyFacadeProxyValue({ load, target: [] });
-}
-
-export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
-  dirName: string;
-  artifactBasename: string;
-}): T {
+export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
+  params: BundledPluginPublicSurfaceParams,
+): T {
   const location = resolveFacadeModuleLocation(params);
+  const trackedPluginId = () =>
+    loadFacadeActivationCheckRuntime().resolveTrackedFacadePluginId(
+      buildFacadeActivationCheckParams(params, location),
+    );
   if (!location) {
-    throw new Error(
-      `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
-    );
+    return loadBundledPluginPublicSurfaceModuleSyncLight<T>({
+      ...params,
+      trackedPluginId,
+    });
   }
-  const cached = loadedFacadeModules.get(location.modulePath);
-  if (cached) {
-    return cached as T;
-  }
-
-  const opened = openBoundaryFileSync({
-    absolutePath: location.modulePath,
-    rootPath: location.boundaryRoot,
-    boundaryLabel:
-      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
-        ? "OpenClaw package root"
-        : "bundled plugin directory",
-    rejectHardlinks: false,
+  return loadFacadeModuleAtLocationSync<T>({
+    location,
+    trackedPluginId,
   });
-  if (!opened.ok) {
-    throw new Error(
-      `Unable to open bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
-      { cause: opened.error },
-    );
-  }
-  fs.closeSync(opened.fd);
-
-  // Place a sentinel object in the cache *before* the Jiti load begins.
-  // If a transitive dependency of the loaded module re-enters this function
-  // for the same modulePath (circular facade reference), it will receive the
-  // sentinel instead of recursing infinitely.  Once the real module finishes
-  // loading, Object.assign() back-fills the sentinel so any references
-  // captured during the circular load phase see the final exports.
-  const sentinel = {} as T;
-  loadedFacadeModules.set(location.modulePath, sentinel);
-
-  let loaded: T;
-  try {
-    // Track the owning plugin once module evaluation begins. Facade top-level
-    // code may have already executed even if the module later throws.
-    loadedFacadePluginIds.add(resolveTrackedFacadePluginId(params.dirName));
-    loaded = getJiti(location.modulePath)(location.modulePath) as T;
-    Object.assign(sentinel, loaded);
-  } catch (err) {
-    loadedFacadeModules.delete(location.modulePath);
-    throw err;
-  }
-
-  return sentinel;
 }
 
 export function canLoadActivatedBundledPluginPublicSurface(params: {
   dirName: string;
   artifactBasename: string;
 }): boolean {
-  return resolveBundledPluginPublicSurfaceAccess(params).allowed;
+  return loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
+    buildFacadeActivationCheckParams(params),
+  ).allowed;
 }
 
 export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
 }): T {
-  const access = resolveBundledPluginPublicSurfaceAccess(params);
-  if (!access.allowed) {
-    const pluginLabel = access.pluginId ?? params.dirName;
-    throw new Error(
-      `Bundled plugin public surface access blocked for "${pluginLabel}" via ${params.dirName}/${params.artifactBasename}: ${access.reason ?? "plugin runtime is not activated"}`,
-    );
-  }
+  loadFacadeActivationCheckRuntime().resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
+    buildFacadeActivationCheckParams(params),
+  );
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }
 
@@ -420,21 +363,63 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
   dirName: string;
   artifactBasename: string;
 }): T | null {
-  const access = resolveBundledPluginPublicSurfaceAccess(params);
+  const access = loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
+    buildFacadeActivationCheckParams(params),
+  );
   if (!access.allowed) {
     return null;
   }
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }
 
-export function listImportedBundledPluginFacadeIds(): string[] {
-  return [...loadedFacadePluginIds].toSorted((left, right) => left.localeCompare(right));
+export function resetFacadeRuntimeStateForTest(): void {
+  resetFacadeLoaderStateForTest();
+  facadeActivationCheckRuntimeModule?.resetFacadeActivationCheckRuntimeStateForTest();
+  facadeActivationCheckRuntimeModule = undefined;
+  facadeActivationCheckRuntimeJiti = undefined;
+  cachedFacadeModuleLocationsByKey.clear();
 }
 
-export function resetFacadeRuntimeStateForTest(): void {
-  loadedFacadeModules.clear();
-  loadedFacadePluginIds.clear();
-  jitiLoaders.clear();
-  cachedBoundaryRawConfig = undefined;
-  cachedBoundaryResolvedConfig = undefined;
-}
+export const __testing = {
+  loadFacadeModuleAtLocationSync,
+  resolveRegistryPluginModuleLocationFromRegistry,
+  resolveFacadeModuleLocation,
+  evaluateBundledPluginPublicSurfaceAccess: ((
+    ...args: Parameters<
+      FacadeActivationCheckRuntimeModule["evaluateBundledPluginPublicSurfaceAccess"]
+    >
+  ) =>
+    loadFacadeActivationCheckRuntime().evaluateBundledPluginPublicSurfaceAccess(
+      ...args,
+    )) as FacadeActivationCheckRuntimeModule["evaluateBundledPluginPublicSurfaceAccess"],
+  throwForBundledPluginPublicSurfaceAccess: ((
+    ...args: Parameters<
+      FacadeActivationCheckRuntimeModule["throwForBundledPluginPublicSurfaceAccess"]
+    >
+  ) =>
+    loadFacadeActivationCheckRuntime().throwForBundledPluginPublicSurfaceAccess(
+      ...args,
+    )) as FacadeActivationCheckRuntimeModule["throwForBundledPluginPublicSurfaceAccess"],
+  resolveActivatedBundledPluginPublicSurfaceAccessOrThrow: ((
+    params: BundledPluginPublicSurfaceParams,
+  ) =>
+    loadFacadeActivationCheckRuntime().resolveActivatedBundledPluginPublicSurfaceAccessOrThrow(
+      buildFacadeActivationCheckParams(params),
+    )) as (params: BundledPluginPublicSurfaceParams) => {
+    allowed: boolean;
+    pluginId?: string;
+    reason?: string;
+  },
+  resolveBundledPluginPublicSurfaceAccess: ((params: BundledPluginPublicSurfaceParams) =>
+    loadFacadeActivationCheckRuntime().resolveBundledPluginPublicSurfaceAccess(
+      buildFacadeActivationCheckParams(params),
+    )) as (params: BundledPluginPublicSurfaceParams) => {
+    allowed: boolean;
+    pluginId?: string;
+    reason?: string;
+  },
+  resolveTrackedFacadePluginId: ((params: BundledPluginPublicSurfaceParams) =>
+    loadFacadeActivationCheckRuntime().resolveTrackedFacadePluginId(
+      buildFacadeActivationCheckParams(params),
+    )) as (params: BundledPluginPublicSurfaceParams) => string,
+};

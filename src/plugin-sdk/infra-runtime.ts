@@ -33,6 +33,7 @@ export * from "../infra/net/proxy-fetch.js";
 export * from "../infra/net/undici-global-dispatcher.js";
 export * from "../infra/net/ssrf.js";
 export * from "../infra/outbound/identity.js";
+export * from "../infra/outbound/sanitize-text.js";
 export * from "../infra/parse-finite-number.js";
 export * from "../infra/outbound/send-deps.js";
 export * from "../infra/retry.js";

@@ -14,17 +14,18 @@ const fallbackState = vi.hoisted(() => ({
     | null,
 }));
 
-vi.mock("../../plugin-sdk/facade-runtime.js", () => ({
-  tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) =>
-    dirName === fallbackState.activeDirName && fallbackState.resolveSessionConversation
-      ? { resolveSessionConversation: fallbackState.resolveSessionConversation }
-      : null,
-}));
-
-vi.mock("../../plugins/bundled-plugin-metadata.js", () => ({
-  resolveBundledPluginPublicSurfacePath: ({ dirName }: { dirName: string }) =>
-    dirName === fallbackState.activeDirName ? `/tmp/${dirName}/session-key-api.js` : null,
-}));
+vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
+    "../../plugin-sdk/facade-runtime.js",
+  );
+  return {
+    ...actual,
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) =>
+      dirName === fallbackState.activeDirName && fallbackState.resolveSessionConversation
+        ? { resolveSessionConversation: fallbackState.resolveSessionConversation }
+        : null,
+  };
+});
 
 import { resolveSessionConversationRef } from "./session-conversation.js";
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardAdapter,
+  createPluginSetupWizardStatus,
   createTestWizardPrompter,
   promptSetupWizardAllowFrom,
   runSetupWizardConfigure,
@@ -13,7 +14,7 @@ import {
 } from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { ircPlugin } from "./channel.js";
-import { setIrcRuntime } from "./runtime.js";
+import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
   parsePort,
@@ -27,17 +28,18 @@ import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   monitorIrcProvider: vi.fn(),
+  sendMessageIrc: vi.fn(),
 }));
 
-vi.mock("./monitor.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
+vi.mock("./channel-runtime.js", () => {
   return {
-    ...actual,
     monitorIrcProvider: hoisted.monitorIrcProvider,
+    sendMessageIrc: hoisted.sendMessageIrc,
   };
 });
 
 const ircConfigureAdapter = createPluginSetupWizardAdapter(ircPlugin);
+const ircStatus = createPluginSetupWizardStatus(ircPlugin);
 
 function buildAccount(): ResolvedIrcAccount {
   return {
@@ -80,6 +82,7 @@ function installIrcRuntime() {
 describe("irc setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    clearIrcRuntime();
   });
 
   it("parses valid ports and falls back for invalid values", () => {
@@ -108,6 +111,58 @@ describe("irc setup", () => {
         },
       },
     });
+  });
+
+  it("setup status honors the selected named account", async () => {
+    const status = await ircStatus({
+      cfg: {
+        channels: {
+          irc: {
+            accounts: {
+              ops: {
+                host: "irc.example.com",
+                nick: "ops-bot",
+              },
+              work: {
+                host: "irc.example.com",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+      accountOverrides: {
+        irc: "work",
+      },
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toEqual(["IRC: needs host + nick"]);
+  });
+
+  it("setup status honors the configured default account", async () => {
+    const status = await ircStatus({
+      cfg: {
+        channels: {
+          irc: {
+            defaultAccount: "work",
+            accounts: {
+              ops: {
+                host: "irc.example.com",
+                nick: "ops-bot",
+              },
+              work: {
+                host: "irc.example.com",
+                nick: "",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toEqual(["IRC: needs host + nick"]);
   });
 
   it("stores nickserv and account config patches on the scoped account", () => {
@@ -221,7 +276,7 @@ describe("irc setup", () => {
     ).toBeNull();
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: { channels: { irc: {} } },
         accountId: "default",
         input: {
@@ -350,13 +405,11 @@ describe("irc setup", () => {
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = vi.fn();
-    vi.resetModules();
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
     installIrcRuntime();
-    const { ircPlugin: runtimeMockedPlugin } = await import("./channel.js");
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: runtimeMockedPlugin.gateway!.startAccount!,
+      startAccount: ircPlugin.gateway!.startAccount!,
       account: buildAccount(),
     });
 

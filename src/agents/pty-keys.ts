@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 
 const ESC = "\x1b";
@@ -324,8 +325,8 @@ function hasAnyModifier(mods: Modifiers): boolean {
 }
 
 function parseHexByte(raw: string): number | null {
-  const trimmed = raw.trim().toLowerCase();
-  const normalized = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  const lower = normalizeLowercaseStringOrEmpty(raw);
+  const normalized = lower.startsWith("0x") ? lower.slice(2) : lower;
   if (!/^[0-9a-f]{1,2}$/.test(normalized)) {
     return null;
   }

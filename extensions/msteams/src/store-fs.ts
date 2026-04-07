@@ -3,7 +3,7 @@ import {
   readJsonFileWithFallback,
   withFileLock as withPathLock,
   writeJsonFileAtomically,
-} from "openclaw/plugin-sdk/msteams";
+} from "../runtime-api.js";
 
 const STORE_LOCK_OPTIONS = {
   retries: {

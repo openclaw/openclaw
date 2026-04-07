@@ -1,1 +1,1 @@
-export { expectChannelInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
+export { expectChannelInboundContextContract } from "../../../../src/channels/plugins/contracts/test-helpers.js";

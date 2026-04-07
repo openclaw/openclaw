@@ -1,39 +1,37 @@
 import { afterAll, afterEach, beforeAll } from "vitest";
+import { resetContextWindowCacheForTest } from "../src/agents/context-runtime-state.js";
+import { resetModelsJsonReadyCacheForTest } from "../src/agents/models-config-state.js";
+import {
+  drainSessionWriteLockStateForTest,
+  resetSessionWriteLockStateForTest,
+} from "../src/agents/session-write-lock.js";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../src/channels/plugins/types.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { clearSessionStoreCaches } from "../src/config/sessions/store-cache.js";
+import { drainSessionStoreLockQueuesForTest } from "../src/config/sessions/store-lock-state.js";
+import { drainFileLockStateForTest, resetFileLockStateForTest } from "../src/infra/file-lock.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
+import { clearPluginDiscoveryCache } from "../src/plugins/discovery.js";
+import { clearPluginManifestRegistryCache } from "../src/plugins/manifest-registry.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
-const testEnv = installSharedTestSetup();
-
-const [
-  { resetContextWindowCacheForTest },
-  { resetModelsJsonReadyCacheForTest },
-  { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
-  { createTopLevelChannelReplyToModeResolver },
-  { createTestRegistry },
-  { cleanupSessionStateForTest },
-] = await Promise.all([
-  import("../src/agents/context.js"),
-  import("../src/agents/models-config.js"),
-  import("../src/agents/session-write-lock.js"),
-  import("../src/channels/plugins/threading-helpers.js"),
-  import("../src/test-utils/channel-plugins.js"),
-  import("../src/test-utils/session-state-cleanup.js"),
-]);
+installSharedTestSetup();
 
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
-
 type WorkerRuntimeState = {
   defaultPluginRegistry: PluginRegistry | null;
   materializedDefaultPluginRegistry: PluginRegistry | null;
 };
+
+type ReplyToModeResolver = NonNullable<
+  NonNullable<ChannelPlugin["threading"]>["resolveReplyToMode"]
+>;
 
 const workerRuntimeState = (() => {
   const globalState = globalThis as typeof globalThis & {
@@ -51,6 +49,54 @@ const workerRuntimeState = (() => {
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
 };
+
+function createTopLevelChannelReplyToModeResolverForTest(channelId: string): ReplyToModeResolver {
+  return ({ cfg }) => {
+    const channelConfig = (
+      cfg.channels as Record<string, { replyToMode?: "off" | "first" | "all" }> | undefined
+    )?.[channelId];
+    return channelConfig?.replyToMode ?? "off";
+  };
+}
+
+function createTestRegistryForSetup(
+  channels: Array<{ pluginId: string; plugin: ChannelPlugin; source: string }> = [],
+): PluginRegistry {
+  return {
+    plugins: [],
+    tools: [],
+    hooks: [],
+    typedHooks: [],
+    channels: channels as unknown as PluginRegistry["channels"],
+    channelSetups: channels.map((entry) => ({
+      pluginId: entry.pluginId,
+      plugin: entry.plugin,
+      source: entry.source,
+      enabled: true,
+    })),
+    providers: [],
+    speechProviders: [],
+    realtimeTranscriptionProviders: [],
+    realtimeVoiceProviders: [],
+    mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
+    videoGenerationProviders: [],
+    webFetchProviders: [],
+    webSearchProviders: [],
+    memoryEmbeddingProviders: [],
+    gatewayHandlers: {},
+    gatewayMethodScopes: {},
+    httpRoutes: [],
+    cliRegistrars: [],
+    reloads: [],
+    nodeHostCommands: [],
+    securityAuditCollectors: [],
+    services: [],
+    commands: [],
+    conversationBindingResolvedHandlers: [],
+    diagnostics: [],
+  };
+}
 
 function resolveSlackStubReplyToMode(params: {
   cfg: OpenClawConfig;
@@ -174,13 +220,13 @@ const createStubPlugin = (params: {
 });
 
 const createDefaultRegistry = () =>
-  createTestRegistry([
+  createTestRegistryForSetup([
     {
       pluginId: "discord",
       plugin: createStubPlugin({
         id: "discord",
         label: "Discord",
-        resolveReplyToMode: createTopLevelChannelReplyToModeResolver("discord"),
+        resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("discord"),
       }),
       source: "test",
     },
@@ -199,7 +245,7 @@ const createDefaultRegistry = () =>
         ...createStubPlugin({
           id: "telegram",
           label: "Telegram",
-          resolveReplyToMode: createTopLevelChannelReplyToModeResolver("telegram"),
+          resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("telegram"),
         }),
         status: {
           buildChannelSummary: async () => ({
@@ -280,15 +326,23 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
-  await cleanupSessionStateForTest();
+  await drainSessionStoreLockQueuesForTest();
+  clearSessionStoreCaches();
+  await drainFileLockStateForTest();
+  await drainSessionWriteLockStateForTest();
+  resetFileLockStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
   installDefaultPluginRegistry();
 });
 
 afterAll(async () => {
-  await cleanupSessionStateForTest();
+  clearSessionStoreCaches();
+  await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();
-  testEnv.cleanup();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
 });

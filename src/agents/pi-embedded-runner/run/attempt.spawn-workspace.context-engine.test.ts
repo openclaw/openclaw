@@ -1,5 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildMemorySystemPromptAddition } from "../../../plugin-sdk/core.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptSection,
+} from "../../../plugins/memory-state.js";
 import {
   type AttemptContextEngine,
   assembleAttemptContextEngine,
@@ -9,11 +14,14 @@ import {
 import {
   cleanupTempPaths,
   createContextEngineBootstrapAndAssemble,
-  createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
   resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
+import {
+  buildEmbeddedSubscriptionParams,
+  cleanupEmbeddedAttemptResources,
+} from "./attempt.subscription-cleanup.js";
 
 const hoisted = getHoisted();
 const embeddedSessionId = "embedded-session";
@@ -62,7 +70,7 @@ async function runAssemble(
   contextEngine: AttemptContextEngine,
   overrides: Partial<Parameters<typeof assembleAttemptContextEngine>[0]> = {},
 ) {
-  await assembleAttemptContextEngine({
+  return await assembleAttemptContextEngine({
     contextEngine,
     sessionId: embeddedSessionId,
     sessionKey,
@@ -103,10 +111,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
+    clearMemoryPluginState();
     hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
+    clearMemoryPluginState();
     await cleanupTempPaths(tempPaths);
   });
 
@@ -140,6 +150,59 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         model: "gpt-test",
       }),
     );
+  });
+
+  it("forwards availableTools and citationsMode to assemble", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const contextEngine = createTestContextEngine({ bootstrap, assemble });
+
+    await runBootstrap(sessionKey, contextEngine);
+    await runAssemble(sessionKey, contextEngine, {
+      availableTools: new Set(["memory_search", "wiki_search"]),
+      citationsMode: "on",
+    });
+
+    expect(assemble).toHaveBeenCalledWith(
+      expect.objectContaining({
+        availableTools: new Set(["memory_search", "wiki_search"]),
+        citationsMode: "on",
+      }),
+    );
+  });
+
+  it("lets non-legacy engines opt into the active memory prompt helper", async () => {
+    registerMemoryPromptSection(({ availableTools, citationsMode }) => {
+      if (!availableTools.has("memory_search")) {
+        return [];
+      }
+      return [
+        "## Memory Recall",
+        `tools=${[...availableTools].toSorted().join(",")}`,
+        `citations=${citationsMode ?? "auto"}`,
+        "",
+      ];
+    });
+
+    const contextEngine = createTestContextEngine({
+      assemble: async ({ messages, availableTools, citationsMode }) => ({
+        messages,
+        estimatedTokens: messages.length,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      }),
+    });
+
+    const result = await runAssemble(sessionKey, contextEngine, {
+      availableTools: new Set(["wiki_search", "memory_search"]),
+      citationsMode: "on",
+    });
+
+    expect(result).toMatchObject({
+      estimatedTokens: 1,
+      systemPromptAddition: "## Memory Recall\ntools=memory_search,wiki_search\ncitations=on",
+    });
   });
 
   it("forwards sessionKey to ingestBatch when afterTurn is absent", async () => {
@@ -177,26 +240,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("forwards silentExpected to the embedded subscription", async () => {
-    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
-
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: {
-        bootstrap,
-        assemble,
-      },
-      attemptOverrides: {
-        silentExpected: true,
-      },
+    const params = buildEmbeddedSubscriptionParams({
+      session: {} as never,
+      runId: "run-context-engine-forwarding",
+      hookRunner: undefined,
+      verboseLevel: undefined,
+      reasoningMode: "off",
+      toolResultFormat: undefined,
+      shouldEmitToolResult: undefined,
+      shouldEmitToolOutput: undefined,
+      onToolResult: undefined,
+      onReasoningStream: undefined,
+      onReasoningEnd: undefined,
+      onBlockReply: undefined,
+      onBlockReplyFlush: undefined,
+      blockReplyBreak: undefined,
+      blockReplyChunking: undefined,
+      onPartialReply: undefined,
+      onAssistantMessageStart: undefined,
+      onAgentEvent: undefined,
+      enforceFinalTag: undefined,
+      silentExpected: true,
+      config: undefined,
       sessionKey,
-      tempPaths,
+      sessionId: embeddedSessionId,
+      agentId: "main",
     });
 
-    expect(result.promptError).toBeNull();
-    expect(hoisted.subscribeEmbeddedPiSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        silentExpected: true,
-      }),
-    );
+    expect(params.silentExpected).toBe(true);
+    expect(params.sessionKey).toBe(sessionKey);
   });
 
   it("skips maintenance when afterTurn fails", async () => {
@@ -252,29 +324,25 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("releases the session lock even when teardown cleanup throws", async () => {
-    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const releaseMock = vi.fn(async () => {});
-    hoisted.acquireSessionWriteLockMock.mockResolvedValue({
-      release: releaseMock,
-    });
-    let flushCallCount = 0;
-    hoisted.flushPendingToolResultsAfterIdleMock.mockImplementation(async () => {
-      flushCallCount += 1;
-      if (flushCallCount >= 2) {
-        throw new Error("flush failed");
-      }
+    const disposeMock = vi.fn();
+    const flushMock = vi.fn(async () => {
+      throw new Error("flush failed");
     });
 
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: {
-        bootstrap,
-        assemble,
-      },
-      sessionKey,
-      tempPaths,
+    await cleanupEmbeddedAttemptResources({
+      removeToolResultContextGuard: () => {},
+      flushPendingToolResultsAfterIdle: flushMock,
+      session: { agent: {}, dispose: disposeMock },
+      sessionManager: hoisted.sessionManager,
+      releaseWsSession: hoisted.releaseWsSessionMock,
+      sessionId: embeddedSessionId,
+      bundleLspRuntime: undefined,
+      sessionLock: { release: releaseMock },
     });
 
-    expect(result.promptError).toBeNull();
+    expect(flushMock).toHaveBeenCalledTimes(1);
+    expect(disposeMock).toHaveBeenCalledTimes(1);
     expect(releaseMock).toHaveBeenCalledTimes(1);
     expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session");
   });

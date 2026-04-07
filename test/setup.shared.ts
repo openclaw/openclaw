@@ -1,7 +1,8 @@
 import { vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
     getOAuthApiKey: () => undefined,
@@ -9,6 +10,12 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
     loginOpenAICodex: vi.fn(),
   };
 });
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: () => undefined,
+  getOAuthProviders: () => [],
+  loginOpenAICodex: vi.fn(),
+}));
 
 vi.mock("@mariozechner/clipboard", () => ({
   availableFormats: () => [],
@@ -50,13 +57,43 @@ type SharedTestSetupOptions = {
   loadProfileEnv?: boolean;
 };
 
+const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
+
+type SharedTestSetupHandle = {
+  cleanup: () => void;
+  tempHome: string;
+};
+
 export function installSharedTestSetup(options?: SharedTestSetupOptions): {
   cleanup: () => void;
   tempHome: string;
 } {
+  const globalState = globalThis as typeof globalThis & {
+    [SHARED_TEST_SETUP]?: SharedTestSetupHandle;
+  };
+  const existing = globalState[SHARED_TEST_SETUP];
+  if (existing) {
+    return existing;
+  }
+
   const testEnv = withIsolatedTestHome({
     loadProfileEnv: options?.loadProfileEnv,
   });
   installProcessWarningFilter();
-  return testEnv;
+
+  let cleaned = false;
+  const handle: SharedTestSetupHandle = {
+    tempHome: testEnv.tempHome,
+    cleanup: () => {
+      if (cleaned) {
+        return;
+      }
+      cleaned = true;
+      testEnv.cleanup();
+      delete globalState[SHARED_TEST_SETUP];
+    },
+  };
+  process.once("exit", handle.cleanup);
+  globalState[SHARED_TEST_SETUP] = handle;
+  return handle;
 }
