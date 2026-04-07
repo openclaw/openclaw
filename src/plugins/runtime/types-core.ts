@@ -130,7 +130,7 @@ export type PluginRuntimeCore = {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
       cfg?: import("../../config/config.js").OpenClawConfig;
       workspaceDir?: string;
-    }) => Promise<import("../../plugins/types.js").ResolvedProviderRuntimeAuth>;
+    }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
     /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
     resolveApiKeyForProvider: (params: {
       provider: string;

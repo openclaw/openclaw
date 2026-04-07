@@ -11,7 +11,8 @@ export {
   resolveAwsSdkEnvVarName,
   type ResolvedProviderAuth,
 } from "../agents/model-auth-runtime-shared.js";
-export type { ProviderPreparedRuntimeAuth, ResolvedProviderRuntimeAuth } from "../plugins/types.js";
+export type { ProviderPreparedRuntimeAuth } from "../plugins/types.js";
+export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-types.js";
 
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 type GetRuntimeAuthForModel =

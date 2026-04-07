@@ -2,7 +2,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { getApiKeyForModel, resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { prepareProviderRuntimeAuth } from "../provider-runtime.runtime.js";
-import type { ResolvedProviderRuntimeAuth } from "../types.js";
+import type { ResolvedProviderRuntimeAuth } from "./model-auth-types.js";
 
 export { getApiKeyForModel, resolveApiKeyForProvider };
 

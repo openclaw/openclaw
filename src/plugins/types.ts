@@ -10,7 +10,6 @@ import type {
   OAuthCredential,
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
-import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
@@ -475,18 +474,6 @@ export type ProviderPreparedRuntimeAuth = {
   request?: ProviderRequestTransportOverrides;
   expiresAt?: number;
 };
-
-/**
- * Runtime-ready auth result exposed to native plugins and context engines.
- *
- * `source`, `mode`, and `profileId` describe how the original credential was
- * resolved. `apiKey` is the request-ready credential after any provider-owned
- * runtime exchange, so it may differ from the stored/raw credential.
- */
-export type ResolvedProviderRuntimeAuth = Omit<ResolvedProviderAuth, "apiKey"> &
-  Partial<Pick<ProviderPreparedRuntimeAuth, "baseUrl" | "expiresAt" | "request">> & {
-    apiKey?: string;
-  };
 
 /**
  * Usage/billing auth input for providers that expose quota/usage endpoints.
