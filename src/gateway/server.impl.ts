@@ -140,6 +140,7 @@ import {
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
@@ -668,6 +669,17 @@ export async function startGatewayServer(
       env: process.env,
       tailscaleMode,
     });
+  const resolveSharedGatewaySessionGenerationForConfig = (config: OpenClawConfig) =>
+    resolveSharedGatewaySessionGeneration(
+      resolveGatewayAuth({
+        authConfig: config.gateway?.auth,
+        authOverride: opts.auth,
+        env: process.env,
+        tailscaleMode,
+      }),
+    );
+  const resolveCurrentSharedGatewaySessionGeneration = () =>
+    resolveSharedGatewaySessionGeneration(getResolvedAuth());
   let hooksConfig = runtimeConfig.hooksConfig;
   let hookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
@@ -1253,6 +1265,21 @@ export async function startGatewayServer(
     });
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
+    const disconnectStaleSharedGatewayAuthClients = (expectedGeneration: string | undefined) => {
+      for (const gatewayClient of clients) {
+        if (!gatewayClient.usesSharedGatewayAuth) {
+          continue;
+        }
+        if (gatewayClient.sharedGatewaySessionGeneration === expectedGeneration) {
+          continue;
+        }
+        try {
+          gatewayClient.socket.close(4001, "gateway auth changed");
+        } catch {
+          /* ignore */
+        }
+      }
+    };
 
     const gatewayRequestContext: import("./server-methods/types.js").GatewayRequestContext = {
       deps,
@@ -1499,6 +1526,8 @@ export async function startGatewayServer(
             readSnapshot: readConfigFileSnapshot,
             subscribeToWrites: registerConfigWriteListener,
             onHotReload: async (plan, nextConfig) => {
+              const previousSharedGatewaySessionGeneration =
+                resolveCurrentSharedGatewaySessionGeneration();
               const previousSnapshot = getActiveSecretsRuntimeSnapshot();
               const prepared = await activateRuntimeSecrets(nextConfig, {
                 reason: "reload",
@@ -1514,12 +1543,24 @@ export async function startGatewayServer(
                 }
                 throw err;
               }
+              const nextSharedGatewaySessionGeneration =
+                resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+              if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
+                disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
+              }
             },
             onRestart: async (plan, nextConfig) => {
-              await activateRuntimeSecrets(nextConfig, {
+              const previousSharedGatewaySessionGeneration =
+                resolveCurrentSharedGatewaySessionGeneration();
+              const prepared = await activateRuntimeSecrets(nextConfig, {
                 reason: "restart-check",
                 activate: false,
               });
+              const nextSharedGatewaySessionGeneration =
+                resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+              if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
+                disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
+              }
               requestGatewayRestart(plan, nextConfig);
             },
             log: {

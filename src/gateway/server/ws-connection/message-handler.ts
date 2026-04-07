@@ -99,6 +99,7 @@ import {
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
 } from "../health-state.js";
+import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 import { formatGatewayAuthFailureMessage } from "./auth-messages.js";
@@ -1183,6 +1184,10 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl && canvasCapability
             ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
             : canvasHostUrl;
+        const sharedGatewaySessionGeneration =
+          authMethod === "token" || authMethod === "password"
+            ? resolveSharedGatewaySessionGeneration(resolvedAuth)
+            : undefined;
         const helloOk = {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
@@ -1217,6 +1222,7 @@ export function attachGatewayWsMessageHandler(params: {
           connect: connectParams,
           connId,
           usesSharedGatewayAuth: authMethod === "token" || authMethod === "password",
+          sharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
           canvasHostUrl,
@@ -1328,6 +1334,18 @@ export function attachGatewayWsMessageHandler(params: {
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;
+      }
+
+      if (client.usesSharedGatewayAuth) {
+        const activeSharedGatewaySessionGeneration =
+          resolveSharedGatewaySessionGeneration(getResolvedAuth());
+        if (client.sharedGatewaySessionGeneration !== activeSharedGatewaySessionGeneration) {
+          setCloseCause("gateway-auth-rotated", {
+            authGenerationStale: true,
+          });
+          close(4001, "gateway auth changed");
+          return;
+        }
       }
 
       // After handshake, accept only req frames
