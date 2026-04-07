@@ -126,8 +126,14 @@ export class MemoryDB {
       await this.table.delete('id = "__schema__"');
       this.availableColumns = new Set(MemoryDB.ALL_COLUMNS);
 
-      // Create FTS Index for keyword search
-      await this.table.createIndex("text");
+      // Create FTS Index for keyword search (non-fatal if it fails)
+      try {
+        await this.table.createIndex("text");
+      } catch (err) {
+        this.logger.warn(
+          `[memory-hybrid] FTS index creation failed (text search degraded): ${err}`,
+        );
+      }
     }
   }
 
@@ -193,8 +199,22 @@ export class MemoryDB {
       createdAt: Date.now(),
       recallCount: 0,
     };
+    const row: Record<string, unknown> = {
+      id: fullEntry.id,
+      text: fullEntry.text,
+      vector: fullEntry.vector,
+      importance: fullEntry.importance,
+      category: fullEntry.category,
+      createdAt: fullEntry.createdAt,
+      recallCount: fullEntry.recallCount ?? 0,
+      happenedAt: fullEntry.happenedAt ?? "",
+      validUntil: fullEntry.validUntil ?? "",
+      summary: fullEntry.summary ?? "",
+      emotionalTone: fullEntry.emotionalTone ?? "neutral",
+      emotionScore: fullEntry.emotionScore ?? 0,
+    };
 
-    await this.safeAdd([fullEntry as unknown as Record<string, unknown>]);
+    await this.safeAdd([row]);
     return fullEntry;
   }
 
@@ -262,8 +282,10 @@ export class MemoryDB {
       .limit(Math.max(limit * 2, 50))
       .toArray();
 
-    // 2. Temporal Search (Recent memories unconditionally)
+    // 2. Temporal Search (Recent memories — last 7 days)
+    const recentCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const recentRows = await this.table!.query()
+      .where(`createdAt > ${recentCutoff}`)
       .select(
         this.selectColumns([
           "id",
@@ -279,7 +301,7 @@ export class MemoryDB {
           "emotionScore",
         ]),
       )
-      .limit(200) // Fetch last 200 metadata entries to sort in memory
+      .limit(200)
       .toArray();
 
     recentRows.sort((a, b) => (b.createdAt as number) - (a.createdAt as number));
@@ -368,9 +390,15 @@ export class MemoryDB {
     await this.ensureInitialized();
 
     // Use FTS search instead of LIKE for much better performance and recall
-    const matchedMemories = await this.table!.search(Array.from(discoveredEntities).join(" "))
-      .limit(10)
-      .toArray();
+    // Graceful fallback: if FTS index is missing, skip associative search
+    let matchedMemories: Array<Record<string, unknown>> = [];
+    try {
+      matchedMemories = await this.table!.search(Array.from(discoveredEntities).join(" "))
+        .limit(10)
+        .toArray();
+    } catch {
+      // FTS index may not exist on older databases — skip silently
+    }
 
     for (const m of matchedMemories) {
       const entry = m as unknown as MemoryEntry;

@@ -23,7 +23,7 @@ import { MemoryTracer, type Logger } from "./tracer.js";
 interface AgentEvent {
   prompt?: string;
   success?: boolean;
-  messages?: Array<any>;
+  messages?: Array<{ role?: string; content?: unknown }>;
 }
 
 /** Shape of the context object passed to hook handlers */
@@ -105,8 +105,9 @@ export async function handleCapture(
   const userTexts: string[] = [];
   const assistantTexts: string[] = [];
   for (const msg of event.messages || []) {
-    if (msg.role === "user") userTexts.push(msg.content);
-    else if (msg.role === "assistant") assistantTexts.push(msg.content);
+    if (msg.role === "user" && typeof msg.content === "string") userTexts.push(msg.content);
+    else if (msg.role === "assistant" && typeof msg.content === "string")
+      assistantTexts.push(msg.content);
   }
 
   const lastUserMsg = userTexts.at(-1) || "";
@@ -182,7 +183,7 @@ async function processFacts(
     const vector = vectors[i];
 
     // Check for contradictions or duplicates
-    const existing = await db.search(vector, 1, 0.95);
+    const existing = await db.search(vector, 1, 0.9);
     if (existing.length > 0) continue;
 
     const entry = await db.store({

@@ -4,3 +4,6 @@ node_modules/
 dist/
 build/
 lancedb/
+.memory/
+*.jsonl
+package-lock.json

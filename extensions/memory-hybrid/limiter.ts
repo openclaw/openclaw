@@ -37,7 +37,7 @@ export class ApiRateLimiter {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
-      let timeout: any;
+      let timeout: ReturnType<typeof setTimeout>;
       const wake = () => {
         clearTimeout(timeout);
         this.wakeupResolver = null;

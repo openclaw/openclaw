@@ -1,16 +1,13 @@
 {
-  "name": "@openclaw/memory-hybrid",
-  "version": "2026.2.16",
-  "private": true,
-  "description": "Enhanced long-term memory with Knowledge Graph, Hybrid Scoring, and Google Gemini support",
+  "name": "memory-hybrid",
+  "version": "2026.4.1",
+  "private": false,
+  "description": "SynaptoClaw: Advanced Cognitive Memory with 7-Channel Hybrid Scoring and Knowledge Graph",
   "type": "module",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
     "@sinclair/typebox": "0.34.48",
     "openai": "^6.22.0"
-  },
-  "devDependencies": {
-    "openclaw": "workspace:*"
   },
   "openclaw": {
     "extensions": [

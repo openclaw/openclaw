@@ -1,36 +1,36 @@
-# BrainClaw (Cognitive Memory Plugin for OpenClaw)
+# SynaptoClaw (Cognitive Memory Plugin for OpenClaw)
 
-> **"Code without memory is just a calculator. Code with BrainClaw is an entity."**
+> **"Code without memory is just a calculator. Code with SynaptoClaw is an entity."**
 
-## 🧠 BrainClaw: The Cognitive Architecture Parallel
+## 🧠 SynaptoClaw: The Cognitive Architecture Parallel
 
-BrainClaw is more than a vector database; it is a technical attempt to replicate the core neurological functions of the human brain within an AI agent.
+SynaptoClaw is more than a vector database; it is a technical attempt to replicate the core neurological functions of the human brain within an AI agent.
 
 ### 1. The Hippocampus (Working Memory Buffer)
 
-Humans do not store every trivial "okay" or "thanks". Our brains filter noise. **BrainClaw's Working Memory Buffer** (`buffer.ts`) mimics this by staging facts and only "promoting" them to long-term storage (LanceDB) if they cross importance thresholds or are reinforced by repetition.
+Humans do not store every trivial "okay" or "thanks". Our brains filter noise. **SynaptoClaw's Working Memory Buffer** (`buffer.ts`) mimics this by staging facts and only "promoting" them to long-term storage (LanceDB) if they cross importance thresholds or are reinforced by repetition.
 
 ### 2. Associative Thinking (AMHR & Knowledge Graph)
 
-Human memory is associative, not just semantic. When you think of "Coffee", you might recall "that cafe in Kyiv". **BrainClaw's Associative Multi-Hop Retrieval** (`index.ts`) traverses the Knowledge Graph to surface connected facts even when mathematical vector similarity is low.
+Human memory is associative, not just semantic. When you think of "Coffee", you might recall "that cafe in Kyiv". **SynaptoClaw's Associative Multi-Hop Retrieval** (`index.ts`) traverses the Knowledge Graph to surface connected facts even when mathematical vector similarity is low.
 
 ### 3. Synaptic Reinforcement (7-Channel Scoring)
 
-The more you think about something, the stronger the neural pathway becomes. **BrainClaw's 7-Channel Scoring** (`recall.ts`) directly applies this. Facts that are frequently recalled (**Reinforcement**), emotionally charged (**Emotional Tone**), or recent (**Recency**) naturally rise to the surface of the agent's consciousness.
+The more you think about something, the stronger the neural pathway becomes. **SynaptoClaw's 7-Channel Scoring** (`recall.ts`) directly applies this. Facts that are frequently recalled (**Reinforcement**), emotionally charged (**Emotional Tone**), or recent (**Recency**) naturally rise to the surface of the agent's consciousness.
 
 ### 4. Continuous Reflection (User Profiling)
 
-Just as humans build a self-identity from accumulated experiences, BrainClaw's **Reflection Engine** (`reflection.ts`) analyzes the entire memory pool to generate a psychological persona and deep behavioral patterns.
+Just as humans build a self-identity from accumulated experiences, SynaptoClaw's **Reflection Engine** (`reflection.ts`) analyzes the entire memory pool to generate a psychological persona and deep behavioral patterns.
 
 ---
 
-## Why BrainClaw?
+## Why SynaptoClaw?
 
-Standard RAG (Retrieval-Augmented Generation) systems use simple vector similarity. They miss context, forget old facts, and don't understand _relationships_. BrainClaw solves this while remaining a drop-in replacement for `memory-lancedb`.
+Standard RAG (Retrieval-Augmented Generation) systems use simple vector similarity. They miss context, forget old facts, and don't understand _relationships_. SynaptoClaw solves this while remaining a drop-in replacement for `memory-lancedb`.
 
 ## Features
 
-| Feature                          | memory-lancedb | **BrainClaw**        |
+| Feature                          | memory-lancedb | **SynaptoClaw**      |
 | -------------------------------- | -------------- | -------------------- |
 | Vector search (LanceDB)          | ✅             | ✅                   |
 | Google Gemini (free!)            | ❌             | ✅                   |
@@ -76,7 +76,7 @@ Score =
 
 ### 🕸️ Knowledge Graph & AMHR
 
-When you store a memory, BrainClaw uses an LLM to extract entities and relationships:
+When you store a memory, SynaptoClaw uses an LLM to extract entities and relationships:
 
 ```
 Memory: "I use Python for my web projects at Acme Corp"
@@ -88,7 +88,7 @@ Memory: "I use Python for my web projects at Acme Corp"
 
 ### 📚 Conversation Stack
 
-To understand full context without blowing up the 15k context window (e.g. Gemma 3 limits), BrainClaw utilizes a `ConversationStack`.
+To understand full context without blowing up the 15k context window (e.g. Gemma 3 limits), SynaptoClaw utilizes a `ConversationStack`.
 It compresses each user/assistant turn into a ~30-word summary, accumulating them into a session-scoped stack.
 **Result:** ~17x token compression with full context retention.
 
@@ -118,9 +118,9 @@ Merges duplicate or similar memories into stronger consolidated facts via the `o
 As an open-source `OpenClaw` plugin, installation is simple:
 
 1. **Clone into `extensions/`**:
-   Navigate to your OpenClaw root directory and clone BrainClaw:
+   Navigate to your OpenClaw root directory and clone SynaptoClaw:
    ```bash
-   git clone https://github.com/vova/BrainClaw.git extensions/memory-hybrid
+   git clone https://github.com/HollyLight28/SynaptoClaw.git extensions/memory-hybrid
    ```
 2. **Install dependencies**:
    ```bash
@@ -144,8 +144,8 @@ As an open-source `OpenClaw` plugin, installation is simple:
             "model": "gemini-embedding-002"
           },
           "autoRecall": true,
-          "autoCapture": false,
-          "smartCapture": false
+          "autoCapture": true,
+          "smartCapture": true
         }
       }
     }
@@ -174,9 +174,9 @@ As an open-source `OpenClaw` plugin, installation is simple:
 | `embedding.model`  | `text-embedding-004`         | Latest Google embedding model (768 dims)                               |
 | `chatModel`        | auto                         | LLM for graph/capture (auto: `gemini-3.1-flash-lite` or `gpt-4o-mini`) |
 | `dbPath`           | `~/.openclaw/memory/lancedb` | Database path                                                          |
-| `autoCapture`      | `false`                      | Auto-capture from conversations                                        |
+| `autoCapture`      | `true`                       | Auto-capture from conversations                                        |
 | `autoRecall`       | `true`                       | Auto-inject memories into context                                      |
-| `smartCapture`     | `false`                      | Use LLM for intelligent fact extraction                                |
+| `smartCapture`     | `true`                       | Use LLM for intelligent fact extraction                                |
 | `captureMaxChars`  | `500`                        | Max message length for capture                                         |
 
 ## Tools
@@ -206,7 +206,7 @@ bun extensions/memory-hybrid/scripts/monitor.ts
 
 ## 🛠️ Observability & Monitoring
 
-BrainClaw provides deep, non-blocking observability into every thought and recall.
+SynaptoClaw provides deep, non-blocking observability into every thought and recall.
 
 ### 1. The Trace Log
 
@@ -236,7 +236,7 @@ The `DreamService` runs periodic maintenance (Cleanup, Emotional Profiling, Proa
 
 ### ⛓️ Candidate Pool Preservation
 
-Unlike standard RAG, BrainClaw preserves a pool of **50-70 candidates** through the entire 7-channel re-ranking process. This prevents "late-stage" signals like recency or importance from being drowned out by early vector similarity truncation.
+Unlike standard RAG, SynaptoClaw preserves a pool of **50-70 candidates** through the entire 7-channel re-ranking process. This prevents "late-stage" signals like recency or importance from being drowned out by early vector similarity truncation.
 
 ## Architecture
 

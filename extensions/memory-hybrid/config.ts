@@ -38,7 +38,7 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 // Defaults
 // ============================================================================
 
-const DEFAULT_MODEL = "gemini-embedding-002";
+const DEFAULT_MODEL = "gemini-embedding-001";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 
 const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
@@ -137,15 +137,23 @@ export const memoryConfigSchema = {
     }
 
     // --- Chat model ---
-    const chatModel =
-      typeof cfg.chatModel === "string"
-        ? cfg.chatModel
-        : typeof cfg.chatApiKey === "string"
-          ? // If separate chatApiKey provided, infer default model from that key's provider
-            cfg.chatApiKey.startsWith("sk-") || resolveEnvVars(cfg.chatApiKey).startsWith("sk-")
-            ? DEFAULT_CHAT_MODELS["openai"]
-            : DEFAULT_CHAT_MODELS["google"]
-          : DEFAULT_CHAT_MODELS[provider];
+    let chatModel: string;
+    if (typeof cfg.chatModel === "string") {
+      chatModel = cfg.chatModel;
+    } else if (typeof cfg.chatApiKey === "string") {
+      // If separate chatApiKey provided, infer default model from that key's provider
+      let looksLikeOpenAI = cfg.chatApiKey.startsWith("sk-");
+      if (!looksLikeOpenAI) {
+        try {
+          looksLikeOpenAI = resolveEnvVars(cfg.chatApiKey).startsWith("sk-");
+        } catch {
+          // Env var not set yet — default to google
+        }
+      }
+      chatModel = looksLikeOpenAI ? DEFAULT_CHAT_MODELS["openai"] : DEFAULT_CHAT_MODELS["google"];
+    } else {
+      chatModel = DEFAULT_CHAT_MODELS[provider];
+    }
 
     // --- Chat API key (optional, defaults to embedding key) ---
     const resolvedEmbeddingApiKey = resolveEnvVars(embedding.apiKey as string);
@@ -182,60 +190,21 @@ export const memoryConfigSchema = {
     };
   },
 
-  uiHints: {
-    "embedding.apiKey": {
-      label: "API Key",
-      sensitive: true,
-      placeholder: "sk-proj-... or AIzaSy...",
-      help: "API key for embeddings. Supports OpenAI and Google Gemini (use ${GEMINI_API_KEY} for env var)",
-    },
-    "embedding.model": {
-      label: "Embedding Model",
-      placeholder: DEFAULT_MODEL,
-      help: "Embedding model: gemini-embedding-2-preview (Google, free, 3072 dims) or text-embedding-004 (768 dims)",
-    },
-    "embedding.outputDimensionality": {
-      label: "Output Dimensionality",
-      help: "Override model dimensions (Matryoshka). Options: 3072, 1536, 768. Recommended: 768 for efficiency.",
-      advanced: true,
-      placeholder: "auto",
-    },
-    chatModel: {
-      label: "Chat Model",
-      placeholder: "auto (gemma-3-12b-it / gpt-4o-mini)",
-      help: "LLM for graph extraction and smart capture. Auto-detected from embedding provider if not set.",
-      advanced: true,
-    },
-    chatApiKey: {
-      label: "Chat API Key (optional)",
-      sensitive: true,
-      placeholder: "defaults to embedding API key",
-      help: "Separate API key for chat/LLM operations. If not set, uses embedding API key.",
-      advanced: true,
-    },
-    dbPath: {
-      label: "Database Path",
-      placeholder: "~/.openclaw/memory/lancedb",
-      advanced: true,
-    },
-    autoCapture: {
-      label: "Auto-Capture",
-      help: "Automatically capture important information from conversations",
-    },
-    autoRecall: {
-      label: "Auto-Recall",
-      help: "Automatically inject relevant memories into context",
-    },
-    smartCapture: {
-      label: "Smart Capture (LLM)",
-      help: "Use LLM to intelligently extract facts (uses 1 API call per message, more accurate than regex)",
-      advanced: true,
-    },
-    captureMaxChars: {
-      label: "Capture Max Chars",
-      help: "Maximum message length eligible for auto-capture",
-      advanced: true,
-      placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
-    },
+  safeParse(value: unknown): {
+    success: boolean;
+    data?: MemoryConfig;
+    error?: { issues: Array<{ path: Array<string | number>; message: string }> };
+  } {
+    try {
+      const data = this.parse(value);
+      return { success: true, data };
+    } catch (err) {
+      return {
+        success: false,
+        error: {
+          issues: [{ path: [], message: err instanceof Error ? err.message : String(err) }],
+        },
+      };
+    }
   },
 };

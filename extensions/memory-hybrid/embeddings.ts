@@ -16,8 +16,7 @@ export const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-large": 3072,
   "text-embedding-ada-002": 1536,
   "gemini-embedding-001": 3072,
-  "gemini-embedding-002": 3072,
-  "text-embedding-004": 768,
+  "text-embedding-004": 768, // Deprecated by Google (Jan 2026), kept for backward compat
   "gemini-embedding-2-preview": 3072,
 };
 

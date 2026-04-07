@@ -155,8 +155,10 @@ export class DreamService {
     // 1. Fetch memories for clustering
     // To stay within 15k context and RAM limits, we only consider up to 200 items per sleep cycle.
     let all = await this.db.listAll();
+    // Sort by createdAt to ensure deterministic subset (LanceDB order is not guaranteed)
+    all.sort((a, b) => a.createdAt - b.createdAt);
     if (all.length > 200) {
-      all = all.slice(-200);
+      all = all.slice(-200); // Keep most recent 200
     }
     if (all.length < 5) return;
 

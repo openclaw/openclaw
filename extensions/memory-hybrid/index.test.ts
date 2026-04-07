@@ -102,7 +102,7 @@ describe("config", () => {
       embedding: { apiKey: "${TEST_DEFAULT_KEY}" },
     });
 
-    expect(cfg.embedding.model).toBe("gemini-embedding-002");
+    expect(cfg.embedding.model).toBe("gemini-embedding-001");
     expect(cfg.embedding.provider).toBe("google");
     delete process.env.TEST_DEFAULT_KEY;
   });
@@ -293,6 +293,7 @@ describe("MemoryDB Error Handling", () => {
       limit: vi.fn().mockReturnThis(),
       toArray: vi.fn().mockRejectedValue(new Error("LanceDB connection lost")),
       query: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnThis(),
         select: vi.fn().mockReturnThis(),
         limit: vi.fn().mockReturnThis(),
         toArray: vi.fn().mockResolvedValue([]),

@@ -1,10 +1,10 @@
-import { type MemoryTracer } from "./tracer.js";
+import type { Logger } from "./tracer.js";
 
 export interface QueueOptions {
   delayMs?: number;
   maxSize?: number;
   onError?: (name: string, error: unknown) => void;
-  logger?: any;
+  logger?: Logger;
 }
 
 export class MemoryQueue {
@@ -12,7 +12,7 @@ export class MemoryQueue {
   private processing = false;
   private delayMs: number;
   private maxSize: number;
-  private logger?: any;
+  private logger?: Logger;
   private onError: (name: string, error: unknown) => void;
 
   constructor(options: QueueOptions = {}) {
@@ -36,6 +36,10 @@ export class MemoryQueue {
       this.processNext().catch((err) => {
         this.onError("queue-loop", err);
         this.processing = false;
+        // Restart loop if items remain (prevent queue stall)
+        if (this.queue.length > 0) {
+          this.processNext().catch(() => {});
+        }
       });
     }
   }

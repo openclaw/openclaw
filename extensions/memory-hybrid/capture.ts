@@ -15,11 +15,11 @@
 import type { ChatModel } from "./chat.js";
 import { DEFAULT_CAPTURE_MAX_CHARS, type MemoryCategory } from "./config.js";
 import { TaskPriority } from "./limiter.js";
+import { type MemoryTracer, type Logger } from "./tracer.js";
+import { escapePrompt } from "./utils.js";
 
 /** Minimum message length to be worth remembering or summarizing */
 export const MIN_MESSAGE_LENGTH = 10;
-
-import { type MemoryTracer, type Logger } from "./tracer.js";
 
 // ============================================================================
 // Rule-based capture (from original memory-lancedb)
@@ -56,8 +56,6 @@ export function looksLikePromptInjection(text: string): boolean {
   return PROMPT_INJECTION_PATTERNS.some((p) => p.test(normalized));
 }
 
-import { escapePrompt } from "./utils.js";
-
 /** Format memories for injection into LLM context */
 export function formatRelevantMemoriesContext(
   memories: Array<{ category: MemoryCategory; text: string }>,
@@ -73,7 +71,7 @@ export function formatRelevantMemoriesContext(
  * Fast, no API calls. Used as first-pass filter.
  */
 export function shouldCapture(text: string, options?: { maxChars?: number }): boolean {
-  const maxChars = options?.maxChars ?? 500;
+  const maxChars = options?.maxChars ?? DEFAULT_CAPTURE_MAX_CHARS;
 
   if (text.length < 10 || text.length > maxChars) return false;
   if (text.includes("<relevant-memories>")) return false;

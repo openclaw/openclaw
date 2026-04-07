@@ -26,6 +26,7 @@ describe("MemoryDB Result Limit", () => {
     const mockTable = {
       vectorSearch: vi.fn().mockReturnValue(mockResults),
       query: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnThis(),
         select: vi.fn().mockReturnThis(),
         limit: vi.fn().mockImplementation((n) => ({
           toArray: vi.fn().mockResolvedValue(mockData.slice(0, n)),

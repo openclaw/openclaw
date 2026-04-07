@@ -85,7 +85,7 @@ const memoryPlugin = {
     // 6. Define Plugin Service
     api.registerService({
       id: "memory-hybrid",
-      start: async () => {
+      start: async (_ctx) => {
         api.logger.info(`memory-hybrid: starting (model: ${cfg.embedding.model})...`);
         try {
           const bufferPath = api.resolvePath("working_memory.jsonl");
@@ -101,7 +101,7 @@ const memoryPlugin = {
         dreamService.start();
         api.logger.info(`memory-hybrid: started successfully`);
       },
-      stop: async () => {
+      stop: async (_ctx) => {
         dreamService.stop();
         hooksHandle.cleanup();
 

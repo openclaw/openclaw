@@ -52,6 +52,11 @@ export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delay =
     } catch (err) {
       lastError = err;
       if (i < maxRetries) {
+        // Skip sleep completely in test environments
+        if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+          continue;
+        }
+
         const wait = delay * Math.pow(2, i);
         // Add some jitter to avoid thundering herd
         const jitter = Math.random() * 200;
