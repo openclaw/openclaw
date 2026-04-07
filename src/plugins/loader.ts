@@ -628,9 +628,7 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
 } {
   const resolved = unwrapDefaultModuleExport(moduleExport, {
-    shouldStop: (candidate) =>
-      typeof candidate.loadSetupPlugin === "function" ||
-      Boolean(candidate.plugin && typeof candidate.plugin === "object"),
+    shouldStop: (candidate) => Boolean(candidate.plugin && typeof candidate.plugin === "object"),
   });
   if (!resolved || typeof resolved !== "object") {
     return {};

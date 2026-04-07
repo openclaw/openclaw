@@ -2855,6 +2855,61 @@ module.exports = {
     expect(registry.channels).toHaveLength(expectedChannels);
   });
 
+  it("unwraps default setup exports when wrapper also defines loadSetupPlugin", () => {
+    const built = createSetupEntryChannelPluginFixture({
+      id: "setup-default-wrapper-test",
+      label: "Setup Default Wrapper Test",
+      packageName: "@openclaw/setup-default-wrapper-test",
+      fullBlurb: "full entry should not run while unconfigured",
+      setupBlurb: "setup default wrapper",
+      configured: false,
+    });
+    fs.writeFileSync(
+      path.join(built.pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(built.setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  loadSetupPlugin() {
+    return null;
+  },
+  default: {
+    plugin: {
+      id: "setup-default-wrapper-test",
+      meta: {
+        id: "setup-default-wrapper-test",
+        label: "Setup Default Wrapper Test",
+        selectionLabel: "Setup Default Wrapper Test",
+        docsPath: "/channels/setup-default-wrapper-test",
+        blurb: "setup default wrapper",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [built.pluginDir] },
+          allow: ["setup-default-wrapper-test"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(built.fullMarker)).toBe(false);
+    expect(fs.existsSync(built.setupMarker)).toBe(true);
+    expect(registry.channels.some((entry) => entry.plugin.id === "setup-default-wrapper-test")).toBe(
+      true,
+    );
+  });
+
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {
     expect(
       __testing.shouldLoadChannelPluginInSetupRuntime({
