@@ -1587,14 +1587,8 @@ export async function startGatewayServer(
               const previousRequiredSharedGatewaySessionGeneration =
                 requiredSharedGatewaySessionGeneration;
               const previousSharedGatewaySessionGeneration = currentSharedGatewaySessionGeneration;
-              const optimisticSharedGatewaySessionGeneration =
-                resolveSharedGatewaySessionGenerationForConfig(nextConfig);
-              if (
-                previousSharedGatewaySessionGeneration !== optimisticSharedGatewaySessionGeneration
-              ) {
-                requiredSharedGatewaySessionGeneration = optimisticSharedGatewaySessionGeneration;
-                disconnectStaleSharedGatewayAuthClients(optimisticSharedGatewaySessionGeneration);
-              }
+              // Restart checks run with activate:false, so enforce invalidation
+              // only after SecretRefs are resolved from prepared.config.
               try {
                 const prepared = await activateRuntimeSecrets(nextConfig, {
                   reason: "restart-check",
