@@ -912,6 +912,62 @@ describe("QmdMemoryManager", () => {
     );
   });
 
+  it("search only queries collections that still exist after ensureCollections", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          sessions: { enabled: false },
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const listedCollections = new Map<string, { path: string; pattern: string }>([
+      ["memory-root-main", { path: workspaceDir, pattern: "MEMORY.md" }],
+      ["memory-dir-main", { path: path.join(workspaceDir, "memory"), pattern: "**/*.md" }],
+    ]);
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify(
+            [...listedCollections.entries()].map(([name, info]) => ({
+              name,
+              path: info.path,
+              mask: info.pattern,
+            })),
+          ),
+        );
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[args.indexOf("--name") + 1] ?? "";
+        if (name === "memory-alt-main") {
+          emitAndClose(child, "stderr", "collection already exists", 1);
+          return child;
+        }
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    expect((manager as unknown as { managedCollectionNames: string[] }).managedCollectionNames).toEqual([
+      "memory-root-main",
+      "memory-dir-main",
+    ]);
+    await manager.close();
+  });
+
   it("migrates unscoped legacy collections from plain-text collection list output", async () => {
     cfg = {
       ...cfg,

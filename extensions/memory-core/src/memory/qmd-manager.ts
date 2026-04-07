@@ -464,6 +464,15 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+
+    const resolvedManagedCollectionNames = this.computeManagedCollectionNames().filter((name) =>
+      existing.has(name),
+    );
+    this.managedCollectionNames.splice(
+      0,
+      this.managedCollectionNames.length,
+      ...resolvedManagedCollectionNames,
+    );
   }
 
   private async listCollectionsBestEffort(): Promise<Map<string, ListedCollection>> {
