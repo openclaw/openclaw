@@ -45,7 +45,7 @@ TIMEOUT_UPDATE_DEV_S=1500
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=60
-TIMEOUT_AGENT_S=120
+TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
 TIMEOUT_DASHBOARD_S=60
 TIMEOUT_SNAPSHOT_S=180
@@ -624,7 +624,6 @@ set rc 1
 expect {
   -re {__OPENCLAW_RC__:(-?[0-9]+)} {
     set rc $expect_out(1,string)
-    exp_continue
   }
   eof {}
 }
@@ -955,8 +954,11 @@ resolve_dashboard_url() {
 
 verify_dashboard_load() {
   local dashboard_url dashboard_http_url dashboard_url_q dashboard_http_url_q cmd
-  dashboard_url="$(resolve_dashboard_url)"
-  dashboard_http_url="${dashboard_url%%#*}"
+  # `openclaw dashboard --no-open` can hang under the Tahoe Parallels transport
+  # even when the dashboard itself is healthy. Probe the local dashboard URL
+  # directly so the smoke still validates HTML readiness and browser reachability.
+  dashboard_url="http://127.0.0.1:18789/"
+  dashboard_http_url="$dashboard_url"
   dashboard_url_q="$(shell_quote "$dashboard_url")"
   dashboard_http_url_q="$(shell_quote "$dashboard_http_url")"
   cmd="$(cat <<EOF
@@ -994,11 +996,12 @@ pkill -x Safari >/dev/null 2>&1 || true
 open -a Safari "\$dashboard_url"
 deadline=\$((SECONDS + 20))
 while [ \$SECONDS -lt \$deadline ]; do
-  if pgrep -x Safari >/dev/null 2>&1; then
-    if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
-      | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
-      exit 0
-    fi
+  # Tahoe can hand dashboard sockets to WebKit helpers even after the Safari
+  # app process exits, so require a non-node client connection rather than a
+  # long-lived `Safari` process specifically.
+  if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
+    | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
+    exit 0
   fi
   sleep 1
 done

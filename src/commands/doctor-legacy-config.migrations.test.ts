@@ -368,12 +368,13 @@ describe("normalizeCompatibilityConfigValues", () => {
       dmPolicy: "allowlist",
       allowFrom: ["123"],
       groupPolicy: "allowlist",
+      streaming: { mode: "partial" },
     });
     expect(res.config.channels?.telegram?.botToken).toBeUndefined();
     expect(res.config.channels?.telegram?.dmPolicy).toBeUndefined();
     expect(res.config.channels?.telegram?.allowFrom).toBeUndefined();
     expect(res.config.channels?.telegram?.groupPolicy).toBeUndefined();
-    expect(res.config.channels?.telegram?.streaming).toEqual({ mode: "partial" });
+    expect(res.config.channels?.telegram?.streaming).toBeUndefined();
     expect(res.config.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
     expect(res.changes).toContain(
       "Moved channels.telegram single-account top-level values into channels.telegram.accounts.default.",

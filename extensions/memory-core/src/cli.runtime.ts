@@ -34,6 +34,7 @@ import type {
   MemorySearchCommandOptions,
 } from "./cli.types.js";
 import { previewRemDreaming } from "./dreaming-phases.js";
+import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import {
   applyShortTermPromotions,
@@ -69,13 +70,6 @@ type LoadedMemoryCommandConfig = {
   config: OpenClawConfig;
   diagnostics: string[];
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set([

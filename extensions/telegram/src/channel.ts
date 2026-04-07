@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -542,7 +543,7 @@ async function resolveTelegramTargets(params: {
         return {
           input,
           resolved: false as const,
-          note: error instanceof Error ? error.message : String(error),
+          note: formatErrorMessage(error),
         };
       }
     }),

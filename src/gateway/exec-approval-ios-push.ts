@@ -5,6 +5,7 @@ import {
   type DeviceAuthToken,
   type PairedDevice,
 } from "../infra/device-pairing.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
 import {
   clearApnsRegistrationIfCurrent,
@@ -208,8 +209,7 @@ async function sendRequestedPushes(params: {
   );
   for (const result of results) {
     if (result.status === "rejected") {
-      const message =
-        result.reason instanceof Error ? result.reason.message : String(result.reason);
+      const message = formatErrorMessage(result.reason);
       params.log.warn?.(`exec approvals: iOS request push threw error: ${message}`);
     }
   }
@@ -274,7 +274,7 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
           nodeIds: plan.targets.map((target) => target.nodeId),
           requestPushPromise: sendRequestedPushes({ request, plan, log: params.log }).catch(
             (err) => {
-              const message = err instanceof Error ? err.message : String(err);
+              const message = formatErrorMessage(err);
               params.log.error?.(`exec approvals: iOS request push failed: ${message}`);
               return { attempted: plan.targets.length, delivered: 0 };
             },

@@ -5,6 +5,7 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -29,21 +30,15 @@ export type PrivateNetworkOptInInput =
         | undefined;
     };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 export function isPrivateNetworkOptInEnabled(input: PrivateNetworkOptInInput): boolean {
   if (input === true) {
     return true;
   }
-  const record = asRecord(input);
+  const record = asNullableRecord(input);
   if (!record) {
     return false;
   }
-  const network = asRecord(record.network);
+  const network = asNullableRecord(record.network);
   return (
     record.allowPrivateNetwork === true ||
     record.dangerouslyAllowPrivateNetwork === true ||
@@ -65,7 +60,7 @@ export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(
 }
 
 export function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
-  const entry = asRecord(value);
+  const entry = asNullableRecord(value);
   return Boolean(entry && Object.prototype.hasOwnProperty.call(entry, "allowPrivateNetwork"));
 }
 
@@ -79,7 +74,7 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
   }
 
   const legacyAllowPrivateNetwork = params.entry.allowPrivateNetwork;
-  const currentNetworkRecord = asRecord(params.entry.network);
+  const currentNetworkRecord = asNullableRecord(params.entry.network);
   const currentNetwork = currentNetworkRecord ? { ...currentNetworkRecord } : {};
   const currentDangerousAllowPrivateNetwork = currentNetwork.dangerouslyAllowPrivateNetwork;
 
@@ -113,11 +108,11 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
 }
 
 function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
-  const accounts = asRecord(value);
+  const accounts = asNullableRecord(value);
   return Boolean(
     accounts &&
     Object.values(accounts).some((account) =>
-      hasLegacyFlatAllowPrivateNetworkAlias(asRecord(account) ?? {}),
+      hasLegacyFlatAllowPrivateNetworkAlias(asNullableRecord(account) ?? {}),
     ),
   );
 }
@@ -132,7 +127,7 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
       {
         path: ["channels", params.channelKey],
         message: `${pathPrefix}.allowPrivateNetwork is legacy; use ${pathPrefix}.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".`,
-        match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(asRecord(value) ?? {}),
+        match: (value) => hasLegacyFlatAllowPrivateNetworkAlias(asNullableRecord(value) ?? {}),
       },
       {
         path: ["channels", params.channelKey, "accounts"],
@@ -141,8 +136,8 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
       },
     ],
     normalizeCompatibilityConfig: ({ cfg }) => {
-      const channels = asRecord(cfg.channels);
-      const channelEntry = asRecord(channels?.[params.channelKey]);
+      const channels = asNullableRecord(cfg.channels);
+      const channelEntry = asNullableRecord(channels?.[params.channelKey]);
       if (!channelEntry) {
         return { config: cfg, changes: [] };
       }
@@ -159,12 +154,12 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
       updatedChannel = topLevel.entry;
       changed = changed || topLevel.changed;
 
-      const accounts = asRecord(updatedChannel.accounts);
+      const accounts = asNullableRecord(updatedChannel.accounts);
       if (accounts) {
         let accountsChanged = false;
         const nextAccounts: Record<string, unknown> = { ...accounts };
         for (const [accountId, accountValue] of Object.entries(accounts)) {
-          const account = asRecord(accountValue);
+          const account = asNullableRecord(accountValue);
           if (!account) {
             continue;
           }

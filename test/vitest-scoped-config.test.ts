@@ -203,7 +203,6 @@ describe("scoped vitest configs", () => {
       defaultAutoReplyTopLevelConfig,
       defaultAutoReplyReplyConfig,
       defaultToolingConfig,
-      defaultUiConfig,
     ]) {
       expect(config.test?.pool).toBe("threads");
       expect(config.test?.isolate).toBe(false);
@@ -215,10 +214,15 @@ describe("scoped vitest configs", () => {
       expect(config.test?.isolate).toBe(false);
       expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
     }
+
+    expect(defaultUiConfig.test?.pool).toBe("threads");
+    expect(defaultUiConfig.test?.isolate).toBe(true);
+    expect(defaultUiConfig.test?.runner).toBeUndefined();
   });
 
   it("keeps the process lane off the openclaw runtime setup", () => {
     expect(defaultProcessConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
+    expect(defaultRuntimeConfig.test?.setupFiles).toEqual(["test/setup.ts"]);
     expect(defaultPluginSdkConfig.test?.setupFiles).toEqual([
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",

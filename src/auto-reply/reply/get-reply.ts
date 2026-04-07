@@ -12,21 +12,21 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
-import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { buildCommandContext } from "./commands-context.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
   initFastReplySessionState,
+  buildFastReplyCommandContext,
+  shouldHandleFastReplyTextCommands,
   shouldUseReplyFastDirectiveExecution,
   resolveGetReplyConfig,
   shouldUseReplyFastTestBootstrap,
+  shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
@@ -155,6 +155,10 @@ export async function getReplyFromConfig(
     isFastTestEnv,
     configOverride,
   });
+  const useFastTestRuntime = shouldUseReplyFastTestRuntime({
+    cfg,
+    isFastTestEnv,
+  });
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
@@ -240,11 +244,6 @@ export async function getReplyFromConfig(
   });
 
   const commandAuthorized = finalized.CommandAuthorized;
-  resolveCommandAuthorization({
-    ctx: finalized,
-    cfg,
-    commandAuthorized,
-  });
   const sessionState = useFastTestBootstrap
     ? initFastReplySessionState({
         ctx: finalized,
@@ -329,13 +328,22 @@ export async function getReplyFromConfig(
 
   if (
     shouldUseReplyFastDirectiveExecution({
-      isFastTestBootstrap: useFastTestBootstrap,
+      isFastTestBootstrap: useFastTestRuntime,
       isGroup,
       isHeartbeat: opts?.isHeartbeat === true,
       resetTriggered,
       triggerBodyNormalized,
     })
   ) {
+    const fastCommand = buildFastReplyCommandContext({
+      ctx,
+      cfg,
+      agentId,
+      sessionKey,
+      isGroup,
+      triggerBodyNormalized,
+      commandAuthorized,
+    });
     return runPreparedReply({
       ctx,
       sessionCtx,
@@ -345,19 +353,10 @@ export async function getReplyFromConfig(
       agentCfg,
       sessionCfg,
       commandAuthorized,
-      command: buildCommandContext({
-        ctx,
-        cfg,
-        agentId,
-        sessionKey,
-        isGroup,
-        triggerBodyNormalized,
-        commandAuthorized,
-      }),
+      command: fastCommand,
       commandSource: finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-      allowTextCommands: shouldHandleTextCommands({
+      allowTextCommands: shouldHandleFastReplyTextCommands({
         cfg,
-        surface: finalized.Surface ?? finalized.Provider ?? "",
         commandSource: finalized.CommandSource,
       }),
       directives: clearInlineDirectives(

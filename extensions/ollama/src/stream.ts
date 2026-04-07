@@ -9,6 +9,7 @@ import type {
   Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
@@ -739,7 +740,7 @@ export function createOllamaStreamFn(
           reason: "error",
           error: buildStreamErrorAssistantMessage({
             model,
-            errorMessage: err instanceof Error ? err.message : String(err),
+            errorMessage: formatErrorMessage(err),
           }),
         });
       } finally {

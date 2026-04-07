@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMemorySlotDecisionShared,
+  resolveEnableStateShared,
   resolveEnableStateResult,
 } from "./config-activation-shared.js";
 import {
@@ -380,13 +381,8 @@ export function resolveEnableState(
   config: NormalizedPluginsConfig,
   enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } {
-  return resolveEnableStateResult(
-    {
-      id,
-      origin,
-      config,
-      enabledByDefault,
-    },
+  return resolveEnableStateShared(
+    { id, origin, config, enabledByDefault },
     resolvePluginActivationState,
   );
 }

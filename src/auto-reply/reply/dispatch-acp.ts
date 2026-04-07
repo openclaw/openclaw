@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -201,7 +202,7 @@ async function maybeUnbindStaleBoundConversations(params: {
     }
   } catch (error) {
     logVerbose(
-      `dispatch-acp: failed to unbind stale bound conversations for ${params.targetSessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+      `dispatch-acp: failed to unbind stale bound conversations for ${params.targetSessionKey}: ${formatErrorMessage(error)}`,
     );
   }
 }
@@ -249,9 +250,7 @@ async function finalizeAcpTurnOutput(params: {
         finalMediaDelivered = delivered;
       }
     } catch (err) {
-      logVerbose(
-        `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      logVerbose(`dispatch-acp: accumulated ACP block TTS failed: ${formatErrorMessage(err)}`);
     }
   }
 
@@ -422,7 +421,7 @@ export async function tryDispatchAcpReply(params: {
         });
       } catch (err) {
         logVerbose(
-          `dispatch-acp: media understanding failed, proceeding with raw content: ${err instanceof Error ? err.message : String(err)}`,
+          `dispatch-acp: media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
         );
       }
     }
@@ -442,9 +441,7 @@ export async function tryDispatchAcpReply(params: {
     try {
       await delivery.startReplyLifecycle();
     } catch (error) {
-      logVerbose(
-        `dispatch-acp: start reply lifecycle failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
     await acpManager.runTurn({

@@ -12,6 +12,7 @@ import type {
   IngestBatchResult,
   IngestResult,
 } from "../../../context-engine/types.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
@@ -237,6 +238,9 @@ vi.mock("../../docs-path.js", () => ({
 vi.mock("../../pi-project-settings.js", () => ({
   createPreparedEmbeddedPiSettingsManager: () => ({
     getCompactionReserveTokens: () => 0,
+    getCompactionKeepRecentTokens: () => 40_000,
+    applyOverrides: () => {},
+    setCompactionEnabled: () => {},
   }),
 }));
 
@@ -508,8 +512,7 @@ vi.mock("../tool-split.js", () => ({
 }));
 
 vi.mock("../utils.js", () => ({
-  describeUnknownError: (error: unknown) =>
-    error instanceof Error ? error.message : String(error),
+  describeUnknownError: (error: unknown) => formatErrorMessage(error),
   mapThinkingLevel: () => undefined,
 }));
 
@@ -659,6 +662,7 @@ export async function cleanupTempPaths(tempPaths: string[]) {
 }
 
 export function createDefaultEmbeddedSession(params?: {
+  initialMessages?: unknown[];
   prompt?: (
     session: MutableSession,
     prompt: string,
@@ -667,7 +671,7 @@ export function createDefaultEmbeddedSession(params?: {
 }): MutableSession {
   const session: MutableSession = {
     sessionId: "embedded-session",
-    messages: [],
+    messages: [...(params?.initialMessages ?? [])],
     isCompacting: false,
     isStreaming: false,
     agent: {
@@ -824,12 +828,9 @@ export async function createContextEngineAttemptRunner(params: {
     .mockReset()
     .mockReturnValue({ messages: seedMessages });
 
-  hoisted.createAgentSessionMock.mockImplementation(async () => {
-    const session = createDefaultEmbeddedSession();
-    session.messages = [...seedMessages];
-    session.agent.state.messages = [...seedMessages];
-    return { session };
-  });
+  hoisted.createAgentSessionMock.mockImplementation(async () => ({
+    session: createDefaultEmbeddedSession({ initialMessages: seedMessages }),
+  }));
 
   return await (
     await loadRunEmbeddedAttempt()

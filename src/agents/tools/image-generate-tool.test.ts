@@ -732,6 +732,59 @@ describe("createImageGenerateTool", () => {
     });
   });
 
+  it("surfaces normalized image geometry from runtime metadata", async () => {
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "minimax",
+      model: "image-01",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "generated.png",
+        },
+      ],
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
+      metadata: {
+        requestedSize: "1280x720",
+        normalizedAspectRatio: "16:9",
+      },
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("minimax/image-01");
+    const result = await tool.execute("call-minimax-generate", {
+      prompt: "A lobster at the movies",
+      size: "1280x720",
+    });
+
+    expect(result.details).toMatchObject({
+      aspectRatio: "16:9",
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
+      metadata: {
+        requestedSize: "1280x720",
+        normalizedAspectRatio: "16:9",
+      },
+    });
+    expect(result.details).not.toHaveProperty("size");
+  });
+
   it("rejects unsupported aspect ratios", async () => {
     const tool = createImageGenerateTool({
       config: {

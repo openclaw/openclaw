@@ -1511,7 +1511,7 @@ describe("buildCommandsMessagePaginated", () => {
       undefined,
       { surface: "telegram", page: 1, forcePaginatedList: true },
     );
-    expect(result.text).toContain("ℹ️ Slash commands");
+    expect(result.text).toContain("ℹ️ Commands (1/");
     expect(result.text).toContain("Session");
     expect(result.text).toContain("/stop - Stop the current run.");
   });

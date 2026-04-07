@@ -8,6 +8,8 @@ import type {
 } from "./runtime-shared.js";
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import type { RuntimeWebDiagnostic, RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
+export { isRecord } from "./shared.js";
+import { isRecord } from "./shared.js";
 
 type RuntimeWebWarningCode = Extract<RuntimeWebDiagnosticCode, SecretResolverWarningCode>;
 export type SecretResolutionResult<TSource extends string> = {
@@ -76,10 +78,6 @@ export type RuntimeWebProviderSelectionParams<
   }) => Promise<void>;
 };
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export function ensureObject(
   target: Record<string, unknown>,
   key: string,
@@ -142,7 +140,7 @@ export type ResolveRuntimeWebProviderSurfaceParams<
   invalidAutoDetectCode: RuntimeWebWarningCode;
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
-  resolveProviders: (params: { configuredBundledPluginId?: string }) => TProvider[];
+  resolveProviders: (params: { configuredBundledPluginId?: string }) => Promise<TProvider[]>;
   sortProviders: (providers: TProvider[]) => TProvider[];
   readConfiguredCredential: (params: {
     provider: TProvider;
@@ -154,7 +152,7 @@ export type ResolveRuntimeWebProviderSurfaceParams<
   normalizeConfiguredProviderAgainstActiveProviders?: boolean;
 };
 
-export function resolveRuntimeWebProviderSurface<
+export async function resolveRuntimeWebProviderSurface<
   TProvider extends {
     id: string;
     requiresCredential?: boolean;
@@ -162,7 +160,7 @@ export function resolveRuntimeWebProviderSurface<
   TToolConfig extends Record<string, unknown> | undefined,
 >(
   params: ResolveRuntimeWebProviderSurfaceParams<TProvider, TToolConfig>,
-): RuntimeWebProviderSurface<TProvider> {
+): Promise<RuntimeWebProviderSurface<TProvider>> {
   const configuredBundledPluginId = resolveManifestContractOwnerPluginId({
     contract: params.contract,
     value: params.rawProvider,
@@ -172,7 +170,7 @@ export function resolveRuntimeWebProviderSurface<
   });
 
   const allProviders = params.sortProviders(
-    params.resolveProviders({
+    await params.resolveProviders({
       configuredBundledPluginId,
     }),
   );

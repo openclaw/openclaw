@@ -502,7 +502,7 @@ describe("runPreparedReply media-only handling", () => {
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
   });
-  it("rechecks same-session ownership after wait resolves before calling the runner", async () => {
+  it("continues when the original owner clears before an unrelated run appears", async () => {
     const queueSettings = await import("./queue/settings.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const previousRun = createReplyOperation({
@@ -530,10 +530,8 @@ describe("runPreparedReply media-only handling", () => {
     });
     nextRun.setPhase("running");
 
-    await expect(runPromise).resolves.toEqual({
-      text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
-    });
-    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+    await expect(runPromise).resolves.toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
 
     nextRun.complete();
   });

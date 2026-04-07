@@ -1,9 +1,5 @@
-import {
-  getChannelPlugin,
-  normalizeChannelId as normalizePluginChannelId,
-} from "../../channels/plugins/index.js";
+import { normalizeChannelId as normalizePluginChannelId } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
-import { normalizeChannelId as normalizeBuiltInChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -27,15 +23,11 @@ function normalizeReplyToModeChatType(
 }
 
 function resolveReplyToModeChannelKey(channel?: OriginatingChannelType): string | undefined {
-  if (typeof channel !== "string") {
-    return undefined;
+  const normalized = normalizePluginChannelId(channel);
+  if (normalized) {
+    return normalized;
   }
-  return (
-    (normalizeBuiltInChannelId(channel) ??
-      normalizePluginChannelId(channel) ??
-      channel.trim().toLowerCase()) ||
-    undefined
-  );
+  return typeof channel === "string" ? channel.trim().toLowerCase() || undefined : undefined;
 }
 
 export function resolveConfiguredReplyToMode(
@@ -89,16 +81,8 @@ export function resolveReplyToMode(
   accountId?: string | null,
   chatType?: string | null,
 ): ReplyToMode {
-  const provider = normalizePluginChannelId(channel);
-  return resolveReplyToModeWithThreading(
-    cfg,
-    provider ? getChannelPlugin(provider)?.threading : undefined,
-    {
-      channel,
-      accountId,
-      chatType,
-    },
-  );
+  void accountId;
+  return resolveConfiguredReplyToMode(cfg, channel, chatType);
 }
 
 export function createReplyToModeFilter(
@@ -175,15 +159,11 @@ export function createReplyToModeFilterForChannel(
   mode: ReplyToMode,
   channel?: OriginatingChannelType,
 ) {
-  const provider = normalizePluginChannelId(channel);
   const normalized = typeof channel === "string" ? channel.trim().toLowerCase() : undefined;
   const isWebchat = normalized === "webchat";
   // Default: allow explicit reply tags/directives even when replyToMode is "off".
   // Unknown channels fail closed; internal webchat stays allowed.
-  const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
-  const allowExplicitReplyTagsWhenOff = provider
-    ? (threading?.allowExplicitReplyTagsWhenOff ?? threading?.allowTagsWhenOff ?? true)
-    : isWebchat;
+  const allowExplicitReplyTagsWhenOff = normalized ? true : isWebchat;
   return createReplyToModeFilter(mode, {
     allowExplicitReplyTagsWhenOff,
   });

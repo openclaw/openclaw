@@ -37,11 +37,11 @@ describe("opt-in extension package boundaries", () => {
     expect(pathsConfig.extends).toBe("../tsconfig.json");
     expect(pathsConfig.compilerOptions?.paths).toEqual({
       "openclaw/extension-api": ["../src/extensionAPI.ts"],
-      "openclaw/plugin-sdk": ["../src/plugin-sdk/index.ts"],
-      "openclaw/plugin-sdk/*": ["../src/plugin-sdk/*.ts"],
+      "openclaw/plugin-sdk": ["../packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts"],
+      "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
       "openclaw/plugin-sdk/account-id": ["../src/plugin-sdk/account-id.ts"],
-      "@openclaw/*": ["../extensions/*"],
-      "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/packages/plugin-sdk/src/*.d.ts"],
+      "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
+      "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
     });
 
     const baseConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG);
@@ -87,22 +87,43 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.outDir).toBe("dist");
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
-      "src/**/*.ts",
+      "../../src/plugin-sdk/config-runtime.ts",
+      "../../src/plugin-sdk/lazy-value.ts",
+      "../../src/plugin-sdk/oauth-utils.ts",
+      "../../src/plugin-sdk/plugin-entry.ts",
+      "../../src/plugin-sdk/provider-auth-result.ts",
+      "../../src/plugin-sdk/provider-auth-runtime.ts",
+      "../../src/plugin-sdk/provider-auth.ts",
+      "../../src/plugin-sdk/provider-catalog-shared.ts",
+      "../../src/plugin-sdk/provider-entry.ts",
+      "../../src/plugin-sdk/provider-http.ts",
+      "../../src/plugin-sdk/provider-model-shared.ts",
+      "../../src/plugin-sdk/provider-onboard.ts",
+      "../../src/plugin-sdk/provider-stream-shared.ts",
+      "../../src/plugin-sdk/provider-tools.ts",
+      "../../src/plugin-sdk/provider-web-search.ts",
+      "../../src/plugin-sdk/runtime-env.ts",
+      "../../src/plugin-sdk/secret-input-schema.ts",
+      "../../src/plugin-sdk/secret-input.ts",
+      "../../src/plugin-sdk/telegram-command-config.ts",
+      "../../src/plugin-sdk/testing.ts",
+      "../../src/plugin-sdk/video-generation.ts",
+      "../../src/video-generation/dashscope-compatible.ts",
+      "../../src/video-generation/types.ts",
       "../../src/types/**/*.d.ts",
-      "../../packages/memory-host-sdk/src/**/*.ts",
     ]);
 
     const packageJson = readJsonFile<PackageJson>("packages/plugin-sdk/package.json");
     expect(packageJson.name).toBe("@openclaw/plugin-sdk");
     expect(packageJson.exports?.["./core"]).toBeUndefined();
     expect(packageJson.exports?.["./plugin-entry"]?.types).toBe(
-      "./dist/packages/plugin-sdk/src/plugin-entry.d.ts",
+      "./dist/src/plugin-sdk/plugin-entry.d.ts",
     );
     expect(packageJson.exports?.["./provider-http"]?.types).toBe(
-      "./dist/packages/plugin-sdk/src/provider-http.d.ts",
+      "./dist/src/plugin-sdk/provider-http.d.ts",
     );
     expect(packageJson.exports?.["./video-generation"]?.types).toBe(
-      "./dist/packages/plugin-sdk/src/video-generation.d.ts",
+      "./dist/src/plugin-sdk/video-generation.d.ts",
     );
     expect(existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,

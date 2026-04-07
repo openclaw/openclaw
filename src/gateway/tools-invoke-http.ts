@@ -237,6 +237,7 @@ export async function handleToolsInvokeHttpRequest(
     agentThreadId,
     allowGatewaySubagentBinding: true,
     allowMediaInvokeCommands: true,
+    surface: "http",
     disablePluginTools: isKnownCoreToolId(toolName),
   });
   // Owner semantics intentionally follow the same shared-secret HTTP contract

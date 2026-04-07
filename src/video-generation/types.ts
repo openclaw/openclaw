@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { MediaNormalizationEntry } from "../media-generation/runtime-shared.js";
 
 export type GeneratedVideoAsset = {
   buffer: Buffer;
@@ -61,6 +62,9 @@ export type VideoGenerationModeCapabilities = {
   maxDurationSeconds?: number;
   supportedDurationSeconds?: readonly number[];
   supportedDurationSecondsByModel?: Readonly<Record<string, readonly number[]>>;
+  sizes?: readonly string[];
+  aspectRatios?: readonly string[];
+  resolutions?: readonly VideoGenerationResolution[];
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;
@@ -76,6 +80,13 @@ export type VideoGenerationProviderCapabilities = VideoGenerationModeCapabilitie
   generate?: VideoGenerationModeCapabilities;
   imageToVideo?: VideoGenerationTransformCapabilities;
   videoToVideo?: VideoGenerationTransformCapabilities;
+};
+
+export type VideoGenerationNormalization = {
+  size?: MediaNormalizationEntry<string>;
+  aspectRatio?: MediaNormalizationEntry<string>;
+  resolution?: MediaNormalizationEntry<VideoGenerationResolution>;
+  durationSeconds?: MediaNormalizationEntry<number>;
 };
 
 export type VideoGenerationProvider = {

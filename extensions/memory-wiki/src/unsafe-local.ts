@@ -5,11 +5,11 @@ import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
 import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import { writeImportedSourcePage } from "./source-page-shared.js";
+import { resolveArtifactKey } from "./source-path-shared.js";
 import {
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
-  setImportedSourceEntry,
-  shouldSkipImportedSourceWrite,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -22,20 +22,6 @@ type UnsafeLocalArtifact = {
 };
 
 const DIRECTORY_TEXT_EXTENSIONS = new Set([".json", ".jsonl", ".md", ".txt", ".yaml", ".yml"]);
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveArtifactKey(absolutePath: string): Promise<string> {
-  const canonicalPath = await fs.realpath(absolutePath).catch(() => path.resolve(absolutePath));
-  return process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
-}
 
 function detectFenceLanguage(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
@@ -142,9 +128,6 @@ async function writeUnsafeLocalSourcePage(params: {
     configuredPath: params.artifact.configuredPath,
     absolutePath: params.artifact.absolutePath,
   });
-  const pageAbsPath = path.join(params.config.vault.path, pagePath);
-  const created = !(await pathExists(pageAbsPath));
-  const updatedAt = new Date(params.sourceUpdatedAtMs).toISOString();
   const title = resolveUnsafeLocalTitle(params.artifact);
   const renderFingerprint = createHash("sha1")
     .update(
@@ -154,67 +137,48 @@ async function writeUnsafeLocalSourcePage(params: {
       }),
     )
     .digest("hex");
-  const shouldSkip = await shouldSkipImportedSourceWrite({
+  return writeImportedSourcePage({
     vaultRoot: params.config.vault.path,
     syncKey: params.artifact.syncKey,
-    expectedPagePath: pagePath,
-    expectedSourcePath: params.artifact.absolutePath,
+    sourcePath: params.artifact.absolutePath,
     sourceUpdatedAtMs: params.sourceUpdatedAtMs,
     sourceSize: params.sourceSize,
     renderFingerprint,
+    pagePath,
+    group: "unsafe-local",
     state: params.state,
+    buildRendered: (raw, updatedAt) =>
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: pageId,
+          title,
+          sourceType: "memory-unsafe-local",
+          provenanceMode: "unsafe-local",
+          sourcePath: params.artifact.absolutePath,
+          unsafeLocalConfiguredPath: params.artifact.configuredPath,
+          unsafeLocalRelativePath: params.artifact.relativePath,
+          status: "active",
+          updatedAt,
+        },
+        body: [
+          `# ${title}`,
+          "",
+          "## Unsafe Local Source",
+          `- Configured path: \`${params.artifact.configuredPath}\``,
+          `- Relative path: \`${params.artifact.relativePath}\``,
+          `- Updated: ${updatedAt}`,
+          "",
+          "## Content",
+          renderMarkdownFence(raw, detectFenceLanguage(params.artifact.absolutePath)),
+          "",
+          "## Notes",
+          "<!-- openclaw:human:start -->",
+          "<!-- openclaw:human:end -->",
+          "",
+        ].join("\n"),
+      }),
   });
-  if (shouldSkip) {
-    return { pagePath, changed: false, created };
-  }
-  const raw = await fs.readFile(params.artifact.absolutePath, "utf8");
-  const rendered = renderWikiMarkdown({
-    frontmatter: {
-      pageType: "source",
-      id: pageId,
-      title,
-      sourceType: "memory-unsafe-local",
-      provenanceMode: "unsafe-local",
-      sourcePath: params.artifact.absolutePath,
-      unsafeLocalConfiguredPath: params.artifact.configuredPath,
-      unsafeLocalRelativePath: params.artifact.relativePath,
-      status: "active",
-      updatedAt,
-    },
-    body: [
-      `# ${title}`,
-      "",
-      "## Unsafe Local Source",
-      `- Configured path: \`${params.artifact.configuredPath}\``,
-      `- Relative path: \`${params.artifact.relativePath}\``,
-      `- Updated: ${updatedAt}`,
-      "",
-      "## Content",
-      renderMarkdownFence(raw, detectFenceLanguage(params.artifact.absolutePath)),
-      "",
-      "## Notes",
-      "<!-- openclaw:human:start -->",
-      "<!-- openclaw:human:end -->",
-      "",
-    ].join("\n"),
-  });
-  const existing = await fs.readFile(pageAbsPath, "utf8").catch(() => "");
-  if (existing !== rendered) {
-    await fs.writeFile(pageAbsPath, rendered, "utf8");
-  }
-  setImportedSourceEntry({
-    syncKey: params.artifact.syncKey,
-    state: params.state,
-    entry: {
-      group: "unsafe-local",
-      pagePath,
-      sourcePath: params.artifact.absolutePath,
-      sourceUpdatedAtMs: params.sourceUpdatedAtMs,
-      sourceSize: params.sourceSize,
-      renderFingerprint,
-    },
-  });
-  return { pagePath, changed: existing !== rendered, created };
 }
 
 export async function syncMemoryWikiUnsafeLocalSources(
