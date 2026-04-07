@@ -13,6 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/voice-call";
 import {
   MissedCallSmsConfigSchema,
+  resolveMissedCallSmsConfig,
   validateProviderConfig,
   type MissedCallSmsConfig,
 } from "./src/config.js";
@@ -70,7 +71,11 @@ const missedCallSmsPlugin = {
     "Catches missed calls, captures voicemail, and runs an AI-driven SMS conversation with the caller.",
   configSchema,
   register(api: OpenClawPluginApi) {
-    const config = configSchema.parse(api.pluginConfig);
+    const parsed = configSchema.parse(api.pluginConfig);
+    // Fill in any missing credentials from environment variables before
+    // validating. Lets the operator keep secrets in ~/.openclaw/.env or
+    // shell env instead of duplicating them in the plugin config block.
+    const config = resolveMissedCallSmsConfig(parsed);
     const validation = validateProviderConfig(config);
 
     let runtimePromise: Promise<MissedCallSmsRuntime> | null = null;

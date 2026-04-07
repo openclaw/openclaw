@@ -198,3 +198,32 @@ export function validateProviderConfig(config: MissedCallSmsConfig): ProviderVal
   if (!config.anthropic.apiKey) errors.push("anthropic.apiKey is required");
   return { valid: errors.length === 0, errors };
 }
+
+/**
+ * Apply environment variable fallbacks to a parsed config. Mutates and
+ * returns the same config so callers can chain. Safe to call multiple times.
+ *
+ * Env values are not re-validated against the Zod regex schemas (they bypass
+ * parse and come straight from process.env) — trust the operator. Missing
+ * required fields are caught downstream by validateProviderConfig().
+ *
+ * Env vars (matches the voice-call extension where applicable):
+ *   TELNYX_API_KEY
+ *   TELNYX_CONNECTION_ID
+ *   TELNYX_PUBLIC_KEY
+ *   TELNYX_MESSAGING_PROFILE_ID  (new — voice-call doesn't need this)
+ *   TELNYX_FROM_NUMBER           (new — voice-call has it as raw config only)
+ *   DEEPGRAM_API_KEY
+ *   ANTHROPIC_API_KEY
+ */
+export function resolveMissedCallSmsConfig(config: MissedCallSmsConfig): MissedCallSmsConfig {
+  config.telnyx.apiKey = config.telnyx.apiKey ?? process.env.TELNYX_API_KEY;
+  config.telnyx.connectionId = config.telnyx.connectionId ?? process.env.TELNYX_CONNECTION_ID;
+  config.telnyx.publicKey = config.telnyx.publicKey ?? process.env.TELNYX_PUBLIC_KEY;
+  config.telnyx.messagingProfileId =
+    config.telnyx.messagingProfileId ?? process.env.TELNYX_MESSAGING_PROFILE_ID;
+  config.telnyx.fromNumber = config.telnyx.fromNumber ?? process.env.TELNYX_FROM_NUMBER;
+  config.deepgram.apiKey = config.deepgram.apiKey ?? process.env.DEEPGRAM_API_KEY;
+  config.anthropic.apiKey = config.anthropic.apiKey ?? process.env.ANTHROPIC_API_KEY;
+  return config;
+}
