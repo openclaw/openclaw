@@ -1082,7 +1082,7 @@ describe("openai transport stream", () => {
   it("flattens pure text content arrays for string-only completions backends when opted in", () => {
     const params = buildOpenAICompletionsParams(
       {
-        id: "gg-hf-gg/gemma-4-E2B-it",
+        id: "google/gemma-4-E2B-it",
         name: "Gemma 4 E2B",
         api: "openai-completions",
         provider: "inferrs",
