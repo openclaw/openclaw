@@ -98,6 +98,9 @@ struct RootCanvas: View {
                 },
                 openSettings: {
                     self.presentedSheet = .settings
+                },
+                retryGatewayConnection: {
+                    Task { await self.gatewayController.connectLastKnown() }
                 })
                 .preferredColorScheme(.dark)
 
@@ -463,6 +466,7 @@ private struct CanvasContent: View {
     var cameraHUDKind: NodeAppModel.CameraHUDKind?
     var openChat: () -> Void
     var openSettings: () -> Void
+    var retryGatewayConnection: () -> Void
 
     private var brightenButtons: Bool { self.systemColorScheme == .light }
     private var talkActive: Bool { self.appModel.talkMode.isEnabled || self.talkEnabled }
@@ -516,7 +520,7 @@ private struct CanvasContent: View {
                     primaryActionTitle: gatewayProblem.retryable ? "Retry" : "Open Settings",
                     onPrimaryAction: {
                         if gatewayProblem.retryable {
-                            self.openSettings()
+                            self.retryGatewayConnection()
                         } else {
                             self.openSettings()
                         }

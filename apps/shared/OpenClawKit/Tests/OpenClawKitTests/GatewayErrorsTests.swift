@@ -72,4 +72,21 @@ import Testing
         #expect(preserved?.kind == .pairingRequired)
         #expect(preserved?.requestId == "req-123")
     }
+
+    @Test func unmappedTransportErrorClearsStaleStructuredProblem() {
+        let pairing = GatewayConnectAuthError(
+            message: "pairing required",
+            detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+            canRetryWithDeviceToken: false,
+            requestId: "req-123")
+        let previousProblem = GatewayConnectionProblemMapper.map(error: pairing)
+        let unknownTransport = NSError(
+            domain: NSURLErrorDomain,
+            code: -1202,
+            userInfo: [NSLocalizedDescriptionKey: "certificate chain validation failed"])
+
+        let mapped = GatewayConnectionProblemMapper.map(error: unknownTransport, preserving: previousProblem)
+
+        #expect(mapped == nil)
+    }
 }

@@ -125,7 +125,7 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
 public enum GatewayConnectionProblemMapper {
     public static func map(error: Error, preserving previousProblem: GatewayConnectionProblem? = nil) -> GatewayConnectionProblem? {
         guard let nextProblem = self.rawMap(error) else {
-            return previousProblem
+            return nil
         }
         guard let previousProblem else {
             return nextProblem
