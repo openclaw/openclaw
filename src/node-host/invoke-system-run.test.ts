@@ -1600,6 +1600,54 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it("keeps env cmd.exe transport wrappers approval-gated on Windows", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-env-cmd-wrapper-allow-"));
+    try {
+      const scriptPath = path.join(tempDir, "check_mail.cmd");
+      fs.writeFileSync(scriptPath, "@echo off\r\necho ok\r\n");
+
+      await withTempApprovalsHome({
+        approvals: createAllowlistOnMissApprovals({
+          agents: {
+            main: {
+              allowlist: [{ pattern: scriptPath }],
+            },
+          },
+        }),
+        run: async () => {
+          const seenArgv: string[][] = [];
+          const invoke = await runSystemInvoke({
+            preferMacAppExecHost: false,
+            command: ["env", "cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`],
+            cwd: tempDir,
+            security: "allowlist",
+            ask: "on-miss",
+            isCmdExeInvocation: (argv) => {
+              seenArgv.push([...argv]);
+              const token = argv[0]?.trim();
+              if (!token) {
+                return false;
+              }
+              const base = path.win32.basename(token).toLowerCase();
+              return base === "cmd.exe" || base === "cmd";
+            },
+          });
+
+          expect(seenArgv).toContainEqual(["cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`]);
+          expect(invoke.runCommand).not.toHaveBeenCalled();
+          expectApprovalRequiredDenied({
+            sendNodeEvent: invoke.sendNodeEvent,
+            sendInvokeResult: invoke.sendInvokeResult,
+          });
+        },
+      });
+    } finally {
+      platformSpy.mockRestore();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("reuses exact-command durable trust for shell-wrapper reruns", async () => {
     if (process.platform === "win32") {
       return;

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import type { GatewayClient } from "../gateway/client.js";
+import { unwrapDispatchWrappersForResolution } from "../infra/dispatch-wrapper-resolution.js";
 import {
   addDurableCommandApproval,
   hasDurableExecApproval,
@@ -359,10 +360,10 @@ async function evaluateSystemRunPolicyPhase(
         .find((entry) => entry !== null) ?? null)
     : null;
   const isWindows = process.platform === "win32";
-  // Detect Windows wrapper transport from the original request argv, not the
-  // analyzed inner shell payload. Once parsing unwraps `cmd.exe /c ...`, the
-  // inner segments no longer retain the wrapper marker we need for policy.
-  const cmdInvocation = opts.isCmdExeInvocation(parsed.argv);
+  // Detect Windows wrapper transport from the request argv after transparently
+  // unwrapping dispatch carriers like `env`. Shell parsing already recognizes
+  // the inner `cmd.exe /c ...` wrapper through that same transport view.
+  const cmdInvocation = opts.isCmdExeInvocation(unwrapDispatchWrappersForResolution(parsed.argv));
   const durableApprovalSatisfied = hasDurableExecApproval({
     analysisOk,
     segmentAllowlistEntries,
