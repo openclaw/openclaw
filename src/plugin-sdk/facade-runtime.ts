@@ -115,12 +115,13 @@ function resolveSourceFirstPublicSurfacePath(params: {
   return null;
 }
 
-function resolveRegistryPluginModuleLocation(params: {
+function resolveRegistryPluginModuleLocationFromRegistry(params: {
+  registry: readonly Pick<PluginManifestRecord, "id" | "rootDir" | "channels">[];
   dirName: string;
   artifactBasename: string;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const registry = getFacadeManifestRegistry();
-  const tiers: Array<(plugin: (typeof registry)[number]) => boolean> = [
+  type RegistryRecord = (typeof params.registry)[number];
+  const tiers: Array<(plugin: RegistryRecord) => boolean> = [
     (plugin) => plugin.id === params.dirName,
     (plugin) => path.basename(plugin.rootDir) === params.dirName,
     (plugin) => plugin.channels.includes(params.dirName),
@@ -128,7 +129,7 @@ function resolveRegistryPluginModuleLocation(params: {
   const artifactBasename = params.artifactBasename.replace(/^\.\//u, "");
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const matchFn of tiers) {
-    for (const record of registry.filter(matchFn)) {
+    for (const record of params.registry.filter(matchFn)) {
       const rootDir = path.resolve(record.rootDir);
       const builtCandidate = path.join(rootDir, artifactBasename);
       if (fs.existsSync(builtCandidate)) {
@@ -143,6 +144,16 @@ function resolveRegistryPluginModuleLocation(params: {
     }
   }
   return null;
+}
+
+function resolveRegistryPluginModuleLocation(params: {
+  dirName: string;
+  artifactBasename: string;
+}): { modulePath: string; boundaryRoot: string } | null {
+  return resolveRegistryPluginModuleLocationFromRegistry({
+    registry: getFacadeManifestRegistry(),
+    ...params,
+  });
 }
 
 function resolveFacadeModuleLocationUncached(params: {
@@ -729,6 +740,7 @@ export function resetFacadeRuntimeStateForTest(): void {
 export const __testing = {
   evaluateBundledPluginPublicSurfaceAccess,
   loadFacadeModuleAtLocationSync,
+  resolveRegistryPluginModuleLocationFromRegistry,
   throwForBundledPluginPublicSurfaceAccess,
   resolveActivatedBundledPluginPublicSurfaceAccessOrThrow,
   resolveFacadeModuleLocation,

@@ -276,7 +276,7 @@ async function assertExplicitTelegramTargetDelivery(params: {
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
     vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
-    setupIsolatedAgentTurnMocks();
+    setupIsolatedAgentTurnMocks({ fast: true });
   });
 
   it("delivers explicit targets with direct text", async () => {
