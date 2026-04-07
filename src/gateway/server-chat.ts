@@ -109,8 +109,12 @@ function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
   nextDelta: string;
+  replace?: boolean;
 }) {
-  const { previousText, nextText, nextDelta } = params;
+  const { previousText, nextText, nextDelta, replace } = params;
+  if (replace) {
+    return typeof nextText === "string" ? nextText : "";
+  }
   if (nextText && previousText) {
     if (nextText.startsWith(previousText)) {
       return nextText;
@@ -667,6 +671,7 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
     delta?: unknown,
+    replace?: boolean,
   ) => {
     const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
     const cleanedDelta =
@@ -676,8 +681,9 @@ export function createAgentEventHandler({
       previousText: previousRawText,
       nextText: cleanedText,
       nextDelta: cleanedDelta,
+      replace,
     });
-    if (!mergedRawText) {
+    if (mergedRawText === "" && !replace) {
       return;
     }
     chatRunState.rawBuffers.set(clientRunId, mergedRawText);
@@ -704,7 +710,8 @@ export function createAgentEventHandler({
     }
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) {
+    // Bypass throttle for explicit replacements or final flushes
+    if (!replace && now - last < 150) {
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
@@ -959,7 +966,16 @@ export function createAgentEventHandler({
         );
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
+        const replace = typeof evt.data.replace === "boolean" ? evt.data.replace : undefined;
+        emitChatDelta(
+          sessionKey,
+          clientRunId,
+          evt.runId,
+          evt.seq,
+          evt.data.text,
+          evt.data.delta,
+          replace,
+        );
       }
     }
 

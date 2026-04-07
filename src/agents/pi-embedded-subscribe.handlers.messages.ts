@@ -274,6 +274,9 @@ export function handleMessageUpdate(
     } else if (content) {
       // KNOWN: Some providers resend full content on `text_end`.
       // We only append a suffix (or nothing) to keep output monotonic.
+      // NOTE: This logic intentionally discards `content` if it is already
+      // present anywhere in the `deltaBuffer` to prevent catastrophic
+      // duplication during heuristic merging.
       if (content.startsWith(ctx.state.deltaBuffer)) {
         chunk = content.slice(ctx.state.deltaBuffer.length);
       } else if (ctx.state.deltaBuffer.startsWith(content)) {

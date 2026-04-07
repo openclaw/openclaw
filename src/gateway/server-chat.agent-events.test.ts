@@ -1434,4 +1434,36 @@ describe("agent event handler", () => {
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
   });
+
+  it("immediately replaces the text buffer when the replace flag is true", () => {
+    const { handler, chatRunState, broadcast } = createHarness();
+
+    const clientRunId = "client-run-1";
+    const sourceRunId = "source-run-1";
+
+    chatRunState.registry.add(sourceRunId, {
+      clientRunId,
+      sessionKey: "agent:main:main",
+    });
+
+    // 1. Initial state
+    handler({
+      stream: "assistant",
+      runId: sourceRunId,
+      seq: 1,
+      data: { text: "Hello", delta: "Hello" },
+    } as any);
+    expect(chatRunState.buffers.get(clientRunId)).toBe("Hello");
+
+    // 2. Send a replacement within the 150ms throttle window
+    handler({
+      stream: "assistant",
+      runId: sourceRunId,
+      seq: 2,
+      data: { text: "Replaced", replace: true },
+    } as any);
+
+    expect(chatRunState.buffers.get(clientRunId)).toBe("Replaced");
+    expect(broadcast).toHaveBeenCalled();
+  });
 });
