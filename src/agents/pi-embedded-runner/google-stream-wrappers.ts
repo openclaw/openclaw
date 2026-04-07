@@ -88,12 +88,16 @@ export function sanitizeGoogleThinkingPayload(params: {
 
   if (typeof params.modelId === "string" && isGemma4Model(params.modelId)) {
     const normalizedThinkingLevel = normalizeGemma4ThinkingLevel(thinkingConfigObj.thinkingLevel);
+    const explicitMappedLevel = mapThinkLevelToGemma4ThinkingLevel(params.thinkingLevel);
     const disabledViaBudget =
       typeof thinkingConfigObj.thinkingBudget === "number" && thinkingConfigObj.thinkingBudget <= 0;
     const hadThinkingBudget = thinkingConfigObj.thinkingBudget !== undefined;
     delete thinkingConfigObj.thinkingBudget;
 
-    if (params.thinkingLevel === "off" || (disabledViaBudget && !normalizedThinkingLevel)) {
+    if (
+      params.thinkingLevel === "off" ||
+      (disabledViaBudget && explicitMappedLevel === undefined && !normalizedThinkingLevel)
+    ) {
       delete thinkingConfigObj.thinkingLevel;
       if (Object.keys(thinkingConfigObj).length === 0) {
         delete configObj.thinkingConfig;
@@ -102,7 +106,7 @@ export function sanitizeGoogleThinkingPayload(params: {
     }
 
     const mappedLevel =
-      mapThinkLevelToGemma4ThinkingLevel(params.thinkingLevel) ??
+      explicitMappedLevel ??
       normalizedThinkingLevel ??
       (hadThinkingBudget ? "MINIMAL" : undefined);
 

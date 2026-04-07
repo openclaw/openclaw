@@ -1172,6 +1172,41 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.config).toEqual({});
   });
+
+  it("preserves explicit Gemma 4 thinking level when thinkingBudget=0", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            thinkingBudget: 0,
+          },
+        },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "google", "gemma-4-26b-a4b-it", undefined, "high");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google",
+      id: "gemma-4-26b-a4b-it",
+      reasoning: true,
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      thinkingConfig: {
+        thinkingLevel: "HIGH",
+      },
+    });
+  });
   it("passes configured websocket transport through stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = {
