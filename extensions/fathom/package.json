@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/fathom-plugin",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "OpenClaw Fathom plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

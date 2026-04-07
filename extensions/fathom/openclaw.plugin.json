@@ -1,0 +1,48 @@
+{
+  "id": "fathom",
+  "providerAuthEnvVars": {
+    "fathom": ["FATHOM_API_KEY"]
+  },
+  "uiHints": {
+    "fathom.apiKey": {
+      "label": "Fathom API Key",
+      "help": "Fathom API key for meetings, transcripts, summaries, teams, and webhooks (fallback: FATHOM_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "fthm_..."
+    },
+    "fathom.baseUrl": {
+      "label": "Fathom Base URL",
+      "help": "Fathom External API base URL override.",
+      "placeholder": "https://api.fathom.ai/external/v1"
+    }
+  },
+  "contracts": {
+    "tools": [
+      "fathom_list_meetings",
+      "fathom_get_summary",
+      "fathom_get_transcript",
+      "fathom_list_teams",
+      "fathom_list_team_members",
+      "fathom_create_webhook",
+      "fathom_delete_webhook"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "fathom": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
