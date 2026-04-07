@@ -1,7 +1,4 @@
-import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -28,18 +25,10 @@ function loadBundledChannelPublicArtifact(
   channelId: string,
   artifactBasenames: readonly string[],
 ): BundledChannelContractApi | undefined {
-  const record = loadPluginManifestRegistry({})
-    .plugins.filter((entry) => entry.origin === "bundled")
-    .find((entry) => entry.channels.includes(channelId));
-  if (!record) {
-    return undefined;
-  }
-  const dirName = path.basename(record.rootDir);
-
   for (const artifactBasename of artifactBasenames) {
     try {
       return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
-        dirName,
+        dirName: channelId,
         artifactBasename,
       });
     } catch (error) {
@@ -50,14 +39,13 @@ function loadBundledChannelPublicArtifact(
         continue;
       }
       if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
-        const detail = formatErrorMessage(error);
+        const detail = error instanceof Error ? error.message : String(error);
         process.stderr.write(
-          `[channel-contract-api] failed to load ${channelId} via ${dirName}/${artifactBasename}: ${detail}\n`,
+          `[channel-contract-api] failed to load ${channelId}/${artifactBasename}: ${detail}\n`,
         );
       }
     }
   }
-
   return undefined;
 }
 
@@ -80,8 +68,5 @@ export type BundledChannelSecurityContractApi = Pick<
 export function loadBundledChannelSecurityContractApi(
   channelId: string,
 ): BundledChannelSecurityContractApi | undefined {
-  return loadBundledChannelPublicArtifact(channelId, [
-    "security-contract-api.js",
-    "contract-api.js",
-  ]);
+  return loadBundledChannelPublicArtifact(channelId, ["security-contract-api.js"]);
 }

@@ -12,6 +12,7 @@
     "opusscript": "^0.1.1"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

@@ -23,6 +23,7 @@ import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -1164,6 +1165,7 @@ function getCompat(model: OpenAIModeModel): {
   openRouterRouting: Record<string, unknown>;
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
+  requiresStringContent: boolean;
 } {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
@@ -1198,6 +1200,7 @@ function getCompat(model: OpenAIModeModel): {
       detected.vercelGatewayRouting,
     supportsStrictMode:
       (compat.supportsStrictMode as boolean | undefined) ?? detected.supportsStrictMode,
+    requiresStringContent: (compat.requiresStringContent as boolean | undefined) ?? false,
   };
 }
 
@@ -1261,9 +1264,12 @@ export function buildOpenAICompletionsParams(
         systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
       }
     : context;
+  const messages = convertMessages(model as never, completionsContext, compat as never);
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertMessages(model as never, completionsContext, compat as never),
+    messages: compat.requiresStringContent
+      ? flattenCompletionMessagesToStringContent(messages)
+      : messages,
     stream: true,
   };
   if (compat.supportsUsageInStreaming) {

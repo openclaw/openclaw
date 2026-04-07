@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
 import { asRecord } from "./tool-display-record.js";
 
@@ -41,7 +45,7 @@ export function defaultTitle(name: string): string {
 }
 
 export function normalizeVerb(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -56,7 +60,7 @@ export function resolveActionArg(args: unknown): string | undefined {
   if (typeof actionRaw !== "string") {
     return undefined;
   }
-  const action = actionRaw.trim();
+  const action = normalizeOptionalString(actionRaw);
   return action || undefined;
 }
 
@@ -164,7 +168,7 @@ export function formatDetailKey(raw: string, overrides: Record<string, string> =
   }
   const cleaned = last.replace(/_/g, " ").replace(/-/g, " ");
   const spaced = cleaned.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
-  return spaced.trim().toLowerCase() || last.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(spaced) || normalizeLowercaseStringOrEmpty(last);
 }
 
 export function resolvePathArg(args: unknown): string | undefined {

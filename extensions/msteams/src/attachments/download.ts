@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
@@ -72,7 +73,7 @@ function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate
 
 function scopeCandidatesForUrl(url: string): string[] {
   try {
-    const host = new URL(url).hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
     const looksLikeGraph =
       host.endsWith("graph.microsoft.com") ||
       host.endsWith("sharepoint.com") ||

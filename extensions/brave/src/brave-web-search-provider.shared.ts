@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 export type BraveConfig = {
   mode?: string;
@@ -174,8 +175,8 @@ export function normalizeBraveLanguageParams(params: { search_lang?: string; ui_
   ui_lang?: string;
   invalidField?: "search_lang" | "ui_lang";
 } {
-  const rawSearchLang = params.search_lang?.trim() || undefined;
-  const rawUiLang = params.ui_lang?.trim() || undefined;
+  const rawSearchLang = normalizeOptionalString(params.search_lang);
+  const rawUiLang = normalizeOptionalString(params.ui_lang);
   let searchLangCandidate = rawSearchLang;
   let uiLangCandidate = rawUiLang;
 

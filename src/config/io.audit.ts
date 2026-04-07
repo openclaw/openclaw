@@ -121,14 +121,14 @@ export type ConfigAuditProcessInfo = {
 export type ConfigWriteAuditRecordBase = Omit<
   ConfigWriteAuditRecord,
   | "result"
-  | "errorCode"
-  | "errorMessage"
   | "nextDev"
   | "nextIno"
   | "nextMode"
   | "nextNlink"
   | "nextUid"
   | "nextGid"
+  | "errorCode"
+  | "errorMessage"
 > & {
   nextHash: string;
   nextBytes: number;
@@ -227,17 +227,11 @@ export function createConfigWriteAuditRecordBase(params: {
     previousBytes: params.previousBytes,
     nextBytes: params.nextBytes,
     previousDev: params.previousMetadata.dev,
-    nextDev: null,
     previousIno: params.previousMetadata.ino,
-    nextIno: null,
     previousMode: params.previousMetadata.mode,
-    nextMode: null,
     previousNlink: params.previousMetadata.nlink,
-    nextNlink: null,
     previousUid: params.previousMetadata.uid,
-    nextUid: null,
     previousGid: params.previousMetadata.gid,
-    nextGid: null,
     changedPathCount: typeof params.changedPathCount === "number" ? params.changedPathCount : null,
     hasMetaBefore: params.hasMetaBefore,
     hasMetaAfter: params.hasMetaAfter,
@@ -292,16 +286,34 @@ export function finalizeConfigWriteAuditRecord(params: {
   };
 }
 
-export async function appendConfigAuditRecord(params: {
+type ConfigAuditAppendContext = {
   fs: ConfigAuditFs;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
-  record: ConfigAuditRecord;
-}): Promise<void> {
+};
+
+type ConfigAuditAppendParams = ConfigAuditAppendContext &
+  (
+    | {
+        record: ConfigAuditRecord;
+      }
+    | ConfigAuditRecord
+  );
+
+function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): ConfigAuditRecord {
+  if ("record" in params) {
+    return params.record;
+  }
+  const { fs: _fs, env: _env, homedir: _homedir, ...record } = params;
+  return record as ConfigAuditRecord;
+}
+
+export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): Promise<void> {
   try {
     const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
+    const record = resolveConfigAuditAppendRecord(params);
     await params.fs.promises.mkdir(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    await params.fs.promises.appendFile(auditPath, `${JSON.stringify(params.record)}\n`, {
+    await params.fs.promises.appendFile(auditPath, `${JSON.stringify(record)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
@@ -310,16 +322,12 @@ export async function appendConfigAuditRecord(params: {
   }
 }
 
-export function appendConfigAuditRecordSync(params: {
-  fs: ConfigAuditFs;
-  env: NodeJS.ProcessEnv;
-  homedir: () => string;
-  record: ConfigAuditRecord;
-}): void {
+export function appendConfigAuditRecordSync(params: ConfigAuditAppendParams): void {
   try {
     const auditPath = resolveConfigAuditLogPath(params.env, params.homedir);
+    const record = resolveConfigAuditAppendRecord(params);
     params.fs.mkdirSync(path.dirname(auditPath), { recursive: true, mode: 0o700 });
-    params.fs.appendFileSync(auditPath, `${JSON.stringify(params.record)}\n`, {
+    params.fs.appendFileSync(auditPath, `${JSON.stringify(record)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });

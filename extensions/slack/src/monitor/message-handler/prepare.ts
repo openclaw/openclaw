@@ -25,6 +25,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackReplyToMode, type ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -395,14 +396,14 @@ export async function prepareSlackMessage(params: {
           ),
         ];
 
-  let resolvedSenderName = message.username?.trim() || undefined;
+  let resolvedSenderName = normalizeOptionalString(message.username);
   const resolveSenderName = async (): Promise<string> => {
     if (resolvedSenderName) {
       return resolvedSenderName;
     }
     if (message.user) {
       const sender = await ctx.resolveUserName(message.user);
-      const normalized = sender?.name?.trim();
+      const normalized = normalizeOptionalString(sender?.name);
       if (normalized) {
         resolvedSenderName = normalized;
         return resolvedSenderName;

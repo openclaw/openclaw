@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { CommandArgValues } from "./commands-registry.types.js";
 
 export type CommandArgsFormatter = (values: CommandArgValues) => string | undefined;
@@ -28,7 +29,7 @@ function formatActionArgs(
     formatKnownAction: (action: string, path: string | undefined) => string | undefined;
   },
 ): string | undefined {
-  const action = normalizeArgValue(values.action)?.toLowerCase();
+  const action = normalizeOptionalLowercaseString(normalizeArgValue(values.action));
   const path = normalizeArgValue(values.path);
   const value = normalizeArgValue(values.value);
   if (!action) {

@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export function parseKeyValueOutput(output: string, separator: string): Record<string, string> {
   const entries: Record<string, string> = {};
   for (const rawLine of output.split(/\r?\n/)) {
@@ -9,7 +11,7 @@ export function parseKeyValueOutput(output: string, separator: string): Record<s
     if (idx <= 0) {
       continue;
     }
-    const key = line.slice(0, idx).trim().toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(line.slice(0, idx));
     if (!key) {
       continue;
     }

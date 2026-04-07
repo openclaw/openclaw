@@ -317,11 +317,19 @@ function resolveCompactionSessionFile(params: {
 
 function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
   const resolved = path.resolve(filePath);
-  try {
-    const parentDir = fs.realpathSync(path.dirname(resolved));
-    return path.join(parentDir, path.basename(resolved));
-  } catch {
-    return resolved;
+  const missingSegments: string[] = [];
+  let cursor = resolved;
+  while (true) {
+    try {
+      return path.join(fs.realpathSync(cursor), ...missingSegments.toReversed());
+    } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return resolved;
+      }
+      missingSegments.push(path.basename(cursor));
+      cursor = parent;
+    }
   }
 }
 

@@ -621,11 +621,20 @@ send -- "/bin/bash /tmp/openclaw-prl.sh; rc=\$?; rm -f /tmp/openclaw-prl.sh; pri
 log_user 1
 
 set rc 1
+set saw_rc 0
 expect {
   -re {__OPENCLAW_RC__:(-?[0-9]+)} {
     set rc $expect_out(1,string)
+    set saw_rc 1
   }
   eof {}
+}
+if {$saw_rc} {
+  # Tahoe can leave `prlctl enter` attached even after the guest command has
+  # printed its explicit rc marker. Close the transport once the marker lands so
+  # consecutive guest_current_user_cli calls in the same phase do not block.
+  catch close
+  exit $rc
 }
 catch wait result
 exit $rc

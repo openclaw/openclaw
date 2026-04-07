@@ -7,6 +7,10 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
   mapToolContextToSpawnedRunMetadata,
@@ -201,7 +205,7 @@ async function persistInitialChildSessionRuntimeModel(params: {
 }
 
 function sanitizeMountPathHint(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -451,11 +455,11 @@ export async function spawnSubagentDirect(
       cfg?.agents?.defaults?.subagents?.allowAgents ??
       [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
-    const normalizedTargetId = targetAgentId.toLowerCase();
+    const normalizedTargetId = normalizeLowercaseStringOrEmpty(targetAgentId);
     const allowSet = new Set(
       allowAgents
         .filter((value) => value.trim() && value.trim() !== "*")
-        .map((value) => normalizeAgentId(value).toLowerCase()),
+        .map((value) => normalizeLowercaseStringOrEmpty(normalizeAgentId(value))),
     );
     if (!allowAny && !allowSet.has(normalizedTargetId)) {
       const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";

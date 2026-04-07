@@ -9,7 +9,10 @@ import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -62,7 +65,7 @@ function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
 
 /** Sanitize channel ID for use in filenames (prevent path traversal). */
 function safeChannelKey(channel: PairingChannel): string {
-  const raw = String(channel).trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(String(channel));
   if (!raw) {
     throw new Error("invalid pairing channel");
   }
@@ -78,7 +81,7 @@ function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = pr
 }
 
 function safeAccountKey(accountId: string): string {
-  const raw = String(accountId).trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(String(accountId));
   if (!raw) {
     throw new Error("invalid pairing account id");
   }
@@ -255,7 +258,7 @@ function generateUniqueCode(existing: Set<string>): string {
 }
 
 function normalizePairingAccountId(accountId?: string): string {
-  return accountId?.trim().toLowerCase() || "";
+  return normalizeLowercaseStringOrEmpty(accountId);
 }
 
 function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: string): boolean {

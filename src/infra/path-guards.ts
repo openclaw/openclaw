@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const NOT_FOUND_CODES = new Set(["ENOENT", "ENOTDIR"]);
 const SYMLINK_OPEN_CODES = new Set(["ELOOP", "EINVAL", "ENOTSUP"]);
@@ -11,7 +12,7 @@ export function normalizeWindowsPathForComparison(input: string): string {
       normalized = `\\\\${normalized.slice(4)}`;
     }
   }
-  return normalized.replaceAll("/", "\\").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(normalized.replaceAll("/", "\\"));
 }
 
 export function isNodeError(value: unknown): value is NodeJS.ErrnoException {

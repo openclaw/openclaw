@@ -2,13 +2,24 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
+import type { CliBundleMcpMode } from "../plugins/types.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ResolvedCliBackend = {
   id: string;
   config: CliBackendConfig;
   bundleMcp: boolean;
+  bundleMcpMode?: CliBundleMcpMode;
   pluginId?: string;
+};
+
+export type ResolvedCliBackendLiveTest = {
+  defaultModelRef?: string;
+  defaultImageProbe: boolean;
+  defaultMcpProbe: boolean;
+  dockerNpmPackage?: string;
+  dockerBinaryName?: string;
 };
 
 export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
@@ -18,11 +29,22 @@ export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBacke
 
 type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
+  bundleMcpMode?: CliBundleMcpMode;
   baseConfig?: CliBackendConfig;
   normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
+
+function normalizeBundleMcpMode(
+  mode: CliBundleMcpMode | undefined,
+  enabled: boolean,
+): CliBundleMcpMode | undefined {
+  if (!enabled) {
+    return undefined;
+  }
+  return mode ?? "claude-config-file";
+}
 
 function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
   const entry = resolvePluginSetupCliBackend({
@@ -35,6 +57,10 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     // Setup-registered backends keep narrow CLI paths generic even when the
     // runtime plugin registry has not booted yet.
     bundleMcp: entry.backend.bundleMcp === true,
+    bundleMcpMode: normalizeBundleMcpMode(
+      entry.backend.bundleMcpMode,
+      entry.backend.bundleMcp === true,
+    ),
     baseConfig: entry.backend.config,
     normalizeConfig: entry.backend.normalizeConfig,
   };
@@ -52,7 +78,9 @@ function pickBackendConfig(
   config: Record<string, CliBackendConfig>,
   normalizedId: string,
 ): CliBackendConfig | undefined {
-  const directKey = Object.keys(config).find((key) => key.trim().toLowerCase() === normalizedId);
+  const directKey = Object.keys(config).find(
+    (key) => normalizeOptionalLowercaseString(key) === normalizedId,
+  );
   if (directKey) {
     return config[directKey];
   }
@@ -118,6 +146,24 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   return ids;
 }
 
+export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
+  const normalized = normalizeBackendKey(provider);
+  const entry =
+    resolvePluginSetupCliBackend({ backend: normalized }) ??
+    resolveRuntimeCliBackends().find((backend) => normalizeBackendKey(backend.id) === normalized);
+  if (!entry) {
+    return null;
+  }
+  const backend = "backend" in entry ? entry.backend : entry;
+  return {
+    defaultModelRef: backend.liveTest?.defaultModelRef,
+    defaultImageProbe: backend.liveTest?.defaultImageProbe === true,
+    defaultMcpProbe: backend.liveTest?.defaultMcpProbe === true,
+    dockerNpmPackage: backend.liveTest?.docker?.npmPackage,
+    dockerBinaryName: backend.liveTest?.docker?.binaryName,
+  };
+}
+
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
@@ -138,6 +184,10 @@ export function resolveCliBackendConfig(
       id: normalized,
       config: { ...config, command },
       bundleMcp: registered.bundleMcp === true,
+      bundleMcpMode: normalizeBundleMcpMode(
+        registered.bundleMcpMode,
+        registered.bundleMcp === true,
+      ),
       pluginId: registered.pluginId,
     };
   }
@@ -157,6 +207,7 @@ export function resolveCliBackendConfig(
       id: normalized,
       config: { ...baseConfig, command },
       bundleMcp: fallbackPolicy.bundleMcp,
+      bundleMcpMode: fallbackPolicy.bundleMcpMode,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
@@ -173,5 +224,6 @@ export function resolveCliBackendConfig(
     id: normalized,
     config: { ...config, command },
     bundleMcp: fallbackPolicy?.bundleMcp === true,
+    bundleMcpMode: fallbackPolicy?.bundleMcpMode,
   };
 }

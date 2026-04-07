@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   ErrorCodes,
   applyBrowserProxyPaths,
@@ -44,10 +45,7 @@ function isBrowserNode(node: NodeSession) {
 }
 
 function normalizeNodeKey(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
+  return normalizeLowercaseStringOrEmpty(value).replace(/[^a-z0-9]+/g, "");
 }
 
 function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {

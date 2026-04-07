@@ -317,6 +317,19 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
     expectSourceMentions("channel-actions", ["optionalStringEnum", "stringEnum"]);
+    expectSourceContract("channel-secret-basic-runtime", {
+      mentions: [
+        "collectSimpleChannelFieldAssignments",
+        "collectConditionalChannelFieldAssignments",
+        "collectSecretInputAssignment",
+        "getChannelSurface",
+        "pushAssignment",
+        "pushInactiveSurfaceWarning",
+        "ResolverContext",
+        "SecretTargetRegistryEntry",
+      ],
+      omits: ["collectNestedChannelTtsAssignments"],
+    });
     expectSourceContract("channel-secret-runtime", {
       mentions: [
         "collectSimpleChannelFieldAssignments",
@@ -335,6 +348,10 @@ describe("plugin-sdk subpath exports", () => {
         "safeMatchRegex",
       ],
     });
+    expectSourceContract("channel-secret-tts-runtime", {
+      mentions: ["collectNestedChannelTtsAssignments"],
+      omits: ["collectSimpleChannelFieldAssignments", "collectConditionalChannelFieldAssignments"],
+    });
     expectSourceContract("provider-web-search-contract", {
       mentions: [
         "enablePluginInConfig",
@@ -349,6 +366,15 @@ describe("plugin-sdk subpath exports", () => {
         "withTrustedWebSearchEndpoint",
         "writeCachedSearchPayload",
         "resolveCitationRedirectUrl",
+      ],
+    });
+    expectSourceContract("provider-web-fetch-contract", {
+      mentions: ["enablePluginInConfig", "WebFetchProviderPlugin"],
+      omits: [
+        "withTrustedWebToolsEndpoint",
+        "readResponseText",
+        "resolveCacheTtlMs",
+        "wrapExternalContent",
       ],
     });
     expectSourceMentions("compat", [
@@ -850,29 +876,28 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps runtime entry subpaths importable", async () => {
-    const [
-      coreSdk,
-      channelActionsSdk,
-      globalSingletonSdk,
-      textRuntimeSdk,
-      pluginEntrySdk,
-      channelLifecycleSdk,
-      channelPairingSdk,
-      channelReplyPipelineSdk,
-      ...representativeModules
-    ] = await Promise.all([
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-actions"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/global-singleton"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-lifecycle"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing"),
-      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-reply-pipeline"),
-      ...representativeRuntimeSmokeSubpaths.map((id) =>
-        importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${id}`),
-      ),
-    ]);
+    const coreSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core");
+    const channelActionsSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-actions",
+    );
+    const globalSingletonSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/global-singleton",
+    );
+    const textRuntimeSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime");
+    const pluginEntrySdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry");
+    const channelLifecycleSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-lifecycle",
+    );
+    const channelPairingSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-pairing",
+    );
+    const channelReplyPipelineSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-reply-pipeline",
+    );
+    const representativeModules = [];
+    for (const id of representativeRuntimeSmokeSubpaths) {
+      representativeModules.push(await importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${id}`));
+    }
 
     expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
     expect(typeof coreSdk.optionalStringEnum).toBe("function");

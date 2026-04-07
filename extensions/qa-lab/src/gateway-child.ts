@@ -47,6 +47,9 @@ function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_CANVAS_HOST: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
+    // QA uses the fast runtime envelope for speed, but it still exercises
+    // normal config-driven heartbeats and runtime config writes.
+    OPENCLAW_ALLOW_SLOW_REPLY_TESTS: "1",
     XDG_CONFIG_HOME: params.xdgConfigHome,
     XDG_DATA_HOME: params.xdgDataHome,
     XDG_CACHE_HOME: params.xdgCacheHome,
@@ -71,11 +74,30 @@ function buildQaRuntimeEnv(params: {
   return env;
 }
 
-async function waitForGatewayReady(baseUrl: string, logs: () => string, timeoutMs = 30_000) {
+export const __testing = {
+  buildQaRuntimeEnv,
+};
+
+async function waitForGatewayReady(params: {
+  baseUrl: string;
+  logs: () => string;
+  child: {
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+  };
+  timeoutMs?: number;
+}) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
+  while (Date.now() - startedAt < (params.timeoutMs ?? 60_000)) {
+    if (params.child.exitCode !== null || params.child.signalCode !== null) {
+      throw new Error(
+        `gateway exited before becoming healthy (exitCode=${String(params.child.exitCode)}, signal=${String(params.child.signalCode)}):\n${params.logs()}`,
+      );
+    }
     try {
-      const response = await fetch(`${baseUrl}/healthz`);
+      const response = await fetch(`${params.baseUrl}/healthz`, {
+        signal: AbortSignal.timeout(2_000),
+      });
       if (response.ok) {
         return;
       }
@@ -84,7 +106,7 @@ async function waitForGatewayReady(baseUrl: string, logs: () => string, timeoutM
     }
     await sleep(250);
   }
-  throw new Error(`gateway failed to become healthy:\n${logs()}`);
+  throw new Error(`gateway failed to become healthy:\n${params.logs()}`);
 }
 
 async function runCliJson(params: { cwd: string; env: NodeJS.ProcessEnv; args: string[] }) {
@@ -122,7 +144,6 @@ export async function startQaGatewayChild(params: {
   providerMode?: "mock-openai" | "live-openai";
   primaryModel?: string;
   alternateModel?: string;
-  fastMode?: boolean;
   controlUiEnabled?: boolean;
 }) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-suite-"));
@@ -156,7 +177,6 @@ export async function startQaGatewayChild(params: {
     providerMode: params.providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
-    fastMode: params.fastMode,
     controlUiEnabled: params.controlUiEnabled,
   });
   await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
@@ -202,7 +222,11 @@ export async function startQaGatewayChild(params: {
   const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1";
 
   try {
-    await waitForGatewayReady(baseUrl, logs);
+    await waitForGatewayReady({
+      baseUrl,
+      logs,
+      child,
+    });
   } catch (error) {
     child.kill("SIGTERM");
     throw error;

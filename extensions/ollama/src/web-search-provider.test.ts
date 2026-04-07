@@ -1,6 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "../index.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOllamaWebSearchProvider as createContractOllamaWebSearchProvider } from "../web-search-contract-api.js";
+import {
+  __testing as testing,
+  createOllamaWebSearchProvider,
+  runOllamaWebSearch,
+} from "./web-search-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -11,35 +16,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 describe("ollama web search provider", () => {
-  let createOllamaWebSearchProvider: typeof import("./web-search-provider.js").createOllamaWebSearchProvider;
-  let runOllamaWebSearch: typeof import("./web-search-provider.js").runOllamaWebSearch;
-  let testing: typeof import("./web-search-provider.js").__testing;
-
-  beforeAll(async () => {
-    ({
-      createOllamaWebSearchProvider,
-      runOllamaWebSearch,
-      __testing: testing,
-    } = await import("./web-search-provider.js"));
-  });
-
   beforeEach(() => {
     fetchWithSsrFGuardMock.mockReset();
   });
 
   it("registers a keyless web search provider", () => {
-    const webSearchProviders: unknown[] = [];
-
-    plugin.register({
-      registerMemoryEmbeddingProvider() {},
-      registerProvider() {},
-      registerWebSearchProvider(provider: unknown) {
-        webSearchProviders.push(provider);
-      },
-    } as never);
-
-    expect(webSearchProviders).toHaveLength(1);
-    expect(webSearchProviders[0]).toMatchObject({
+    expect(createContractOllamaWebSearchProvider()).toMatchObject({
       id: "ollama",
       label: "Ollama Web Search",
       requiresCredential: false,

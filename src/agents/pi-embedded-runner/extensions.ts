@@ -59,7 +59,10 @@ function buildContextPruningFactory(params: {
     contextWindowTokens: resolveContextWindowTokens(params),
     isToolPrunable: makeToolPrunablePredicate(settings.tools),
     dropThinkingBlocks: transcriptPolicy.dropThinkingBlocks,
-    lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager),
+    lastCacheTouchAt: readLastCacheTtlTimestamp(params.sessionManager, {
+      provider: params.provider,
+      modelId: params.modelId,
+    }),
   });
 
   return contextPruningExtension;

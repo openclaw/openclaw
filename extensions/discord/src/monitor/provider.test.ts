@@ -194,15 +194,18 @@ describe("monitorDiscordProvider", () => {
         Parameters<typeof providerTesting.setLoadDiscordProviderSessionRuntime>[0]
       >,
     );
-    providerTesting.setCreateClient((options, handlers) => {
+    providerTesting.setCreateClient((options, handlers, plugins = []) => {
       clientConstructorOptionsMock(options);
+      const pluginRegistry = plugins.map((plugin) => ({ id: plugin.id, plugin }));
       return {
         options,
         listeners: handlers.listeners ?? [],
+        plugins: pluginRegistry,
         rest: { put: vi.fn(async () => undefined) },
         handleDeployRequest: async () => await clientHandleDeployRequestMock(),
         fetchUser: async (target: string) => await clientFetchUserMock(target),
-        getPlugin: (name: string) => clientGetPluginMock(name),
+        getPlugin: (name: string) =>
+          clientGetPluginMock(name) ?? pluginRegistry.find((entry) => entry.id === name)?.plugin,
       } as never;
     });
     providerTesting.setGetPluginCommandSpecs((provider?: string) =>

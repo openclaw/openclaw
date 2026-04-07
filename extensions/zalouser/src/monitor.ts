@@ -38,6 +38,10 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
   isZalouserGroupEntryAllowed,
@@ -79,7 +83,7 @@ function normalizeZalouserEntry(entry: string): string {
 function buildNameIndex<T>(items: T[], nameFn: (item: T) => string | undefined): Map<string, T[]> {
   const index = new Map<string, T[]>();
   for (const item of items) {
-    const name = nameFn(item)?.trim().toLowerCase();
+    const name = normalizeOptionalLowercaseString(nameFn(item));
     if (!name) {
       continue;
     }
@@ -106,7 +110,7 @@ function resolveUserAllowlistEntries(
       additions.push(entry);
       continue;
     }
-    const matches = byName.get(entry.toLowerCase()) ?? [];
+    const matches = byName.get(normalizeLowercaseStringOrEmpty(entry)) ?? [];
     const match = matches[0];
     const id = match?.userId ? String(match.userId) : undefined;
     if (id) {
@@ -195,12 +199,12 @@ function isSenderAllowed(senderId: string | undefined, allowFrom: string[]): boo
   if (allowFrom.includes("*")) {
     return true;
   }
-  const normalizedSenderId = senderId?.trim().toLowerCase();
+  const normalizedSenderId = normalizeOptionalLowercaseString(senderId);
   if (!normalizedSenderId) {
     return false;
   }
   return allowFrom.some((entry) => {
-    const normalized = entry.toLowerCase().replace(/^(zalouser|zlu):/i, "");
+    const normalized = normalizeLowercaseStringOrEmpty(entry).replace(/^(zalouser|zlu):/i, "");
     return normalized === normalizedSenderId;
   });
 }

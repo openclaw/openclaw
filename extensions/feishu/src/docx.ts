@@ -5,6 +5,7 @@ import { basename } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Type } from "@sinclair/typebox";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
@@ -33,6 +34,24 @@ function json(data: unknown) {
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
     details: data,
   };
+}
+
+function resolveDocToolLocalRoots(ctx: {
+  workspaceDir?: string;
+  fsPolicy?: { workspaceOnly: boolean };
+}): string[] | undefined {
+  if (ctx.fsPolicy?.workspaceOnly !== true) {
+    return undefined;
+  }
+  const workspaceDir = ctx.workspaceDir?.trim();
+  // Fail closed: workspace-only with no resolved workspace must not fall back
+  // to default managed roots.
+  if (!workspaceDir) {
+    return [];
+  }
+  // Workspace paths are expected to be absolute; resolve() normalizes any
+  // accidental relative input before passing roots to loadWebMedia.
+  return [resolve(workspaceDir)];
 }
 
 /** Extract image URLs from markdown content */
@@ -519,6 +538,7 @@ async function resolveUploadInput(
   url: string | undefined,
   filePath: string | undefined,
   maxBytes: number,
+  localRoots?: readonly string[],
   explicitFileName?: string,
   imageInput?: string, // data URI, plain base64, or local path
 ): Promise<{ buffer: Buffer; fileName: string }> {
@@ -584,12 +604,11 @@ async function resolveUploadInput(
 
     if (unambiguousPath || (absolutePath && existsSync(candidate))) {
       // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
-      // localRoots left undefined so loadWebMedia uses default roots (tmp, media,
-      // workspace, sandboxes) plus workspace-profile auto-discovery.
       const resolvedPath = resolve(candidate);
       const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedPath, {
         maxBytes,
         optimizeImages: false,
+        localRoots,
       });
       return { buffer: loaded.buffer, fileName: explicitFileName ?? basename(candidate) };
     }
@@ -646,11 +665,11 @@ async function resolveUploadInput(
   }
 
   // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
-  // localRoots left undefined — see comment above.
   const resolvedFilePath = resolve(filePath!);
   const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedFilePath, {
     maxBytes,
     optimizeImages: false,
+    localRoots,
   });
   return {
     buffer: loaded.buffer,
@@ -706,6 +725,7 @@ async function uploadImageBlock(
   client: Lark.Client,
   docToken: string,
   maxBytes: number,
+  localRoots?: readonly string[],
   url?: string,
   filePath?: string,
   parentBlockId?: string,
@@ -729,7 +749,14 @@ async function uploadImageBlock(
   }
 
   // Step 2: Resolve and upload the image buffer.
-  const upload = await resolveUploadInput(url, filePath, maxBytes, filename, imageInput);
+  const upload = await resolveUploadInput(
+    url,
+    filePath,
+    maxBytes,
+    localRoots,
+    filename,
+    imageInput,
+  );
   const fileToken = await uploadImageToDocx(
     client,
     imageBlockId,
@@ -760,6 +787,7 @@ async function uploadFileBlock(
   client: Lark.Client,
   docToken: string,
   maxBytes: number,
+  localRoots?: readonly string[],
   url?: string,
   filePath?: string,
   parentBlockId?: string,
@@ -770,7 +798,7 @@ async function uploadFileBlock(
   // Feishu API does not allow creating empty file blocks (block_type 23).
   // Workaround: create a placeholder text block, then replace it with file content.
   // Actually, file blocks need a different approach: use markdown link as placeholder.
-  const upload = await resolveUploadInput(url, filePath, maxBytes, filename);
+  const upload = await resolveUploadInput(url, filePath, maxBytes, localRoots, filename);
 
   // Create a placeholder text block first
   const placeholderMd = `[${upload.fileName}](https://example.com/placeholder)`;
@@ -1392,8 +1420,11 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     api.registerTool(
       (ctx) => {
         const defaultAccountId = ctx.agentAccountId;
+        const mediaLocalRoots = resolveDocToolLocalRoots(ctx);
         const trustedRequesterOpenId =
-          ctx.messageChannel === "feishu" ? ctx.requesterSenderId?.trim() || undefined : undefined;
+          ctx.messageChannel === "feishu"
+            ? normalizeOptionalString(ctx.requesterSenderId)
+            : undefined;
         return {
           name: "feishu_doc",
           label: "Feishu Doc",
@@ -1486,6 +1517,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       client,
                       p.doc_token,
                       getMediaMaxBytes(p, defaultAccountId),
+                      mediaLocalRoots,
                       p.url,
                       p.file_path,
                       p.parent_block_id,
@@ -1500,6 +1532,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       client,
                       p.doc_token,
                       getMediaMaxBytes(p, defaultAccountId),
+                      mediaLocalRoots,
                       p.url,
                       p.file_path,
                       p.parent_block_id,

@@ -203,6 +203,9 @@ export class GatewayClient {
     if (this.closed) {
       return;
     }
+    this.clearConnectChallengeTimeout();
+    this.connectNonce = null;
+    this.connectSent = false;
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
       this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
@@ -264,6 +267,9 @@ export class GatewayClient {
     const ws = new WebSocket(url, wsOptions as ClientOptions);
     this.ws = ws;
     this.socketOpened = false;
+    this.connectNonce = null;
+    this.connectSent = false;
+    this.clearConnectChallengeTimeout();
 
     ws.on("open", () => {
       this.socketOpened = true;

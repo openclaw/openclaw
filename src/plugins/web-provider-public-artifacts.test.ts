@@ -41,4 +41,14 @@ describe("web provider public artifacts", () => {
       }),
     );
   });
+
+  it("prefers lightweight bundled web fetch contract artifacts", () => {
+    const provider = resolveBundledWebFetchProvidersFromPublicArtifacts({
+      bundledAllowlistCompat: true,
+      onlyPluginIds: ["firecrawl"],
+    })?.[0];
+
+    expect(provider?.pluginId).toBe("firecrawl");
+    expect(provider?.createTool({ config: {} as never })).toBeNull();
+  });
 });

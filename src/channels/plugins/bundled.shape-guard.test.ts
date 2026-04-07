@@ -40,6 +40,23 @@ describe("bundled channel entry shape guards", () => {
   });
 
   it("loads real bundled channel entries from the source tree", async () => {
+    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
+      return {
+        ...actual,
+        listBundledChannelPluginMetadata: (params: {
+          includeChannelConfigs: boolean;
+          includeSyntheticChannelConfigs: boolean;
+        }) =>
+          actual
+            .listBundledChannelPluginMetadata(params)
+            .filter(
+              (metadata) => metadata.manifest.id === "slack" || metadata.manifest.id === "line",
+            ),
+      };
+    });
+
     const bundled = await importFreshModule<typeof import("./bundled.js")>(
       import.meta.url,
       "./bundled.js?scope=real-bundled-source-tree",

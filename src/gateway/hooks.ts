@@ -7,7 +7,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
 import { resolveAllowedAgentIds } from "./hooks-policy.js";
@@ -109,7 +112,7 @@ function resolveSessionKey(raw: string | undefined): string | undefined {
 }
 
 function normalizeSessionKeyPrefix(raw: string): string | undefined {
-  const value = raw.trim().toLowerCase();
+  const value = normalizeLowercaseStringOrEmpty(raw);
   return value ? value : undefined;
 }
 
@@ -129,7 +132,7 @@ function resolveAllowedSessionKeyPrefixes(raw: string[] | undefined): string[] |
 }
 
 export function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string[]): boolean {
-  const normalized = sessionKey.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!normalized) {
     return false;
   }
@@ -139,7 +142,7 @@ export function isSessionKeyAllowedByPrefix(sessionKey: string, prefixes: string
 export function extractHookToken(req: IncomingMessage): string | undefined {
   const auth =
     typeof req.headers.authorization === "string" ? req.headers.authorization.trim() : "";
-  if (auth.toLowerCase().startsWith("bearer ")) {
+  if (normalizeLowercaseStringOrEmpty(auth).startsWith("bearer ")) {
     const token = auth.slice(7).trim();
     if (token) {
       return token;
@@ -178,10 +181,11 @@ export async function readJsonBody(
 export function normalizeHookHeaders(req: IncomingMessage) {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
+    const normalizedKey = normalizeLowercaseStringOrEmpty(key);
     if (typeof value === "string") {
-      headers[key.toLowerCase()] = value;
+      headers[normalizedKey] = value;
     } else if (Array.isArray(value) && value.length > 0) {
-      headers[key.toLowerCase()] = value.join(", ");
+      headers[normalizedKey] = value.join(", ");
     }
   }
   return headers;

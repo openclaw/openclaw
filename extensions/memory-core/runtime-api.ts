@@ -4,7 +4,9 @@ export {
   DEFAULT_LOCAL_MODEL,
   getBuiltinMemoryEmbeddingProviderDoctorMetadata,
   listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
+  registerBuiltInMemoryEmbeddingProviders,
 } from "./src/memory/provider-adapters.js";
+export { createEmbeddingProvider } from "./src/memory/embeddings.js";
 export {
   resolveMemoryCacheSummary,
   resolveMemoryFtsState,

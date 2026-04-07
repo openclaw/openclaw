@@ -149,6 +149,95 @@ async function waitForHealth(
   throw new Error(lines.filter(Boolean).join("\n"));
 }
 
+async function isHealthy(url: string, fetchImpl: FetchLike) {
+  try {
+    const response = await fetchImpl(url);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForDockerServiceHealth(
+  service: string,
+  composeFile: string,
+  repoRoot: string,
+  runCommand: RunCommand,
+  sleepImpl: (ms: number) => Promise<unknown>,
+  timeoutMs = 360_000,
+  pollMs = 1_000,
+) {
+  const startMs = Date.now();
+  const deadline = startMs + timeoutMs;
+  let lastStatus = "unknown";
+
+  while (Date.now() < deadline) {
+    try {
+      const { stdout } = await runCommand(
+        "docker",
+        ["compose", "-f", composeFile, "ps", "--format", "json", service],
+        repoRoot,
+      );
+      const rows = stdout
+        .trim()
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { Health?: string; State?: string });
+      const row = rows[0];
+      lastStatus = row?.Health ?? row?.State ?? "unknown";
+      if (lastStatus === "healthy" || lastStatus === "running") {
+        return;
+      }
+    } catch (error) {
+      lastStatus = describeError(error);
+    }
+    await sleepImpl(pollMs);
+  }
+
+  const elapsedSec = Math.round((Date.now() - startMs) / 1000);
+  throw new Error(
+    [
+      `${service} did not become healthy within ${elapsedSec}s (limit ${Math.round(timeoutMs / 1000)}s).`,
+      `Last status: ${lastStatus}`,
+      `Hint: check container logs with \`docker compose -f ${composeFile} logs ${service}\`.`,
+    ].join("\n"),
+  );
+}
+
+async function resolveComposeServiceUrl(
+  service: string,
+  port: number,
+  composeFile: string,
+  repoRoot: string,
+  runCommand: RunCommand,
+) {
+  const { stdout: containerStdout } = await runCommand(
+    "docker",
+    ["compose", "-f", composeFile, "ps", "-q", service],
+    repoRoot,
+  );
+  const containerId = containerStdout.trim();
+  if (!containerId) {
+    return null;
+  }
+  const { stdout: ipStdout } = await runCommand(
+    "docker",
+    [
+      "inspect",
+      "--format",
+      "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+      containerId,
+    ],
+    repoRoot,
+  );
+  const ip = ipStdout.trim();
+  if (!ip) {
+    return null;
+  }
+  return `http://${ip}:${port}/`;
+}
+
 export async function runQaDockerUp(
   params: {
     repoRoot?: string;
@@ -158,21 +247,24 @@ export async function runQaDockerUp(
     providerBaseUrl?: string;
     image?: string;
     usePrebuiltImage?: boolean;
+    bindUiDist?: boolean;
     skipUiBuild?: boolean;
   },
   deps?: {
     runCommand?: RunCommand;
     fetchImpl?: FetchLike;
     sleepImpl?: (ms: number) => Promise<unknown>;
+    resolveHostPortImpl?: typeof resolveHostPort;
   },
 ): Promise<QaDockerUpResult> {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir = path.resolve(params.outputDir ?? DEFAULT_QA_DOCKER_DIR);
-  const gatewayPort = await resolveHostPort(
+  const resolveHostPortImpl = deps?.resolveHostPortImpl ?? resolveHostPort;
+  const gatewayPort = await resolveHostPortImpl(
     params.gatewayPort ?? 18789,
     params.gatewayPort != null,
   );
-  const qaLabPort = await resolveHostPort(params.qaLabPort ?? 43124, params.qaLabPort != null);
+  const qaLabPort = await resolveHostPortImpl(params.qaLabPort ?? 43124, params.qaLabPort != null);
   const runCommand = deps?.runCommand ?? execCommand;
   const fetchImpl =
     deps?.fetchImpl ??
@@ -193,6 +285,7 @@ export async function runQaDockerUp(
     providerBaseUrl: params.providerBaseUrl,
     imageName: params.image,
     usePrebuiltImage: params.usePrebuiltImage,
+    bindUiDist: params.bindUiDist,
     includeQaLabUi: true,
   });
 
@@ -222,7 +315,7 @@ export async function runQaDockerUp(
   await sleepImpl(3_000);
 
   const qaLabUrl = `http://127.0.0.1:${qaLabPort}`;
-  const gatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
+  const hostGatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
 
   await waitForHealth(`${qaLabUrl}/healthz`, {
     label: "QA Lab",
@@ -230,12 +323,26 @@ export async function runQaDockerUp(
     sleepImpl,
     composeFile,
   });
-  await waitForHealth(`${gatewayUrl}healthz`, {
-    label: "Gateway",
-    fetchImpl,
-    sleepImpl,
+  await waitForDockerServiceHealth(
+    "openclaw-qa-gateway",
     composeFile,
-  });
+    repoRoot,
+    runCommand,
+    sleepImpl,
+  );
+  let gatewayUrl = hostGatewayUrl;
+  if (!(await isHealthy(`${hostGatewayUrl}healthz`, fetchImpl))) {
+    const containerGatewayUrl = await resolveComposeServiceUrl(
+      "openclaw-qa-gateway",
+      18789,
+      composeFile,
+      repoRoot,
+      runCommand,
+    );
+    if (containerGatewayUrl && (await isHealthy(`${containerGatewayUrl}healthz`, fetchImpl))) {
+      gatewayUrl = containerGatewayUrl;
+    }
+  }
 
   return {
     outputDir,
