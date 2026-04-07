@@ -20,9 +20,21 @@
       "cliDescription": "Databricks API key"
     }
   ],
+  "providerAuthOnboardingCliOptions": [
+    {
+      "optionKey": "databricksBaseUrl",
+      "cliFlag": "--databricks-base-url",
+      "cliOption": "--databricks-base-url <url>",
+      "cliDescription": "Databricks Workspace Base URL"
+    }
+  ],
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
-    "properties": {}
+    "additionalProperties": true,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      }
+    }
   }
 }
