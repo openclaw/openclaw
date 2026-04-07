@@ -18,11 +18,12 @@ import {
   parseJsonStringArray,
   restoreCliBackendLiveEnv,
   shouldRunCliImageProbe,
+  shouldRunCliMcpProbe,
   snapshotCliBackendLiveEnv,
   type SystemPromptReport,
-  verifyClaudeCliCronMcpProbe,
+  verifyCliCronMcpProbe,
   verifyCliBackendImageProbe,
-  withMcpConfigOverrides,
+  withClaudeMcpConfigOverrides,
   connectTestGatewayClient,
 } from "./gateway-cli-backend.live-helpers.js";
 import { startGatewayServer } from "./server.js";
@@ -79,7 +80,13 @@ describeLive("gateway live (cli backend)", () => {
       const modelKey = `${providerId}/${parsed.model}`;
       const backendResolved = resolveCliBackendConfig(providerId);
       const enableCliImageProbe = shouldRunCliImageProbe(providerId);
-      logCliBackendLiveStep("model-selected", { providerId, modelKey, enableCliImageProbe });
+      const enableCliMcpProbe = shouldRunCliMcpProbe(providerId);
+      logCliBackendLiveStep("model-selected", {
+        providerId,
+        modelKey,
+        enableCliImageProbe,
+        enableCliMcpProbe,
+      });
       const providerDefaults = backendResolved?.config;
 
       const cliCommand = process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ?? providerDefaults?.command;
@@ -127,13 +134,20 @@ describeLive("gateway live (cli backend)", () => {
       await fs.mkdir(stateDir, { recursive: true });
       process.env.OPENCLAW_STATE_DIR = stateDir;
       const bundleMcp = backendResolved?.bundleMcp === true;
-      const bootstrapWorkspace = bundleMcp ? await createBootstrapWorkspace(tempDir) : null;
+      const bootstrapWorkspace =
+        backendResolved?.bundleMcpMode === "claude-config-file"
+          ? await createBootstrapWorkspace(tempDir)
+          : null;
       const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
       let cliArgs = baseCliArgs;
-      if (bundleMcp && disableMcpConfig) {
+      if (
+        bundleMcp &&
+        disableMcpConfig &&
+        backendResolved?.bundleMcpMode === "claude-config-file"
+      ) {
         const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
         await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
-        cliArgs = withMcpConfigOverrides(baseCliArgs, mcpConfigPath);
+        cliArgs = withClaudeMcpConfigOverrides(baseCliArgs, mcpConfigPath);
       }
 
       const cfg: OpenClawConfig = {};
@@ -278,10 +292,11 @@ describeLive("gateway live (cli backend)", () => {
           logCliBackendLiveStep("image-probe:done");
         }
 
-        if (providerId === "claude-cli") {
+        if (enableCliMcpProbe) {
           logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
-          await verifyClaudeCliCronMcpProbe({
+          await verifyCliCronMcpProbe({
             client,
+            providerId,
             sessionKey,
             port,
             token,

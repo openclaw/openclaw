@@ -3,7 +3,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveBundledPluginWorkspaceSourcePath } from "../../../plugins/bundled-plugin-metadata.js";
 import { resolveBundledPluginInstallCommandHint } from "../../../plugins/bundled-sources.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 
 export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
   const configured = normalizeOptionalString(cfg.acp?.runtime?.installCommand);
@@ -11,7 +14,7 @@ export function resolveAcpInstallCommandHint(cfg: OpenClawConfig): string {
     return configured;
   }
   const workspaceDir = process.cwd();
-  const backendId = normalizeOptionalString(cfg.acp?.backend)?.toLowerCase() ?? "acpx";
+  const backendId = normalizeOptionalLowercaseString(cfg.acp?.backend) ?? "acpx";
   if (backendId === "acpx") {
     const workspaceLocalPath = resolveBundledPluginWorkspaceSourcePath({
       rootDir: workspaceDir,

@@ -33,7 +33,11 @@ function getBundledChannelDirName(channelId: string): string | undefined {
         .plugins.filter((entry) => entry.origin === "bundled")
         .flatMap((entry) =>
           entry.channels.map(
-            (candidateChannelId) => [candidateChannelId, path.basename(entry.rootDir)] as const,
+            (candidateChannelId) =>
+              [
+                candidateChannelId,
+                entry.rootDir ? path.basename(entry.rootDir) : entry.id,
+              ] as const,
           ),
         ),
     );

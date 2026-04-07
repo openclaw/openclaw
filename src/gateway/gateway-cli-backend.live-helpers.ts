@@ -1,9 +1,6 @@
-import { execFile } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-import { expect } from "vitest";
 import { resolveCliBackendLiveTest } from "../agents/cli-backends.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -19,10 +16,18 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
-import { renderCatNoncePngBase64 } from "./live-image-probe.js";
+import {
+  assertCronJobMatches,
+  assertCronJobVisibleViaCli,
+  assertLiveImageProbeReply,
+  buildLiveCronProbeMessage,
+  createLiveCronProbeSpec,
+  runOpenClawCliJson,
+  type CronListJob,
+} from "./live-agent-probes.js";
+import { renderCatFacePngBase64 } from "./live-image-probe.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
-const execFileAsync = promisify(execFile);
 const CLI_GATEWAY_CONNECT_TIMEOUT_MS = 30_000;
 
 export type BootstrapWorkspaceContext = {
@@ -34,19 +39,6 @@ export type BootstrapWorkspaceContext = {
 export type SystemPromptReport = {
   injectedWorkspaceFiles?: Array<{ name?: string }>;
 };
-
-export type CronListCliResult = {
-  jobs?: Array<{
-    id?: string;
-    name?: string;
-    sessionTarget?: string;
-    agentId?: string | null;
-    sessionKey?: string | null;
-    payload?: { kind?: string; text?: string; message?: string };
-  }>;
-};
-
-type CronListJob = NonNullable<CronListCliResult["jobs"]>[number];
 
 export type CliBackendLiveEnvSnapshot = {
   configPath?: string;
@@ -63,18 +55,6 @@ export type CliBackendLiveEnvSnapshot = {
   anthropicApiKey?: string;
   anthropicApiKeyOld?: string;
 };
-
-export function randomImageProbeCode(len = 6): string {
-  // Chosen to avoid common OCR confusions in our 5x7 bitmap font.
-  // Notably: 0↔8, B↔8, 6↔9, 3↔B, D↔0.
-  const alphabet = "24567ACEF";
-  const bytes = randomBytes(len);
-  let out = "";
-  for (let i = 0; i < len; i += 1) {
-    out += alphabet[bytes[i] % alphabet.length];
-  }
-  return out;
-}
 
 export function parseJsonStringArray(name: string, raw?: string): string[] | undefined {
   const trimmed = raw?.trim();
@@ -107,13 +87,21 @@ export function shouldRunCliImageProbe(providerId: string): boolean {
   return resolveCliBackendLiveTest(providerId)?.defaultImageProbe === true;
 }
 
+export function shouldRunCliMcpProbe(providerId: string): boolean {
+  const raw = process.env.OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE?.trim();
+  if (raw) {
+    return isTruthyEnvValue(raw);
+  }
+  return resolveCliBackendLiveTest(providerId)?.defaultMcpProbe === true;
+}
+
 export function matchesCliBackendReply(text: string, expected: string): boolean {
   const normalized = text.trim();
   const target = expected.trim();
   return normalized === target || normalized === target.slice(0, -1);
 }
 
-export function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
+export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
   const next = [...args];
   if (!next.includes("--strict-mcp-config")) {
     next.push("--strict-mcp-config");
@@ -151,46 +139,6 @@ export async function createBootstrapWorkspace(
   await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), `IDENTITY-${randomUUID()}\n`);
   await fs.writeFile(path.join(workspaceDir, "USER.md"), `USER-${randomUUID()}\n`);
   return { expectedInjectedFiles, workspaceDir, workspaceRootDir };
-}
-
-export async function runOpenClawCliJson<T>(args: string[], env: NodeJS.ProcessEnv): Promise<T> {
-  const childEnv = { ...env };
-  delete childEnv.VITEST;
-  delete childEnv.VITEST_MODE;
-  delete childEnv.VITEST_POOL_ID;
-  delete childEnv.VITEST_WORKER_ID;
-  const { stdout, stderr } = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
-    cwd: process.cwd(),
-    env: childEnv,
-    timeout: 30_000,
-    maxBuffer: 1024 * 1024,
-  });
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    throw new Error(
-      [
-        `openclaw ${args.join(" ")} produced no JSON stdout`,
-        stderr.trim() ? `stderr: ${stderr.trim()}` : undefined,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-  }
-  try {
-    return JSON.parse(trimmed) as T;
-  } catch (error) {
-    throw new Error(
-      [
-        `openclaw ${args.join(" ")} returned invalid JSON`,
-        `stdout: ${trimmed}`,
-        stderr.trim() ? `stderr: ${stderr.trim()}` : undefined,
-        error instanceof Error ? `cause: ${error.message}` : undefined,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      { cause: error },
-    );
-  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -394,8 +342,7 @@ export async function verifyCliBackendImageProbe(params: {
   tempDir: string;
   bootstrapWorkspace: BootstrapWorkspaceContext | null;
 }): Promise<void> {
-  const imageCode = randomImageProbeCode();
-  const imageBase64 = renderCatNoncePngBase64(imageCode);
+  const imageBase64 = renderCatFacePngBase64();
   const runIdImage = randomUUID();
   const imageFilePath = path.join(
     params.bootstrapWorkspace?.workspaceDir ?? params.tempDir,
@@ -435,84 +382,66 @@ export async function verifyCliBackendImageProbe(params: {
   if (imageProbe?.status !== "ok") {
     throw new Error(`image probe failed: status=${String(imageProbe?.status)}`);
   }
-  const imageText = extractPayloadText(imageProbe?.result).trim().toLowerCase();
-  if (imageText !== "cat") {
-    throw new Error(`image probe expected 'cat', got: ${imageText}`);
-  }
+  assertLiveImageProbeReply(extractPayloadText(imageProbe?.result));
 }
 
-export async function verifyClaudeCliCronMcpProbe(params: {
+export async function verifyCliCronMcpProbe(params: {
   client: GatewayClient;
+  providerId: string;
   sessionKey: string;
   port: number;
   token: string;
   env: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const cronProbeNonce = randomBytes(3).toString("hex").toUpperCase();
-  const cronProbeName = `live-mcp-${cronProbeNonce.toLowerCase()}`;
-  const cronProbeMessage = `probe-${cronProbeNonce.toLowerCase()}`;
-  const cronProbeAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  const cronArgsJson = JSON.stringify({
-    action: "add",
-    job: {
-      name: cronProbeName,
-      schedule: { kind: "at", at: cronProbeAt },
-      payload: { kind: "agentTurn", message: cronProbeMessage },
-      sessionTarget: "current",
-      enabled: true,
-    },
-  });
+  const cronProbe = createLiveCronProbeSpec();
 
   let createdJob: CronListJob | undefined;
   let lastCronText = "";
 
   for (let attempt = 0; attempt < 2 && !createdJob; attempt += 1) {
     const runIdMcp = randomUUID();
-    const cronProbe = await params.client.request(
+    const cronResult = await params.client.request(
       "agent",
       {
         sessionKey: params.sessionKey,
         idempotencyKey: `idem-${runIdMcp}-mcp-${attempt}`,
-        message:
-          attempt === 0
-            ? "Use the OpenClaw MCP tool named cron. " +
-              `Call it with JSON arguments ${cronArgsJson}. ` +
-              "Do the actual tool call; I will verify externally with the OpenClaw cron CLI. " +
-              `After the cron job is created, reply exactly: ${cronProbeName}`
-            : "Return only a tool call for the OpenClaw MCP tool `cron`. " +
-              `Use these exact JSON arguments: ${cronArgsJson}. ` +
-              "No prose. I will verify externally with the OpenClaw cron CLI.",
+        message: buildLiveCronProbeMessage({
+          agent: params.providerId,
+          argsJson: cronProbe.argsJson,
+          attempt,
+          exactReply: cronProbe.name,
+        }),
         deliver: false,
       },
       { expectFinal: true },
     );
-    if (cronProbe?.status !== "ok") {
-      throw new Error(`cron mcp probe failed: status=${String(cronProbe?.status)}`);
+    if (cronResult?.status !== "ok") {
+      throw new Error(`cron mcp probe failed: status=${String(cronResult?.status)}`);
     }
-    lastCronText = extractPayloadText(cronProbe?.result).trim();
+    lastCronText = extractPayloadText(cronResult?.result).trim();
     createdJob = await assertCronJobVisibleViaCli({
       port: params.port,
       token: params.token,
       env: params.env,
-      expectedName: cronProbeName,
-      expectedMessage: cronProbeMessage,
+      expectedName: cronProbe.name,
+      expectedMessage: cronProbe.message,
     });
     if (!createdJob && attempt === 1) {
       throw new Error(
-        `cron cli verify could not find job ${cronProbeName}: reply=${JSON.stringify(lastCronText)}`,
+        `cron cli verify could not find job ${cronProbe.name}: reply=${JSON.stringify(lastCronText)}`,
       );
     }
   }
 
   if (!createdJob) {
-    throw new Error(`cron cli verify did not create job ${cronProbeName}`);
+    throw new Error(`cron cli verify did not create job ${cronProbe.name}`);
   }
-  expect(createdJob.name).toBe(cronProbeName);
-  expect(createdJob?.payload?.kind).toBe("agentTurn");
-  expect(createdJob?.payload?.message).toBe(cronProbeMessage);
-  expect(createdJob?.agentId).toBe("dev");
-  expect(createdJob?.sessionKey).toBe(params.sessionKey);
-  expect(createdJob?.sessionTarget).toBe(`session:${params.sessionKey}`);
+  assertCronJobMatches({
+    job: createdJob,
+    expectedName: cronProbe.name,
+    expectedMessage: cronProbe.message,
+    expectedSessionKey: params.sessionKey,
+  });
   if (createdJob?.id) {
     await runOpenClawCliJson(
       [
@@ -528,30 +457,4 @@ export async function verifyClaudeCliCronMcpProbe(params: {
       params.env,
     );
   }
-}
-
-export async function assertCronJobVisibleViaCli(params: {
-  port: number;
-  token: string;
-  env: NodeJS.ProcessEnv;
-  expectedName: string;
-  expectedMessage: string;
-}): Promise<CronListJob | undefined> {
-  const cronList = await runOpenClawCliJson<CronListCliResult>(
-    [
-      "cron",
-      "list",
-      "--all",
-      "--json",
-      "--url",
-      `ws://127.0.0.1:${params.port}`,
-      "--token",
-      params.token,
-    ],
-    params.env,
-  );
-  return (
-    cronList.jobs?.find((job) => job.name === params.expectedName) ??
-    cronList.jobs?.find((job) => job.payload?.message === params.expectedMessage)
-  );
 }

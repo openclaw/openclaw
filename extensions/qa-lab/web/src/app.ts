@@ -1,4 +1,4 @@
-import { defaultQaModelForMode, isQaFastModeEnabled } from "../../src/model-selection.js";
+import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   type Bootstrap,

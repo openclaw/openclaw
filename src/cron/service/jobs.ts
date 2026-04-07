@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
@@ -715,13 +718,6 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
   };
 }
 
-function normalizeOptionalThreadId(value: unknown): string | number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return normalizeOptionalString(value);
-}
-
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
@@ -746,7 +742,7 @@ function mergeCronDelivery(
     next.to = normalizeOptionalString(patch.to);
   }
   if ("threadId" in patch) {
-    next.threadId = normalizeOptionalThreadId(patch.threadId);
+    next.threadId = normalizeOptionalThreadValue(patch.threadId);
   }
   if ("accountId" in patch) {
     next.accountId = normalizeOptionalString(patch.accountId);

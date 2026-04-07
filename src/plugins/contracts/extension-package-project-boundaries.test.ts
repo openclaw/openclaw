@@ -80,33 +80,7 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.outDir).toBe("dist");
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
-      "../../src/plugin-sdk/config-runtime.ts",
-      "../../src/plugin-sdk/index.ts",
-      "../../src/plugin-sdk/lazy-value.ts",
-      "../../src/plugin-sdk/oauth-utils.ts",
-      "../../src/plugin-sdk/plugin-entry.ts",
-      "../../src/plugin-sdk/plugin-runtime.ts",
-      "../../src/plugin-sdk/provider-auth-result.ts",
-      "../../src/plugin-sdk/provider-auth-runtime.ts",
-      "../../src/plugin-sdk/provider-auth.ts",
-      "../../src/plugin-sdk/provider-catalog-shared.ts",
-      "../../src/plugin-sdk/provider-entry.ts",
-      "../../src/plugin-sdk/provider-http.ts",
-      "../../src/plugin-sdk/provider-model-shared.ts",
-      "../../src/plugin-sdk/provider-onboard.ts",
-      "../../src/plugin-sdk/provider-stream-shared.ts",
-      "../../src/plugin-sdk/provider-tools.ts",
-      "../../src/plugin-sdk/provider-web-search-contract.ts",
-      "../../src/plugin-sdk/provider-web-search.ts",
-      "../../src/plugin-sdk/runtime-doctor.ts",
-      "../../src/plugin-sdk/runtime-env.ts",
-      "../../src/plugin-sdk/security-runtime.ts",
-      "../../src/plugin-sdk/secret-input-schema.ts",
-      "../../src/plugin-sdk/secret-input.ts",
-      "../../src/plugin-sdk/telegram-command-config.ts",
-      "../../src/plugin-sdk/testing.ts",
-      "../../src/plugin-sdk/text-runtime.ts",
-      "../../src/plugin-sdk/video-generation.ts",
+      "../../src/plugin-sdk/**/*.ts",
       "../../src/video-generation/dashscope-compatible.ts",
       "../../src/video-generation/types.ts",
       "../../src/types/**/*.d.ts",
@@ -114,15 +88,51 @@ describe("opt-in extension package boundaries", () => {
 
     const packageJson = readJsonFile<PackageJson>("packages/plugin-sdk/package.json");
     expect(packageJson.name).toBe("@openclaw/plugin-sdk");
-    expect(packageJson.exports?.["./core"]).toBeUndefined();
+    expect(packageJson.exports?.["./account-id"]?.types).toBe(
+      "./dist/src/plugin-sdk/account-id.d.ts",
+    );
+    expect(packageJson.exports?.["./acp-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/acp-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./browser-config-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/browser-config-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./browser-node-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/browser-node-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./browser-setup-tools"]?.types).toBe(
+      "./dist/src/plugin-sdk/browser-setup-tools.d.ts",
+    );
+    expect(packageJson.exports?.["./browser-security-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/browser-security-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./channel-secret-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./channel-streaming"]?.types).toBe(
+      "./dist/src/plugin-sdk/channel-streaming.d.ts",
+    );
+    expect(packageJson.exports?.["./cli-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/cli-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./core"]?.types).toBe("./dist/src/plugin-sdk/core.d.ts");
+    expect(packageJson.exports?.["./error-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/error-runtime.d.ts",
+    );
     expect(packageJson.exports?.["./plugin-entry"]?.types).toBe(
       "./dist/src/plugin-sdk/plugin-entry.d.ts",
     );
     expect(packageJson.exports?.["./plugin-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/plugin-runtime.d.ts",
     );
+    expect(packageJson.exports?.["./provider-env-vars"]?.types).toBe(
+      "./dist/src/plugin-sdk/provider-env-vars.d.ts",
+    );
     expect(packageJson.exports?.["./provider-http"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-http.d.ts",
+    );
+    expect(packageJson.exports?.["./provider-usage"]?.types).toBe(
+      "./dist/src/plugin-sdk/provider-usage.d.ts",
     );
     expect(packageJson.exports?.["./runtime-doctor"]?.types).toBe(
       "./dist/src/plugin-sdk/runtime-doctor.d.ts",
@@ -130,12 +140,19 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./security-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/security-runtime.d.ts",
     );
+    expect(packageJson.exports?.["./secret-ref-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/secret-ref-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./ssrf-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/ssrf-runtime.d.ts",
+    );
     expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/text-runtime.d.ts",
     );
     expect(packageJson.exports?.["./video-generation"]?.types).toBe(
       "./dist/src/plugin-sdk/video-generation.d.ts",
     );
+    expect(packageJson.exports?.["./zod"]?.types).toBe("./dist/src/plugin-sdk/zod.d.ts");
     expect(existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,
     );

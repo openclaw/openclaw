@@ -695,6 +695,10 @@ async function validateProjectedSecretsState(params: {
     await prepareSecretsRuntimeSnapshot({
       config: params.nextConfig,
       env: params.env,
+      // Dry-run preflight only needs auth-store materialization when this plan
+      // actually touches auth-profile state. Write mode keeps the stricter
+      // whole-runtime check.
+      includeAuthStoreRefs: params.write || params.authStoreByPath.size > 0,
       loadAuthStore: (agentDir?: string) => {
         const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
         const override = authStoreLookup.get(storePath);

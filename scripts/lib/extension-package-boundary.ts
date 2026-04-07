@@ -16,11 +16,54 @@ export const EXTENSION_PACKAGE_BOUNDARY_EXCLUDE = [
 ] as const;
 export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "openclaw/extension-api": ["../src/extensionAPI.ts"],
-  "openclaw/plugin-sdk": ["../dist/plugin-sdk/index.d.ts"],
-  "openclaw/plugin-sdk/*": ["../dist/plugin-sdk/*.d.ts"],
+  "openclaw/plugin-sdk": ["../packages/plugin-sdk/dist/src/plugin-sdk/index.d.ts"],
+  "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
+  "openclaw/plugin-sdk/account-id": ["../packages/plugin-sdk/dist/src/plugin-sdk/account-id.d.ts"],
+  "openclaw/plugin-sdk/channel-entry-contract": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/channel-entry-contract.d.ts",
+  ],
+  "openclaw/plugin-sdk/browser-maintenance": [
+    "../packages/plugin-sdk/dist/extensions/browser/browser-maintenance.d.ts",
+  ],
+  "openclaw/plugin-sdk/browser-config-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/browser-config-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/browser-node-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/browser-node-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/browser-setup-tools": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/browser-setup-tools.d.ts",
+  ],
+  "openclaw/plugin-sdk/browser-security-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/browser-security-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/channel-secret-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/channel-streaming": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/channel-streaming.d.ts",
+  ],
+  "openclaw/plugin-sdk/error-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/provider-catalog-shared": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/provider-catalog-shared.d.ts",
+  ],
+  "openclaw/plugin-sdk/provider-entry": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts",
+  ],
+  "openclaw/plugin-sdk/provider-web-search-contract": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/provider-web-search-contract.d.ts",
+  ],
+  "openclaw/plugin-sdk/secret-ref-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/secret-ref-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/ssrf-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/ssrf-runtime.d.ts",
+  ],
   "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
   "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
-  "@openclaw/plugin-sdk/*": ["../dist/plugin-sdk/*.d.ts"],
+  "@openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
 } as const;
 
 export type ExtensionPackageBoundaryTsConfigJson = {

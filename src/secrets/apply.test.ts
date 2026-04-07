@@ -304,6 +304,75 @@ describe("secrets apply", () => {
     expect(callLog.split("\n").filter((line) => line.trim().length > 0).length).toBeGreaterThan(0);
   });
 
+  it("ignores unrelated auth-profile store refs during allowExec dry-run preflight", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const execScriptPath = path.join(fixture.rootDir, "resolver.sh");
+    await fs.writeFile(
+      execScriptPath,
+      [
+        "#!/bin/sh",
+        "cat >/dev/null",
+        'printf \'{"protocolVersion":1,"values":{"providers/openai/apiKey":"sk-openai-exec"}}\'', // pragma: allowlist secret
+      ].join("\n"),
+      { encoding: "utf8", mode: 0o700 },
+    );
+
+    await writeJsonFile(fixture.configPath, {
+      secrets: {
+        providers: {
+          execmain: {
+            source: "exec",
+            command: execScriptPath,
+            jsonOnly: true,
+            timeoutMs: 20_000,
+            noOutputTimeoutMs: 10_000,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: createOpenAiProviderConfig(),
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "MISSING_AUTH_STORE_KEY" },
+        },
+      },
+    });
+
+    const plan = createPlan({
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.apiKey",
+          providerId: "openai",
+          ref: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    await expect(
+      runSecretsApply({ plan, env: fixture.env, write: false, allowExec: true }),
+    ).resolves.toMatchObject({
+      mode: "dry-run",
+      skippedExecRefs: 0,
+      checks: { resolvabilityComplete: true },
+    });
+  });
+
   it("rejects write mode for exec plans unless allowExec is set", async () => {
     const plan = createPlan({
       targets: [

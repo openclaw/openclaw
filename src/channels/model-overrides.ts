@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   buildChannelKeyCandidates,
@@ -38,13 +41,13 @@ function resolveProviderEntry(
   channel: string,
 ): Record<string, string> | undefined {
   const normalized =
-    normalizeMessageChannel(channel) ?? normalizeOptionalString(channel)?.toLowerCase() ?? "";
+    normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "";
   return (
     modelByChannel?.[normalized] ??
     modelByChannel?.[
       Object.keys(modelByChannel ?? {}).find((key) => {
         const normalizedKey =
-          normalizeMessageChannel(key) ?? normalizeOptionalString(key)?.toLowerCase() ?? "";
+          normalizeMessageChannel(key) ?? normalizeOptionalLowercaseString(key) ?? "";
         return normalizedKey === normalized;
       }) ?? ""
     ]
@@ -59,7 +62,7 @@ function buildChannelCandidates(
 ): { keys: string[]; parentKeys: string[] } {
   const normalizedChannel =
     normalizeMessageChannel(params.channel ?? "") ??
-    normalizeOptionalString(params.channel)?.toLowerCase();
+    normalizeOptionalLowercaseString(params.channel);
   const groupId = normalizeOptionalString(params.groupId);
   const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
   const feishuParentOverrideFallbacks =
@@ -119,23 +122,23 @@ function buildFeishuParentOverrideCandidates(rawId: string | undefined): string[
   }
   const topicSenderMatch = value.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
   if (topicSenderMatch) {
-    const chatId = normalizeOptionalString(topicSenderMatch[1])?.toLowerCase();
-    const topicId = normalizeOptionalString(topicSenderMatch[2])?.toLowerCase();
+    const chatId = normalizeOptionalLowercaseString(topicSenderMatch[1]);
+    const topicId = normalizeOptionalLowercaseString(topicSenderMatch[2]);
     return [`${chatId}:topic:${topicId}`, chatId].filter((entry): entry is string =>
       Boolean(entry),
     );
   }
   const topicMatch = value.match(/^(.+):topic:([^:]+)$/i);
   if (topicMatch) {
-    const chatId = normalizeOptionalString(topicMatch[1])?.toLowerCase();
-    const topicId = normalizeOptionalString(topicMatch[2])?.toLowerCase();
+    const chatId = normalizeOptionalLowercaseString(topicMatch[1]);
+    const topicId = normalizeOptionalLowercaseString(topicMatch[2]);
     return [`${chatId}:topic:${topicId}`, chatId].filter((entry): entry is string =>
       Boolean(entry),
     );
   }
   const senderMatch = value.match(/^(.+):sender:([^:]+)$/i);
   if (senderMatch) {
-    const chatId = normalizeOptionalString(senderMatch[1])?.toLowerCase();
+    const chatId = normalizeOptionalLowercaseString(senderMatch[1]);
     return chatId ? [chatId] : [];
   }
   return [];
@@ -180,8 +183,7 @@ export function resolveChannelModelOverride(
   }
 
   return {
-    channel:
-      normalizeMessageChannel(channel) ?? normalizeOptionalString(channel)?.toLowerCase() ?? "",
+    channel: normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "",
     model,
     matchKey: match.matchKey,
     matchSource: match.matchSource,

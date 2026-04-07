@@ -29,6 +29,11 @@ function runNodeStep(label, args, timeoutMs) {
 
 runNodeStep("plugin-sdk boundary dts", [tscBin, "-p", "tsconfig.plugin-sdk.dts.json"], 300_000);
 runNodeStep(
+  "plugin-sdk package boundary dts",
+  [tscBin, "-p", "packages/plugin-sdk/tsconfig.json"],
+  300_000,
+);
+runNodeStep(
   "plugin-sdk boundary root shims",
   ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
   120_000,

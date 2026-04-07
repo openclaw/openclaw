@@ -3,6 +3,7 @@ import path from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
   DEFAULT_THREAD_BINDING_MAX_AGE_MS,
@@ -112,14 +113,7 @@ export function normalizeTargetKind(
 }
 
 export function normalizeThreadId(raw: unknown): string | undefined {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return String(Math.floor(raw));
-  }
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalStringifiedId(raw);
 }
 
 export function toBindingRecordKey(params: { accountId: string; threadId: string }): string {

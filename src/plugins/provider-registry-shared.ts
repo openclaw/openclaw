@@ -1,9 +1,14 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
+export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
+  return normalizeOptionalString(providerId)?.toLowerCase();
+}
+
 export function buildCapabilityProviderMaps<T extends { id: string; aliases?: readonly string[] }>(
   providers: readonly T[],
-  normalizeId: (providerId: string | undefined) => string | undefined = (providerId) =>
-    normalizeOptionalString(providerId)?.toLowerCase(),
+  normalizeId: (
+    providerId: string | undefined,
+  ) => string | undefined = normalizeCapabilityProviderId,
 ): {
   canonical: Map<string, T>;
   aliases: Map<string, T>;
