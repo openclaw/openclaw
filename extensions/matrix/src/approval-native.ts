@@ -89,6 +89,10 @@ function hasMatrixPluginApprovers(params: { cfg: CoreConfig; accountId?: string 
   return getMatrixApprovalAuthApprovers(params).length > 0;
 }
 
+function availabilityState(enabled: boolean) {
+  return enabled ? ({ kind: "enabled" } as const) : ({ kind: "disabled" } as const);
+}
+
 function hasMatrixApprovalApprovers(params: {
   cfg: CoreConfig;
   accountId?: string | null;
@@ -246,20 +250,19 @@ const matrixNativeAdapter = matrixBaseNativeApprovalAdapter && {
     params: Parameters<typeof matrixBaseNativeApprovalAdapter.describeDeliveryCapabilities>[0],
   ) => {
     const capabilities = matrixBaseNativeApprovalAdapter.describeDeliveryCapabilities(params);
+    const hasApprovers = hasMatrixApprovalApprovers({
+      cfg: params.cfg as CoreConfig,
+      accountId: params.accountId,
+      approvalKind: params.approvalKind,
+    });
+    const clientEnabled = isMatrixApprovalClientEnabled({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      approvalKind: params.approvalKind,
+    });
     return {
       ...capabilities,
-      enabled:
-        capabilities.enabled &&
-        hasMatrixApprovalApprovers({
-          cfg: params.cfg as CoreConfig,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-        }) &&
-        isMatrixApprovalClientEnabled({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-        }),
+      enabled: capabilities.enabled && hasApprovers && clientEnabled,
     };
   },
   resolveOriginTarget: matrixBaseNativeApprovalAdapter.resolveOriginTarget,
@@ -284,16 +287,21 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
     }
     return matrixApprovalAuth.authorizeActorAction(params);
   },
-  getActionAvailabilityState: (params) =>
-    params.approvalKind === "plugin"
-      ? hasMatrixPluginApprovers({
+  getActionAvailabilityState: (params) => {
+    if (params.approvalKind === "plugin") {
+      return availabilityState(
+        hasMatrixPluginApprovers({
           cfg: params.cfg as CoreConfig,
           accountId: params.accountId,
-        })
-        ? ({ kind: "enabled" } as const)
-        : ({ kind: "disabled" } as const)
-      : (matrixNativeApprovalCapability.getActionAvailabilityState?.(params) ??
-        ({ kind: "disabled" } as const)),
+        }),
+      );
+    }
+    return (
+      matrixNativeApprovalCapability.getActionAvailabilityState?.(params) ?? {
+        kind: "disabled",
+      }
+    );
+  },
   getExecInitiatingSurfaceState: (params) =>
     matrixNativeApprovalCapability.getExecInitiatingSurfaceState?.(params) ??
     ({ kind: "disabled" } as const),

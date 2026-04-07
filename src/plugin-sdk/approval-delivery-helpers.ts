@@ -62,10 +62,28 @@ function buildApproverRestrictedNativeApprovalCapability(
   params: ApproverRestrictedNativeApprovalParams,
 ): ChannelApprovalCapability {
   const pluginSenderAuth = params.isPluginAuthorizedSender ?? params.isExecAuthorizedSender;
+  const availabilityState = (enabled: boolean) =>
+    enabled ? ({ kind: "enabled" } as const) : ({ kind: "disabled" } as const);
   const normalizePreferredSurface = (
     mode: NativeApprovalDeliveryMode,
   ): NativeApprovalSurface | "both" =>
     mode === "channel" ? "origin" : mode === "dm" ? "approver-dm" : "both";
+  const hasConfiguredApprovers = ({
+    cfg,
+    accountId,
+  }: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => params.hasApprovers({ cfg, accountId });
+  const isExecInitiatingSurfaceEnabled = ({
+    cfg,
+    accountId,
+  }: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) =>
+    hasConfiguredApprovers({ cfg, accountId }) &&
+    params.isNativeDeliveryEnabled({ cfg, accountId });
   const resolveExecInitiatingSurfaceState = ({
     cfg,
     accountId,
@@ -73,10 +91,7 @@ function buildApproverRestrictedNativeApprovalCapability(
     cfg: OpenClawConfig;
     accountId?: string | null;
     action: "approve";
-  }) =>
-    params.hasApprovers({ cfg, accountId }) && params.isNativeDeliveryEnabled({ cfg, accountId })
-      ? ({ kind: "enabled" } as const)
-      : ({ kind: "disabled" } as const);
+  }) => availabilityState(isExecInitiatingSurfaceEnabled({ cfg, accountId }));
 
   return createChannelApprovalCapability({
     authorizeActorAction: ({
@@ -109,16 +124,13 @@ function buildApproverRestrictedNativeApprovalCapability(
       cfg: OpenClawConfig;
       accountId?: string | null;
       action: "approve";
-    }) =>
-      params.hasApprovers({ cfg, accountId })
-        ? ({ kind: "enabled" } as const)
-        : ({ kind: "disabled" } as const),
+    }) => availabilityState(hasConfiguredApprovers({ cfg, accountId })),
     getExecInitiatingSurfaceState: resolveExecInitiatingSurfaceState,
     describeExecApprovalSetup: params.describeExecApprovalSetup,
     delivery: {
       hasConfiguredDmRoute: ({ cfg }: { cfg: OpenClawConfig }) =>
         params.listAccountIds(cfg).some((accountId) => {
-          if (!params.hasApprovers({ cfg, accountId })) {
+          if (!hasConfiguredApprovers({ cfg, accountId })) {
             return false;
           }
           if (!params.isNativeDeliveryEnabled({ cfg, accountId })) {
@@ -160,9 +172,7 @@ function buildApproverRestrictedNativeApprovalCapability(
               approvalKind: ApprovalKind;
               request: NativeApprovalRequest;
             }) => ({
-              enabled:
-                params.hasApprovers({ cfg, accountId }) &&
-                params.isNativeDeliveryEnabled({ cfg, accountId }),
+              enabled: isExecInitiatingSurfaceEnabled({ cfg, accountId }),
               preferredSurface: normalizePreferredSurface(
                 params.resolveNativeDeliveryMode({ cfg, accountId }),
               ),

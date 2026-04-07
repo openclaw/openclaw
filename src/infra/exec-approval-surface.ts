@@ -32,10 +32,10 @@ function labelForChannel(channel?: string): string {
 
 function hasNativeExecApprovalCapability(channel?: string): boolean {
   const capability = resolveChannelApprovalCapability(getChannelPlugin(channel ?? ""));
-  return Boolean(
-    capability?.native &&
-    (capability.getExecInitiatingSurfaceState || capability.getActionAvailabilityState),
-  );
+  if (!capability?.native) {
+    return false;
+  }
+  return Boolean(capability.getExecInitiatingSurfaceState || capability.getActionAvailabilityState);
 }
 
 export function resolveExecApprovalInitiatingSurfaceState(params: {
