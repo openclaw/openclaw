@@ -208,6 +208,38 @@ describe("plugin module default-unwrapping", () => {
     expect(loaded?.error).toBeUndefined();
   });
 
+  it("keeps unwrapping metadata wrappers to default function exports", async () => {
+    const plugin = writePlugin({
+      id: "default-wrapper-with-metadata-and-default-function",
+      body: `module.exports = { register() { throw new Error("wrapper register should not run"); }, version: "1.0.0", description: "wrapper metadata", default() {} };`,
+    });
+
+    const registry = await loadPlugins([plugin.file]);
+    const loaded = registry.plugins.find(
+      (entry) => entry.id === "default-wrapper-with-metadata-and-default-function",
+    );
+
+    expect(loaded?.status).toBe("loaded");
+    expect(loaded?.failurePhase).toBeUndefined();
+    expect(loaded?.error).toBeUndefined();
+  });
+
+  it("does not unwrap past id-bearing plugin definitions into nested helper objects", async () => {
+    const plugin = writePlugin({
+      id: "nested-default-id-definition-with-helper-register",
+      body: `module.exports = { default: { id: "nested-default-id-definition-with-helper-register", register() {}, default: { register() { throw new Error("nested helper register should not run"); } } } };`,
+    });
+
+    const registry = await loadPlugins([plugin.file]);
+    const loaded = registry.plugins.find(
+      (entry) => entry.id === "nested-default-id-definition-with-helper-register",
+    );
+
+    expect(loaded?.status).toBe("loaded");
+    expect(loaded?.failurePhase).toBeUndefined();
+    expect(loaded?.error).toBeUndefined();
+  });
+
   it("prefers default plugin definitions over wrapper-level named register exports", async () => {
     const plugin = writePlugin({
       id: "nested-default-wrapper-with-named-register",

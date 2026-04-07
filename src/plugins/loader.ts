@@ -600,11 +600,9 @@ function unwrapDefaultModuleExport(
   return resolved;
 }
 
-function looksLikePluginDefinitionRecord(candidate: Record<string, unknown>): boolean {
+function hasPluginDefinitionIdentity(candidate: Record<string, unknown>): boolean {
   return (
     typeof candidate.id === "string" ||
-    typeof candidate.version === "string" ||
-    typeof candidate.description === "string" ||
     candidate.kind !== undefined ||
     candidate.configSchema !== undefined ||
     candidate.capabilities !== undefined
@@ -616,6 +614,13 @@ function defaultChainContainsPluginExport(
   next: unknown,
   depth: number,
 ): boolean {
+  if (
+    hasPluginDefinitionIdentity(candidate) &&
+    !isForwardedPluginIdentityWrapper(candidate, next)
+  ) {
+    return false;
+  }
+
   let current = next;
   const visited = new Set<unknown>();
   while (true) {
@@ -623,9 +628,6 @@ function defaultChainContainsPluginExport(
       // Wrapper layers can re-export the real default function while also exposing
       // named register/activate exports. But if the current object already looks
       // like a concrete plugin definition, prefer its own register/activate.
-      if (looksLikePluginDefinitionRecord(candidate)) {
-        return false;
-      }
       // Treat nested register/activate records as terminal plugin exports, while
       // still allowing top-level interop wrappers to redirect to default functions.
       if (
@@ -649,6 +651,17 @@ function defaultChainContainsPluginExport(
     visited.add(current);
     current = record.default;
   }
+}
+
+function isForwardedPluginIdentityWrapper(
+  candidate: Record<string, unknown>,
+  next: unknown,
+): boolean {
+  if (!next || typeof next !== "object") {
+    return false;
+  }
+  const nextRecord = next as Record<string, unknown>;
+  return typeof candidate.id === "string" && candidate.id === nextRecord.id;
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {
@@ -679,6 +692,7 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
 } {
   const resolved = unwrapDefaultModuleExport(moduleExport, {
     shouldStop: (candidate) => Boolean(candidate.plugin && typeof candidate.plugin === "object"),
+    shouldContinueOnDefault: (_candidate, next) => defaultChainContainsSetupPlugin(next),
   });
   if (!resolved || typeof resolved !== "object") {
     return {};
@@ -692,6 +706,25 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
   return {
     plugin: setup.plugin as ChannelPlugin,
   };
+}
+
+function defaultChainContainsSetupPlugin(next: unknown): boolean {
+  let current = next;
+  const visited = new Set<unknown>();
+  while (true) {
+    if (!current || typeof current !== "object" || visited.has(current)) {
+      return false;
+    }
+    const record = current as Record<string, unknown>;
+    if (record.plugin && typeof record.plugin === "object") {
+      return true;
+    }
+    if (!("default" in record)) {
+      return false;
+    }
+    visited.add(current);
+    current = record.default;
+  }
 }
 
 function shouldLoadChannelPluginInSetupRuntime(params: {

@@ -2910,6 +2910,76 @@ module.exports = {
     );
   });
 
+  it("unwraps to default setup plugin when wrapper also defines a plugin object", () => {
+    const built = createSetupEntryChannelPluginFixture({
+      id: "setup-default-wrapper-with-plugin-field-test",
+      label: "Setup Default Wrapper With Plugin Field Test",
+      packageName: "@openclaw/setup-default-wrapper-with-plugin-field-test",
+      fullBlurb: "full entry should not run while unconfigured",
+      setupBlurb: "setup default wrapper plugin field",
+      configured: false,
+    });
+    fs.writeFileSync(
+      path.join(built.pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(built.setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  plugin: {
+    id: "setup-default-wrapper-with-plugin-field-test-wrapper",
+    meta: {
+      id: "setup-default-wrapper-with-plugin-field-test-wrapper",
+      label: "Wrapper Plugin",
+      selectionLabel: "Wrapper Plugin",
+      docsPath: "/channels/setup-default-wrapper-with-plugin-field-test-wrapper",
+      blurb: "wrapper setup plugin",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+    outbound: { deliveryMode: "direct" },
+  },
+  default: {
+    plugin: {
+      id: "setup-default-wrapper-with-plugin-field-test",
+      meta: {
+        id: "setup-default-wrapper-with-plugin-field-test",
+        label: "Setup Default Wrapper With Plugin Field Test",
+        selectionLabel: "Setup Default Wrapper With Plugin Field Test",
+        docsPath: "/channels/setup-default-wrapper-with-plugin-field-test",
+        blurb: "setup default wrapper plugin field",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [built.pluginDir] },
+          allow: ["setup-default-wrapper-with-plugin-field-test"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(built.fullMarker)).toBe(false);
+    expect(fs.existsSync(built.setupMarker)).toBe(true);
+    expect(
+      registry.channels.some(
+        (entry) => entry.plugin.id === "setup-default-wrapper-with-plugin-field-test",
+      ),
+    ).toBe(true);
+  });
+
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {
     expect(
       __testing.shouldLoadChannelPluginInSetupRuntime({
