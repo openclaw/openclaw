@@ -86,6 +86,31 @@ describe("resolveAgentConfig", () => {
     expect(resolveAgentConfig(cfg, "main")?.verboseDefault).toBe("on");
   });
 
+  it("returns per-agent tts overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            tts: {
+              provider: "openai",
+              providers: {
+                openai: { voice: "ash" },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.tts).toEqual({
+      provider: "openai",
+      providers: {
+        openai: { voice: "ash" },
+      },
+    });
+  });
+
   it("resolves explicit and effective model primary separately", () => {
     const cfgWithStringDefault = {
       agents: {

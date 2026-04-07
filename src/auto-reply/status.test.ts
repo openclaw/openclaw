@@ -201,6 +201,35 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Text: low");
   });
 
+  it("shows the active agent-specific voice provider", () => {
+    const text = buildStatusMessage({
+      config: {
+        messages: {
+          tts: {
+            auto: "always",
+            provider: "openai",
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "voicey",
+              tts: {
+                provider: "elevenlabs",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      agent: {},
+      agentId: "voicey",
+      sessionKey: "agent:voicey:session-1",
+      queue: { mode: "none" },
+    });
+
+    expect(normalizeTestText(text)).toContain("Voice: always · provider=elevenlabs");
+  });
+
   it("notes channel model overrides in status output", () => {
     const text = buildStatusMessage({
       config: {

@@ -117,7 +117,7 @@ export async function resolveCommandsSystemPromptBundle(
         },
       }
     : { enabled: false };
-  const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
+  const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg, sessionAgentId) : undefined;
 
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,

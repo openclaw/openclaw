@@ -6025,6 +6025,360 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   additionalProperties: false,
                 },
+                tts: {
+                  type: "object",
+                  properties: {
+                    auto: {
+                      type: "string",
+                      enum: ["off", "always", "inbound", "tagged"],
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    mode: {
+                      type: "string",
+                      enum: ["final", "all"],
+                    },
+                    provider: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    summaryModel: {
+                      type: "string",
+                    },
+                    modelOverrides: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        allowText: {
+                          type: "boolean",
+                        },
+                        allowProvider: {
+                          type: "boolean",
+                        },
+                        allowVoice: {
+                          type: "boolean",
+                        },
+                        allowModelId: {
+                          type: "boolean",
+                        },
+                        allowVoiceSettings: {
+                          type: "boolean",
+                        },
+                        allowNormalization: {
+                          type: "boolean",
+                        },
+                        allowSeed: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    elevenlabs: {
+                      type: "object",
+                      properties: {
+                        apiKey: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              oneOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "env",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "file",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "exec",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                        baseUrl: {
+                          type: "string",
+                        },
+                        voiceId: {
+                          type: "string",
+                        },
+                        modelId: {
+                          type: "string",
+                        },
+                        seed: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 4294967295,
+                        },
+                        applyTextNormalization: {
+                          type: "string",
+                          enum: ["auto", "on", "off"],
+                        },
+                        languageCode: {
+                          type: "string",
+                        },
+                        voiceSettings: {
+                          type: "object",
+                          properties: {
+                            stability: {
+                              type: "number",
+                              minimum: 0,
+                              maximum: 1,
+                            },
+                            similarityBoost: {
+                              type: "number",
+                              minimum: 0,
+                              maximum: 1,
+                            },
+                            style: {
+                              type: "number",
+                              minimum: 0,
+                              maximum: 1,
+                            },
+                            useSpeakerBoost: {
+                              type: "boolean",
+                            },
+                            speed: {
+                              type: "number",
+                              minimum: 0.5,
+                              maximum: 2,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    openai: {
+                      type: "object",
+                      properties: {
+                        apiKey: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              oneOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "env",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "file",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "exec",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                        baseUrl: {
+                          type: "string",
+                        },
+                        model: {
+                          type: "string",
+                        },
+                        voice: {
+                          type: "string",
+                        },
+                        speed: {
+                          type: "number",
+                          minimum: 0.25,
+                          maximum: 4,
+                        },
+                        instructions: {
+                          type: "string",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    edge: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        voice: {
+                          type: "string",
+                        },
+                        lang: {
+                          type: "string",
+                        },
+                        outputFormat: {
+                          type: "string",
+                        },
+                        pitch: {
+                          type: "string",
+                        },
+                        rate: {
+                          type: "string",
+                        },
+                        volume: {
+                          type: "string",
+                        },
+                        saveSubtitles: {
+                          type: "boolean",
+                        },
+                        proxy: {
+                          type: "string",
+                        },
+                        timeoutMs: {
+                          type: "integer",
+                          minimum: 1000,
+                          maximum: 120000,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    microsoft: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        voice: {
+                          type: "string",
+                        },
+                        lang: {
+                          type: "string",
+                        },
+                        outputFormat: {
+                          type: "string",
+                        },
+                        pitch: {
+                          type: "string",
+                        },
+                        rate: {
+                          type: "string",
+                        },
+                        volume: {
+                          type: "string",
+                        },
+                        saveSubtitles: {
+                          type: "boolean",
+                        },
+                        proxy: {
+                          type: "string",
+                        },
+                        timeoutMs: {
+                          type: "integer",
+                          minimum: 1000,
+                          maximum: 120000,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    prefsPath: {
+                      type: "string",
+                    },
+                    maxTextLength: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 9007199254740991,
+                    },
+                    timeoutMs: {
+                      type: "integer",
+                      minimum: 1000,
+                      maximum: 120000,
+                    },
+                  },
+                  additionalProperties: false,
+                },
                 subagents: {
                   type: "object",
                   properties: {
@@ -26526,6 +26880,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].memorySearch.remote.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
+    },
+    "agents.list[].tts.elevenlabs.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
+    },
+    "agents.list[].tts.openai.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
     },
     "agents.list[].sandbox.ssh.identityData": {
       sensitive: true,

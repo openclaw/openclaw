@@ -41,4 +41,21 @@ describe("createTtsTool", () => {
     });
     expect(JSON.stringify(result.content)).not.toContain("MEDIA:");
   });
+
+  it("forwards agentId to textToSpeech when present", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: false,
+      error: "not configured",
+    });
+
+    const tool = createTtsTool({ agentId: "assistant-voice" });
+    await tool.execute("call-2", { text: "hello" });
+
+    expect(textToSpeechSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "hello",
+        agentId: "assistant-voice",
+      }),
+    );
+  });
 });

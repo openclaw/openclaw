@@ -398,12 +398,14 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
 const formatVoiceModeLine = (
   config?: OpenClawConfig,
   sessionEntry?: SessionEntry,
+  agentId?: string,
 ): string | null => {
   if (!config) {
     return null;
   }
   const snapshot = resolveStatusTtsSnapshot({
     cfg: config,
+    agentId,
     sessionAuto: sessionEntry?.ttsAuto,
   });
   if (!snapshot) {
@@ -803,7 +805,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
-  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
+  const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
   return [
     versionLine,

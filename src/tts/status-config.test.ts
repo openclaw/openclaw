@@ -62,6 +62,39 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
+  it("prefers per-agent provider overrides over global defaults", async () => {
+    await withTempHome(async () => {
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                auto: "always",
+                provider: "openai",
+              },
+            },
+            agents: {
+              list: [
+                {
+                  id: "voicey",
+                  tts: {
+                    provider: "elevenlabs",
+                  },
+                },
+              ],
+            },
+          } as OpenClawConfig,
+          agentId: "voicey",
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "elevenlabs",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("derives the default prefs path from OPENCLAW_CONFIG_PATH when set", async () => {
     await withTempHome(
       async (home) => {

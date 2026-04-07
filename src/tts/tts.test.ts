@@ -46,4 +46,17 @@ describe("tts runtime facade", () => {
     expect(loadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledTimes(1);
     expect(buildTtsSystemPromptHint).toHaveBeenCalledTimes(1);
   });
+
+  it("forwards agentId through the runtime facade", async () => {
+    const cfg = {} as never;
+    const buildTtsSystemPromptHint = vi.fn().mockReturnValue("hint");
+    loadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      buildTtsSystemPromptHint,
+    });
+
+    const tts = await importTtsModule();
+    tts.buildTtsSystemPromptHint(cfg, "voicey");
+
+    expect(buildTtsSystemPromptHint).toHaveBeenCalledWith(cfg, "voicey");
+  });
 });

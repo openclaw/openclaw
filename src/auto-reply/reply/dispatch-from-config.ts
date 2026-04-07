@@ -210,6 +210,7 @@ export async function dispatchReplyFromConfig(params: {
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const sessionKey = ctx.SessionKey;
+  const agentId = sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
 
@@ -575,6 +576,7 @@ export async function dispatchReplyFromConfig(params: {
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
+        agentId,
         channel: ttsChannel,
         kind: "final",
         inboundAudio,
@@ -979,7 +981,7 @@ export async function dispatchReplyFromConfig(params: {
       routedFinalCount += finalReply.routedFinalCount;
     }
 
-    const ttsMode = resolveConfiguredTtsMode(cfg);
+    const ttsMode = resolveConfiguredTtsMode(cfg, agentId);
     // Generate TTS-only reply after block streaming completes (when there's no final reply).
     // This handles the case where block streaming succeeds and drops final payloads,
     // but we still want TTS audio to be generated from the accumulated block content.
@@ -993,6 +995,7 @@ export async function dispatchReplyFromConfig(params: {
         const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
           payload: { text: accumulatedBlockText },
           cfg,
+          agentId,
           channel: ttsChannel,
           kind: "final",
           inboundAudio,

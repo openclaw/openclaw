@@ -16,6 +16,7 @@ const TtsToolSchema = Type.Object({
 
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
+  agentId?: string;
   agentChannel?: GatewayMessageChannel;
 }): AnyAgentTool {
   return {
@@ -32,6 +33,7 @@ export function createTtsTool(opts?: {
       const result = await textToSpeech({
         text,
         cfg,
+        agentId: opts?.agentId,
         channel: channel ?? opts?.agentChannel,
       });
 

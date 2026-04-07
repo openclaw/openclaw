@@ -111,7 +111,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false };
   }
 
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentId);
   const prefsPath = resolveTtsPrefsPath(config);
   const action = parsed.action;
   const args = parsed.args;
@@ -147,6 +147,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     const result = await textToSpeech({
       text: args,
       cfg: params.cfg,
+      agentId: params.agentId,
       channel: params.command.channel,
       prefsPath,
     });
