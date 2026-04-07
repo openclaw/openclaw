@@ -7,6 +7,7 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { SkillSnapshot } from "../skills.js";
 
 export type RunCliAgentParams = {
   sessionId: string;
@@ -35,6 +36,7 @@ export type RunCliAgentParams = {
   agentAccountId?: string;
   abortSignal?: AbortSignal;
   replyOperation?: ReplyOperation;
+  skillsSnapshot?: SkillSnapshot;
 };
 
 export type CliPreparedBackend = {

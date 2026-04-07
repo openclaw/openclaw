@@ -22,6 +22,7 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -162,6 +163,11 @@ export async function prepareCliRunContext(
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
+  const skillsPrompt = resolveSkillsPromptForRun({
+    skillsSnapshot: params.skillsSnapshot,
+    config: params.config,
+    workspaceDir,
+  });
   const systemPrompt =
     resolveSystemPromptOverride({
       config: params.config,
@@ -179,6 +185,7 @@ export async function prepareCliRunContext(
       contextFiles,
       modelDisplay,
       agentId: sessionAgentId,
+      skillsPrompt,
     });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
@@ -199,7 +206,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt: "",
+    skillsPrompt,
     tools: [],
   });
 
