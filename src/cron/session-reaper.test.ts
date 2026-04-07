@@ -255,4 +255,42 @@ describe("sweepCronRunSessions", () => {
     });
     expect(r3.swept).toBe(false);
   });
+
+  it("recovers orphaned running sessions older than 2h and marks them done", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number; status?: string }> = {
+      "agent:main:cron:job1:run:stuck-run": {
+        sessionId: "stuck-run",
+        updatedAt: now - 3 * 3_600_000, // 3h ago — stuck running
+        status: "running",
+      },
+      "agent:main:cron:job1:run:recent-run": {
+        sessionId: "recent-run",
+        updatedAt: now - 30 * 60_000, // 30min ago — actively running
+        status: "running",
+      },
+      "agent:main:cron:job1:run:done-run": {
+        sessionId: "done-run",
+        updatedAt: now - 3 * 3_600_000, // 3h ago but already done
+        status: "done",
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.orphansRecovered).toBe(1);
+    expect(result.pruned).toBe(0); // not pruned yet — gives UI time to show done status
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:job1:run:stuck-run"].status).toBe("done");
+    expect(updated["agent:main:cron:job1:run:recent-run"].status).toBe("running"); // untouched
+    expect(updated["agent:main:cron:job1:run:done-run"].status).toBe("done"); // untouched
+  });
 });

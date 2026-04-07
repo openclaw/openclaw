@@ -16,6 +16,14 @@ import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 
+/**
+ * How long a cron:run session may stay in status="running" before the reaper
+ * assumes the gateway crashed mid-run and marks it done.  Two hours covers
+ * any realistic cron job while still cleaning up within a reasonable window
+ * after a hard restart.
+ */
+const ORPHAN_RUNNING_THRESHOLD_MS = 2 * 3_600_000; // 2 hours
+
 /** Minimum interval between reaper sweeps (avoid running every timer tick). */
 const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
@@ -39,6 +47,8 @@ export function resolveRetentionMs(cronConfig?: CronConfig): number | null {
 export type ReaperResult = {
   swept: boolean;
   pruned: number;
+  /** Sessions whose status was "running" but haven't been updated recently — marked done. */
+  orphansRecovered: number;
 };
 
 /**
@@ -66,20 +76,22 @@ export async function sweepCronRunSessions(params: {
 
   // Throttle: don't sweep more often than every 5 minutes.
   if (!params.force && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
-    return { swept: false, pruned: 0 };
+    return { swept: false, pruned: 0, orphansRecovered: 0 };
   }
 
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
     lastSweepAtMsByStore.set(storePath, now);
-    return { swept: false, pruned: 0 };
+    return { swept: false, pruned: 0, orphansRecovered: 0 };
   }
 
   let pruned = 0;
+  let orphansRecovered = 0;
   const prunedSessions = new Map<string, string | undefined>();
   try {
     await updateSessionStore(storePath, (store) => {
       const cutoff = now - retentionMs;
+      const orphanCutoff = now - ORPHAN_RUNNING_THRESHOLD_MS;
       for (const key of Object.keys(store)) {
         if (!isCronRunSessionKey(key)) {
           continue;
@@ -89,6 +101,16 @@ export async function sweepCronRunSessions(params: {
           continue;
         }
         const updatedAt = entry.updatedAt ?? 0;
+        // Recover orphaned "running" sessions before the deletion cutoff check.
+        // If a run is still marked "running" but hasn't been updated for longer
+        // than ORPHAN_RUNNING_THRESHOLD_MS, the gateway likely crashed mid-run.
+        if (entry.status === "running" && updatedAt < orphanCutoff) {
+          store[key] = { ...entry, status: "done", endedAt: updatedAt };
+          orphansRecovered++;
+          // Skip the retention-prune check — let the next sweep delete it so
+          // the UI briefly reflects the corrected "done" status.
+          continue;
+        }
         if (updatedAt < cutoff) {
           if (!prunedSessions.has(entry.sessionId) || entry.sessionFile) {
             prunedSessions.set(entry.sessionId, entry.sessionFile);
@@ -100,7 +122,7 @@ export async function sweepCronRunSessions(params: {
     });
   } catch (err) {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
-    return { swept: false, pruned: 0 };
+    return { swept: false, pruned: 0, orphansRecovered: 0 };
   }
 
   lastSweepAtMsByStore.set(storePath, now);
@@ -133,6 +155,12 @@ export async function sweepCronRunSessions(params: {
     }
   }
 
+  if (orphansRecovered > 0) {
+    params.log.info(
+      { orphansRecovered },
+      `cron-reaper: recovered ${orphansRecovered} orphaned running cron run session(s)`,
+    );
+  }
   if (pruned > 0) {
     params.log.info(
       { pruned, retentionMs },
@@ -140,7 +168,7 @@ export async function sweepCronRunSessions(params: {
     );
   }
 
-  return { swept: true, pruned };
+  return { swept: true, pruned, orphansRecovered };
 }
 
 /** Reset the throttle timer (for tests). */
