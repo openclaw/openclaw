@@ -410,6 +410,42 @@ describe("discordPlugin bindings", () => {
   });
 });
 
+describe("discordPlugin messaging", () => {
+  it("resolveInboundConversation returns channel: prefix for group channels", () => {
+    // Regression guard: ACP thread binding reads this value and normalizes the channel: prefix
+    // before passing it to Discord REST. If this format changes, the normalization in
+    // normalizeDiscordBindingChannelRef() becomes a silent no-op and the binding breaks.
+    const resolve = discordPlugin.messaging?.resolveInboundConversation;
+    if (!resolve) {
+      throw new Error("resolveInboundConversation unavailable");
+    }
+
+    const result = resolve({
+      to: "123456789012345678",
+      conversationId: "123456789012345678",
+      isGroup: true,
+    });
+
+    expect(result).toEqual({ conversationId: "channel:123456789012345678" });
+  });
+
+  it("resolveInboundConversation returns user: prefix for DM sender", () => {
+    const resolve = discordPlugin.messaging?.resolveInboundConversation;
+    if (!resolve) {
+      throw new Error("resolveInboundConversation unavailable");
+    }
+
+    const result = resolve({
+      from: "987654321098765432",
+      to: "987654321098765432",
+      conversationId: "987654321098765432",
+      isGroup: false,
+    });
+
+    expect(result).toEqual({ conversationId: "user:987654321098765432" });
+  });
+});
+
 describe("discordPlugin security", () => {
   it("normalizes dm allowlist entries with trimmed prefixes and mentions", () => {
     const resolveDmPolicy = discordPlugin.security?.resolveDmPolicy;

@@ -180,6 +180,19 @@ describe("resolveChannelIdForBinding", () => {
 
     expect(resolved).toBe("forum-1");
   });
+
+  it("returns null without REST lookup when threadId normalizes to empty", async () => {
+    // Regression guard: a blank threadId should short-circuit before hitting Discord REST.
+    // Previously the guard was missing and Routes.channel("") produced an invalid path.
+    const resolved = await resolveChannelIdForBinding({
+      accountId: "default",
+      threadId: "   ",
+    });
+
+    expect(resolved).toBeNull();
+    expect(createDiscordRestClient).not.toHaveBeenCalled();
+    expect(restGet).not.toHaveBeenCalled();
+  });
 });
 
 describe("maybeSendBindingMessage", () => {
