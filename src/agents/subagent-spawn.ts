@@ -84,6 +84,7 @@ export type SpawnSubagentParams = {
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: SpawnSubagentMode;
+  lightContext?: boolean;
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
   lightContext?: boolean;
