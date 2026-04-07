@@ -1,17 +1,23 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import {
-  loadSessionStore,
-  resolveAllAgentSessionStoreTargets,
-  resolveStorePath,
-  updateSessionStore,
-} from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { resolveAllAgentSessionStoreTargets } from "../../config/sessions/targets.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
   type SessionEntry,
 } from "../../config/sessions/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
 
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
@@ -141,6 +147,7 @@ export async function upsertAcpSessionMeta(params: {
     sessionKey,
     cfg: params.cfg,
   });
+  const { updateSessionStore } = await loadSessionStoreRuntime();
   return await updateSessionStore(
     storePath,
     (store) => {

@@ -41,7 +41,7 @@ export type DiscordGuildEntryResolved = {
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: string[];
   roles?: string[];
-  channels?: Record<string, { allow?: boolean } & DiscordChannelOverrideConfig>;
+  channels?: Record<string, DiscordChannelOverrideConfig>;
 };
 
 export type DiscordChannelConfigResolved = DiscordChannelOverrideConfig & {
@@ -394,7 +394,7 @@ function resolveDiscordChannelConfigEntry(
   entry: DiscordChannelEntry,
 ): DiscordChannelConfigResolved {
   const resolved: DiscordChannelConfigResolved = {
-    allowed: entry.allow !== false,
+    allowed: entry.enabled !== false,
     requireMention: entry.requireMention,
     ignoreOtherMentions: entry.ignoreOtherMentions,
     skills: entry.skills,
@@ -530,6 +530,26 @@ export function isDiscordGroupAllowedByPolicy(params: {
     routeAllowlistConfigured: params.channelAllowlistConfigured,
     routeMatched: params.channelAllowed,
   }).allowed;
+}
+
+export function resolveDiscordChannelPolicyCommandAuthorizer(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  guildInfo?: DiscordGuildEntryResolved | null;
+  channelConfig?: DiscordChannelConfigResolved | null;
+}) {
+  const channelAllowlistConfigured =
+    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  return {
+    configured:
+      params.groupPolicy === "allowlist" &&
+      (Boolean(params.guildInfo) || channelAllowlistConfigured),
+    allowed: isDiscordGroupAllowedByPolicy({
+      groupPolicy: params.groupPolicy,
+      guildAllowlisted: Boolean(params.guildInfo),
+      channelAllowlistConfigured,
+      channelAllowed: params.channelConfig?.allowed !== false,
+    }),
+  } as const;
 }
 
 export function resolveGroupDmAllow(params: {

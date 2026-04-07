@@ -1,4 +1,5 @@
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
@@ -144,15 +145,14 @@ export default definePluginEntry({
         const apiKey = asTrimmedString(active.config.apiKey);
         const baseUrl = asProviderBaseUrl(active.config.baseUrl);
 
-        const currentVoiceId =
-          asTrimmedString(active.config.voiceId) || asTrimmedString(cfg.talk?.voiceId);
+        const currentVoiceId = asTrimmedString(active.config.voiceId);
 
         if (action === "status") {
           return {
             text:
               "Talk voice status:\n" +
               `- provider: ${providerId}\n` +
-              `- talk.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
+              `- talk.providers.${providerId}.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
               `- ${providerId}.apiKey: ${apiKey ? mask(apiKey) : "(unset)"}`,
           };
         }
@@ -170,7 +170,7 @@ export default definePluginEntry({
               text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12, providerId),
             };
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
+            const message = formatErrorMessage(error);
             return { text: `${providerLabel} voice list failed: ${message}` };
           }
         }
@@ -195,7 +195,7 @@ export default definePluginEntry({
               baseUrl,
             });
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
+            const message = formatErrorMessage(error);
             return { text: `${providerLabel} voice lookup failed: ${message}` };
           }
           const chosen = findVoice(voices, query);
@@ -210,9 +210,9 @@ export default definePluginEntry({
               ...cfg.talk,
               provider: providerId,
               providers: {
-                ...(cfg.talk?.providers ?? {}),
+                ...cfg.talk?.providers,
                 [providerId]: {
-                  ...(cfg.talk?.providers?.[providerId] ?? {}),
+                  ...cfg.talk?.providers?.[providerId],
                   voiceId: chosen.id,
                 },
               },

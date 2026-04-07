@@ -2019,6 +2019,7 @@ public struct TalkSpeakParams: Codable, Sendable {
     public let modelid: String?
     public let outputformat: String?
     public let speed: Double?
+    public let ratewpm: Int?
     public let stability: Double?
     public let similarity: Double?
     public let style: Double?
@@ -2026,6 +2027,7 @@ public struct TalkSpeakParams: Codable, Sendable {
     public let seed: Int?
     public let normalize: String?
     public let language: String?
+    public let latencytier: Int?
 
     public init(
         text: String,
@@ -2033,19 +2035,22 @@ public struct TalkSpeakParams: Codable, Sendable {
         modelid: String?,
         outputformat: String?,
         speed: Double?,
+        ratewpm: Int?,
         stability: Double?,
         similarity: Double?,
         style: Double?,
         speakerboost: Bool?,
         seed: Int?,
         normalize: String?,
-        language: String?)
+        language: String?,
+        latencytier: Int?)
     {
         self.text = text
         self.voiceid = voiceid
         self.modelid = modelid
         self.outputformat = outputformat
         self.speed = speed
+        self.ratewpm = ratewpm
         self.stability = stability
         self.similarity = similarity
         self.style = style
@@ -2053,6 +2058,7 @@ public struct TalkSpeakParams: Codable, Sendable {
         self.seed = seed
         self.normalize = normalize
         self.language = language
+        self.latencytier = latencytier
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2061,6 +2067,7 @@ public struct TalkSpeakParams: Codable, Sendable {
         case modelid = "modelId"
         case outputformat = "outputFormat"
         case speed
+        case ratewpm = "rateWpm"
         case stability
         case similarity
         case style
@@ -2068,6 +2075,7 @@ public struct TalkSpeakParams: Codable, Sendable {
         case seed
         case normalize
         case language
+        case latencytier = "latencyTier"
     }
 }
 
@@ -2893,6 +2901,78 @@ public struct SkillsBinsResult: Codable, Sendable {
     }
 }
 
+public struct SkillsSearchParams: Codable, Sendable {
+    public let query: String?
+    public let limit: Int?
+
+    public init(
+        query: String?,
+        limit: Int?)
+    {
+        self.query = query
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case limit
+    }
+}
+
+public struct SkillsSearchResult: Codable, Sendable {
+    public let results: [[String: AnyCodable]]
+
+    public init(
+        results: [[String: AnyCodable]])
+    {
+        self.results = results
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case results
+    }
+}
+
+public struct SkillsDetailParams: Codable, Sendable {
+    public let slug: String
+
+    public init(
+        slug: String)
+    {
+        self.slug = slug
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case slug
+    }
+}
+
+public struct SkillsDetailResult: Codable, Sendable {
+    public let skill: AnyCodable
+    public let latestversion: AnyCodable?
+    public let metadata: AnyCodable?
+    public let owner: AnyCodable?
+
+    public init(
+        skill: AnyCodable,
+        latestversion: AnyCodable?,
+        metadata: AnyCodable?,
+        owner: AnyCodable?)
+    {
+        self.skill = skill
+        self.latestversion = latestversion
+        self.metadata = metadata
+        self.owner = owner
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skill
+        case latestversion = "latestVersion"
+        case metadata
+        case owner
+    }
+}
+
 public struct CronJob: Codable, Sendable {
     public let id: String
     public let agentid: String?
@@ -3336,6 +3416,20 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
         case exists
         case hash
         case file
+    }
+}
+
+public struct ExecApprovalGetParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
     }
 }
 

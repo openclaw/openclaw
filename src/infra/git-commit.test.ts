@@ -1,13 +1,15 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+
+const tempDirs = createTrackedTempDirs();
 
 async function makeTempDir(label: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
+  return await tempDirs.make(`openclaw-${label}-`);
 }
 
 async function makeFakeGitRepo(
@@ -61,6 +63,7 @@ describe("git commit resolution", () => {
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
     __testing.clearCachedGitCommits();
+    await tempDirs.cleanup();
   });
 
   it("resolves commit metadata from the caller module root instead of the caller cwd", async () => {

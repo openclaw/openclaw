@@ -1,4 +1,5 @@
 import type { SessionAcpIdentity, SessionAcpMeta } from "../../config/sessions/types.js";
+import { normalizeText } from "../normalize-text.js";
 import { isSessionIdentityPending, resolveSessionIdentityFromMeta } from "./session-identity.js";
 
 export const ACP_SESSION_IDENTITY_RENDERER_VERSION = "v1";
@@ -33,14 +34,6 @@ const ACP_AGENT_RESUME_HINT_BY_KEY = new Map<string, SessionResumeHintResolver>(
       `resume in Kimi CLI: \`kimi resume ${agentSessionId}\` (continues this conversation).`,
   ],
 ]);
-
-function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function normalizeAgentHintKey(value: unknown): string | undefined {
   const normalized = normalizeText(value);

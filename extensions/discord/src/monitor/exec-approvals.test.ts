@@ -57,8 +57,8 @@ const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
 const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
 const mockCreateOperatorApprovalsGatewayClient = vi.hoisted(() => vi.fn());
 
-vi.mock("../send.shared.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.shared.js")>();
+vi.mock("../send.shared.js", async () => {
+  const actual = await vi.importActual<typeof import("../send.shared.js")>("../send.shared.js");
   return {
     ...actual,
     createDiscordClient: () => ({
@@ -72,8 +72,10 @@ vi.mock("../send.shared.js", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
     loadSessionStore: () => mockSessionStoreEntries.value,
@@ -148,8 +150,10 @@ vi.mock("../../../../src/gateway/client.js", () => ({
   },
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
+    "openclaw/plugin-sdk/text-runtime",
+  );
   return {
     ...actual,
     logDebug: vi.fn(),
@@ -296,7 +300,6 @@ beforeEach(() => {
 });
 
 beforeAll(async () => {
-  vi.resetModules();
   ({
     buildExecApprovalCustomId,
     extractDiscordChannelId,
@@ -352,9 +355,7 @@ describe("parseExecApprovalData", () => {
   });
 
   it("rejects null/undefined input", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     expect(parseExecApprovalData(null as any)).toBeNull();
-    // oxlint-disable-next-line typescript/no-explicit-any
     expect(parseExecApprovalData(undefined as any)).toBeNull();
   });
 
@@ -710,7 +711,6 @@ describe("ExecApprovalButton", () => {
       ephemeral: true,
     });
     expect(acknowledge).not.toHaveBeenCalled();
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
 
@@ -726,7 +726,6 @@ describe("ExecApprovalButton", () => {
 
     expect(reply).not.toHaveBeenCalled();
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-once");
   });
 
@@ -741,7 +740,6 @@ describe("ExecApprovalButton", () => {
     await button.run(interaction, data);
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "allow-always");
   });
 
@@ -756,7 +754,6 @@ describe("ExecApprovalButton", () => {
     await button.run(interaction, data);
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).toHaveBeenCalledWith("test-approval", "deny");
   });
 
@@ -775,7 +772,6 @@ describe("ExecApprovalButton", () => {
       ephemeral: true,
     });
     expect(acknowledge).not.toHaveBeenCalled();
-    // oxlint-disable-next-line typescript/unbound-method -- vi.fn() mock
     expect(handler.resolveApproval).not.toHaveBeenCalled();
   });
 

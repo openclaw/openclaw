@@ -15,7 +15,13 @@ import type {
 } from "./types.js";
 
 function extractBearerToken(header: unknown): string {
-  const authHeader = Array.isArray(header) ? String(header[0] ?? "") : String(header ?? "");
+  const authHeader = Array.isArray(header)
+    ? typeof header[0] === "string"
+      ? header[0]
+      : ""
+    : typeof header === "string"
+      ? header
+      : "";
   return authHeader.toLowerCase().startsWith("bearer ")
     ? authHeader.slice("bearer ".length).trim()
     : "";
@@ -63,7 +69,10 @@ function parseGoogleChatInboundPayload(
       user: chat.user,
       eventTime: chat.eventTime,
     };
-    addOnBearerToken = String(rawObj.authorizationEventObject?.systemIdToken ?? "").trim();
+    addOnBearerToken =
+      typeof rawObj.authorizationEventObject?.systemIdToken === "string"
+        ? rawObj.authorizationEventObject.systemIdToken.trim()
+        : "";
   }
 
   const event = eventPayload as GoogleChatEvent;

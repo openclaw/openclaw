@@ -10,15 +10,7 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  createChannelNativeApprovalRuntime,
-  type ExecApprovalChannelRuntime,
-} from "openclaw/plugin-sdk/infra-runtime";
-import { buildExecApprovalActionDescriptors } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
-import { getExecApprovalApproverDmNoticeText } from "openclaw/plugin-sdk/infra-runtime";
+import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   ExecApprovalActionDescriptor,
   ExecApprovalDecision,
@@ -27,14 +19,23 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  buildExecApprovalActionDescriptors,
+  createChannelNativeApprovalRuntime,
+  getExecApprovalApproverDmNoticeText,
+  resolveExecApprovalCommandDisplay,
+  type ExecApprovalChannelRuntime,
+} from "openclaw/plugin-sdk/infra-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import {
-  createDiscordNativeApprovalAdapter,
   createDiscordApprovalCapability,
   shouldHandleDiscordApprovalRequest,
 } from "../approval-native.js";
-import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
+import {
+  getDiscordExecApprovalApprovers,
+  isDiscordExecApprovalClientEnabled,
+} from "../exec-approvals.js";
 import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
@@ -195,15 +196,15 @@ class ExecApprovalActionRow extends Row<Button> {
     ask?: string | null;
     allowedDecisions?: readonly ExecApprovalDecision[];
   }) {
-    super([
-      ...buildExecApprovalActionDescriptors({
+    super(
+      buildExecApprovalActionDescriptors({
         approvalCommandId: params.approvalId,
         ask: params.ask,
         allowedDecisions: params.allowedDecisions,
       }).map(
         (descriptor) => new ExecApprovalActionButton({ approvalId: params.approvalId, descriptor }),
       ),
-    ]);
+    );
   }
 }
 
@@ -473,9 +474,7 @@ export class DiscordExecApprovalHandler {
     this.runtime = createChannelNativeApprovalRuntime<
       PendingApproval,
       PreparedDeliveryTarget,
-      DiscordPendingDelivery,
-      ApprovalRequest,
-      ApprovalResolved
+      DiscordPendingDelivery
     >({
       label: "discord/exec-approvals",
       clientDisplayName: "Discord Exec Approvals",
@@ -484,7 +483,12 @@ export class DiscordExecApprovalHandler {
       gatewayUrl: this.opts.gatewayUrl,
       eventKinds: ["exec", "plugin"],
       nativeAdapter: createDiscordApprovalCapability(this.opts.config).native,
-      isConfigured: () => Boolean(this.opts.config.enabled && this.getApprovers().length > 0),
+      isConfigured: () =>
+        isDiscordExecApprovalClientEnabled({
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+          configOverride: this.opts.config,
+        }),
       shouldHandle: (request) => this.shouldHandle(request),
       buildPendingContent: ({ request }) => {
         const actionRow = createApprovalActionRow(request);
@@ -555,7 +559,12 @@ export class DiscordExecApprovalHandler {
           },
         };
       },
-      deliverTarget: async ({ plannedTarget, preparedTarget, pendingContent, request }) => {
+      deliverTarget: async ({
+        plannedTarget,
+        preparedTarget,
+        pendingContent,
+        request: _request,
+      }) => {
         const { rest, request: discordRequest } = createDiscordClient(
           { token: this.opts.token, accountId: this.opts.accountId },
           this.opts.cfg,

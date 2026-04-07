@@ -8,6 +8,7 @@ import {
   type Tool,
 } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
+import { formatErrorMessage } from "../infra/errors.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -284,7 +285,7 @@ async function probeTool(
     return {
       ok: false,
       latencyMs: Date.now() - startedAt,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }
@@ -321,7 +322,7 @@ async function probeImage(
     return {
       ok: false,
       latencyMs: Date.now() - startedAt,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }

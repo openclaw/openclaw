@@ -143,10 +143,14 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("cxx")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
+    expect(isDangerousHostEnvVarName("cargo_build_rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvVarName("CMAKE_C_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_c_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("CMAKE_CXX_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_cxx_compiler")).toBe(true);
+    expect(isDangerousHostEnvVarName("RUSTC_WRAPPER")).toBe(true);
+    expect(isDangerousHostEnvVarName("rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELLOPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ps4")).toBe(true);
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
@@ -168,12 +172,18 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("glibc_tunables")).toBe(true);
     expect(isDangerousHostEnvVarName("MAVEN_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("maven_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("MAKEFLAGS")).toBe(true);
+    expect(isDangerousHostEnvVarName("makeflags")).toBe(true);
+    expect(isDangerousHostEnvVarName("MFLAGS")).toBe(true);
+    expect(isDangerousHostEnvVarName("mflags")).toBe(true);
     expect(isDangerousHostEnvVarName("SBT_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("sbt_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("GRADLE_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("ANT_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("HGRCPATH")).toBe(true);
+    expect(isDangerousHostEnvVarName("hgrcpath")).toBe(true);
     expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(false);
     expect(isDangerousHostEnvVarName("https_proxy")).toBe(false);
     expect(isDangerousHostEnvVarName("HTTP_PROXY")).toBe(false);
@@ -189,8 +199,10 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(false);
     expect(isDangerousHostEnvVarName("docker_cert_path")).toBe(false);
     expect(isDangerousHostEnvVarName("DOCKER_TLS_VERIFY")).toBe(false);
+    expect(isDangerousHostEnvVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
+    expect(isDangerousHostEnvVarName("yarn_rc_filename")).toBe(false);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
     expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
@@ -208,6 +220,11 @@ describe("sanitizeHostExecEnv", () => {
         GIT_EXTERNAL_DIFF: "/tmp/pwn.sh",
         GIT_TEMPLATE_DIR: "/tmp/git-template",
         GIT_SEQUENCE_EDITOR: "/tmp/pwn-sequence-editor",
+        HGRCPATH: "/tmp/evil-hgrc",
+        CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
+        MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
         AWS_CONFIG_FILE: "/tmp/aws-config",
         LD_PRELOAD: "/tmp/pwn.so",
         OK: "1",
@@ -228,6 +245,8 @@ describe("sanitizeHostExecEnv", () => {
         PATH: "/usr/bin:/bin",
         HOME: "/tmp/trusted-home",
         ZDOTDIR: "/tmp/trusted-zdotdir",
+        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://trusted.example/crates.io-index",
+        YARN_RC_FILENAME: ".trusted-yarnrc.yml",
       },
       overrides: {
         PATH: "/tmp/evil",
@@ -238,8 +257,11 @@ describe("sanitizeHostExecEnv", () => {
         CC: "/tmp/evil-cc",
         CXX: "/tmp/evil-cxx",
         CARGO_BUILD_RUSTC: "/tmp/evil-rustc",
+        CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
         CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
         CMAKE_CXX_COMPILER: "/tmp/evil-cxx-compiler",
+        RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        HGRCPATH: "/tmp/evil-hgrc",
         GIT_SSH_COMMAND: "touch /tmp/pwned",
         GIT_EDITOR: "/tmp/git-editor",
         GIT_EXEC_PATH: "/tmp/git-exec-path",
@@ -247,7 +269,9 @@ describe("sanitizeHostExecEnv", () => {
         EDITOR: "/tmp/editor",
         NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
+        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
         AWS_CONFIG_FILE: "/tmp/override-aws-config",
+        YARN_RC_FILENAME: ".evil-yarnrc.yml",
         PIP_INDEX_URL: "https://example.invalid/simple",
         PIP_PYPI_URL: "https://example.invalid/simple",
         PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
@@ -256,6 +280,7 @@ describe("sanitizeHostExecEnv", () => {
         PIP_TRUSTED_HOST: "example.invalid",
         UV_INDEX: "https://example.invalid/simple",
         UV_INDEX_URL: "https://example.invalid/simple",
+        UV_PYTHON: "/tmp/evil-uv-python",
         UV_DEFAULT_INDEX: "https://example.invalid/simple",
         UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
         DOCKER_HOST: "tcp://example.invalid:2376",
@@ -288,6 +313,8 @@ describe("sanitizeHostExecEnv", () => {
         PS4: "$(touch /tmp/pwned)",
         CLASSPATH: "/tmp/evil-classpath",
         GOFLAGS: "-mod=mod",
+        MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
+        MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
         PHPRC: "/tmp/evil-php.ini",
         XDG_CONFIG_HOME: "/tmp/evil-config",
         SAFE: "ok",
@@ -302,8 +329,11 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.CC).toBeUndefined();
     expect(env.CXX).toBeUndefined();
     expect(env.CARGO_BUILD_RUSTC).toBeUndefined();
+    expect(env.CARGO_BUILD_RUSTC_WRAPPER).toBeUndefined();
     expect(env.CMAKE_C_COMPILER).toBeUndefined();
     expect(env.CMAKE_CXX_COMPILER).toBeUndefined();
+    expect(env.RUSTC_WRAPPER).toBeUndefined();
+    expect(env.HGRCPATH).toBeUndefined();
     expect(env.GIT_TEMPLATE_DIR).toBeUndefined();
     expect(env.GIT_SEQUENCE_EDITOR).toBeUndefined();
     expect(env.AWS_CONFIG_FILE).toBeUndefined();
@@ -312,12 +342,16 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.EDITOR).toBeUndefined();
     expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
     expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
+    expect(env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBe("https://trusted.example/crates.io-index");
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
     expect(env.CLASSPATH).toBeUndefined();
     expect(env.GOFLAGS).toBeUndefined();
+    expect(env.MAKEFLAGS).toBeUndefined();
+    expect(env.MFLAGS).toBeUndefined();
     expect(env.PHPRC).toBeUndefined();
     expect(env.XDG_CONFIG_HOME).toBeUndefined();
+    expect(env.YARN_RC_FILENAME).toBe(".trusted-yarnrc.yml");
     expect(env.PIP_INDEX_URL).toBeUndefined();
     expect(env.PIP_PYPI_URL).toBeUndefined();
     expect(env.PIP_EXTRA_INDEX_URL).toBeUndefined();
@@ -326,6 +360,7 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.PIP_TRUSTED_HOST).toBeUndefined();
     expect(env.UV_INDEX).toBeUndefined();
     expect(env.UV_INDEX_URL).toBeUndefined();
+    expect(env.UV_PYTHON).toBeUndefined();
     expect(env.UV_DEFAULT_INDEX).toBeUndefined();
     expect(env.UV_EXTRA_INDEX_URL).toBeUndefined();
     expect(env.DOCKER_HOST).toBeUndefined();
@@ -459,7 +494,6 @@ describe("sanitizeHostExecEnv", () => {
       baseEnv: {
         PATH: "/usr/bin:/bin",
         GOOD: "1",
-        // oxlint-disable-next-line typescript/no-explicit-any
         BAD_NUMBER: 1 as any,
         "NOT-PORTABLE": "x",
         "ProgramFiles(x86)": "C:\\Program Files (x86)",
@@ -484,6 +518,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("editor")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("cargo_registries_internal_index")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("PIP_INDEX_URL")).toBe(true);
@@ -494,6 +530,7 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("PIP_EXTRA_INDEX_URL")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("UV_INDEX")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("UV_INDEX_URL")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("uv_python")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("uv_default_index")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("UV_EXTRA_INDEX_URL")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("DOCKER_HOST")).toBe(true);
@@ -512,14 +549,25 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("virtual_env")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CLASSPATH")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("classpath")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("MAKEFLAGS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("makeflags")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("MFLAGS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("mflags")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GOFLAGS")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("goflags")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("HGRCPATH")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("hgrcpath")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("RUSTC_WRAPPER")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("cargo_build_rustc_wrapper")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CORECLR_PROFILER_PATH")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("coreclr_profiler_path")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("xdg_config_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("AWS_CONFIG_FILE")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("aws_config_file")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("yarn_rc_filename")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
   });
@@ -534,6 +582,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       overrides: {
         PATH: "/tmp/evil",
         CXX: "/tmp/evil-cxx",
+        CARGO_BUILD_RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
+        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
         CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
         CLASSPATH: "/tmp/evil-classpath",
         PIP_INDEX_URL: "https://example.invalid/simple",
@@ -544,6 +594,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         PIP_TRUSTED_HOST: "example.invalid",
         UV_INDEX: "https://example.invalid/simple",
         UV_INDEX_URL: "https://example.invalid/simple",
+        UV_PYTHON: "/tmp/evil-uv-python",
         UV_DEFAULT_INDEX: "https://example.invalid/simple",
         UV_EXTRA_INDEX_URL: "https://example.invalid/simple",
         DOCKER_HOST: "tcp://example.invalid:2376",
@@ -567,8 +618,13 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GOPRIVATE: "example.invalid/*",
         GOENV: "/tmp/evil-goenv",
         GOPATH: "/tmp/evil-go",
+        HGRCPATH: "/tmp/evil-hgrc",
+        MAKEFLAGS: "--eval=$(shell touch /tmp/pwned)",
+        MFLAGS: "--eval=$(shell touch /tmp/pwned-too)",
         PYTHONUSERBASE: "/tmp/evil-python-userbase",
+        RUSTC_WRAPPER: "/tmp/evil-rustc-wrapper",
         VIRTUAL_ENV: "/tmp/evil-venv",
+        YARN_RC_FILENAME: ".evil-yarnrc.yml",
         HTTPS_PROXY: "http://proxy.example.test:8080",
         GIT_SSL_NO_VERIFY: "1",
         GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
@@ -581,6 +637,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
 
     expect(result.rejectedOverrideBlockedKeys).toEqual([
       "C_INCLUDE_PATH",
+      "CARGO_BUILD_RUSTC_WRAPPER",
+      "CARGO_REGISTRIES_CRATES_IO_INDEX",
       "CLASSPATH",
       "CMAKE_C_COMPILER",
       "CPATH",
@@ -601,8 +659,11 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "GOPATH",
       "GOPRIVATE",
       "GOPROXY",
+      "HGRCPATH",
       "HTTPS_PROXY",
       "LIBRARY_PATH",
+      "MAKEFLAGS",
+      "MFLAGS",
       "NODE_EXTRA_CA_CERTS",
       "NODE_TLS_REJECT_UNAUTHORIZED",
       "OBJC_INCLUDE_PATH",
@@ -615,13 +676,16 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "PIP_TRUSTED_HOST",
       "PYTHONUSERBASE",
       "REQUESTS_CA_BUNDLE",
+      "RUSTC_WRAPPER",
       "SSL_CERT_DIR",
       "SSL_CERT_FILE",
       "UV_DEFAULT_INDEX",
       "UV_EXTRA_INDEX_URL",
       "UV_INDEX",
       "UV_INDEX_URL",
+      "UV_PYTHON",
       "VIRTUAL_ENV",
+      "YARN_RC_FILENAME",
     ]);
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env.SAFE_KEY).toBe("ok");
@@ -629,6 +693,8 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.CLASSPATH).toBeUndefined();
     expect(result.env.CXX).toBeUndefined();
     expect(result.env.CMAKE_C_COMPILER).toBeUndefined();
+    expect(result.env.CARGO_BUILD_RUSTC_WRAPPER).toBeUndefined();
+    expect(result.env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBeUndefined();
     expect(result.env.PIP_INDEX_URL).toBeUndefined();
     expect(result.env.PIP_PYPI_URL).toBeUndefined();
     expect(result.env.PIP_EXTRA_INDEX_URL).toBeUndefined();
@@ -637,6 +703,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.PIP_TRUSTED_HOST).toBeUndefined();
     expect(result.env.UV_INDEX).toBeUndefined();
     expect(result.env.UV_INDEX_URL).toBeUndefined();
+    expect(result.env.UV_PYTHON).toBeUndefined();
     expect(result.env.UV_DEFAULT_INDEX).toBeUndefined();
     expect(result.env.UV_EXTRA_INDEX_URL).toBeUndefined();
     expect(result.env.GIT_SSL_NO_VERIFY).toBeUndefined();
@@ -663,10 +730,15 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GOPRIVATE).toBeUndefined();
     expect(result.env.GOENV).toBeUndefined();
     expect(result.env.GOPATH).toBeUndefined();
+    expect(result.env.HGRCPATH).toBeUndefined();
     expect(result.env.HTTPS_PROXY).toBeUndefined();
+    expect(result.env.MAKEFLAGS).toBeUndefined();
+    expect(result.env.MFLAGS).toBeUndefined();
     expect(result.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
     expect(result.env.PYTHONUSERBASE).toBeUndefined();
+    expect(result.env.RUSTC_WRAPPER).toBeUndefined();
     expect(result.env.VIRTUAL_ENV).toBeUndefined();
+    expect(result.env.YARN_RC_FILENAME).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {
@@ -1072,6 +1144,57 @@ describe("compiler override exploit regression", () => {
       await runMakeCommand(makePath, tempDir, safeEnv);
 
       expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  });
+});
+
+describe("make env exploit regression", () => {
+  it("blocks MAKEFLAGS overrides so make cannot evaluate shell payloads from env", async () => {
+    const makePath = getSystemMakePath();
+    if (!makePath) {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `openclaw-makeflags-override-${process.pid}-${Date.now()}-`),
+    );
+    const exploitPath = path.join(tempDir, "evil-makeflags.sh");
+    const marker = path.join(os.tmpdir(), `openclaw-makeflags-marker-${process.pid}-${Date.now()}`);
+
+    try {
+      clearMarker(marker);
+      fs.writeFileSync(path.join(tempDir, "Makefile"), "all:\n\t@:\n", "utf8");
+      fs.writeFileSync(exploitPath, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, "utf8");
+      fs.chmodSync(exploitPath, 0o755);
+
+      const exploitValue = `--eval=$(shell ${exploitPath})`;
+      const baseEnv = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+      };
+
+      await runMakeCommand(makePath, tempDir, {
+        ...baseEnv,
+        MAKEFLAGS: exploitValue,
+      });
+
+      const baselineTriggered = fs.existsSync(marker);
+      clearMarker(marker);
+
+      const safeEnv = sanitizeHostExecEnv({
+        baseEnv,
+        overrides: {
+          MAKEFLAGS: exploitValue,
+        },
+      });
+      expect(safeEnv.MAKEFLAGS).toBeUndefined();
+
+      await runMakeCommand(makePath, tempDir, safeEnv);
+
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(typeof baselineTriggered).toBe("boolean");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
       fs.rmSync(marker, { force: true });

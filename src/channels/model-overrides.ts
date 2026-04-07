@@ -7,6 +7,7 @@ import {
   type ChannelMatchSource,
 } from "./channel-config.js";
 import { normalizeChatType } from "./chat-type.js";
+import { getChannelPlugin } from "./plugins/registry.js";
 import {
   resolveSessionConversation,
   resolveSessionConversationRef,
@@ -57,6 +58,18 @@ function buildChannelCandidates(
     normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
   const groupId = params.groupId?.trim();
   const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
+  const feishuParentOverrideFallbacks =
+    normalizedChannel === "feishu"
+      ? buildFeishuParentOverrideCandidates(sessionConversation?.rawId)
+      : [];
+  const parentOverrideFallbacks =
+    (normalizedChannel
+      ? getChannelPlugin(
+          normalizedChannel,
+        )?.conversationBindings?.buildModelOverrideParentCandidates?.({
+          parentConversationId: sessionConversation?.rawId,
+        })
+      : null) ?? [];
   const groupConversationKind =
     normalizeChatType(params.groupChatType ?? undefined) === "channel"
       ? "channel"
@@ -81,6 +94,8 @@ function buildChannelCandidates(
       sessionConversation?.rawId,
       ...(groupConversation?.parentConversationCandidates ?? []),
       ...(sessionConversation?.parentConversationCandidates ?? []),
+      ...feishuParentOverrideFallbacks,
+      ...parentOverrideFallbacks,
     ),
     parentKeys: buildChannelKeyCandidates(
       groupChannel,
@@ -91,6 +106,35 @@ function buildChannelCandidates(
       subjectSlug,
     ),
   };
+}
+
+function buildFeishuParentOverrideCandidates(rawId: string | undefined): string[] {
+  const value = rawId?.trim();
+  if (!value) {
+    return [];
+  }
+  const topicSenderMatch = value.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  if (topicSenderMatch) {
+    const chatId = topicSenderMatch[1]?.trim().toLowerCase();
+    const topicId = topicSenderMatch[2]?.trim().toLowerCase();
+    return [`${chatId}:topic:${topicId}`, chatId].filter((entry): entry is string =>
+      Boolean(entry),
+    );
+  }
+  const topicMatch = value.match(/^(.+):topic:([^:]+)$/i);
+  if (topicMatch) {
+    const chatId = topicMatch[1]?.trim().toLowerCase();
+    const topicId = topicMatch[2]?.trim().toLowerCase();
+    return [`${chatId}:topic:${topicId}`, chatId].filter((entry): entry is string =>
+      Boolean(entry),
+    );
+  }
+  const senderMatch = value.match(/^(.+):sender:([^:]+)$/i);
+  if (senderMatch) {
+    const chatId = senderMatch[1]?.trim().toLowerCase();
+    return chatId ? [chatId] : [];
+  }
+  return [];
 }
 
 export function resolveChannelModelOverride(

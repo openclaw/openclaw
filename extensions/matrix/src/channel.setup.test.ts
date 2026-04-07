@@ -11,6 +11,7 @@ vi.mock("./matrix/actions/verification.js", () => ({
 
 import { matrixPlugin } from "./channel.js";
 import { matrixSetupAdapter } from "./setup-core.js";
+import { matrixSetupWizard } from "./setup-surface.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -135,6 +136,11 @@ describe("matrix setup post-write bootstrap", () => {
     installMatrixTestRuntime();
   });
 
+  it("registers the Matrix guided setup wizard on the channel plugin", () => {
+    expect(matrixPlugin.setupWizard).toBe(matrixSetupWizard);
+    expect(matrixPlugin.setupWizard?.channel).toBe("matrix");
+  });
+
   it("bootstraps verification for newly added encrypted accounts", async () => {
     const { previousCfg, nextCfg, accountId, input } = applyDefaultAccountConfig();
     mockBootstrapResult({ success: true, backupVersion: "7" });
@@ -248,7 +254,9 @@ describe("matrix setup post-write bootstrap", () => {
         channels: {
           matrix: {
             homeserver: "http://localhost.localdomain:8008",
-            allowPrivateNetwork: true,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
             proxy: "http://127.0.0.1:7890",
             accounts: {
               ops: {

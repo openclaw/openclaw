@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ConversationRef,
   SessionBindingAdapter,
@@ -9,8 +8,10 @@ import type {
 } from "../infra/outbound/session-binding-service.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-binding-"));
+const tempDirs: string[] = [];
+const tempRoot = makeTrackedTempDir("openclaw-plugin-binding", tempDirs);
 const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
 
 const sessionBindingState = vi.hoisted(() => {
@@ -91,8 +92,9 @@ const pluginRuntimeState = vi.hoisted(
     }) satisfies { registry: PluginRegistry },
 );
 
-vi.mock("../infra/home-dir.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+vi.mock("../infra/home-dir.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
   return {
     ...actual,
     expandHomePrefix: (value: string) => {
@@ -106,6 +108,7 @@ vi.mock("../infra/home-dir.js", async (importOriginal) => {
 
 vi.mock("./runtime.js", () => ({
   getActivePluginRegistry: () => pluginRuntimeState.registry,
+  getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
   setActivePluginRegistry: (registry: PluginRegistry) => {
     pluginRuntimeState.registry = registry;
   },
@@ -155,6 +158,10 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
     unbind: sessionBindingState.unbind,
   };
 }
+
+afterAll(() => {
+  cleanupTrackedTempDirs(tempDirs);
+});
 
 function createDiscordCodexBindRequest(
   conversationId: string,
@@ -378,8 +385,9 @@ async function expectResolutionDoesNotWait(params: {
 describe("plugin conversation binding approvals", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.doMock("../infra/home-dir.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+    vi.doMock("../infra/home-dir.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
       return {
         ...actual,
         expandHomePrefix: (value: string) => {
@@ -392,6 +400,7 @@ describe("plugin conversation binding approvals", () => {
     });
     vi.doMock("./runtime.js", () => ({
       getActivePluginRegistry: () => pluginRuntimeState.registry,
+      getActivePluginChannelRegistry: () => pluginRuntimeState.registry,
       setActivePluginRegistry: (registry: PluginRegistry) => {
         pluginRuntimeState.registry = registry;
       },

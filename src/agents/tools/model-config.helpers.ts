@@ -56,6 +56,7 @@ export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   agentDir?: string;
   candidates: Array<string | null | undefined>;
+  isProviderConfigured?: (provider: string) => boolean;
 }): ToolModelConfig | null {
   if (hasToolModelConfig(params.explicit)) {
     return params.explicit;
@@ -68,7 +69,10 @@ export function buildToolModelConfigFromCandidates(params: {
       continue;
     }
     const provider = trimmed.slice(0, trimmed.indexOf("/")).trim();
-    if (!provider || !hasAuthForProvider({ provider, agentDir: params.agentDir })) {
+    const providerConfigured =
+      params.isProviderConfigured?.(provider) ??
+      hasAuthForProvider({ provider, agentDir: params.agentDir });
+    if (!provider || !providerConfigured) {
       continue;
     }
     if (!deduped.includes(trimmed)) {

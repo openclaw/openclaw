@@ -14,6 +14,7 @@ import {
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolvePersistedSelectedModelRef,
 } from "../agents/model-selection.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -210,6 +211,18 @@ function resolvePositiveNumber(value: number | null | undefined): number | undef
 
 function resolveNonNegativeNumber(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function resolveLatestCompactionCheckpoint(
+  entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
+): NonNullable<SessionEntry["compactionCheckpoints"]>[number] | undefined {
+  const checkpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    return undefined;
+  }
+  return checkpoints.reduce((latest, checkpoint) =>
+    !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
+  );
 }
 
 function resolveEstimatedSessionCostUsd(params: {
@@ -1032,47 +1045,17 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
-  // Prefer the last runtime model recorded on the session entry.
-  // This is the actual model used by the latest run and must win over defaults.
-  let provider = resolved.provider;
-  let model = resolved.model;
-  const runtimeModel = entry?.model?.trim();
-  const runtimeProvider = entry?.modelProvider?.trim();
-  if (runtimeModel) {
-    if (runtimeProvider) {
-      // Provider is explicitly recorded — use it directly. Re-parsing the
-      // model string through parseModelRef would incorrectly split OpenRouter
-      // vendor-prefixed model names (e.g. model="anthropic/claude-haiku-4.5"
-      // with provider="openrouter") into { provider: "anthropic" }, discarding
-      // the stored OpenRouter provider and causing direct API calls to a
-      // provider the user has no credentials for.
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    const parsedRuntime = parseModelRef(runtimeModel, provider || DEFAULT_PROVIDER);
-    if (parsedRuntime) {
-      provider = parsedRuntime.provider;
-      model = parsedRuntime.model;
-    } else {
-      model = runtimeModel;
-    }
-    return { provider, model };
+  const persisted = resolvePersistedSelectedModelRef({
+    defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+    runtimeProvider: entry?.modelProvider,
+    runtimeModel: entry?.model,
+    overrideProvider: entry?.providerOverride,
+    overrideModel: entry?.modelOverride,
+  });
+  if (persisted) {
+    return persisted;
   }
-
-  // Fall back to explicit per-session override (set at spawn/model-patch time),
-  // then finally to configured defaults.
-  const storedModelOverride = entry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
-    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
-    if (parsedOverride) {
-      provider = parsedOverride.provider;
-      model = parsedOverride.model;
-    } else {
-      provider = overrideProvider;
-      model = storedModelOverride;
-    }
-  }
-  return { provider, model };
+  return resolved;
 }
 
 export async function resolveGatewayModelSupportsImages(params: {
@@ -1090,7 +1073,57 @@ export async function resolveGatewayModelSupportsImages(params: {
       (entry) =>
         entry.id === params.model && (!params.provider || entry.provider === params.provider),
     );
-    return modelEntry ? (modelEntry.input?.includes("image") ?? false) : false;
+    const normalizedProvider = params.provider?.trim().toLowerCase();
+    const normalizedCandidates = [
+      params.model.trim().toLowerCase(),
+      typeof modelEntry?.name === "string" ? modelEntry.name.trim().toLowerCase() : "",
+    ].filter(Boolean);
+    if (modelEntry) {
+      if (modelEntry.input?.includes("image")) {
+        return true;
+      }
+      // Legacy safety shim for stale persisted Foundry rows that predate
+      // provider-owned capability normalization.
+      if (
+        normalizedProvider === "microsoft-foundry" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate.startsWith("gpt-") ||
+            candidate.startsWith("o1") ||
+            candidate.startsWith("o3") ||
+            candidate.startsWith("o4") ||
+            candidate === "computer-use-preview",
+        )
+      ) {
+        return true;
+      }
+      if (
+        normalizedProvider === "claude-cli" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate === "opus" ||
+            candidate === "sonnet" ||
+            candidate === "haiku" ||
+            candidate.startsWith("claude-"),
+        )
+      ) {
+        return true;
+      }
+      return false;
+    }
+    if (
+      normalizedProvider === "claude-cli" &&
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate === "opus" ||
+          candidate === "sonnet" ||
+          candidate === "haiku" ||
+          candidate.startsWith("claude-"),
+      )
+    ) {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -1190,6 +1223,9 @@ export function buildGatewaySessionRow(params: {
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
   const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const selectedModel = entry?.modelOverride?.trim()
+    ? resolveSessionModelRef(cfg, entry, sessionAgentId)
+    : null;
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,
@@ -1244,6 +1280,7 @@ export function buildGatewaySessionRow(params: {
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const childSessions = resolveChildSessionKeys(key, store);
+  const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
@@ -1322,14 +1359,16 @@ export function buildGatewaySessionRow(params: {
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
-    modelProvider,
-    model,
+    modelProvider: selectedModel?.provider ?? modelProvider,
+    model: selectedModel?.model ?? model,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,
     lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
+    compactionCheckpointCount: entry?.compactionCheckpoints?.length,
+    latestCompactionCheckpoint,
   };
 }
 

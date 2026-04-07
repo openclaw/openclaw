@@ -53,7 +53,7 @@ async function runThinkDirectiveAndGetText(home: string): Promise<string | undef
     { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
     {},
     makeWhatsAppDirectiveConfig(home, {
-      model: "anthropic/claude-opus-4-5",
+      model: "anthropic/claude-opus-4-6",
       thinkingDefault: "high",
     }),
   );
@@ -82,7 +82,7 @@ async function runInlineReasoningMessage(params: {
     },
     makeWhatsAppDirectiveConfig(
       params.home,
-      { model: "anthropic/claude-opus-4-5" },
+      { model: "anthropic/claude-opus-4-6" },
       {
         session: { store: params.storePath },
       },
@@ -93,7 +93,7 @@ async function runInlineReasoningMessage(params: {
 function makeRunConfig(home: string, storePath: string) {
   return makeWhatsAppDirectiveConfig(
     home,
-    { model: "anthropic/claude-opus-4-5" },
+    { model: "anthropic/claude-opus-4-6" },
     { session: { store: storePath } },
   );
 }
@@ -199,7 +199,7 @@ describe("directive behavior", () => {
       const enabledRes = await getReplyFromConfig(
         { Body: "/verbose on", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
+        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-6" }),
       );
       expect(replyText(enabledRes)).toMatch(/^⚙️ Verbose logging enabled\./);
 
@@ -208,7 +208,7 @@ describe("directive behavior", () => {
         {},
         makeWhatsAppDirectiveConfig(
           home,
-          { model: "anthropic/claude-opus-4-5" },
+          { model: "anthropic/claude-opus-4-6" },
           {
             session: { store: storePath },
           },
@@ -254,8 +254,8 @@ describe("directive behavior", () => {
       expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
 
       for (const model of [
-        "openai-codex/gpt-5.2-codex",
-        "openai/gpt-5.2",
+        "openai-codex/gpt-5.4",
+        "openai/gpt-5.4",
         "openai/gpt-5.4-mini",
         "openai/gpt-5.4-nano",
       ]) {
@@ -282,9 +282,9 @@ describe("directive behavior", () => {
         makeWhatsAppDirectiveConfig(
           home,
           {
-            model: "anthropic/claude-opus-4-5",
+            model: "anthropic/claude-opus-4-6",
             models: {
-              "anthropic/claude-opus-4-5": { alias: " help " },
+              "anthropic/claude-opus-4-6": { alias: " help " },
             },
           },
           { session: { store: sessionStorePath(home) } },
@@ -316,10 +316,10 @@ describe("directive behavior", () => {
         makeWhatsAppDirectiveConfig(
           home,
           {
-            model: "anthropic/claude-opus-4-5",
+            model: "anthropic/claude-opus-4-6",
             workspace,
             models: {
-              "anthropic/claude-opus-4-5": { alias: "demo_skill" },
+              "anthropic/claude-opus-4-6": { alias: "demo_skill" },
             },
           },
           { session: { store: sessionStorePath(home) } },
@@ -343,7 +343,7 @@ describe("directive behavior", () => {
         {},
         makeWhatsAppDirectiveConfig(
           home,
-          { model: "anthropic/claude-opus-4-5" },
+          { model: "anthropic/claude-opus-4-6" },
           {
             session: { store: sessionStorePath(home) },
           },
@@ -366,7 +366,7 @@ describe("directive behavior", () => {
         {},
         makeWhatsAppDirectiveConfig(
           home,
-          { model: "anthropic/claude-opus-4-5" },
+          { model: "anthropic/claude-opus-4-6" },
           {
             messages: {
               queue: {

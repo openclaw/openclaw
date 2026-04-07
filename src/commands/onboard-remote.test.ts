@@ -10,8 +10,10 @@ const discoverGatewayBeacons = vi.hoisted(() => vi.fn<() => Promise<GatewayBonjo
 const resolveWideAreaDiscoveryDomain = vi.hoisted(() => vi.fn(() => undefined));
 const detectBinary = vi.hoisted(() => vi.fn<(name: string) => Promise<boolean>>());
 
-vi.mock("../infra/bonjour-discovery.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/bonjour-discovery.js")>();
+vi.mock("../infra/bonjour-discovery.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/bonjour-discovery.js")>(
+    "../infra/bonjour-discovery.js",
+  );
   return {
     ...actual,
     discoverGatewayBeacons,

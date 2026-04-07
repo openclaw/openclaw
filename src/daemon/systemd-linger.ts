@@ -1,4 +1,5 @@
 import os from "node:os";
+import { formatErrorMessage } from "../infra/errors.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 
 function resolveLoginctlUser(env: Record<string, string | undefined>): string | null {
@@ -67,7 +68,7 @@ export async function enableSystemdUserLinger(params: {
       code: result.code ?? 1,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     return { ok: false, stdout: "", stderr: message, code: 1 };
   }
 }

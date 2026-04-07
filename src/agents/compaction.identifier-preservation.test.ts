@@ -3,8 +3,8 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import * as piCodingAgent from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof piCodingAgent>();
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof piCodingAgent>("@mariozechner/pi-coding-agent");
   return {
     ...actual,
     generateSummary: vi.fn(),
@@ -14,14 +14,8 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
 const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
 type SummarizeInStagesInput = Parameters<typeof import("./compaction.js").summarizeInStages>[0];
 
-let buildCompactionSummarizationInstructions: typeof import("./compaction.js").buildCompactionSummarizationInstructions;
-let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
-
-async function loadFreshCompactionModuleForTest() {
-  vi.resetModules();
-  ({ buildCompactionSummarizationInstructions, summarizeInStages } =
-    await import("./compaction.js"));
-}
+const { buildCompactionSummarizationInstructions, summarizeInStages } =
+  await import("./compaction.js");
 
 function makeMessage(index: number, size = 1200): AgentMessage {
   return {
@@ -46,8 +40,7 @@ describe("compaction identifier-preservation instructions", () => {
     signal: new AbortController().signal,
   };
 
-  beforeEach(async () => {
-    await loadFreshCompactionModuleForTest();
+  beforeEach(() => {
     mockGenerateSummary.mockReset();
     mockGenerateSummary.mockResolvedValue("summary");
   });

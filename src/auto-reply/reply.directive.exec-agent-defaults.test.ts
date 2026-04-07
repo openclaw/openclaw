@@ -14,14 +14,15 @@ import {
   loadModelCatalogMock,
   runEmbeddedPiAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 
 let getReplyFromConfig: typeof import("./reply/get-reply.js").getReplyFromConfig;
 
 function makeAgentExecConfig(home: string) {
-  return {
+  return withFullRuntimeReplyConfig({
     agents: {
       defaults: {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         workspace: `${home}/openclaw`,
       },
       list: [
@@ -40,7 +41,7 @@ function makeAgentExecConfig(home: string) {
     },
     channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: sessionStorePath(home) },
-  };
+  });
 }
 
 describe("directive behavior exec agent defaults", () => {

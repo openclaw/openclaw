@@ -1,16 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
-
-async function importProbeModule(scope: string) {
-  void scope;
-  vi.resetModules();
-  return await import("./probe.js");
-}
 
 let FEISHU_PROBE_REQUEST_TIMEOUT_MS: typeof import("./probe.js").FEISHU_PROBE_REQUEST_TIMEOUT_MS;
 let probeFeishu: typeof import("./probe.js").probeFeishu;
@@ -106,10 +100,12 @@ async function readSequentialDefaultProbePair() {
 }
 
 describe("probeFeishu", () => {
-  beforeEach(async () => {
-    ({ FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu, clearProbeCache } = await importProbeModule(
-      `probe-${Date.now()}-${Math.random()}`,
-    ));
+  beforeAll(async () => {
+    ({ FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu, clearProbeCache } =
+      await import("./probe.js"));
+  });
+
+  beforeEach(() => {
     clearProbeCache();
     vi.restoreAllMocks();
   });
