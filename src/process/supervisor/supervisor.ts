@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { getShellConfig } from "../../agents/shell-utils.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { createRunRegistry } from "./registry.js";
@@ -56,16 +57,17 @@ export function createProcessSupervisor(): ProcessSupervisor {
   };
 
   const spawn = async (input: SpawnInput): Promise<ManagedRun> => {
-    const runId = input.runId?.trim() || crypto.randomUUID();
-    if (input.replaceExistingScope && input.scopeKey?.trim()) {
-      cancelScope(input.scopeKey, "manual-cancel");
+    const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
+    const scopeKey = normalizeOptionalString(input.scopeKey);
+    if (input.replaceExistingScope && scopeKey) {
+      cancelScope(scopeKey, "manual-cancel");
     }
     const startedAtMs = Date.now();
     const record: RunRecord = {
       runId,
       sessionId: input.sessionId,
       backendId: input.backendId,
-      scopeKey: input.scopeKey?.trim() || undefined,
+      scopeKey,
       state: "starting",
       startedAtMs,
       lastOutputAtMs: startedAtMs,
@@ -252,7 +254,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
 
       active.set(runId, {
         run: managedRun,
-        scopeKey: input.scopeKey?.trim() || undefined,
+        scopeKey,
       });
       return managedRun;
     } catch (err) {

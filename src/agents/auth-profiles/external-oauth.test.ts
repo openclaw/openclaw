@@ -9,6 +9,8 @@ const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: (params: unknown) =>
     resolveExternalAuthProfilesWithPluginsMock(params),
+  resolveExternalOAuthProfilesWithPlugins: (params: unknown) =>
+    resolveExternalAuthProfilesWithPluginsMock(params),
 }));
 
 function createStore(profiles: AuthProfileStore["profiles"] = {}): AuthProfileStore {
@@ -39,7 +41,7 @@ describe("auth external oauth helpers", () => {
       },
     ]);
 
-    const { overlayExternalOAuthProfiles } = await import("./external-oauth.js");
+    const { overlayExternalOAuthProfiles } = await import("./external-auth.js");
     const store = overlayExternalOAuthProfiles(createStore());
 
     expect(store.profiles["openai-codex:default"]).toMatchObject({
@@ -58,7 +60,7 @@ describe("auth external oauth helpers", () => {
       },
     ]);
 
-    const { shouldPersistExternalOAuthProfile } = await import("./external-oauth.js");
+    const { shouldPersistExternalOAuthProfile } = await import("./external-auth.js");
     const shouldPersist = shouldPersistExternalOAuthProfile({
       store: createStore({ "openai-codex:default": credential }),
       profileId: "openai-codex:default",
@@ -78,7 +80,7 @@ describe("auth external oauth helpers", () => {
       },
     ]);
 
-    const { shouldPersistExternalOAuthProfile } = await import("./external-oauth.js");
+    const { shouldPersistExternalOAuthProfile } = await import("./external-auth.js");
     const shouldPersist = shouldPersistExternalOAuthProfile({
       store: createStore({ "openai-codex:default": credential }),
       profileId: "openai-codex:default",
@@ -97,7 +99,7 @@ describe("auth external oauth helpers", () => {
       },
     ]);
 
-    const { shouldPersistExternalOAuthProfile } = await import("./external-oauth.js");
+    const { shouldPersistExternalOAuthProfile } = await import("./external-auth.js");
     const shouldPersist = shouldPersistExternalOAuthProfile({
       store: createStore({ "openai-codex:default": credential }),
       profileId: "openai-codex:default",

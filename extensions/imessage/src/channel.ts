@@ -3,7 +3,6 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -32,7 +31,6 @@ import type { IMessageProbe } from "./probe.js";
 import { imessageSetupAdapter } from "./setup-core.js";
 import {
   createIMessagePluginBase,
-  imessageConfigAdapter,
   imessageSecurityAdapter,
   imessageSetupWizard,
 } from "./shared.js";

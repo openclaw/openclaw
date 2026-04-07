@@ -26,6 +26,7 @@ import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
@@ -45,7 +46,7 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
-  const trimmed = prompt?.trim();
+  const trimmed = normalizeOptionalString(prompt);
   if (!trimmed) {
     return undefined;
   }
@@ -112,10 +113,10 @@ function resolveSessionLogPath(
   }
 
   try {
-    const transcriptPath = (
-      sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined
-    )?.transcriptPath?.trim();
-    const sessionFile = sessionEntry?.sessionFile?.trim() || transcriptPath;
+    const transcriptPath = normalizeOptionalString(
+      (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
+    );
+    const sessionFile = normalizeOptionalString(sessionEntry?.sessionFile) || transcriptPath;
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const pathOpts = resolveSessionFilePathOptions({
       agentId,
@@ -171,7 +172,7 @@ async function appendPostCompactionRefreshPrompt(params: {
     return;
   }
 
-  const existingPrompt = params.followupRun.run.extraSystemPrompt?.trim();
+  const existingPrompt = normalizeOptionalString(params.followupRun.run.extraSystemPrompt);
   if (existingPrompt?.includes(refreshPrompt)) {
     return;
   }
@@ -260,7 +261,7 @@ function estimatePromptTokensFromSessionTranscript(params: {
   storePath?: string;
   sessionFile?: string;
 }): number | undefined {
-  const sessionId = params.sessionId?.trim();
+  const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }

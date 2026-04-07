@@ -76,10 +76,6 @@ function toSlackEmojiName(emoji: string): string {
   return UNICODE_TO_SLACK[trimmed] ?? trimmed;
 }
 
-function hasMedia(payload: ReplyPayload): boolean {
-  return resolveSendableOutboundReplyParts(payload).hasMedia;
-}
-
 export function isSlackStreamingEnabled(params: {
   mode: "off" | "partial" | "block" | "progress";
   nativeStreaming: boolean;
@@ -436,7 +432,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const slackBlocks = readSlackReplyBlocks(payload);
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
-      const finalText = reply.text;
       const trimmedFinalText = reply.trimmedText;
       const canFinalizeViaPreviewEdit =
         previewStreamingEnabled &&

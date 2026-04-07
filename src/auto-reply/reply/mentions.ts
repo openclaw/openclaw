@@ -4,18 +4,22 @@ import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
-  const name = identity?.name?.trim();
+  const name = normalizeOptionalString(identity?.name);
   if (name) {
     const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
     const re = parts.length ? parts.join(String.raw`\s+`) : escapeRegExp(name);
     patterns.push(String.raw`\b@?${re}\b`);
   }
-  const emoji = identity?.emoji?.trim();
+  const emoji = normalizeOptionalString(identity?.emoji);
   if (emoji) {
     patterns.push(escapeRegExp(emoji));
   }
@@ -200,7 +204,7 @@ export function stripMentions(
   let result = text;
   const providerId =
     (ctx.Provider ? normalizeChannelId(ctx.Provider) : null) ??
-    (ctx.Provider?.trim().toLowerCase() as ChannelId | undefined) ??
+    (normalizeOptionalLowercaseString(ctx.Provider) as ChannelId | undefined) ??
     null;
   const providerMentions = providerId ? getChannelPlugin(providerId)?.mentions : undefined;
   const configRegexes = compileMentionPatternsCached({

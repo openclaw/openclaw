@@ -3,10 +3,14 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 
-vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
-  const nextcloudTalkSecrets =
-    await import("../../extensions/nextcloud-talk/src/secret-contract.ts");
+const nextcloudTalkSecrets = loadBundledChannelSecretContractApi("nextcloud-talk");
+if (!nextcloudTalkSecrets?.collectRuntimeConfigAssignments) {
+  throw new Error("Missing Nextcloud Talk secret contract api");
+}
+
+vi.mock("../channels/plugins/bootstrap-registry.js", () => {
   return {
     getBootstrapChannelPlugin: (id: string) =>
       id === "nextcloud-talk"
@@ -14,6 +18,12 @@ vi.mock("../channels/plugins/bootstrap-registry.js", async () => {
             secrets: {
               collectRuntimeConfigAssignments: nextcloudTalkSecrets.collectRuntimeConfigAssignments,
             },
+          }
+        : undefined,
+    getBootstrapChannelSecrets: (id: string) =>
+      id === "nextcloud-talk"
+        ? {
+            collectRuntimeConfigAssignments: nextcloudTalkSecrets.collectRuntimeConfigAssignments,
           }
         : undefined,
   };
@@ -111,12 +121,11 @@ describe("secrets runtime snapshot nextcloud talk file precedence", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.["nextcloud-talk"]?.accounts?.work?.botSecret).toBe(
-      "resolved-nextcloud-work-bot-secret",
-    );
-    expect(snapshot.config.channels?.["nextcloud-talk"]?.accounts?.work?.apiPassword).toBe(
-      "resolved-nextcloud-work-api-password",
-    );
+    const workAccount = snapshot.config.channels?.["nextcloud-talk"]?.accounts?.work as
+      | { botSecret?: unknown; apiPassword?: unknown }
+      | undefined;
+    expect(workAccount?.botSecret).toBe("resolved-nextcloud-work-bot-secret");
+    expect(workAccount?.apiPassword).toBe("resolved-nextcloud-work-api-password");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.nextcloud-talk.accounts.work.botSecret",
     );

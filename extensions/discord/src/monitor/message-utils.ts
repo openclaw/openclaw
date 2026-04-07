@@ -1,10 +1,5 @@
 import type { ChannelType, Client, Message } from "@buape/carbon";
-import {
-  MessageReferenceType,
-  StickerFormatType,
-  type APIAttachment,
-  type APIStickerItem,
-} from "discord-api-types/v10";
+import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import { fetchRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -102,6 +97,8 @@ type DiscordSnapshotMessage = {
   sticker_items?: APIStickerItem[] | null;
   author?: DiscordSnapshotAuthor | null;
 };
+
+const FORWARD_MESSAGE_REFERENCE_TYPE = 1;
 
 type DiscordMessageSnapshot = {
   message?: DiscordSnapshotMessage | null;
@@ -727,7 +724,8 @@ function buildDiscordForwardedMessageBlock(
 }
 
 function resolveDiscordReferencedForwardMessage(message: Message): Message | null {
-  return message.messageReference?.type === MessageReferenceType.Forward
+  const referenceType = message.messageReference?.type;
+  return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
     ? message.referencedMessage
     : null;
 }

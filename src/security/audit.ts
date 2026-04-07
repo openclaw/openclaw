@@ -16,8 +16,11 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { asNullableRecord } from "../shared/record-coerce.js";
+import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
   formatPermissionDetail,
@@ -114,7 +117,6 @@ type AuditExecutionContext = {
 
 let channelPluginsModulePromise: Promise<typeof import("../channels/plugins/index.js")> | undefined;
 let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js")> | undefined;
-let auditDeepModulePromise: Promise<typeof import("./audit.deep.runtime.js")> | undefined;
 let auditChannelModulePromise:
   | Promise<typeof import("./audit-channel.collect.runtime.js")>
   | undefined;
@@ -141,11 +143,6 @@ async function loadChannelPlugins() {
 async function loadAuditNonDeepModule() {
   auditNonDeepModulePromise ??= import("./audit.nondeep.runtime.js");
   return await auditNonDeepModulePromise;
-}
-
-async function loadAuditDeepModule() {
-  auditDeepModulePromise ??= import("./audit.deep.runtime.js");
-  return await auditDeepModulePromise;
 }
 
 async function loadAuditChannelModule() {
@@ -199,17 +196,6 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
     return [];
   }
   return list.map((v) => String(v).trim()).filter(Boolean);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
-function hasNonEmptyString(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 export async function collectFilesystemFindings(params: {
@@ -1140,14 +1126,14 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
 }
 
 function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
-  const channels = asRecord(cfg.channels);
+  const channels = asNullableRecord(cfg.channels);
   if (!channels) {
     return [];
   }
   const hits = new Set<string>();
   const seen = new WeakSet<object>();
   const visit = (value: unknown, scope: string) => {
-    const record = asRecord(value);
+    const record = asNullableRecord(value);
     if (!record || seen.has(record)) {
       return;
     }
@@ -1163,7 +1149,7 @@ function collectOpenExecSurfacePaths(cfg: OpenClawConfig): string[] {
         visit(nested, `${scope}.${key}`);
         continue;
       }
-      if (asRecord(nested)) {
+      if (asNullableRecord(nested)) {
         visit(nested, `${scope}.${key}`);
       }
     }
@@ -1364,22 +1350,14 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       })),
     );
     findings.push(...(await auditNonDeep.collectPluginsTrustFindings({ cfg, stateDir })));
-    if (context.deep) {
-      const auditDeep = await loadAuditDeepModule();
-      findings.push(
-        ...(await auditDeep.collectPluginsCodeSafetyFindings({
-          stateDir,
-          summaryCache: context.codeSafetySummaryCache,
-        })),
-      );
-      findings.push(
-        ...(await auditDeep.collectInstalledSkillsCodeSafetyFindings({
-          cfg,
-          stateDir,
-          summaryCache: context.codeSafetySummaryCache,
-        })),
-      );
-    }
+    findings.push(
+      ...(await collectDeepCodeSafetyFindings({
+        cfg,
+        stateDir,
+        deep: context.deep,
+        summaryCache: context.codeSafetySummaryCache,
+      })),
+    );
   }
 
   const shouldAuditChannelSecurity =

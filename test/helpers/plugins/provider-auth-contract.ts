@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
-import { registerProviders, requireProvider } from "../../../src/plugins/contracts/testkit.js";
 import { createNonExitingRuntime } from "../../../src/runtime.js";
 import type {
   WizardMultiSelectParams,
@@ -9,6 +8,7 @@ import type {
   WizardProgress,
   WizardSelectParams,
 } from "../../../src/wizard/prompts.js";
+import { registerProviders, requireProvider } from "./contracts-testkit.js";
 
 type LoginOpenAICodexOAuth =
   (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];

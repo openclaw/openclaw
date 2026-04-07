@@ -12,6 +12,7 @@ import {
   renderTopbarThemeModeToggle,
   switchChatSession,
 } from "./app-render.helpers.ts";
+import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
@@ -67,6 +68,7 @@ import {
 import {
   loadDreamDiary,
   loadDreamingStatus,
+  resolveConfiguredDreaming,
   updateDreamingEnabled,
 } from "./controllers/dreaming.ts";
 import {
@@ -78,7 +80,14 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
+import {
+  branchSessionFromCheckpoint,
+  deleteSessionsAndRefresh,
+  loadSessions,
+  patchSession,
+  restoreSessionFromCheckpoint,
+  toggleSessionCompactionCheckpoints,
+} from "./controllers/sessions.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -149,24 +158,6 @@ const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
 const lazyDreamingView = createLazy(() => import("./views/dreaming.ts"));
-
-function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
-  enabled: boolean;
-} {
-  if (!configValue) {
-    return {
-      enabled: false,
-    };
-  }
-  const plugins = configValue.plugins as Record<string, unknown> | undefined;
-  const entries = plugins?.entries as Record<string, unknown> | undefined;
-  const memoryCore = entries?.["memory-core"] as Record<string, unknown> | undefined;
-  const config = memoryCore?.config as Record<string, unknown> | undefined;
-  const dreaming = config?.dreaming as Record<string, unknown> | undefined;
-  return {
-    enabled: typeof dreaming?.enabled === "boolean" ? dreaming.enabled : false,
-  };
-}
 
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
@@ -737,6 +728,7 @@ export function renderApp(state: AppViewState) {
               cronEnabled: state.cronStatus?.enabled ?? null,
               cronNext,
               lastChannelsRefresh: state.channelsLastSuccess,
+              warnQueryToken,
               usageResult: state.usageResult,
               sessionsResult: state.sessionsResult,
               skillsReport: state.skillsReport,
@@ -838,6 +830,11 @@ export function renderApp(state: AppViewState) {
                 page: state.sessionsPage,
                 pageSize: state.sessionsPageSize,
                 selectedKeys: state.sessionsSelectedKeys,
+                expandedCheckpointKey: state.sessionsExpandedCheckpointKey,
+                checkpointItemsByKey: state.sessionsCheckpointItemsByKey,
+                checkpointLoadingKey: state.sessionsCheckpointLoadingKey,
+                checkpointBusyKey: state.sessionsCheckpointBusyKey,
+                checkpointErrorByKey: state.sessionsCheckpointErrorByKey,
                 onFiltersChange: (next) => {
                   state.sessionsFilterActive = next.activeMinutes;
                   state.sessionsFilterLimit = next.limit;
@@ -903,6 +900,21 @@ export function renderApp(state: AppViewState) {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
+                onToggleCheckpointDetails: (sessionKey) =>
+                  toggleSessionCompactionCheckpoints(state, sessionKey),
+                onBranchFromCheckpoint: async (sessionKey, checkpointId) => {
+                  const nextKey = await branchSessionFromCheckpoint(
+                    state,
+                    sessionKey,
+                    checkpointId,
+                  );
+                  if (nextKey) {
+                    switchChatSession(state, nextKey);
+                    state.setTab("chat" as import("./navigation.ts").Tab);
+                  }
+                },
+                onRestoreCheckpoint: (sessionKey, checkpointId) =>
+                  restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
               }),
             )
           : nothing}

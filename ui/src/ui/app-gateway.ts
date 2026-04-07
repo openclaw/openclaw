@@ -204,7 +204,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
     );
     shutdownHost.resumeChatQueueAfterReconnect = true;
   } else {
-    host.execApprovalQueue = [];
+    // Preserve any still-live approvals that were already staged in UI state.
+    // Initial connect can happen after a soft reload while an approval is pending.
+    host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
   }
   host.execApprovalError = null;
 

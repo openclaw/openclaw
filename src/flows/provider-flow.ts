@@ -5,6 +5,7 @@ import {
 } from "../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { FlowContribution, FlowOption } from "./types.js";
 import { sortFlowContributionsByLabel } from "./types.js";
 
@@ -56,9 +57,9 @@ function resolveProviderDocsById(params?: {
       mode: "setup",
     })
       .filter((provider): provider is ProviderPlugin & { docsPath: string } =>
-        Boolean(provider.docsPath?.trim()),
+        Boolean(normalizeOptionalString(provider.docsPath)),
       )
-      .map((provider) => [provider.id, provider.docsPath.trim()]),
+      .map((provider) => [provider.id, normalizeOptionalString(provider.docsPath)!]),
   );
 }
 

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
@@ -21,10 +22,10 @@ export type ClaudeBundleCommandSpec = {
 };
 
 function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
-  if (typeof value !== "string") {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return fallback;
   }
-  const normalized = value.trim().toLowerCase();
   if (normalized === "true" || normalized === "yes" || normalized === "1") {
     return true;
   }

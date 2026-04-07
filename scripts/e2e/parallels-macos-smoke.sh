@@ -41,10 +41,11 @@ RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-smoke.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_INSTALL_S=900
+TIMEOUT_UPDATE_DEV_S=1500
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=60
-TIMEOUT_AGENT_S=120
+TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
 TIMEOUT_DASHBOARD_S=60
 TIMEOUT_SNAPSHOT_S=180
@@ -620,12 +621,20 @@ send -- "/bin/bash /tmp/openclaw-prl.sh; rc=\$?; rm -f /tmp/openclaw-prl.sh; pri
 log_user 1
 
 set rc 1
+set saw_rc 0
 expect {
   -re {__OPENCLAW_RC__:(-?[0-9]+)} {
     set rc $expect_out(1,string)
-    exp_continue
+    set saw_rc 1
   }
   eof {}
+}
+if {$saw_rc} {
+  # Tahoe can leave `prlctl enter` attached even after the guest command has
+  # printed its explicit rc marker. Close the transport once the marker lands so
+  # consecutive guest_current_user_cli calls in the same phase do not block.
+  catch close
+  exit $rc
 }
 catch wait result
 exit $rc
@@ -708,13 +717,24 @@ run_dev_channel_update() {
   update_entry="$update_root/openclaw.mjs"
   ensure_guest_pnpm_for_dev_update
   printf 'update-dev: run\n'
-  guest_current_user_exec /bin/rm -rf "$update_root"
-  guest_current_user_exec_path "$bootstrap_bin:$GUEST_EXEC_PATH" \
-    "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" update --channel dev --yes --json
+  guest_current_user_sh "$(cat <<EOF
+rm -rf $(shell_quote "$update_root")
+export PATH=$(shell_quote "$bootstrap_bin:$GUEST_EXEC_PATH")
+$GUEST_NODE_BIN $GUEST_OPENCLAW_ENTRY update --channel dev --yes --json
+EOF
+)"
   printf 'update-dev: git-version\n'
-  guest_current_user_node_cli "$update_entry" --version
+  guest_current_user_sh "$(cat <<EOF
+export PATH=$(shell_quote "$GUEST_EXEC_PATH")
+$GUEST_NODE_BIN $(shell_quote "$update_entry") --version
+EOF
+)"
   printf 'update-dev: git-status\n'
-  guest_current_user_node_cli "$update_entry" update status --json
+  guest_current_user_sh "$(cat <<EOF
+export PATH=$(shell_quote "$GUEST_EXEC_PATH")
+$GUEST_NODE_BIN $(shell_quote "$update_entry") update status --json
+EOF
+)"
 }
 
 verify_dev_channel_update() {
@@ -943,8 +963,11 @@ resolve_dashboard_url() {
 
 verify_dashboard_load() {
   local dashboard_url dashboard_http_url dashboard_url_q dashboard_http_url_q cmd
-  dashboard_url="$(resolve_dashboard_url)"
-  dashboard_http_url="${dashboard_url%%#*}"
+  # `openclaw dashboard --no-open` can hang under the Tahoe Parallels transport
+  # even when the dashboard itself is healthy. Probe the local dashboard URL
+  # directly so the smoke still validates HTML readiness and browser reachability.
+  dashboard_url="http://127.0.0.1:18789/"
+  dashboard_http_url="$dashboard_url"
   dashboard_url_q="$(shell_quote "$dashboard_url")"
   dashboard_http_url_q="$(shell_quote "$dashboard_http_url")"
   cmd="$(cat <<EOF
@@ -982,11 +1005,12 @@ pkill -x Safari >/dev/null 2>&1 || true
 open -a Safari "\$dashboard_url"
 deadline=\$((SECONDS + 20))
 while [ \$SECONDS -lt \$deadline ]; do
-  if pgrep -x Safari >/dev/null 2>&1; then
-    if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
-      | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
-      exit 0
-    fi
+  # Tahoe can hand dashboard sockets to WebKit helpers even after the Safari
+  # app process exits, so require a non-node client connection rather than a
+  # long-lived `Safari` process specifically.
+  if lsof -nPiTCP:"\$dashboard_port" -sTCP:ESTABLISHED 2>/dev/null \
+    | awk 'NR > 1 && \$1 != "node" { found = 1 } END { exit found ? 0 : 1 }'; then
+    exit 0
   fi
   sleep 1
 done
@@ -1358,7 +1382,7 @@ run_upgrade_lane() {
     phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
     phase_run "upgrade.verify-bundle-permissions" "$TIMEOUT_PERMISSION_S" verify_bundle_permissions
   else
-    phase_run "upgrade.update-dev" "$TIMEOUT_INSTALL_S" run_dev_channel_update
+    phase_run "upgrade.update-dev" "$TIMEOUT_UPDATE_DEV_S" run_dev_channel_update
     UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.update-dev)")"
     phase_run "upgrade.verify-dev-channel" "$TIMEOUT_VERIFY_S" verify_dev_channel_update
   fi

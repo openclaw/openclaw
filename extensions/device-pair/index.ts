@@ -2,6 +2,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   clearDeviceBootstrapTokens,
   definePluginEntry,
   issueDeviceBootstrapToken,
@@ -139,7 +143,7 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
 };
 
 function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
-  const candidate = raw.trim();
+  const candidate = normalizeOptionalString(raw);
   if (!candidate) {
     return null;
   }
@@ -147,7 +151,7 @@ function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null 
   if (parsedUrl) {
     return parsedUrl;
   }
-  const hostPort = candidate.split("/", 1)[0]?.trim() ?? "";
+  const hostPort = normalizeOptionalString(candidate.split("/", 1)[0]) ?? "";
   return hostPort ? `${schemeFallback}://${hostPort}` : null;
 }
 
@@ -230,7 +234,7 @@ function pickMatchingIPv4(predicate: (address: string) => boolean): string | nul
       if (!entry || entry.internal || !isIpv4) {
         continue;
       }
-      const address = entry.address?.trim() ?? "";
+      const address = normalizeOptionalString(entry.address) ?? "";
       if (!address) {
         continue;
       }
@@ -281,10 +285,7 @@ function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelRes
 
 function pickFirstDefined(candidates: Array<unknown>): string | null {
   for (const value of candidates) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
+    const trimmed = normalizeOptionalString(value);
     if (trimmed) {
       return trimmed;
     }
@@ -312,8 +313,9 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
   const scheme = resolveScheme(cfg);
   const port = resolveGatewayPort(cfg);
 
-  if (typeof pluginCfg.publicUrl === "string" && pluginCfg.publicUrl.trim()) {
-    const url = normalizeUrl(pluginCfg.publicUrl, scheme);
+  const configuredPublicUrl = normalizeOptionalString(pluginCfg.publicUrl);
+  if (configuredPublicUrl) {
+    const url = normalizeUrl(configuredPublicUrl, scheme);
     if (url) {
       return { url, source: "plugins.entries.device-pair.config.publicUrl" };
     }
@@ -329,8 +331,8 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     return { url: `wss://${host}`, source: `gateway.tailscale.mode=${tailscaleMode}` };
   }
 
-  const remoteUrl = cfg.gateway?.remote?.url;
-  if (typeof remoteUrl === "string" && remoteUrl.trim()) {
+  const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url);
+  if (remoteUrl) {
     const url = normalizeUrl(remoteUrl, scheme);
     if (url) {
       return { url, source: "gateway.remote.url" };
@@ -478,14 +480,19 @@ function canSendQrPngToChannel(channel: string): boolean {
 
 function resolveQrReplyTarget(ctx: QrCommandContext): string {
   if (ctx.channel === "discord") {
-    const senderId = ctx.senderId?.trim() ?? "";
+    const senderId = normalizeOptionalString(ctx.senderId) ?? "";
     if (senderId) {
       return senderId.startsWith("user:") || senderId.startsWith("channel:")
         ? senderId
         : `user:${senderId}`;
     }
   }
-  return ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
+  return (
+    normalizeOptionalString(ctx.senderId) ||
+    normalizeOptionalString(ctx.from) ||
+    normalizeOptionalString(ctx.to) ||
+    ""
+  );
 }
 
 const PAIR_SETUP_NON_ISSUING_ACTIONS = new Set([
@@ -521,7 +528,7 @@ async function sendQrPngToSupportedChannel(params: {
   qrFilePath: string;
 }): Promise<boolean> {
   const mediaLocalRoots = [path.dirname(params.qrFilePath)];
-  const accountId = params.ctx.accountId?.trim() || undefined;
+  const accountId = normalizeOptionalString(params.ctx.accountId) || undefined;
   const sender = QR_CHANNEL_SENDERS[params.ctx.channel];
   if (!sender) {
     return false;
@@ -557,9 +564,9 @@ export default definePluginEntry({
       description: "Generate setup codes and approve device pairing requests.",
       acceptsArgs: true,
       handler: async (ctx) => {
-        const args = ctx.args?.trim() ?? "";
+        const args = normalizeOptionalString(ctx.args) ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
-        const action = tokens[0]?.toLowerCase() ?? "";
+        const action = normalizeLowercaseStringOrEmpty(tokens[0]);
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
           : undefined;
@@ -579,7 +586,7 @@ export default definePluginEntry({
         }
 
         if (action === "notify") {
-          const notifyAction = tokens[1]?.trim().toLowerCase() ?? "status";
+          const notifyAction = normalizeLowercaseStringOrEmpty(tokens[1]) || "status";
           return await handleNotifyCommand({
             api,
             ctx,
@@ -594,7 +601,7 @@ export default definePluginEntry({
           const list = await listDevicePairing();
           const selected = selectPendingApprovalRequest({
             pending: list.pending,
-            requested: tokens[1]?.trim(),
+            requested: normalizeOptionalString(tokens[1]),
           });
           if (selected.reply) {
             return selected.reply;
@@ -744,7 +751,11 @@ export default definePluginEntry({
           };
         }
         const channel = ctx.channel;
-        const target = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
+        const target =
+          normalizeOptionalString(ctx.senderId) ||
+          normalizeOptionalString(ctx.from) ||
+          normalizeOptionalString(ctx.to) ||
+          "";
         const payload = await issueSetupPayload(urlResult.url);
 
         if (channel === "telegram" && target) {

@@ -546,27 +546,30 @@ describe("resolvePluginWebSearchProviders", () => {
     expectLoaderCallCount(2);
   });
 
-  it.each([
-    {
-      name: "invalidates the snapshot cache when config contents change in place",
-      mutate: (config: { plugins?: Record<string, unknown> }, _env: NodeJS.ProcessEnv) => {
-        config.plugins = { allow: ["perplexity"] };
-      },
-    },
-    {
-      name: "invalidates the snapshot cache when env contents change in place",
-      mutate: (_config: { plugins?: Record<string, unknown> }, env: NodeJS.ProcessEnv) => {
-        env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
-      },
-    },
-  ] as const)("$name", ({ mutate }) => {
+  it("retains the snapshot cache when config contents change in place", () => {
     const config = createBraveAllowConfig();
     const env = createWebSearchEnv({ OPENCLAW_HOME: "/tmp/openclaw-home-a" });
 
     expectSnapshotLoaderCalls({
       config,
       env,
-      mutate: () => mutate(config, env),
+      mutate: () => {
+        config.plugins = { allow: ["perplexity"] };
+      },
+      expectedLoaderCalls: 1,
+    });
+  });
+
+  it("invalidates the snapshot cache when env contents change in place", () => {
+    const config = createBraveAllowConfig();
+    const env = createWebSearchEnv({ OPENCLAW_HOME: "/tmp/openclaw-home-a" });
+
+    expectSnapshotLoaderCalls({
+      config,
+      env,
+      mutate: () => {
+        env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
+      },
       expectedLoaderCalls: 2,
     });
   });

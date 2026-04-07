@@ -2,6 +2,7 @@ import {
   getChannelStreamingConfigObject,
   resolveChannelStreamingNativeTransport,
 } from "openclaw/plugin-sdk/channel-streaming";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 export type StreamingMode = "off" | "partial" | "block" | "progress";
 export type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
@@ -10,7 +11,7 @@ function normalizeStreamingMode(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized || null;
 }
 

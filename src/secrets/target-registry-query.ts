@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { getPath } from "./path-utils.js";
-import { SECRET_TARGET_REGISTRY } from "./target-registry-data.js";
+import { getCoreSecretTargetRegistry, getSecretTargetRegistry } from "./target-registry-data.js";
 import {
   compileTargetRegistryEntry,
   expandPathTokens,
@@ -14,15 +14,25 @@ import type {
   SecretTargetRegistryEntry,
 } from "./target-registry-types.js";
 
-const COMPILED_SECRET_TARGET_REGISTRY = SECRET_TARGET_REGISTRY.map(compileTargetRegistryEntry);
-const OPENCLAW_COMPILED_SECRET_TARGETS = COMPILED_SECRET_TARGET_REGISTRY.filter(
-  (entry) => entry.configFile === "openclaw.json",
-);
-const AUTH_PROFILES_COMPILED_SECRET_TARGETS = COMPILED_SECRET_TARGET_REGISTRY.filter(
-  (entry) => entry.configFile === "auth-profiles.json",
-);
+let compiledSecretTargetRegistryState: {
+  authProfilesCompiledSecretTargets: CompiledTargetRegistryEntry[];
+  authProfilesTargetsById: Map<string, CompiledTargetRegistryEntry[]>;
+  compiledSecretTargetRegistry: CompiledTargetRegistryEntry[];
+  knownTargetIds: Set<string>;
+  openClawCompiledSecretTargets: CompiledTargetRegistryEntry[];
+  openClawTargetsById: Map<string, CompiledTargetRegistryEntry[]>;
+  targetsByType: Map<string, CompiledTargetRegistryEntry[]>;
+} | null = null;
 
-function buildTargetTypeIndex(): Map<string, CompiledTargetRegistryEntry[]> {
+let compiledCoreOpenClawTargetState: {
+  knownTargetIds: Set<string>;
+  openClawCompiledSecretTargets: CompiledTargetRegistryEntry[];
+  openClawTargetsById: Map<string, CompiledTargetRegistryEntry[]>;
+} | null = null;
+
+function buildTargetTypeIndex(
+  compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],
+): Map<string, CompiledTargetRegistryEntry[]> {
   const byType = new Map<string, CompiledTargetRegistryEntry[]>();
   const append = (type: string, entry: CompiledTargetRegistryEntry) => {
     const existing = byType.get(type);
@@ -32,7 +42,7 @@ function buildTargetTypeIndex(): Map<string, CompiledTargetRegistryEntry[]> {
     }
     byType.set(type, [entry]);
   };
-  for (const entry of COMPILED_SECRET_TARGET_REGISTRY) {
+  for (const entry of compiledSecretTargetRegistry) {
     append(entry.targetType, entry);
     for (const alias of entry.targetTypeAliases ?? []) {
       append(alias, entry);
@@ -41,12 +51,11 @@ function buildTargetTypeIndex(): Map<string, CompiledTargetRegistryEntry[]> {
   return byType;
 }
 
-const TARGETS_BY_TYPE = buildTargetTypeIndex();
-const KNOWN_TARGET_IDS = new Set(COMPILED_SECRET_TARGET_REGISTRY.map((entry) => entry.id));
-
-function buildConfigTargetIdIndex(): Map<string, CompiledTargetRegistryEntry[]> {
+function buildConfigTargetIdIndex(
+  entries: CompiledTargetRegistryEntry[],
+): Map<string, CompiledTargetRegistryEntry[]> {
   const byId = new Map<string, CompiledTargetRegistryEntry[]>();
-  for (const entry of OPENCLAW_COMPILED_SECRET_TARGETS) {
+  for (const entry of entries) {
     const existing = byId.get(entry.id);
     if (existing) {
       existing.push(entry);
@@ -57,22 +66,43 @@ function buildConfigTargetIdIndex(): Map<string, CompiledTargetRegistryEntry[]> 
   return byId;
 }
 
-const OPENCLAW_TARGETS_BY_ID = buildConfigTargetIdIndex();
-
-function buildAuthProfileTargetIdIndex(): Map<string, CompiledTargetRegistryEntry[]> {
-  const byId = new Map<string, CompiledTargetRegistryEntry[]>();
-  for (const entry of AUTH_PROFILES_COMPILED_SECRET_TARGETS) {
-    const existing = byId.get(entry.id);
-    if (existing) {
-      existing.push(entry);
-      continue;
-    }
-    byId.set(entry.id, [entry]);
+function getCompiledSecretTargetRegistryState() {
+  if (compiledSecretTargetRegistryState) {
+    return compiledSecretTargetRegistryState;
   }
-  return byId;
+  const compiledSecretTargetRegistry = getSecretTargetRegistry().map(compileTargetRegistryEntry);
+  const openClawCompiledSecretTargets = compiledSecretTargetRegistry.filter(
+    (entry) => entry.configFile === "openclaw.json",
+  );
+  const authProfilesCompiledSecretTargets = compiledSecretTargetRegistry.filter(
+    (entry) => entry.configFile === "auth-profiles.json",
+  );
+  compiledSecretTargetRegistryState = {
+    authProfilesCompiledSecretTargets,
+    authProfilesTargetsById: buildConfigTargetIdIndex(authProfilesCompiledSecretTargets),
+    compiledSecretTargetRegistry,
+    knownTargetIds: new Set(compiledSecretTargetRegistry.map((entry) => entry.id)),
+    openClawCompiledSecretTargets,
+    openClawTargetsById: buildConfigTargetIdIndex(openClawCompiledSecretTargets),
+    targetsByType: buildTargetTypeIndex(compiledSecretTargetRegistry),
+  };
+  return compiledSecretTargetRegistryState;
 }
 
-const AUTH_PROFILES_TARGETS_BY_ID = buildAuthProfileTargetIdIndex();
+function getCompiledCoreOpenClawTargetState() {
+  if (compiledCoreOpenClawTargetState) {
+    return compiledCoreOpenClawTargetState;
+  }
+  const openClawCompiledSecretTargets = getCoreSecretTargetRegistry()
+    .filter((entry) => entry.configFile === "openclaw.json")
+    .map(compileTargetRegistryEntry);
+  compiledCoreOpenClawTargetState = {
+    knownTargetIds: new Set(openClawCompiledSecretTargets.map((entry) => entry.id)),
+    openClawCompiledSecretTargets,
+    openClawTargetsById: buildConfigTargetIdIndex(openClawCompiledSecretTargets),
+  };
+  return compiledCoreOpenClawTargetState;
+}
 
 function normalizeAllowedTargetIds(targetIds?: Iterable<string>): Set<string> | null {
   if (targetIds === undefined) {
@@ -170,7 +200,7 @@ function toResolvedPlanTarget(
 }
 
 export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
-  return COMPILED_SECRET_TARGET_REGISTRY.map((entry) => ({
+  return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.map((entry) => ({
     id: entry.id,
     targetType: entry.targetType,
     ...(entry.targetTypeAliases ? { targetTypeAliases: [...entry.targetTypeAliases] } : {}),
@@ -194,11 +224,15 @@ export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
 }
 
 export function isKnownSecretTargetType(value: unknown): value is string {
-  return typeof value === "string" && TARGETS_BY_TYPE.has(value);
+  return (
+    typeof value === "string" && getCompiledSecretTargetRegistryState().targetsByType.has(value)
+  );
 }
 
 export function isKnownSecretTargetId(value: unknown): value is string {
-  return typeof value === "string" && KNOWN_TARGET_IDS.has(value);
+  return (
+    typeof value === "string" && getCompiledSecretTargetRegistryState().knownTargetIds.has(value)
+  );
 }
 
 export function resolvePlanTargetAgainstRegistry(candidate: {
@@ -207,7 +241,7 @@ export function resolvePlanTargetAgainstRegistry(candidate: {
   providerId?: string;
   accountId?: string;
 }): ResolvedPlanTarget | null {
-  const entries = TARGETS_BY_TYPE.get(candidate.type);
+  const entries = getCompiledSecretTargetRegistryState().targetsByType.get(candidate.type);
   if (!entries || entries.length === 0) {
     return null;
   }
@@ -240,7 +274,7 @@ export function resolvePlanTargetAgainstRegistry(candidate: {
 }
 
 export function resolveConfigSecretTargetByPath(pathSegments: string[]): ResolvedPlanTarget | null {
-  for (const entry of OPENCLAW_COMPILED_SECRET_TARGETS) {
+  for (const entry of getCompiledSecretTargetRegistryState().openClawCompiledSecretTargets) {
     if (!entry.includeInPlan) {
       continue;
     }
@@ -268,10 +302,17 @@ export function discoverConfigSecretTargetsByIds(
   targetIds?: Iterable<string>,
 ): DiscoveredConfigSecretTarget[] {
   const allowedTargetIds = normalizeAllowedTargetIds(targetIds);
+  const registryState =
+    allowedTargetIds !== null &&
+    Array.from(allowedTargetIds).every((targetId) =>
+      getCompiledCoreOpenClawTargetState().knownTargetIds.has(targetId),
+    )
+      ? getCompiledCoreOpenClawTargetState()
+      : getCompiledSecretTargetRegistryState();
   const discoveryEntries = resolveDiscoveryEntries({
     allowedTargetIds,
-    defaultEntries: OPENCLAW_COMPILED_SECRET_TARGETS,
-    entriesById: OPENCLAW_TARGETS_BY_ID,
+    defaultEntries: registryState.openClawCompiledSecretTargets,
+    entriesById: registryState.openClawTargetsById,
   });
   return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }
@@ -285,16 +326,17 @@ export function discoverAuthProfileSecretTargetsByIds(
   targetIds?: Iterable<string>,
 ): DiscoveredConfigSecretTarget[] {
   const allowedTargetIds = normalizeAllowedTargetIds(targetIds);
+  const registryState = getCompiledSecretTargetRegistryState();
   const discoveryEntries = resolveDiscoveryEntries({
     allowedTargetIds,
-    defaultEntries: AUTH_PROFILES_COMPILED_SECRET_TARGETS,
-    entriesById: AUTH_PROFILES_TARGETS_BY_ID,
+    defaultEntries: registryState.authProfilesCompiledSecretTargets,
+    entriesById: registryState.authProfilesTargetsById,
   });
   return discoverSecretTargetsFromEntries(store, discoveryEntries);
 }
 
 export function listAuthProfileSecretTargetEntries(): SecretTargetRegistryEntry[] {
-  return COMPILED_SECRET_TARGET_REGISTRY.filter(
+  return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.filter(
     (entry) => entry.configFile === "auth-profiles.json" && entry.includeInAudit,
   );
 }

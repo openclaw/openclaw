@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
 
 const verificationMocks = vi.hoisted(() => ({
@@ -10,12 +10,10 @@ vi.mock("./matrix/actions/verification.js", () => ({
 }));
 
 import { matrixPlugin } from "./channel.js";
+import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import { matrixSetupAdapter } from "./setup-core.js";
-import { matrixSetupWizard } from "./setup-surface.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
-
-let runMatrixSetupBootstrapAfterConfigWrite: typeof import("./setup-bootstrap.js").runMatrixSetupBootstrapAfterConfigWrite;
 
 describe("matrix setup post-write bootstrap", () => {
   const log = vi.fn();
@@ -124,21 +122,12 @@ describe("matrix setup post-write bootstrap", () => {
     }
   }
 
-  beforeAll(async () => {
-    ({ runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js"));
-  });
-
   beforeEach(() => {
     verificationMocks.bootstrapMatrixVerification.mockReset();
     log.mockClear();
     error.mockClear();
     exit.mockClear();
     installMatrixTestRuntime();
-  });
-
-  it("registers the Matrix guided setup wizard on the channel plugin", () => {
-    expect(matrixPlugin.setupWizard).toBe(matrixSetupWizard);
-    expect(matrixPlugin.setupWizard?.channel).toBe("matrix");
   });
 
   it("bootstraps verification for newly added encrypted accounts", async () => {

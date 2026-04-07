@@ -1,82 +1,40 @@
+import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import {
+  buildSessionEntry,
+  listSessionFilesForAgent,
+  parseUsageCountedSessionIdFromFileName,
+  sessionPathForFile,
+} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
-  resolveMemoryCorePluginConfig,
+  formatMemoryDreamingDay,
+  resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
-  resolveMemoryDreamingWorkspaces,
   type MemoryLightDreamingConfig,
   type MemoryRemDreamingConfig,
-  type MemoryDreamingPhaseName,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
 import {
+  asRecord,
+  formatErrorMessage,
+  includesSystemEventToken,
+  normalizeTrimmedString,
+} from "./dreaming-shared.js";
+import {
   readShortTermRecallEntries,
-  recordShortTermRecalls,
   recordDreamingPhaseSignals,
+  recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
-
-type CronSchedule = { kind: "cron"; expr: string; tz?: string };
-type CronPayload = { kind: "systemEvent"; text: string };
-type ManagedCronJobCreate = {
-  name: string;
-  description: string;
-  enabled: boolean;
-  schedule: CronSchedule;
-  sessionTarget: "main";
-  wakeMode: "next-heartbeat";
-  payload: CronPayload;
-};
-
-type ManagedCronJobPatch = {
-  name?: string;
-  description?: string;
-  enabled?: boolean;
-  schedule?: CronSchedule;
-  sessionTarget?: "main";
-  wakeMode?: "next-heartbeat";
-  payload?: CronPayload;
-};
-
-type ManagedCronJobLike = {
-  id: string;
-  name?: string;
-  description?: string;
-  enabled?: boolean;
-  schedule?: {
-    kind?: string;
-    expr?: string;
-    tz?: string;
-  };
-  sessionTarget?: string;
-  wakeMode?: string;
-  payload?: {
-    kind?: string;
-    text?: string;
-  };
-  createdAtMs?: number;
-};
-
-type CronServiceLike = {
-  list: (opts?: { includeDisabled?: boolean }) => Promise<ManagedCronJobLike[]>;
-  add: (input: ManagedCronJobCreate) => Promise<unknown>;
-  update: (id: string, patch: ManagedCronJobPatch) => Promise<unknown>;
-  remove: (id: string) => Promise<{ removed?: boolean }>;
-};
-
-const LIGHT_SLEEP_CRON_NAME = "Memory Light Dreaming";
-const LIGHT_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.light]";
 const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
-
-const REM_SLEEP_CRON_NAME = "Memory REM Dreaming";
-const REM_SLEEP_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
@@ -84,6 +42,20 @@ const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
+const SESSION_INGESTION_STATE_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "session-ingestion.json",
+);
+const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
+const SESSION_INGESTION_SCORE = 0.58;
+const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
+const SESSION_INGESTION_MIN_SNIPPET_CHARS = 12;
+const SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP = 240;
+const SESSION_INGESTION_MAX_MESSAGES_PER_FILE = 80;
+const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
+const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
+const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
@@ -98,215 +70,6 @@ const MANAGED_DAILY_DREAMING_BLOCKS = [
     endMarker: "<!-- openclaw:dreaming:rem:end -->",
   },
 ] as const;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function formatErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
-
-function buildCronDescription(params: {
-  tag: string;
-  phase: "light" | "rem";
-  cron: string;
-  limit: number;
-  lookbackDays: number;
-}): string {
-  return `${params.tag} Run ${params.phase} dreaming (cron=${params.cron}, limit=${params.limit}, lookbackDays=${params.lookbackDays}).`;
-}
-
-function buildManagedCronJob(params: {
-  name: string;
-  tag: string;
-  payloadText: string;
-  cron: string;
-  timezone?: string;
-  phase: "light" | "rem";
-  limit: number;
-  lookbackDays: number;
-}): ManagedCronJobCreate {
-  return {
-    name: params.name,
-    description: buildCronDescription({
-      tag: params.tag,
-      phase: params.phase,
-      cron: params.cron,
-      limit: params.limit,
-      lookbackDays: params.lookbackDays,
-    }),
-    enabled: true,
-    schedule: {
-      kind: "cron",
-      expr: params.cron,
-      ...(params.timezone ? { tz: params.timezone } : {}),
-    },
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    payload: {
-      kind: "systemEvent",
-      text: params.payloadText,
-    },
-  };
-}
-
-function isManagedPhaseJob(
-  job: ManagedCronJobLike,
-  params: {
-    name: string;
-    tag: string;
-    payloadText: string;
-  },
-): boolean {
-  const description = normalizeTrimmedString(job.description);
-  if (description?.includes(params.tag)) {
-    return true;
-  }
-  const name = normalizeTrimmedString(job.name);
-  const payloadText = normalizeTrimmedString(job.payload?.text);
-  return name === params.name && payloadText === params.payloadText;
-}
-
-function buildManagedPhasePatch(
-  job: ManagedCronJobLike,
-  desired: ManagedCronJobCreate,
-): ManagedCronJobPatch | null {
-  const patch: ManagedCronJobPatch = {};
-  const scheduleKind = normalizeTrimmedString(job.schedule?.kind)?.toLowerCase();
-  const scheduleExpr = normalizeTrimmedString(job.schedule?.expr);
-  const scheduleTz = normalizeTrimmedString(job.schedule?.tz);
-  if (normalizeTrimmedString(job.name) !== desired.name) {
-    patch.name = desired.name;
-  }
-  if (normalizeTrimmedString(job.description) !== desired.description) {
-    patch.description = desired.description;
-  }
-  if (job.enabled !== true) {
-    patch.enabled = true;
-  }
-  if (
-    scheduleKind !== "cron" ||
-    scheduleExpr !== desired.schedule.expr ||
-    scheduleTz !== desired.schedule.tz
-  ) {
-    patch.schedule = desired.schedule;
-  }
-  if (normalizeTrimmedString(job.sessionTarget)?.toLowerCase() !== "main") {
-    patch.sessionTarget = "main";
-  }
-  if (normalizeTrimmedString(job.wakeMode)?.toLowerCase() !== "next-heartbeat") {
-    patch.wakeMode = "next-heartbeat";
-  }
-  const payloadKind = normalizeTrimmedString(job.payload?.kind)?.toLowerCase();
-  const payloadText = normalizeTrimmedString(job.payload?.text);
-  if (payloadKind !== "systemevent" || payloadText !== desired.payload.text) {
-    patch.payload = desired.payload;
-  }
-  return Object.keys(patch).length > 0 ? patch : null;
-}
-
-function sortManagedJobs(managed: ManagedCronJobLike[]): ManagedCronJobLike[] {
-  return managed.toSorted((a, b) => {
-    const aCreated =
-      typeof a.createdAtMs === "number" && Number.isFinite(a.createdAtMs)
-        ? a.createdAtMs
-        : Number.MAX_SAFE_INTEGER;
-    const bCreated =
-      typeof b.createdAtMs === "number" && Number.isFinite(b.createdAtMs)
-        ? b.createdAtMs
-        : Number.MAX_SAFE_INTEGER;
-    if (aCreated !== bCreated) {
-      return aCreated - bCreated;
-    }
-    return a.id.localeCompare(b.id);
-  });
-}
-
-function resolveCronServiceFromStartupEvent(event: unknown): CronServiceLike | null {
-  const payload = asRecord(event);
-  if (!payload || payload.type !== "gateway" || payload.action !== "startup") {
-    return null;
-  }
-  const context = asRecord(payload.context);
-  const deps = asRecord(context?.deps);
-  const cronCandidate = context?.cron ?? deps?.cron;
-  if (!cronCandidate || typeof cronCandidate !== "object") {
-    return null;
-  }
-  const cron = cronCandidate as Partial<CronServiceLike>;
-  if (
-    typeof cron.list !== "function" ||
-    typeof cron.add !== "function" ||
-    typeof cron.update !== "function" ||
-    typeof cron.remove !== "function"
-  ) {
-    return null;
-  }
-  return cron as CronServiceLike;
-}
-
-async function reconcileManagedPhaseCronJob(params: {
-  cron: CronServiceLike | null;
-  desired: ManagedCronJobCreate;
-  match: { name: string; tag: string; payloadText: string };
-  enabled: boolean;
-  logger: Logger;
-}): Promise<void> {
-  const cron = params.cron;
-  if (!cron) {
-    return;
-  }
-  const allJobs = await cron.list({ includeDisabled: true });
-  const managed = allJobs.filter((job) => isManagedPhaseJob(job, params.match));
-  if (!params.enabled) {
-    for (const job of managed) {
-      try {
-        await cron.remove(job.id);
-      } catch (err) {
-        params.logger.warn(
-          `memory-core: failed to remove managed ${params.match.name} cron job ${job.id}: ${formatErrorMessage(err)}`,
-        );
-      }
-    }
-    return;
-  }
-
-  if (managed.length === 0) {
-    await cron.add(params.desired);
-    return;
-  }
-
-  const [primary, ...duplicates] = sortManagedJobs(managed);
-  for (const duplicate of duplicates) {
-    try {
-      await cron.remove(duplicate.id);
-    } catch (err) {
-      params.logger.warn(
-        `memory-core: failed to prune duplicate managed ${params.match.name} cron job ${duplicate.id}: ${formatErrorMessage(err)}`,
-      );
-    }
-  }
-
-  const patch = buildManagedPhasePatch(primary, params.desired);
-  if (patch) {
-    await cron.update(primary.id, patch);
-  }
-}
 
 function resolveWorkspaces(params: {
   cfg?: OpenClawConfig;
@@ -633,6 +396,547 @@ async function writeDailyIngestionState(
   await fs.rename(tmpPath, statePath);
 }
 
+type SessionIngestionFileState = {
+  mtimeMs: number;
+  size: number;
+  contentHash: string;
+  lineCount: number;
+  lastContentLine: number;
+};
+
+type SessionIngestionState = {
+  version: 3;
+  files: Record<string, SessionIngestionFileState>;
+  seenMessages: Record<string, string[]>;
+};
+
+type SessionIngestionMessage = {
+  day: string;
+  snippet: string;
+  rendered: string;
+};
+
+type SessionIngestionCollectionResult = {
+  batches: DailyIngestionBatch[];
+  nextState: SessionIngestionState;
+  changed: boolean;
+};
+
+function normalizeWorkspaceKey(workspaceDir: string): string {
+  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function resolveSessionIngestionStatePath(workspaceDir: string): string {
+  return path.join(workspaceDir, SESSION_INGESTION_STATE_RELATIVE_PATH);
+}
+
+function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
+  const record = asRecord(raw);
+  const filesRaw = asRecord(record?.files);
+  const files: Record<string, SessionIngestionFileState> = {};
+  if (filesRaw) {
+    for (const [key, value] of Object.entries(filesRaw)) {
+      const file = asRecord(value);
+      if (!file || key.trim().length === 0) {
+        continue;
+      }
+      const mtimeMs = Number(file.mtimeMs);
+      const size = Number(file.size);
+      if (!Number.isFinite(mtimeMs) || mtimeMs < 0 || !Number.isFinite(size) || size < 0) {
+        continue;
+      }
+      const lineCountRaw = Number(file.lineCount);
+      const lastContentLineRaw = Number(file.lastContentLine);
+      const lineCount =
+        Number.isFinite(lineCountRaw) && lineCountRaw >= 0 ? Math.floor(lineCountRaw) : 0;
+      const lastContentLine =
+        Number.isFinite(lastContentLineRaw) && lastContentLineRaw >= 0
+          ? Math.floor(lastContentLineRaw)
+          : 0;
+      files[key] = {
+        mtimeMs: Math.floor(mtimeMs),
+        size: Math.floor(size),
+        contentHash: typeof file.contentHash === "string" ? file.contentHash.trim() : "",
+        lineCount,
+        lastContentLine: Math.min(lineCount, lastContentLine),
+      };
+    }
+  }
+  const seenMessagesRaw = asRecord(record?.seenMessages);
+  const seenMessages: Record<string, string[]> = {};
+  if (seenMessagesRaw) {
+    for (const [scope, value] of Object.entries(seenMessagesRaw)) {
+      if (scope.trim().length === 0 || !Array.isArray(value)) {
+        continue;
+      }
+      const unique = [
+        ...new Set(value.filter((entry): entry is string => typeof entry === "string")),
+      ]
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(-SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION);
+      if (unique.length > 0) {
+        seenMessages[scope] = unique;
+      }
+    }
+  }
+  return { version: 3, files, seenMessages };
+}
+
+async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
+  const statePath = resolveSessionIngestionStatePath(workspaceDir);
+  try {
+    const raw = await fs.readFile(statePath, "utf-8");
+    return normalizeSessionIngestionState(JSON.parse(raw) as unknown);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || err instanceof SyntaxError) {
+      return { version: 3, files: {}, seenMessages: {} };
+    }
+    throw err;
+  }
+}
+
+async function writeSessionIngestionState(
+  workspaceDir: string,
+  state: SessionIngestionState,
+): Promise<void> {
+  const statePath = resolveSessionIngestionStatePath(workspaceDir);
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
+  const tmpPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
+  await fs.rename(tmpPath, statePath);
+}
+
+function trimTrackedSessionScopes(
+  seenMessages: Record<string, string[]>,
+): Record<string, string[]> {
+  const keys = Object.keys(seenMessages);
+  if (keys.length <= SESSION_INGESTION_MAX_TRACKED_SCOPES) {
+    return seenMessages;
+  }
+  const keep = new Set(keys.toSorted().slice(-SESSION_INGESTION_MAX_TRACKED_SCOPES));
+  const next: Record<string, string[]> = {};
+  for (const [scope, hashes] of Object.entries(seenMessages)) {
+    if (keep.has(scope)) {
+      next[scope] = hashes;
+    }
+  }
+  return next;
+}
+
+function normalizeSessionCorpusSnippet(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
+}
+
+function hashSessionMessageId(value: string): string {
+  return createHash("sha1").update(value).digest("hex");
+}
+
+function buildSessionScopeKey(agentId: string, absolutePath: string): string {
+  const fileName = path.basename(absolutePath);
+  const logicalSessionId = parseUsageCountedSessionIdFromFileName(fileName) ?? fileName;
+  return `${agentId}:${logicalSessionId}`;
+}
+
+function mergeTrackedMessageHashes(existing: string[], additions: string[]): string[] {
+  if (additions.length === 0) {
+    return existing;
+  }
+  const seen = new Set(existing);
+  const next = existing.slice();
+  for (const hash of additions) {
+    if (!seen.has(hash)) {
+      seen.add(hash);
+      next.push(hash);
+    }
+  }
+  if (next.length <= SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION) {
+    return next;
+  }
+  return next.slice(-SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION);
+}
+
+function areStringArraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildSessionStateKey(agentId: string, absolutePath: string): string {
+  return `${agentId}:${sessionPathForFile(absolutePath)}`;
+}
+
+function buildSessionRenderedLine(params: {
+  agentId: string;
+  sessionPath: string;
+  lineNumber: number;
+  snippet: string;
+}): string {
+  const source = `${params.agentId}/${params.sessionPath}#L${params.lineNumber}`;
+  return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
+}
+
+function resolveSessionAgentsForWorkspace(
+  cfg: OpenClawConfig | undefined,
+  workspaceDir: string,
+): string[] {
+  if (!cfg) {
+    return [];
+  }
+  const target = normalizeWorkspaceKey(workspaceDir);
+  const workspaces = resolveMemoryDreamingWorkspaces(cfg);
+  const match = workspaces.find((entry) => normalizeWorkspaceKey(entry.workspaceDir) === target);
+  if (!match) {
+    return [];
+  }
+  return match.agentIds
+    .filter((agentId, index, all) => agentId.trim().length > 0 && all.indexOf(agentId) === index)
+    .toSorted();
+}
+
+async function appendSessionCorpusLines(params: {
+  workspaceDir: string;
+  day: string;
+  lines: SessionIngestionMessage[];
+}): Promise<MemorySearchResult[]> {
+  if (params.lines.length === 0) {
+    return [];
+  }
+  const relativePath = path.posix.join("memory", ".dreams", "session-corpus", `${params.day}.txt`);
+  const absolutePath = path.join(
+    params.workspaceDir,
+    SESSION_CORPUS_RELATIVE_DIR,
+    `${params.day}.txt`,
+  );
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  let existing = "";
+  try {
+    existing = await fs.readFile(absolutePath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw err;
+    }
+  }
+  const normalizedExisting = existing.replace(/\r\n/g, "\n");
+  const existingLineCount =
+    normalizedExisting.length === 0
+      ? 0
+      : normalizedExisting.endsWith("\n")
+        ? normalizedExisting.slice(0, -1).split("\n").length
+        : normalizedExisting.split("\n").length;
+  const payload = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
+  await fs.appendFile(absolutePath, payload, "utf-8");
+  return params.lines.map((entry, index) => {
+    const lineNumber = existingLineCount + index + 1;
+    return {
+      path: relativePath,
+      startLine: lineNumber,
+      endLine: lineNumber,
+      score: SESSION_INGESTION_SCORE,
+      snippet: entry.snippet,
+      source: "memory",
+    };
+  });
+}
+
+async function collectSessionIngestionBatches(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  lookbackDays: number;
+  nowMs: number;
+  timezone?: string;
+  state: SessionIngestionState;
+}): Promise<SessionIngestionCollectionResult> {
+  if (!params.cfg) {
+    return {
+      batches: [],
+      nextState: { version: 3, files: {}, seenMessages: {} },
+      changed:
+        Object.keys(params.state.files).length > 0 ||
+        Object.keys(params.state.seenMessages).length > 0,
+    };
+  }
+  const agentIds = resolveSessionAgentsForWorkspace(params.cfg, params.workspaceDir);
+  const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
+  const batchByDay = new Map<string, SessionIngestionMessage[]>();
+  const nextFiles: Record<string, SessionIngestionFileState> = {};
+  const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
+  let changed = false;
+
+  const sessionFiles: Array<{ agentId: string; absolutePath: string; sessionPath: string }> = [];
+  for (const agentId of agentIds) {
+    const files = await listSessionFilesForAgent(agentId);
+    for (const absolutePath of files) {
+      sessionFiles.push({
+        agentId,
+        absolutePath,
+        sessionPath: sessionPathForFile(absolutePath),
+      });
+    }
+  }
+
+  const sortedFiles = sessionFiles.toSorted((a, b) => {
+    if (a.agentId !== b.agentId) {
+      return a.agentId.localeCompare(b.agentId);
+    }
+    return a.sessionPath.localeCompare(b.sessionPath);
+  });
+
+  const totalCap = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
+  let remaining = totalCap;
+  const perFileCap = Math.min(
+    SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
+    Math.max(
+      SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
+      Math.ceil(totalCap / Math.max(1, sortedFiles.length)),
+    ),
+  );
+
+  for (const file of sortedFiles) {
+    if (remaining <= 0) {
+      break;
+    }
+    const stateKey = buildSessionStateKey(file.agentId, file.absolutePath);
+    const previous = params.state.files[stateKey];
+    const stat = await fs.stat(file.absolutePath).catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    });
+    if (!stat) {
+      if (previous) {
+        changed = true;
+      }
+      continue;
+    }
+    const fingerprint = {
+      mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
+      size: Math.floor(Math.max(0, stat.size)),
+    };
+    const cursorAtEnd =
+      previous !== undefined &&
+      previous.lineCount > 0 &&
+      previous.lastContentLine >= previous.lineCount;
+    const unchanged =
+      Boolean(previous) &&
+      previous.mtimeMs === fingerprint.mtimeMs &&
+      previous.size === fingerprint.size &&
+      previous.contentHash.length > 0 &&
+      cursorAtEnd;
+    if (unchanged) {
+      nextFiles[stateKey] = previous!;
+      continue;
+    }
+
+    const entry = await buildSessionEntry(file.absolutePath);
+    if (!entry) {
+      continue;
+    }
+    const contentHash = entry.hash.trim();
+    if (
+      previous &&
+      previous.mtimeMs === fingerprint.mtimeMs &&
+      previous.size === fingerprint.size &&
+      previous.contentHash === contentHash &&
+      previous.lineCount === entry.lineMap.length &&
+      previous.lastContentLine >= previous.lineCount
+    ) {
+      nextFiles[stateKey] = previous;
+      continue;
+    }
+
+    const sessionScope = buildSessionScopeKey(file.agentId, file.absolutePath);
+    const previousSeen = nextSeenMessages[sessionScope] ?? [];
+    let seenSet = new Set(previousSeen);
+    const newSeenHashes: string[] = [];
+
+    const lines = entry.content.length > 0 ? entry.content.split("\n") : [];
+    const lineCount = lines.length;
+    let cursor =
+      previous &&
+      previous.mtimeMs === fingerprint.mtimeMs &&
+      previous.size === fingerprint.size &&
+      previous.contentHash === contentHash &&
+      previous.lineCount === lineCount
+        ? Math.max(0, Math.min(previous.lastContentLine, lineCount))
+        : 0;
+
+    const fileCap = Math.max(1, Math.min(perFileCap, remaining));
+    let fileCount = 0;
+    let lastScannedContentLine = cursor;
+    for (let index = cursor; index < lines.length; index += 1) {
+      if (fileCount >= fileCap || remaining <= 0) {
+        break;
+      }
+      lastScannedContentLine = index + 1;
+      const rawSnippet = lines[index] ?? "";
+      const snippet = normalizeSessionCorpusSnippet(rawSnippet);
+      if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
+        continue;
+      }
+      const lineNumber = entry.lineMap[index] ?? index + 1;
+      const messageTimestampMs = entry.messageTimestampsMs[index] ?? 0;
+      const day = formatMemoryDreamingDay(
+        messageTimestampMs > 0 ? messageTimestampMs : fingerprint.mtimeMs,
+        params.timezone,
+      );
+      if (!isDayWithinLookback(day, cutoffMs)) {
+        continue;
+      }
+      const dedupeBasis =
+        messageTimestampMs > 0 ? `ts:${Math.floor(messageTimestampMs)}` : `line:${lineNumber}`;
+      const messageHash = hashSessionMessageId(`${sessionScope}\n${dedupeBasis}\n${snippet}`);
+      if (seenSet.has(messageHash)) {
+        continue;
+      }
+      const rendered = buildSessionRenderedLine({
+        agentId: file.agentId,
+        sessionPath: file.sessionPath,
+        lineNumber,
+        snippet,
+      });
+      const bucket = batchByDay.get(day) ?? [];
+      bucket.push({ day, snippet, rendered });
+      batchByDay.set(day, bucket);
+      seenSet.add(messageHash);
+      newSeenHashes.push(messageHash);
+      fileCount += 1;
+      remaining -= 1;
+    }
+
+    if (lastScannedContentLine < cursor) {
+      lastScannedContentLine = cursor;
+    }
+    cursor = Math.max(0, Math.min(lastScannedContentLine, lineCount));
+
+    nextFiles[stateKey] = {
+      mtimeMs: fingerprint.mtimeMs,
+      size: fingerprint.size,
+      contentHash,
+      lineCount,
+      lastContentLine: cursor,
+    };
+    const mergedSeen = mergeTrackedMessageHashes(previousSeen, newSeenHashes);
+    nextSeenMessages[sessionScope] = mergedSeen;
+    if (!areStringArraysEqual(mergedSeen, previousSeen)) {
+      changed = true;
+    }
+    if (
+      !previous ||
+      previous.mtimeMs !== fingerprint.mtimeMs ||
+      previous.size !== fingerprint.size ||
+      previous.contentHash !== contentHash ||
+      previous.lineCount !== lineCount ||
+      previous.lastContentLine !== cursor
+    ) {
+      changed = true;
+    }
+  }
+
+  for (const [key, state] of Object.entries(params.state.files)) {
+    if (!Object.hasOwn(nextFiles, key)) {
+      changed = true;
+      continue;
+    }
+    const next = nextFiles[key];
+    if (!next || next.mtimeMs !== state.mtimeMs || next.size !== state.size) {
+      changed = true;
+    }
+    if (
+      next &&
+      typeof state.contentHash === "string" &&
+      state.contentHash.trim().length > 0 &&
+      next.contentHash !== state.contentHash
+    ) {
+      changed = true;
+    }
+    if (
+      !next ||
+      next.lineCount !== state.lineCount ||
+      next.lastContentLine !== state.lastContentLine
+    ) {
+      changed = true;
+    }
+  }
+
+  const trimmedSeenMessages = trimTrackedSessionScopes(nextSeenMessages);
+  for (const [scope, hashes] of Object.entries(trimmedSeenMessages)) {
+    const previous = params.state.seenMessages[scope] ?? [];
+    if (!areStringArraysEqual(previous, hashes)) {
+      changed = true;
+    }
+  }
+  for (const scope of Object.keys(params.state.seenMessages)) {
+    if (!Object.hasOwn(trimmedSeenMessages, scope)) {
+      changed = true;
+    }
+  }
+
+  const batches: DailyIngestionBatch[] = [];
+  for (const day of [...batchByDay.keys()].toSorted()) {
+    const lines = batchByDay.get(day) ?? [];
+    if (lines.length === 0) {
+      continue;
+    }
+    const results = await appendSessionCorpusLines({
+      workspaceDir: params.workspaceDir,
+      day,
+      lines,
+    });
+    if (results.length > 0) {
+      batches.push({ day, results });
+    }
+  }
+
+  return {
+    batches,
+    nextState: { version: 3, files: nextFiles, seenMessages: trimmedSeenMessages },
+    changed,
+  };
+}
+
+async function ingestSessionTranscriptSignals(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  lookbackDays: number;
+  nowMs: number;
+  timezone?: string;
+}): Promise<void> {
+  const state = await readSessionIngestionState(params.workspaceDir);
+  const collected = await collectSessionIngestionBatches({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+    lookbackDays: params.lookbackDays,
+    nowMs: params.nowMs,
+    timezone: params.timezone,
+    state,
+  });
+  for (const batch of collected.batches) {
+    await recordShortTermRecalls({
+      workspaceDir: params.workspaceDir,
+      query: `__dreaming_sessions__:${batch.day}`,
+      results: batch.results,
+      signalType: "daily",
+      dedupeByQueryPerDay: true,
+      dayBucket: batch.day,
+      nowMs: params.nowMs,
+      timezone: params.timezone,
+    });
+  }
+  if (collected.changed) {
+    await writeSessionIngestionState(params.workspaceDir, collected.nextState);
+  }
+}
+
 type DailyIngestionCollectionResult = {
   batches: DailyIngestionBatch[];
   nextState: DailyIngestionState;
@@ -661,7 +965,7 @@ async function collectDailyIngestionBatches(params: {
       if (!match) {
         return null;
       }
-      const day = match[1]!;
+      const day = match[1];
       if (!isDayWithinLookback(day, cutoffMs)) {
         return null;
       }
@@ -1004,6 +1308,7 @@ export function previewRemDreaming(params: {
 
 async function runLightDreaming(params: {
   workspaceDir: string;
+  cfg?: OpenClawConfig;
   config: MemoryLightDreamingConfig & {
     timezone?: string;
     storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
@@ -1018,6 +1323,13 @@ async function runLightDreaming(params: {
     workspaceDir: params.workspaceDir,
     lookbackDays: params.config.lookbackDays,
     limit: params.config.limit,
+    nowMs,
+    timezone: params.config.timezone,
+  });
+  await ingestSessionTranscriptSignals({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+    lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
   });
@@ -1076,6 +1388,7 @@ async function runLightDreaming(params: {
 
 async function runRemDreaming(params: {
   workspaceDir: string;
+  cfg?: OpenClawConfig;
   config: MemoryRemDreamingConfig & {
     timezone?: string;
     storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
@@ -1090,6 +1403,13 @@ async function runRemDreaming(params: {
     workspaceDir: params.workspaceDir,
     lookbackDays: params.config.lookbackDays,
     limit: params.config.limit,
+    nowMs,
+    timezone: params.config.timezone,
+  });
+  await ingestSessionTranscriptSignals({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+    lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
   });
@@ -1163,6 +1483,7 @@ export async function runDreamingSweepPhases(params: {
   if (light.enabled && light.limit > 0) {
     await runLightDreaming({
       workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
       config: light,
       logger: params.logger,
       subagent: params.subagent,
@@ -1177,6 +1498,7 @@ export async function runDreamingSweepPhases(params: {
   if (rem.enabled && rem.limit > 0) {
     await runRemDreaming({
       workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
       config: rem,
       logger: params.logger,
       subagent: params.subagent,
@@ -1204,7 +1526,10 @@ async function runPhaseIfTriggered(params: {
         storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
       });
 }): Promise<{ handled: true; reason: string } | undefined> {
-  if (params.trigger !== "heartbeat" || params.cleanedBody.trim() !== params.eventText) {
+  if (
+    params.trigger !== "heartbeat" ||
+    !includesSystemEventToken(params.cleanedBody, params.eventText)
+  ) {
     return undefined;
   }
   if (!params.config.enabled) {
@@ -1229,6 +1554,7 @@ async function runPhaseIfTriggered(params: {
       if (params.phase === "light") {
         await runLightDreaming({
           workspaceDir,
+          cfg: params.cfg,
           config: params.config as MemoryLightDreamingConfig & {
             timezone?: string;
             storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
@@ -1239,6 +1565,7 @@ async function runPhaseIfTriggered(params: {
       } else {
         await runRemDreaming({
           workspaceDir,
+          cfg: params.cfg,
           config: params.config as MemoryRemDreamingConfig & {
             timezone?: string;
             storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
@@ -1256,94 +1583,18 @@ async function runPhaseIfTriggered(params: {
   return { handled: true, reason: `memory-core: ${params.phase} dreaming processed` };
 }
 
-export function registerMemoryDreamingPhases(api: OpenClawPluginApi): void {
-  api.registerHook(
-    "gateway:startup",
-    async (event: unknown) => {
-      const cron = resolveCronServiceFromStartupEvent(event);
-      const pluginConfig = resolveMemoryCorePluginConfig(api.config) ?? api.pluginConfig;
-      const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: api.config });
-      const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: api.config });
-      const lightDesired = buildManagedCronJob({
-        name: LIGHT_SLEEP_CRON_NAME,
-        tag: LIGHT_SLEEP_CRON_TAG,
-        payloadText: LIGHT_SLEEP_EVENT_TEXT,
-        cron: light.cron,
-        timezone: light.timezone,
-        phase: "light",
-        limit: light.limit,
-        lookbackDays: light.lookbackDays,
-      });
-      const remDesired = buildManagedCronJob({
-        name: REM_SLEEP_CRON_NAME,
-        tag: REM_SLEEP_CRON_TAG,
-        payloadText: REM_SLEEP_EVENT_TEXT,
-        cron: rem.cron,
-        timezone: rem.timezone,
-        phase: "rem",
-        limit: rem.limit,
-        lookbackDays: rem.lookbackDays,
-      });
-      try {
-        await reconcileManagedPhaseCronJob({
-          cron,
-          desired: lightDesired,
-          match: {
-            name: LIGHT_SLEEP_CRON_NAME,
-            tag: LIGHT_SLEEP_CRON_TAG,
-            payloadText: LIGHT_SLEEP_EVENT_TEXT,
-          },
-          enabled: light.enabled,
-          logger: api.logger,
-        });
-        await reconcileManagedPhaseCronJob({
-          cron,
-          desired: remDesired,
-          match: {
-            name: REM_SLEEP_CRON_NAME,
-            tag: REM_SLEEP_CRON_TAG,
-            payloadText: REM_SLEEP_EVENT_TEXT,
-          },
-          enabled: rem.enabled,
-          logger: api.logger,
-        });
-      } catch (err) {
-        api.logger.error(
-          `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
-        );
-      }
-    },
-    { name: "memory-core-dreaming-phase-cron" },
-  );
-
-  api.on("before_agent_reply", async (event, ctx) => {
-    const pluginConfig = resolveMemoryCorePluginConfig(api.config) ?? api.pluginConfig;
-    const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: api.config });
-    const lightResult = await runPhaseIfTriggered({
-      cleanedBody: event.cleanedBody,
-      trigger: ctx.trigger,
-      workspaceDir: ctx.workspaceDir,
-      cfg: api.config,
-      logger: api.logger,
-      subagent: light.enabled ? api.runtime?.subagent : undefined,
-      phase: "light",
-      eventText: LIGHT_SLEEP_EVENT_TEXT,
-      config: light,
-    });
-    if (lightResult) {
-      return lightResult;
-    }
-    const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: api.config });
-    return await runPhaseIfTriggered({
-      cleanedBody: event.cleanedBody,
-      trigger: ctx.trigger,
-      workspaceDir: ctx.workspaceDir,
-      cfg: api.config,
-      logger: api.logger,
-      subagent: rem.enabled ? api.runtime?.subagent : undefined,
-      phase: "rem",
-      eventText: REM_SLEEP_EVENT_TEXT,
-      config: rem,
-    });
-  });
+/**
+ * @deprecated Unified dreaming registration lives in registerShortTermPromotionDreaming().
+ */
+export function registerMemoryDreamingPhases(_api: OpenClawPluginApi): void {
+  // LEGACY(memory-v1): kept as a no-op compatibility shim while the unified
+  // dreaming controller owns startup reconciliation and heartbeat triggers.
 }
+
+export const __testing = {
+  runPhaseIfTriggered,
+  constants: {
+    LIGHT_SLEEP_EVENT_TEXT,
+    REM_SLEEP_EVENT_TEXT,
+  },
+};

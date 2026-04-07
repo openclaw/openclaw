@@ -39,7 +39,10 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  summarizeStringEntries,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
 import { fetchDiscordApplicationId } from "../probe.js";
@@ -174,12 +177,12 @@ function appendPluginCommandSpecs(params: {
 }): NativeCommandSpec[] {
   const merged = [...params.commandSpecs];
   const existingNames = new Set(
-    merged.map((spec) => spec.name.trim().toLowerCase()).filter(Boolean),
+    merged.map((spec) => normalizeLowercaseStringOrEmpty(spec.name)).filter(Boolean),
   );
   for (const pluginCommand of (getPluginCommandSpecsForTesting ?? getPluginCommandSpecs)(
     "discord",
   )) {
-    const normalizedName = pluginCommand.name.trim().toLowerCase();
+    const normalizedName = normalizeLowercaseStringOrEmpty(pluginCommand.name);
     if (!normalizedName) {
       continue;
     }
@@ -223,7 +226,7 @@ function classifyAcpStatusProbeError(params: {
     return { status: "stale", reason: "session-init-failed" };
   }
 
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const message = formatErrorMessage(params.error);
   if (isLegacyMissingSessionError(message)) {
     return { status: "stale", reason: "session-missing" };
   }

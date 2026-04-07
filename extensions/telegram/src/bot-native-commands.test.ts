@@ -1,14 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
-import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
-
-let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
-let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
-let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
 import {
   createCommandBot,
   createNativeCommandTestParams,
@@ -20,6 +12,12 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
+import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
+import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
+
+let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
+let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
+let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
 
 describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
@@ -135,7 +133,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredCommands).toHaveLength(92);
     expect(
       registeredCommands.some(
-        (entry) => entry.description.length < customCommands[0]!.description.length,
+        (entry) => entry.description.length < customCommands[0].description.length,
       ),
     ).toBe(true);
     expect(runtimeLog).toHaveBeenCalledWith(

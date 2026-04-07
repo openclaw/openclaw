@@ -8,6 +8,7 @@ import type {
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
 } from "../plugins/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   MessagePreprocessedHookContext,
   MessageReceivedHookContext,
@@ -194,8 +195,8 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
     : null;
   if (pluginResolved) {
     return {
-      conversationId: pluginResolved.conversationId?.trim() || undefined,
-      parentConversationId: pluginResolved.parentConversationId?.trim() || undefined,
+      conversationId: normalizeOptionalString(pluginResolved.conversationId),
+      parentConversationId: normalizeOptionalString(pluginResolved.parentConversationId),
     };
   }
   const baseConversationId = stripChannelPrefix(

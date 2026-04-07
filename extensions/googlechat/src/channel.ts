@@ -7,8 +7,6 @@ import {
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   composeAccountWarningCollectors,
-  composeWarningCollectors,
-  createAllowlistProviderGroupPolicyWarningCollector,
   createAllowlistProviderOpenWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
@@ -23,6 +21,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { googlechatMessageActions } from "./actions.js";
 import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
@@ -32,18 +31,18 @@ import {
   DEFAULT_ACCOUNT_ID,
   fetchRemoteMedia,
   GoogleChatConfigSchema,
+  isGoogleChatSpaceTarget,
+  isGoogleChatUserTarget,
   listGoogleChatAccountIds,
   loadOutboundMediaFromUrl,
   missingTargetError,
+  normalizeGoogleChatTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatAccount,
   resolveGoogleChatOutboundSpace,
   runPassiveAccountLifecycle,
-  isGoogleChatSpaceTarget,
-  isGoogleChatUserTarget,
-  normalizeGoogleChatTarget,
   type ChannelMessageActionAdapter,
   type ChannelStatusIssue,
   type OpenClawConfig,
@@ -51,7 +50,6 @@ import {
 } from "./channel.deps.runtime.js";
 import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
-import { getGoogleChatRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
@@ -76,12 +74,13 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 );
 
 const formatAllowFromEntry = (entry: string) =>
-  entry
-    .trim()
-    .replace(/^(googlechat|google-chat|gchat):/i, "")
-    .replace(/^user:/i, "")
-    .replace(/^users\//i, "")
-    .toLowerCase();
+  normalizeLowercaseStringOrEmpty(
+    entry
+      .trim()
+      .replace(/^(googlechat|google-chat|gchat):/i, "")
+      .replace(/^user:/i, "")
+      .replace(/^users\//i, ""),
+  );
 
 const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleChatAccount>({
   sectionKey: "googlechat",

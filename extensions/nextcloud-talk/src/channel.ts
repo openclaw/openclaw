@@ -240,7 +240,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
               changed = true;
             }
             const accountCleanup = clearAccountEntryFields({
-              accounts: nextSection.accounts,
+              accounts: nextSection.accounts as Record<string, object> | undefined,
               accountId,
               fields: ["botSecret"],
             });
@@ -250,7 +250,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
                 cleared = true;
               }
               if (accountCleanup.nextAccounts) {
-                nextSection.accounts = accountCleanup.nextAccounts;
+                nextSection.accounts = accountCleanup.nextAccounts as Record<string, unknown>;
               } else {
                 delete nextSection.accounts;
               }

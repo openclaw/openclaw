@@ -51,4 +51,22 @@ describe("xai responses tool helpers", () => {
       citations: ["https://example.com/b"],
     });
   });
+
+  it("includes inline citations only when enabled", () => {
+    const data = {
+      output_text: "Done",
+      citations: ["https://example.com/b"],
+      inline_citations: [{ start_index: 0, end_index: 4, url: "https://example.com/b" }],
+    };
+    expect(__testing.resolveXaiResponseTextCitationsAndInline(data, true)).toEqual({
+      content: "Done",
+      citations: ["https://example.com/b"],
+      inlineCitations: [{ start_index: 0, end_index: 4, url: "https://example.com/b" }],
+    });
+    expect(__testing.resolveXaiResponseTextCitationsAndInline(data, false)).toEqual({
+      content: "Done",
+      citations: ["https://example.com/b"],
+      inlineCitations: undefined,
+    });
+  });
 });

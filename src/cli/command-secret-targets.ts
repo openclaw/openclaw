@@ -4,6 +4,51 @@ import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
 } from "../secrets/target-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
+const STATIC_QR_REMOTE_TARGET_IDS = ["gateway.remote.token", "gateway.remote.password"] as const;
+const STATIC_MODEL_TARGET_IDS = [
+  "models.providers.*.apiKey",
+  "models.providers.*.headers.*",
+  "models.providers.*.request.headers.*",
+  "models.providers.*.request.auth.token",
+  "models.providers.*.request.auth.value",
+  "models.providers.*.request.proxy.tls.ca",
+  "models.providers.*.request.proxy.tls.cert",
+  "models.providers.*.request.proxy.tls.key",
+  "models.providers.*.request.proxy.tls.passphrase",
+  "models.providers.*.request.tls.ca",
+  "models.providers.*.request.tls.cert",
+  "models.providers.*.request.tls.key",
+  "models.providers.*.request.tls.passphrase",
+] as const;
+const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
+  ...STATIC_MODEL_TARGET_IDS,
+  "agents.defaults.memorySearch.remote.apiKey",
+  "agents.list[].memorySearch.remote.apiKey",
+  "messages.tts.providers.*.apiKey",
+  "skills.entries.*.apiKey",
+  "tools.web.search.apiKey",
+  "plugins.entries.brave.config.webSearch.apiKey",
+  "plugins.entries.google.config.webSearch.apiKey",
+  "plugins.entries.xai.config.webSearch.apiKey",
+  "plugins.entries.moonshot.config.webSearch.apiKey",
+  "plugins.entries.perplexity.config.webSearch.apiKey",
+  "plugins.entries.firecrawl.config.webSearch.apiKey",
+  "plugins.entries.firecrawl.config.webFetch.apiKey",
+  "plugins.entries.tavily.config.webSearch.apiKey",
+  "plugins.entries.minimax.config.webSearch.apiKey",
+] as const;
+const STATIC_STATUS_TARGET_IDS = [
+  "agents.defaults.memorySearch.remote.apiKey",
+  "agents.list[].memorySearch.remote.apiKey",
+] as const;
+const STATIC_SECURITY_AUDIT_TARGET_IDS = [
+  "gateway.auth.token",
+  "gateway.auth.password",
+  "gateway.remote.token",
+  "gateway.remote.password",
+] as const;
 
 function idsByPrefix(prefixes: readonly string[]): string[] {
   return listSecretTargetRegistryEntries()
@@ -12,48 +57,28 @@ function idsByPrefix(prefixes: readonly string[]): string[] {
     .toSorted();
 }
 
-function idsByPredicate(predicate: (id: string) => boolean): string[] {
-  return listSecretTargetRegistryEntries()
-    .map((entry) => entry.id)
-    .filter(predicate)
-    .toSorted();
-}
-
 type CommandSecretTargets = {
-  qrRemote: string[];
   channels: string[];
-  models: string[];
   agentRuntime: string[];
   status: string[];
   securityAudit: string[];
 };
 
 let cachedCommandSecretTargets: CommandSecretTargets | undefined;
+let cachedChannelSecretTargetIds: string[] | undefined;
+
+function getChannelSecretTargetIds(): string[] {
+  cachedChannelSecretTargetIds ??= idsByPrefix(["channels."]);
+  return cachedChannelSecretTargetIds;
+}
 
 function buildCommandSecretTargets(): CommandSecretTargets {
-  const webPluginSecretTargets = idsByPredicate((id) =>
-    /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(id),
-  );
-
+  const channelTargetIds = getChannelSecretTargetIds();
   return {
-    qrRemote: ["gateway.remote.token", "gateway.remote.password"],
-    channels: idsByPrefix(["channels."]),
-    models: idsByPrefix(["models.providers."]),
-    agentRuntime: idsByPrefix([
-      "channels.",
-      "models.providers.",
-      "agents.defaults.memorySearch.remote.",
-      "agents.list[].memorySearch.remote.",
-      "skills.entries.",
-      "messages.tts.",
-      "tools.web.search",
-    ]).concat(webPluginSecretTargets),
-    status: idsByPrefix([
-      "channels.",
-      "agents.defaults.memorySearch.remote.",
-      "agents.list[].memorySearch.remote.",
-    ]),
-    securityAudit: idsByPrefix(["channels.", "gateway.auth.", "gateway.remote."]),
+    channels: channelTargetIds,
+    agentRuntime: [...STATIC_AGENT_RUNTIME_BASE_TARGET_IDS, ...channelTargetIds],
+    status: [...STATIC_STATUS_TARGET_IDS, ...channelTargetIds],
+    securityAudit: [...STATIC_SECURITY_AUDIT_TARGET_IDS, ...channelTargetIds],
   };
 }
 
@@ -64,11 +89,6 @@ function getCommandSecretTargets(): CommandSecretTargets {
 
 function toTargetIdSet(values: readonly string[]): Set<string> {
   return new Set(values);
-}
-
-function normalizeScopedChannelId(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function selectChannelTargetIds(channel?: string): Set<string> {
@@ -104,7 +124,7 @@ export function getScopedChannelsCommandSecretTargets(params: {
   targetIds: Set<string>;
   allowedPaths?: Set<string>;
 } {
-  const channel = normalizeScopedChannelId(params.channel);
+  const channel = normalizeOptionalString(params.channel);
   const targetIds = selectChannelTargetIds(channel);
   const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
   if (!channel || !normalizedAccountId) {
@@ -127,7 +147,7 @@ export function getScopedChannelsCommandSecretTargets(params: {
 }
 
 export function getQrRemoteCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(getCommandSecretTargets().qrRemote);
+  return toTargetIdSet(STATIC_QR_REMOTE_TARGET_IDS);
 }
 
 export function getChannelsCommandSecretTargetIds(): Set<string> {
@@ -135,10 +155,15 @@ export function getChannelsCommandSecretTargetIds(): Set<string> {
 }
 
 export function getModelsCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(getCommandSecretTargets().models);
+  return toTargetIdSet(STATIC_MODEL_TARGET_IDS);
 }
 
-export function getAgentRuntimeCommandSecretTargetIds(): Set<string> {
+export function getAgentRuntimeCommandSecretTargetIds(params?: {
+  includeChannelTargets?: boolean;
+}): Set<string> {
+  if (params?.includeChannelTargets !== true) {
+    return toTargetIdSet(STATIC_AGENT_RUNTIME_BASE_TARGET_IDS);
+  }
   return toTargetIdSet(getCommandSecretTargets().agentRuntime);
 }
 

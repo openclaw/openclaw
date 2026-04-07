@@ -157,10 +157,24 @@ describe("matrix doctor", () => {
       } as never,
     });
 
-    expect(result.config.channels?.matrix?.groups?.["!ops:example.org"]).toEqual({
+    const matrixConfig = result.config.channels?.matrix as
+      | {
+          groups?: Record<string, unknown>;
+          accounts?: Record<string, unknown>;
+          network?: { dangerouslyAllowPrivateNetwork?: boolean };
+        }
+      | undefined;
+    const workAccount = matrixConfig?.accounts?.work as
+      | {
+          rooms?: Record<string, unknown>;
+          network?: { dangerouslyAllowPrivateNetwork?: boolean };
+        }
+      | undefined;
+
+    expect(matrixConfig?.groups?.["!ops:example.org"]).toEqual({
       enabled: true,
     });
-    expect(result.config.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
+    expect(workAccount?.rooms?.["!legacy:example.org"]).toEqual({
       enabled: false,
     });
     expect(result.changes).toEqual(
@@ -193,10 +207,22 @@ describe("matrix doctor", () => {
       } as never,
     });
 
-    expect(result.config.channels?.matrix?.network).toEqual({
+    const matrixConfig = result.config.channels?.matrix as
+      | {
+          accounts?: Record<string, unknown>;
+          network?: { dangerouslyAllowPrivateNetwork?: boolean };
+        }
+      | undefined;
+    const workAccount = matrixConfig?.accounts?.work as
+      | {
+          network?: { dangerouslyAllowPrivateNetwork?: boolean };
+        }
+      | undefined;
+
+    expect(matrixConfig?.network).toEqual({
       dangerouslyAllowPrivateNetwork: true,
     });
-    expect(result.config.channels?.matrix?.accounts?.work?.network).toEqual({
+    expect(workAccount?.network).toEqual({
       dangerouslyAllowPrivateNetwork: false,
     });
     expect(result.changes).toEqual(
