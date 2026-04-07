@@ -267,7 +267,7 @@ describe("models-config merge helpers", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: {
-          apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
+          apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
           models: [createModel({ id: "model", api: "openai-responses" })],
         } as ProviderConfig,
       },
@@ -281,7 +281,7 @@ describe("models-config merge helpers", () => {
       explicitBaseUrlProviders: new Set<string>(),
     });
 
-    expect(merged.custom?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    expect(merged.custom?.apiKey).toBe("GOOGLE_API_KEY"); // pragma: allowlist secret
   });
 
   it("does not preserve a stale non-env marker when config returns to plaintext", async () => {

@@ -28,6 +28,29 @@ describe("memory manager readonly recovery", () => {
   let workspaceDir = "";
   let indexPath = "";
 
+  function createQueuedSyncHarness(syncing: Promise<void>) {
+    const queuedSessionFiles = new Set<string>();
+    let queuedSessionSync: Promise<void> | null = null;
+    const sync = vi.fn(async () => {});
+    return {
+      queuedSessionFiles,
+      get queuedSessionSync() {
+        return queuedSessionSync;
+      },
+      sync,
+      state: {
+        isClosed: () => false,
+        getSyncing: () => syncing,
+        getQueuedSessionFiles: () => queuedSessionFiles,
+        getQueuedSessionSync: () => queuedSessionSync,
+        setQueuedSessionSync: (value: Promise<void> | null) => {
+          queuedSessionSync = value;
+        },
+        sync,
+      },
+    };
+  }
+
   function _createMemoryConfig(): OpenClawConfig {
     return _createMemorySyncControlConfigForTests(workspaceDir, indexPath);
   }
@@ -56,9 +79,9 @@ describe("memory manager readonly recovery", () => {
       readonlyRecoveryLastError: undefined,
       ensureProviderInitialized: vi.fn(async () => {}),
       enqueueTargetedSessionSync: vi.fn(async () => {}),
-      runSync: vi.fn(),
+      runSync: vi.fn(async (_params) => undefined) as ReadonlyRecoveryHarness["runSync"],
       openDatabase: vi.fn(() => reopenedDb),
-      ensureSchema: vi.fn(),
+      ensureSchema: vi.fn(() => undefined) as ReadonlyRecoveryHarness["ensureSchema"],
       readMeta: vi.fn(() => undefined),
     };
     return {
@@ -168,15 +191,9 @@ describe("memory manager readonly recovery", () => {
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
     });
-    const harness = {
-      closed: false,
-      syncing: pendingSync,
-      queuedSessionFiles: new Set<string>(),
-      queuedSessionSync: null as Promise<void> | null,
-      sync: vi.fn(async () => {}),
-    };
+    const harness = createQueuedSyncHarness(pendingSync);
 
-    const queued = enqueueMemoryTargetedSessionSync(harness, [
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, [
       "  /tmp/first.jsonl ",
       "",
       "/tmp/second.jsonl",
@@ -200,19 +217,13 @@ describe("memory manager readonly recovery", () => {
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
     });
-    const harness = {
-      closed: false,
-      syncing: pendingSync,
-      queuedSessionFiles: new Set<string>(),
-      queuedSessionSync: null as Promise<void> | null,
-      sync: vi.fn(async () => {}),
-    };
+    const harness = createQueuedSyncHarness(pendingSync);
 
-    const first = enqueueMemoryTargetedSessionSync(harness, [
+    const first = enqueueMemoryTargetedSessionSync(harness.state, [
       "/tmp/first.jsonl",
       "/tmp/second.jsonl",
     ]);
-    const second = enqueueMemoryTargetedSessionSync(harness, [
+    const second = enqueueMemoryTargetedSessionSync(harness.state, [
       "/tmp/second.jsonl",
       "/tmp/third.jsonl",
     ]);
@@ -234,15 +245,9 @@ describe("memory manager readonly recovery", () => {
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
     });
-    const harness = {
-      closed: false,
-      syncing: pendingSync,
-      queuedSessionFiles: new Set<string>(),
-      queuedSessionSync: null as Promise<void> | null,
-      sync: vi.fn(async () => {}),
-    };
+    const harness = createQueuedSyncHarness(pendingSync);
 
-    const queued = enqueueMemoryTargetedSessionSync(harness, ["", "   "]);
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, ["", "   "]);
 
     expect(queued).toBe(pendingSync);
     releaseSync();

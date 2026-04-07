@@ -48,7 +48,7 @@ export function getLoadWebMediaMock(): AnyMock {
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
-vi.mock("openclaw/plugin-sdk/web-media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 

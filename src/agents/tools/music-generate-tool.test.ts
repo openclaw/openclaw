@@ -355,4 +355,67 @@ describe("createMusicGenerateTool", () => {
     expect(result.details).not.toHaveProperty("durationSeconds");
     expect(result.details).not.toHaveProperty("format");
   });
+
+  it("surfaces normalized durations from runtime metadata", async () => {
+    vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
+      provider: "minimax",
+      model: "music-2.5+",
+      attempts: [],
+      ignoredOverrides: [],
+      tracks: [
+        {
+          buffer: Buffer.from("music-bytes"),
+          mimeType: "audio/mpeg",
+          fileName: "night-drive.mp3",
+        },
+      ],
+      normalization: {
+        durationSeconds: {
+          requested: 45,
+          applied: 30,
+        },
+      },
+      metadata: {
+        requestedDurationSeconds: 45,
+        normalizedDurationSeconds: 30,
+      },
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/generated-night-drive.mp3",
+      id: "generated-night-drive.mp3",
+      size: 11,
+      contentType: "audio/mpeg",
+    });
+
+    const tool = createMusicGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "minimax/music-2.5+" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected music_generate tool");
+    }
+
+    const result = await tool.execute("call-1", {
+      prompt: "night-drive synthwave",
+      durationSeconds: 45,
+    });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("Duration normalized: requested 45s; used 30s.");
+    expect(result.details).toMatchObject({
+      durationSeconds: 30,
+      requestedDurationSeconds: 45,
+      normalization: {
+        durationSeconds: {
+          requested: 45,
+          applied: 30,
+        },
+      },
+    });
+  });
 });

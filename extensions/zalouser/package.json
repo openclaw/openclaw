@@ -8,6 +8,7 @@
     "zca-js": "2.1.2"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

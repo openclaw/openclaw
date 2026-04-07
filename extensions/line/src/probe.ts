@@ -1,4 +1,5 @@
 import { messagingApi } from "@line/bot-sdk";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-runtime";
 import type { LineProbeResult } from "./types.js";
 
@@ -27,7 +28,7 @@ export async function probeLineBot(
       },
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return { ok: false, error: message };
   }
 }

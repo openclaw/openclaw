@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -47,7 +48,7 @@ export function checkFileSize(filePath: string, maxSize = MAX_UPLOAD_SIZE): File
     return {
       ok: false,
       size: 0,
-      error: `Failed to read file metadata: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Failed to read file metadata: ${formatErrorMessage(err)}`,
     };
   }
 }

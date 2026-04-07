@@ -1,5 +1,6 @@
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 import {
   createChannelApproverDmTargetResolver,
@@ -103,7 +104,7 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
       }),
     resolveTurnSourceTarget: (request) => {
       const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
-      const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
+      const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
       const rawTurnSourceTo = request.request.turnSourceTo?.trim() || "";
       const turnSourceTo = normalizeDiscordOriginChannelId(rawTurnSourceTo);
       const hasExplicitOriginTarget = /^(?:channel|group):/i.test(rawTurnSourceTo);

@@ -1,3 +1,12 @@
+import { randomUUID } from "node:crypto";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
+  StopReason,
+} from "@mariozechner/pi-ai";
+import * as piAi from "@mariozechner/pi-ai";
 /**
  * OpenAI WebSocket StreamFn Integration
  *
@@ -20,16 +29,7 @@
  *
  * @see src/agents/openai-ws-connection.ts for the connection manager
  */
-
-import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  AssistantMessageEventStream,
-  StopReason,
-} from "@mariozechner/pi-ai";
-import * as piAi from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveProviderTransportTurnStateWithPlugin,
   resolveProviderWebSocketSessionPolicyWithPlugin,
@@ -550,7 +550,7 @@ function normalizeWsRunError(err: unknown): OpenAIWebSocketRuntimeError {
   if (err instanceof OpenAIWebSocketRuntimeError) {
     return err;
   }
-  return new OpenAIWebSocketRuntimeError(err instanceof Error ? err.message : String(err), {
+  return new OpenAIWebSocketRuntimeError(formatErrorMessage(err), {
     kind: "server",
     retryable: false,
   });
@@ -1177,7 +1177,7 @@ export function createOpenAIWebSocketStreamFn(
 
     queueMicrotask(() =>
       run().catch((err) => {
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorMessage = formatErrorMessage(err);
         log.warn(`[ws-stream] session=${sessionId} run error: ${errorMessage}`);
         eventStream.push({
           type: "error",

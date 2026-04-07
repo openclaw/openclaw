@@ -17,6 +17,26 @@ export type MemoryResolvedProviderState = {
   providerRuntime?: EmbeddingProviderRuntime;
 };
 
+export function resolveMemoryPrimaryProviderRequest(params: {
+  settings: ResolvedMemorySearchConfig;
+}): {
+  provider: string;
+  model: string;
+  remote: ResolvedMemorySearchConfig["remote"];
+  outputDimensionality: ResolvedMemorySearchConfig["outputDimensionality"];
+  fallback: ResolvedMemorySearchConfig["fallback"];
+  local: ResolvedMemorySearchConfig["local"];
+} {
+  return {
+    provider: params.settings.provider,
+    model: params.settings.model,
+    remote: params.settings.remote,
+    outputDimensionality: params.settings.outputDimensionality,
+    fallback: params.settings.fallback,
+    local: params.settings.local,
+  };
+}
+
 export function resolveMemoryProviderState(
   result: Pick<
     EmbeddingProviderResult,

@@ -3,6 +3,7 @@ import type {
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import {
   createBraveSchema,
   mapBraveLlmContextResults,
@@ -18,10 +19,6 @@ type ConfigInput = Parameters<
 type ConfigTarget = Parameters<
   NonNullable<WebSearchProviderPlugin["setConfiguredCredentialValue"]>
 >[0];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function resolveProviderWebSearchPluginConfig(
   config: ConfigInput,
@@ -139,11 +136,11 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) =>
       createBraveToolDefinition(
         mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "brave",
           resolveProviderWebSearchPluginConfig(ctx.config, "brave"),
           { mirrorApiKeyToTopLevel: true },
-        ) as SearchConfigRecord | undefined,
+        ),
       ),
   };
 }

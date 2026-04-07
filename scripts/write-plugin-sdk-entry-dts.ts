@@ -70,6 +70,17 @@ for (const entry of pluginSdkEntrypoints) {
     "utf8",
   );
 
+  const packageTypeOut = path.join(
+    process.cwd(),
+    `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
+  );
+  fs.mkdirSync(path.dirname(packageTypeOut), { recursive: true });
+  fs.writeFileSync(
+    packageTypeOut,
+    `export * from "../../../../../dist/plugin-sdk/${entry}.js";\n`,
+    "utf8",
+  );
+
   const runtimeShim = RUNTIME_SHIMS[entry];
   if (!runtimeShim) {
     continue;

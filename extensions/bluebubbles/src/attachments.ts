@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import {
@@ -130,7 +132,7 @@ export async function downloadBlueBubblesAttachment(
         cause: error,
       });
     }
-    const text = error instanceof Error ? error.message : String(error);
+    const text = formatErrorMessage(error);
     throw new Error(`BlueBubbles attachment download failed: ${text}`, { cause: error });
   }
 }
@@ -160,7 +162,7 @@ export async function sendBlueBubblesAttachment(params: {
   const wantsVoice = asVoice === true;
   const fallbackName = wantsVoice ? "Audio Message" : "attachment";
   filename = sanitizeFilename(filename, fallbackName);
-  contentType = contentType?.trim() || undefined;
+  contentType = normalizeOptionalString(contentType);
   const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(opts);
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);

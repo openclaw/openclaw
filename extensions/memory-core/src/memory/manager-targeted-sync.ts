@@ -1,6 +1,12 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
-type TargetedSyncProgress = (update: MemorySyncProgressUpdate) => void;
+type TargetedSyncProgress = {
+  completed: number;
+  total: number;
+  label?: string;
+  report: (update: MemorySyncProgressUpdate) => void;
+};
 
 export function clearMemorySyncedSessionFiles(params: {
   sessionsDirtyFiles: Set<string>;
@@ -62,7 +68,7 @@ export async function runMemoryTargetedSessionSync(params: {
       }),
     };
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = formatErrorMessage(err);
     const activated =
       params.shouldFallbackOnError(reason) && (await params.activateFallbackProvider(reason));
     if (!activated) {

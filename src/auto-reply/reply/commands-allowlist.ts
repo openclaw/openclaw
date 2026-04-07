@@ -13,6 +13,10 @@ import {
   removeChannelAllowFromStoreEntry,
 } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID, normalizeOptionalAccountId } from "../../routing/session-key.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import {
   rejectNonOwnerCommand,
@@ -65,7 +69,9 @@ function resolveAllowlistAccountId(params: {
     return explicitAccountId;
   }
   const plugin = getChannelPlugin(params.channelId);
-  const configuredDefaultAccountId = plugin?.config.defaultAccountId?.(params.cfg)?.trim();
+  const configuredDefaultAccountId = normalizeOptionalString(
+    plugin?.config.defaultAccountId?.(params.cfg),
+  );
   const ctxAccountId = normalizeOptionalAccountId(params.ctxAccountId);
   return configuredDefaultAccountId || ctxAccountId || DEFAULT_ACCOUNT_ID;
 }
@@ -126,8 +132,8 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
     }
     const kv = token.split("=");
     if (kv.length === 2) {
-      const key = kv[0]?.trim().toLowerCase();
-      const value = kv[1]?.trim();
+      const key = normalizeOptionalLowercaseString(kv[0]);
+      const value = normalizeOptionalString(kv[1]);
       if (key === "channel") {
         if (value) {
           channel = value;
@@ -280,7 +286,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       reply: { text: "⚠️ Unknown channel. Add channel=<id> to the command." },
     };
   }
-  if (parsed.account?.trim() && !normalizeOptionalAccountId(parsed.account)) {
+  if (normalizeOptionalString(parsed.account) && !normalizeOptionalAccountId(parsed.account)) {
     return {
       shouldContinue: false,
       reply: {

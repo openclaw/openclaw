@@ -11,6 +11,7 @@ import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
+import { readStringValue } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
@@ -86,7 +87,7 @@ export async function promptGatewayConfig(
       }),
       runtime,
     );
-    customBindHost = typeof input === "string" ? input : undefined;
+    customBindHost = readStringValue(input);
   }
 
   let authMode = guardCancel(

@@ -72,9 +72,9 @@ export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
 export const listPluginDoctorLegacyConfigRules = vi.fn(() => []) as unknown as MockFn;
-export const runDoctorHealthContributions = vi
-  .fn()
-  .mockResolvedValue(undefined) as unknown as MockFn;
+export const runDoctorHealthContributions = vi.fn(
+  defaultRunDoctorHealthContributions,
+) as unknown as MockFn;
 export const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
   changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
@@ -140,6 +140,44 @@ export const autoMigrateLegacyStateDir = vi.fn().mockResolvedValue({
 export const runChannelPluginStartupMaintenance = vi
   .fn()
   .mockResolvedValue(undefined) as unknown as MockFn;
+
+function defaultRunDoctorHealthContributions(ctx: {
+  cfg: Record<string, unknown>;
+  runtime: { log: (message: string) => void; error: (message: string) => void };
+  prompter?: { shouldRepair?: boolean };
+}) {
+  if (ctx.prompter?.shouldRepair !== true) {
+    return Promise.resolve();
+  }
+  const channels =
+    ctx.cfg.channels && typeof ctx.cfg.channels === "object" && !Array.isArray(ctx.cfg.channels)
+      ? Object.fromEntries(
+          Object.entries(ctx.cfg.channels).map(([channelId, value]) => {
+            if (!value || typeof value !== "object" || Array.isArray(value)) {
+              return [channelId, value];
+            }
+            const channelConfig = { ...(value as Record<string, unknown>) };
+            if (channelConfig.enabled === true) {
+              delete channelConfig.enabled;
+            }
+            return [channelId, channelConfig];
+          }),
+        )
+      : ctx.cfg.channels;
+  return runChannelPluginStartupMaintenance({
+    cfg: {
+      ...ctx.cfg,
+      ...(channels !== undefined ? { channels } : {}),
+    },
+    env: process.env,
+    log: {
+      info: (message: string) => ctx.runtime.log(message),
+      warn: (message: string) => ctx.runtime.error(message),
+    },
+    trigger: "doctor-fix",
+    logPrefix: "doctor",
+  });
+}
 
 function createLegacyStateMigrationDetectionResult(params?: {
   hasLegacySessions?: boolean;
@@ -454,7 +492,7 @@ beforeEach(() => {
   resolveOpenClawPackageRoot.mockReset().mockResolvedValue(null);
   runGatewayUpdate.mockReset().mockResolvedValue(createGatewayUpdateResult());
   listPluginDoctorLegacyConfigRules.mockReset().mockReturnValue([]);
-  runDoctorHealthContributions.mockReset().mockResolvedValue(undefined);
+  runDoctorHealthContributions.mockReset().mockImplementation(defaultRunDoctorHealthContributions);
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue(createLegacyConfigSnapshot());
   createConfigIO.mockReset().mockImplementation(() => ({
     readConfigFileSnapshot: legacyReadConfigFileSnapshot,

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { formatMatrixEncryptionUnavailableError } from "../encryption-guidance.js";
@@ -43,9 +44,9 @@ export async function requestMatrixVerification(
     const ownUser = params.ownUser ?? (!params.userId && !params.deviceId && !params.roomId);
     return await crypto.requestVerification({
       ownUser,
-      userId: params.userId?.trim() || undefined,
-      deviceId: params.deviceId?.trim() || undefined,
-      roomId: params.roomId?.trim() || undefined,
+      userId: normalizeOptionalString(params.userId),
+      deviceId: normalizeOptionalString(params.deviceId),
+      roomId: normalizeOptionalString(params.roomId),
     });
   });
 }
@@ -67,8 +68,8 @@ export async function cancelMatrixVerification(
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
     return await crypto.cancelVerification(resolveVerificationId(requestId), {
-      reason: opts.reason?.trim() || undefined,
-      code: opts.code?.trim() || undefined,
+      reason: normalizeOptionalString(opts.reason),
+      code: normalizeOptionalString(opts.code),
     });
   });
 }
@@ -210,7 +211,7 @@ export async function restoreMatrixRoomKeyBackup(
     opts,
     async (client) =>
       await client.restoreRoomKeyBackup({
-        recoveryKey: opts.recoveryKey?.trim() || undefined,
+        recoveryKey: normalizeOptionalString(opts.recoveryKey),
       }),
   );
 }
@@ -229,7 +230,7 @@ export async function bootstrapMatrixVerification(
     opts,
     async (client) =>
       await client.bootstrapOwnDeviceVerification({
-        recoveryKey: opts.recoveryKey?.trim() || undefined,
+        recoveryKey: normalizeOptionalString(opts.recoveryKey),
         forceResetCrossSigning: opts.forceResetCrossSigning === true,
       }),
   );

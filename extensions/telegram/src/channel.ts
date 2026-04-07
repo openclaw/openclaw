@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -31,6 +32,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
@@ -330,7 +332,7 @@ function resolveTelegramInboundConversation(params: {
     parsedTarget.messageThreadId != null
       ? String(parsedTarget.messageThreadId)
       : params.threadId != null
-        ? String(params.threadId).trim() || undefined
+        ? normalizeOptionalString(String(params.threadId))
         : undefined;
   if (threadId) {
     const parsedTopic = parseTelegramTopicConversation({
@@ -542,7 +544,7 @@ async function resolveTelegramTargets(params: {
         return {
           input,
           resolved: false as const,
-          note: error instanceof Error ? error.message : String(error),
+          note: formatErrorMessage(error),
         };
       }
     }),

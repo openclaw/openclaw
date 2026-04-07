@@ -590,6 +590,7 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
     id: "exa",
     label: "Exa Search",
     hint: "Neural + keyword search with date filters and content extraction",
+    onboardingScopes: ["text-inference"],
     credentialLabel: "Exa API key",
     envVars: ["EXA_API_KEY"],
     placeholder: "exa-...",
@@ -610,10 +611,10 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) =>
       createExaToolDefinition(
         mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "exa",
           resolveProviderWebSearchPluginConfig(ctx.config, "exa"),
-        ) as SearchConfigRecord | undefined,
+        ),
       ),
   };
 }

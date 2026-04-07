@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asRecord, readString } from "../config-record-shared.js";
 import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
 
@@ -14,7 +16,7 @@ function loadSilkWasm(): Promise<SilkWasm | null> {
   }
   _silkWasmPromise = import("silk-wasm").catch((err) => {
     debugWarn(
-      `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${err instanceof Error ? err.message : String(err)})`,
+      `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${formatErrorMessage(err)})`,
     );
     return null;
   });
@@ -206,17 +208,6 @@ type QQBotTtsBlock = QQBotTtsProviderConfig & {
   voice?: string;
   speed?: number;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" ? value : undefined;
-}
 
 function readNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
   const value = record?.[key];
@@ -571,9 +562,7 @@ export async function audioFileToSilkBase64(
       debugLog(`[audio-convert] ffmpeg: ${ext} → SILK done (${silkBuffer.length} bytes)`);
       return silkBuffer.toString("base64");
     } catch (err) {
-      debugError(
-        `[audio-convert] ffmpeg conversion failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      debugError(`[audio-convert] ffmpeg conversion failed: ${formatErrorMessage(err)}`);
     }
   }
 
@@ -808,9 +797,7 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 
     return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
   } catch (err) {
-    debugError(
-      `[audio-convert] WASM MP3 decode failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    debugError(`[audio-convert] WASM MP3 decode failed: ${formatErrorMessage(err)}`);
     if (err instanceof Error && err.stack) {
       debugError(`[audio-convert] stack: ${err.stack}`);
     }

@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import http2 from "node:http2";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { DeviceIdentity } from "./device-identity.js";
+import { formatErrorMessage } from "./errors.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 import {
   type ApnsRelayConfig,
@@ -253,7 +255,7 @@ function normalizePrivateKey(value: string): string {
 }
 
 function normalizeNonEmptyString(value: string | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
+  const trimmed = normalizeOptionalString(value) ?? "";
   return trimmed.length > 0 ? trimmed : null;
 }
 
@@ -261,7 +263,7 @@ function normalizeDistribution(value: unknown): "official" | null {
   if (typeof value !== "string") {
     return null;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized === "official" ? "official" : null;
 }
 
@@ -635,7 +637,7 @@ export async function resolveApnsAuthConfigFromEnv(
       },
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return {
       ok: false,
       error: `failed reading OPENCLAW_APNS_PRIVATE_KEY_PATH (${keyPath}): ${message}`,

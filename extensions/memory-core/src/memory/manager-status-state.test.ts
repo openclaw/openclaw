@@ -1,4 +1,4 @@
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
   collectMemoryStatusAggregate,
@@ -59,7 +59,7 @@ describe("memory manager status state", () => {
   });
 
   it("uses one aggregation query for status counts and source breakdowns", () => {
-    const calls: Array<{ sql: string; params: MemorySource[] }> = [];
+    const calls: Array<{ sql: string; params: SQLInputValue[] }> = [];
     const aggregate = collectMemoryStatusAggregate({
       db: {
         prepare: (sql) => ({

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -12,6 +13,7 @@ import {
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
+import { normalizeProviderIdForAuth } from "./provider-id.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -53,7 +55,7 @@ export function normalizeApiKeyConfig(value: string): string {
 }
 
 export function toDiscoveryApiKey(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed || isNonSecretApiKeyMarker(trimmed)) {
     return undefined;
   }
@@ -323,14 +325,19 @@ export function createProviderApiKeyResolver(
   config?: OpenClawConfig,
 ): ProviderApiKeyResolver {
   return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
-    const envVar = resolveEnvApiKeyVarName(provider, env);
+    const authProvider = normalizeProviderIdForAuth(provider);
+    const envVar = resolveEnvApiKeyVarName(authProvider, env);
     if (envVar) {
       return {
         apiKey: envVar,
         discoveryApiKey: toDiscoveryApiKey(env[envVar]),
       };
     }
-    const fromProfiles = resolveApiKeyFromProfiles({ provider, store: authStore, env });
+    const fromProfiles = resolveApiKeyFromProfiles({
+      provider: authProvider,
+      store: authStore,
+      env,
+    });
     if (fromProfiles?.apiKey) {
       return {
         apiKey: fromProfiles.apiKey,
@@ -338,7 +345,7 @@ export function createProviderApiKeyResolver(
       };
     }
     const fromConfig = resolveConfigBackedProviderAuth({
-      provider,
+      provider: authProvider,
       config,
     });
     return {
@@ -354,7 +361,8 @@ export function createProviderAuthResolver(
   config?: OpenClawConfig,
 ): ProviderAuthResolver {
   return (provider: string, options?: { oauthMarker?: string }) => {
-    const ids = listProfilesForProvider(authStore, provider);
+    const authProvider = normalizeProviderIdForAuth(provider);
+    const ids = listProfilesForProvider(authStore, authProvider);
     let oauthCandidate:
       | {
           apiKey: string | undefined;
@@ -395,7 +403,7 @@ export function createProviderAuthResolver(
       return oauthCandidate;
     }
 
-    const envVar = resolveEnvApiKeyVarName(provider, env);
+    const envVar = resolveEnvApiKeyVarName(authProvider, env);
     if (envVar) {
       return {
         apiKey: envVar,
@@ -406,7 +414,7 @@ export function createProviderAuthResolver(
     }
 
     const fromConfig = resolveConfigBackedProviderAuth({
-      provider,
+      provider: authProvider,
       config,
     });
     if (fromConfig) {
@@ -438,13 +446,14 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
   // Providers own any provider-specific fallback auth logic via
   // resolveSyntheticAuth(...). Discovery/bootstrap callers may consume
   // non-secret markers from source config, but must never persist plaintext.
+  const authProvider = normalizeProviderIdForAuth(params.provider);
   const synthetic = resolveProviderSyntheticAuthWithPlugin({
-    provider: params.provider,
+    provider: authProvider,
     config: params.config,
     context: {
       config: params.config,
-      provider: params.provider,
-      providerConfig: params.config?.models?.providers?.[params.provider],
+      provider: authProvider,
+      providerConfig: params.config?.models?.providers?.[authProvider],
     },
   });
   const apiKey = synthetic?.apiKey?.trim();

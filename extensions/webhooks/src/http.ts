@@ -223,38 +223,52 @@ type TaskView = {
   terminalOutcome?: string;
 };
 
-function optionalField<TKey extends string, TValue>(
-  key: TKey,
-  value: TValue | undefined,
-): Partial<Record<TKey, TValue>> {
-  return value !== undefined ? ({ [key]: value } as Record<TKey, TValue>) : {};
+function pickOptionalFields<T extends object, TKey extends keyof T & string>(
+  source: T,
+  keys: readonly TKey[],
+): Partial<Pick<T, TKey>> {
+  const result: Partial<Pick<T, TKey>> = {};
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
-function optionalTruthyStringField<TKey extends string>(
-  key: TKey,
-  value: string | undefined,
-): Partial<Record<TKey, string>> {
-  return value ? ({ [key]: value } as Record<TKey, string>) : {};
+function pickOptionalTruthyStringFields<T extends object, TKey extends keyof T & string>(
+  source: T,
+  keys: readonly TKey[],
+): Partial<Pick<T, TKey>> {
+  const result: Partial<Pick<T, TKey>> = {};
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value) {
+      result[key] = value as T[TKey];
+    }
+  }
+  return result;
 }
 
 function toFlowView(flow: FlowView): FlowView {
   return {
     flowId: flow.flowId,
     syncMode: flow.syncMode,
-    ...optionalTruthyStringField("controllerId", flow.controllerId),
+    ...pickOptionalTruthyStringFields(flow, [
+      "controllerId",
+      "currentStep",
+      "blockedTaskId",
+      "blockedSummary",
+    ]),
     revision: flow.revision,
     status: flow.status,
     notifyPolicy: flow.notifyPolicy,
     goal: flow.goal,
-    ...optionalTruthyStringField("currentStep", flow.currentStep),
-    ...optionalTruthyStringField("blockedTaskId", flow.blockedTaskId),
-    ...optionalTruthyStringField("blockedSummary", flow.blockedSummary),
-    ...optionalField("stateJson", flow.stateJson),
-    ...optionalField("waitJson", flow.waitJson),
-    ...optionalField("cancelRequestedAt", flow.cancelRequestedAt),
+    ...pickOptionalFields(flow, ["stateJson", "waitJson", "cancelRequestedAt"]),
     createdAt: flow.createdAt,
     updatedAt: flow.updatedAt,
-    ...optionalField("endedAt", flow.endedAt),
+    ...pickOptionalFields(flow, ["endedAt"]),
   };
 }
 
@@ -262,27 +276,26 @@ function toTaskView(task: TaskView): TaskView {
   return {
     taskId: task.taskId,
     runtime: task.runtime,
-    ...optionalTruthyStringField("sourceId", task.sourceId),
+    ...pickOptionalTruthyStringFields(task, [
+      "sourceId",
+      "childSessionKey",
+      "parentFlowId",
+      "parentTaskId",
+      "agentId",
+      "runId",
+      "label",
+      "error",
+      "progressSummary",
+      "terminalSummary",
+      "terminalOutcome",
+    ]),
     scopeKind: task.scopeKind,
-    ...optionalTruthyStringField("childSessionKey", task.childSessionKey),
-    ...optionalTruthyStringField("parentFlowId", task.parentFlowId),
-    ...optionalTruthyStringField("parentTaskId", task.parentTaskId),
-    ...optionalTruthyStringField("agentId", task.agentId),
-    ...optionalTruthyStringField("runId", task.runId),
-    ...optionalTruthyStringField("label", task.label),
     task: task.task,
     status: task.status,
     deliveryStatus: task.deliveryStatus,
     notifyPolicy: task.notifyPolicy,
     createdAt: task.createdAt,
-    ...optionalField("startedAt", task.startedAt),
-    ...optionalField("endedAt", task.endedAt),
-    ...optionalField("lastEventAt", task.lastEventAt),
-    ...optionalField("cleanupAfter", task.cleanupAfter),
-    ...optionalTruthyStringField("error", task.error),
-    ...optionalTruthyStringField("progressSummary", task.progressSummary),
-    ...optionalTruthyStringField("terminalSummary", task.terminalSummary),
-    ...optionalTruthyStringField("terminalOutcome", task.terminalOutcome),
+    ...pickOptionalFields(task, ["startedAt", "endedAt", "lastEventAt", "cleanupAfter"]),
   };
 }
 

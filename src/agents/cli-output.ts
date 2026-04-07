@@ -1,4 +1,5 @@
 import type { CliBackendConfig } from "../config/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 
 type CliUsage = {
@@ -23,7 +24,7 @@ export type CliStreamingDelta = {
 };
 
 function isClaudeCliProvider(providerId: string): boolean {
-  return providerId.trim().toLowerCase() === "claude-cli";
+  return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {

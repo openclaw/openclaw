@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,
+  resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
 } from "./manager-provider-state.js";
 
@@ -113,5 +114,20 @@ describe("memory manager mistral provider wiring", () => {
     expect(request?.provider).toBe("ollama");
     expect(request?.model).toBe(DEFAULT_OLLAMA_EMBEDDING_MODEL);
     expect(request?.fallback).toBe("none");
+  });
+
+  it("includes outputDimensionality in the primary provider request", () => {
+    const request = resolveMemoryPrimaryProviderRequest({
+      settings: {
+        ...createSettings({ provider: "mistral" }),
+        provider: "gemini",
+        model: "gemini-embedding-2-preview",
+        outputDimensionality: 1536,
+      } as ResolvedMemorySearchConfig,
+    });
+
+    expect(request.provider).toBe("gemini");
+    expect(request.model).toBe("gemini-embedding-2-preview");
+    expect(request.outputDimensionality).toBe(1536);
   });
 });

@@ -1,7 +1,12 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
-  const trimmed = (raw ?? "").trim();
+  const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -23,10 +28,13 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
       return joined || undefined;
     }
   }
-  const channelId = normalizeChannelId(parts[0] ?? "") ?? parts[0]?.trim().toLowerCase();
-  const parsed = channelId
-    ? getChannelPlugin(channelId)?.messaging?.parseExplicitTarget?.({ raw: trimmed })
-    : null;
+  const channelId =
+    normalizeChannelId(parts[0] ?? "") ?? normalizeOptionalLowercaseString(parts[0]);
+  const messaging = channelId
+    ? (getLoadedChannelPlugin(channelId)?.messaging ??
+      getBundledChannelPlugin(channelId)?.messaging)
+    : undefined;
+  const parsed = messaging?.parseExplicitTarget?.({ raw: trimmed }) ?? null;
   if (parsed && parsed.chatType && parsed.chatType !== "direct") {
     return parsed.to.replace(/:topic:.*$/, "") || undefined;
   }

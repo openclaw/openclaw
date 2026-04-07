@@ -1,5 +1,6 @@
 import { complete, type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -152,7 +153,7 @@ export async function prepareSimpleCompletionModel(params: {
     });
   } catch (err) {
     return {
-      error: `Auth lookup failed for provider "${resolved.model.provider}": ${err instanceof Error ? err.message : String(err)}`,
+      error: `Auth lookup failed for provider "${resolved.model.provider}": ${formatErrorMessage(err)}`,
     };
   }
   const rawApiKey = auth.apiKey?.trim();

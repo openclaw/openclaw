@@ -6,6 +6,7 @@ import {
   resolveXaiResponseTextCitationsAndInline,
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
+import { isRecord } from "./tool-config-shared.js";
 export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 
 export const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
@@ -74,14 +75,10 @@ export function buildXaiWebSearchPayload(params: {
   };
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 export function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): XaiWebSearchConfig {
-  return (asRecord(searchConfig?.grok) as XaiWebSearchConfig | undefined) ?? {};
+  return (
+    (isRecord(searchConfig?.grok) ? (searchConfig.grok as XaiWebSearchConfig) : undefined) ?? {}
+  );
 }
 
 export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>): string {

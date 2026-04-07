@@ -1,117 +1,83 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
-
-let shouldFail = false;
-
-type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
-type TestManagerHelpersModule = typeof import("./test-manager-helpers.js");
-type MemoryIndexModule = typeof import("./index.js");
-type MemoryEmbeddingProvidersModule =
-  typeof import("../../../../src/plugins/memory-embedding-providers.js");
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
 
 describe("memory manager atomic reindex", () => {
   let fixtureRoot = "";
   let caseId = 0;
-  let workspaceDir: string;
   let indexPath: string;
-  let manager: MemoryIndexManager | null = null;
-  let embedBatch: ReturnType<EmbeddingTestMocksModule["getEmbedBatchMock"]>;
-  let resetEmbeddingMocks: EmbeddingTestMocksModule["resetEmbeddingMocks"];
-  let getRequiredMemoryIndexManager: TestManagerHelpersModule["getRequiredMemoryIndexManager"];
-  let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
-  let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
-  let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
+  let tempIndexPath: string;
 
   beforeAll(async () => {
-    vi.resetModules();
-    const embeddingMocks = await import("./embedding.test-mocks.js");
-    embedBatch = embeddingMocks.getEmbedBatchMock();
-    resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
-    ({ getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js"));
-    ({ closeAllMemorySearchManagers } = await import("./index.js"));
-    ({
-      clearMemoryEmbeddingProviders: clearRegistry,
-      registerMemoryEmbeddingProvider: registerAdapter,
-    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
   });
 
   beforeEach(async () => {
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
-    clearRegistry();
-    registerAdapter({
-      id: "openai",
-      defaultModel: "mock-embed",
-      transport: "remote",
-      create: async () => ({ provider: null }),
-    });
-    resetEmbeddingMocks();
-    shouldFail = false;
-    embedBatch.mockImplementation(async (texts: string[]) => {
-      if (shouldFail) {
-        throw new Error("embedding failure");
-      }
-      return texts.map((_, index) => [index + 1, 0, 0]);
-    });
-    workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
+    const workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(workspaceDir, { recursive: true });
     indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"));
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
-  });
-
-  afterEach(async () => {
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
-    await closeAllMemorySearchManagers();
-    clearRegistry();
-    vi.unstubAllEnvs();
+    tempIndexPath = `${indexPath}.tmp`;
   });
 
   afterAll(async () => {
-    if (!fixtureRoot) {
-      vi.resetModules();
-      return;
-    }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
-    vi.resetModules();
   });
 
   it("keeps the prior index when a full reindex fails", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: indexPath, vector: { enabled: false } },
-            cache: { enabled: false },
-            // Perf: keep test indexes to a single chunk to reduce sqlite work.
-            chunking: { tokens: 4000, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
+
+    await expect(
+      runMemoryAtomicReindex({
+        targetPath: indexPath,
+        tempPath: tempIndexPath,
+        build: async () => {
+          throw new Error("embedding failure");
         },
-        list: [{ id: "main", default: true }],
-      },
-    } as OpenClawConfig;
+      }),
+    ).rejects.toThrow("embedding failure");
 
-    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
+    expect(readChunkMarker(indexPath)).toBe("before");
+    await expect(fs.access(tempIndexPath)).rejects.toThrow();
+  });
 
-    await manager.sync({ force: true });
-    const beforeStatus = manager.status();
-    expect(beforeStatus.chunks).toBeGreaterThan(0);
+  it("replaces the old index after a successful temp reindex", async () => {
+    writeChunkMarker(indexPath, "before");
+    writeChunkMarker(tempIndexPath, "after");
 
-    shouldFail = true;
-    await expect(manager.sync({ force: true })).rejects.toThrow("embedding failure");
+    await runMemoryAtomicReindex({
+      targetPath: indexPath,
+      tempPath: tempIndexPath,
+      build: async () => undefined,
+    });
 
-    const afterStatus = manager.status();
-    expect(afterStatus.chunks).toBeGreaterThan(0);
+    expect(readChunkMarker(indexPath)).toBe("after");
+    await expect(fs.access(tempIndexPath)).rejects.toThrow();
   });
 });
+
+function writeChunkMarker(dbPath: string, marker: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("CREATE TABLE chunks (id TEXT PRIMARY KEY, text TEXT NOT NULL)");
+    db.prepare("INSERT INTO chunks (id, text) VALUES (?, ?)").run("chunk-1", marker);
+  } finally {
+    db.close();
+  }
+}
+
+function readChunkMarker(dbPath: string): string | undefined {
+  const db = new DatabaseSync(dbPath);
+  try {
+    return (
+      db.prepare("SELECT text FROM chunks WHERE id = ?").get("chunk-1") as
+        | { text: string }
+        | undefined
+    )?.text;
+  } finally {
+    db.close();
+  }
+}

@@ -14,7 +14,7 @@ import {
 } from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { ircPlugin } from "./channel.js";
-import { setIrcRuntime } from "./runtime.js";
+import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
   parsePort,
@@ -82,6 +82,7 @@ function installIrcRuntime() {
 describe("irc setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    clearIrcRuntime();
   });
 
   it("parses valid ports and falls back for invalid values", () => {
@@ -404,13 +405,11 @@ describe("irc setup", () => {
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = vi.fn();
-    vi.resetModules();
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
     installIrcRuntime();
-    const { ircPlugin: runtimeMockedPlugin } = await import("./channel.js");
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: runtimeMockedPlugin.gateway!.startAccount!,
+      startAccount: ircPlugin.gateway!.startAccount!,
       account: buildAccount(),
     });
 

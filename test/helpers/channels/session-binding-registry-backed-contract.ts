@@ -7,10 +7,8 @@ import {
 import { feishuPlugin, feishuThreadBindingTesting } from "../../../extensions/feishu/api.js";
 import { imessagePlugin } from "../../../extensions/imessage/api.js";
 import { matrixPlugin, setMatrixRuntime } from "../../../extensions/matrix/test-api.js";
-import {
-  telegramPlugin,
-  resetTelegramThreadBindingsForTests,
-} from "../../../extensions/telegram/test-api.js";
+import { telegramPlugin } from "../../../extensions/telegram/api.js";
+import { resetTelegramThreadBindingsForTests } from "../../../extensions/telegram/test-api.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -80,7 +78,7 @@ async function getResetMatrixThreadBindingsForTests() {
 
 function resolveSessionBindingContractRuntimeConfig(id: string) {
   if (id !== "discord" && id !== "matrix") {
-    return null;
+    return {};
   }
   return {
     plugins: {
@@ -161,12 +159,12 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
     beforeEach(async () => {
       resetPluginRuntimeStateForTest();
       clearRuntimeConfigSnapshot();
+      // Keep the suite hermetic; some contract helpers resolve runtime artifacts through config-aware
+      // plugin boundaries, so never fall back to the developer's real ~/.openclaw/openclaw.json here.
       const runtimeConfig = resolveSessionBindingContractRuntimeConfig(entry.id);
-      if (runtimeConfig) {
-        // These registry-backed contract suites intentionally exercise bundled runtime facades.
-        // Opt those specific plugins in so the activation boundary behaves like real runtime usage.
-        setRuntimeConfigSnapshot(runtimeConfig);
-      }
+      // These registry-backed contract suites intentionally exercise bundled runtime facades.
+      // Opt the bundled-runtime cases in so the activation boundary behaves like real runtime usage.
+      setRuntimeConfigSnapshot(runtimeConfig);
       // These suites only exercise the session-binding channels, so avoid the broader
       // default registry helper and seed only the six plugins this contract lane needs.
       setSessionBindingPluginRegistryForTests();

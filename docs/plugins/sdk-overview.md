@@ -108,7 +108,7 @@ explicitly promotes one as public.
     | `plugin-sdk/group-access` | Shared group-access decision helpers |
     | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
     | `plugin-sdk/interactive-runtime` | Interactive reply payload normalization/reduction helpers |
-    | `plugin-sdk/channel-inbound` | Debounce, mention matching, envelope helpers |
+    | `plugin-sdk/channel-inbound` | Inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
     | `plugin-sdk/channel-targets` | Target parsing/matching helpers |
@@ -133,8 +133,10 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers such as `normalizeNativeXaiModelId` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
+    | `plugin-sdk/provider-web-fetch-contract` | Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
     | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
-    | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/config helpers |
+    | `plugin-sdk/provider-web-search-contract` | Narrow web-search config/credential contract helpers such as `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
+    | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/runtime helpers |
     | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
     | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
@@ -156,6 +158,7 @@ explicitly promotes one as public.
     | `plugin-sdk/command-surface` | Command-body normalization and command-surface helpers |
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/channel-secret-runtime` | Narrow secret-contract collection helpers for channel/plugin secret surfaces |
+    | `plugin-sdk/secret-ref-runtime` | Narrow `coerceSecretRef` and SecretRef typing helpers for secret-contract/config parsing |
     | `plugin-sdk/security-runtime` | Shared trust, DM gating, external-content, and secret-collection helpers |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, and SSRF policy helpers |
@@ -383,6 +386,7 @@ AI CLI backend such as `codex-cli`.
 | Method                                     | What it registers                     |
 | ------------------------------------------ | ------------------------------------- |
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time) |
+| `api.registerMemoryCapability(capability)` | Unified memory capability             |
 | `api.registerMemoryPromptSection(builder)` | Memory prompt section builder         |
 | `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver            |
 | `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                |
@@ -393,8 +397,13 @@ AI CLI backend such as `codex-cli`.
 | ---------------------------------------------- | ---------------------------------------------- |
 | `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
 
+- `registerMemoryCapability` is the preferred exclusive memory-plugin API.
+- `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
+  so companion plugins can consume exported memory artifacts through
+  `openclaw/plugin-sdk/memory-host-core` instead of reaching into a specific
+  memory plugin's private layout.
 - `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
-  `registerMemoryRuntime` are exclusive to memory plugins.
+  `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
 - `registerMemoryEmbeddingProvider` lets the active memory plugin register one
   or more embedding adapter ids (for example `openai`, `gemini`, or a custom
   plugin-defined id).

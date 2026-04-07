@@ -9,6 +9,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { debugLog, debugWarn } from "./debug-log.js";
 
 // Basic platform information.
@@ -372,9 +373,7 @@ export async function checkSilkWasmAvailable(): Promise<boolean> {
     debugLog("[platform] silk-wasm: available");
   } catch (err) {
     _silkWasmAvailable = false;
-    debugWarn(
-      `[platform] silk-wasm: NOT available (${err instanceof Error ? err.message : String(err)})`,
-    );
+    debugWarn(`[platform] silk-wasm: NOT available (${formatErrorMessage(err)})`);
   }
   return _silkWasmAvailable;
 }

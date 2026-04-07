@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
   type OpenClawConfig,
@@ -49,7 +50,7 @@ export function isMemoryReadonlyDbError(err: unknown): boolean {
     messages.add(normalized);
   };
 
-  pushValue(err instanceof Error ? err.message : String(err));
+  pushValue(formatErrorMessage(err));
   if (err && typeof err === "object") {
     const record = err as Record<string, unknown>;
     pushValue(record.message);
@@ -124,10 +125,11 @@ export async function runMemorySyncWithReadonlyRecovery(
 
 export function enqueueMemoryTargetedSessionSync(
   state: {
-    closed: boolean;
-    syncing: Promise<void> | null;
-    queuedSessionFiles: Set<string>;
-    queuedSessionSync: Promise<void> | null;
+    isClosed: () => boolean;
+    getSyncing: () => Promise<void> | null;
+    getQueuedSessionFiles: () => Set<string>;
+    getQueuedSessionSync: () => Promise<void> | null;
+    setQueuedSessionSync: (value: Promise<void> | null) => void;
     sync: (params?: {
       reason?: string;
       force?: boolean;
@@ -137,33 +139,36 @@ export function enqueueMemoryTargetedSessionSync(
   },
   sessionFiles?: string[],
 ): Promise<void> {
+  const queuedSessionFiles = state.getQueuedSessionFiles();
   for (const sessionFile of sessionFiles ?? []) {
     const trimmed = sessionFile.trim();
     if (trimmed) {
-      state.queuedSessionFiles.add(trimmed);
+      queuedSessionFiles.add(trimmed);
     }
   }
-  if (state.queuedSessionFiles.size === 0) {
-    return state.syncing ?? Promise.resolve();
+  if (queuedSessionFiles.size === 0) {
+    return state.getSyncing() ?? Promise.resolve();
   }
-  if (!state.queuedSessionSync) {
-    state.queuedSessionSync = (async () => {
-      try {
-        await state.syncing?.catch(() => undefined);
-        while (!state.closed && state.queuedSessionFiles.size > 0) {
-          const queuedSessionFiles = Array.from(state.queuedSessionFiles);
-          state.queuedSessionFiles.clear();
-          await state.sync({
-            reason: "queued-session-files",
-            sessionFiles: queuedSessionFiles,
-          });
+  if (!state.getQueuedSessionSync()) {
+    state.setQueuedSessionSync(
+      (async () => {
+        try {
+          await state.getSyncing()?.catch(() => undefined);
+          while (!state.isClosed() && state.getQueuedSessionFiles().size > 0) {
+            const pendingSessionFiles = Array.from(state.getQueuedSessionFiles());
+            state.getQueuedSessionFiles().clear();
+            await state.sync({
+              reason: "queued-session-files",
+              sessionFiles: pendingSessionFiles,
+            });
+          }
+        } finally {
+          state.setQueuedSessionSync(null);
         }
-      } finally {
-        state.queuedSessionSync = null;
-      }
-    })();
+      })(),
+    );
   }
-  return state.queuedSessionSync;
+  return state.getQueuedSessionSync() ?? Promise.resolve();
 }
 
 export function _createMemorySyncControlConfigForTests(

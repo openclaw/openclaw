@@ -148,6 +148,53 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     });
   });
 
+  it("passes lightweight bootstrap context flags for lightContext subagent spawns", async () => {
+    await spawnSubagentDirect(
+      {
+        task: "inspect workspace",
+        lightContext: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "123",
+        agentTo: "456",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    const agentCall = hoisted.callGatewayMock.mock.calls.find(
+      ([request]) => (request as { method?: string }).method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+
+    expect(agentCall?.params).toMatchObject({
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "default",
+    });
+  });
+
+  it("omits bootstrap context flags for default subagent spawns", async () => {
+    await spawnSubagentDirect(
+      {
+        task: "inspect workspace",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "123",
+        agentTo: "456",
+        workspaceDir: "/tmp/requester-workspace",
+      },
+    );
+
+    const agentCall = hoisted.callGatewayMock.mock.calls.find(
+      ([request]) => (request as { method?: string }).method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+
+    expect(agentCall?.params).not.toHaveProperty("bootstrapContextMode");
+    expect(agentCall?.params).not.toHaveProperty("bootstrapContextRunKind");
+  });
+
   it("deletes the provisional child session when a non-thread subagent start fails", async () => {
     hoisted.callGatewayMock.mockImplementation(
       async (request: {

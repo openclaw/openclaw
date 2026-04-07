@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 
@@ -121,7 +122,6 @@ export async function startQaGatewayChild(params: {
   providerMode?: "mock-openai" | "live-openai";
   primaryModel?: string;
   alternateModel?: string;
-  fastMode?: boolean;
   controlUiEnabled?: boolean;
 }) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-suite-"));
@@ -155,7 +155,6 @@ export async function startQaGatewayChild(params: {
     providerMode: params.providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
-    fastMode: params.fastMode,
     controlUiEnabled: params.controlUiEnabled,
   });
   await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
@@ -242,7 +241,7 @@ export async function startQaGatewayChild(params: {
           JSON.stringify(rpcParams ?? {}),
         ],
       }).catch((error) => {
-        const details = error instanceof Error ? error.message : String(error);
+        const details = formatErrorMessage(error);
         throw new Error(`${details}\nGateway logs:\n${logs()}`);
       });
     },

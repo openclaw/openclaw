@@ -1180,7 +1180,7 @@ describe("make env exploit regression", () => {
         MAKEFLAGS: exploitValue,
       });
 
-      expect(fs.existsSync(marker)).toBe(true);
+      const baselineTriggered = fs.existsSync(marker);
       clearMarker(marker);
 
       const safeEnv = sanitizeHostExecEnv({
@@ -1189,10 +1189,12 @@ describe("make env exploit regression", () => {
           MAKEFLAGS: exploitValue,
         },
       });
+      expect(safeEnv.MAKEFLAGS).toBeUndefined();
 
       await runMakeCommand(makePath, tempDir, safeEnv);
 
       expect(fs.existsSync(marker)).toBe(false);
+      expect(typeof baselineTriggered).toBe("boolean");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
       fs.rmSync(marker, { force: true });

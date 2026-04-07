@@ -11,6 +11,7 @@ import {
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -62,7 +63,7 @@ export async function buildModelsProviderData(
   };
 
   const addRawModelRef = (raw?: string) => {
-    const trimmed = raw?.trim();
+    const trimmed = normalizeOptionalString(raw);
     if (!trimmed) {
       return;
     }
@@ -143,7 +144,7 @@ function parseModelsArgs(raw: string): {
   }
 
   const tokens = trimmed.split(/\s+/g).filter(Boolean);
-  const provider = tokens[0]?.trim();
+  const provider = normalizeOptionalString(tokens[0]);
 
   let page = 1;
   let all = false;

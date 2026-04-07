@@ -9,6 +9,7 @@
     "express": "^5.2.1"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

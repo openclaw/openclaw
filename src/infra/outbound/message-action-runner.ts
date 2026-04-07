@@ -22,7 +22,9 @@ import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
+import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
@@ -143,9 +145,10 @@ export function getToolResult(
 function collectActionMediaSourceHints(params: Record<string, unknown>): string[] {
   const sources: string[] = [];
   for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const) {
-    const value = params[key];
-    if (typeof value === "string" && value.trim()) {
-      sources.push(value);
+    const source = typeof params[key] === "string" ? params[key] : undefined;
+    const normalized = normalizeOptionalString(source);
+    if (normalized && source) {
+      sources.push(source);
     }
   }
   return sources;
@@ -381,7 +384,7 @@ async function handleBroadcastAction(
           channel: targetChannel,
           to: target,
           ok: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: formatErrorMessage(err),
         });
       }
     }
@@ -444,7 +447,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const mergedMediaUrls: string[] = [];
   const seenMedia = new Set<string>();
   const pushMedia = (value?: string | null) => {
-    const trimmed = value?.trim();
+    const trimmed = normalizeOptionalString(value);
     if (!trimmed) {
       return;
     }

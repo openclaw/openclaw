@@ -715,7 +715,9 @@ export function createDiscordNativeCommand(params: {
         discordConfig,
         accountId,
         sessionPrefix,
-        preferFollowUp: false,
+        // Slash commands are deferred up front, so all later responses must use
+        // follow-up/edit semantics instead of the initial reply endpoint.
+        preferFollowUp: true,
         threadBindings,
       });
     }

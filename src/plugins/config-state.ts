@@ -1,6 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import {
   resolveMemorySlotDecisionShared,
+  resolveEnableStateShared,
   resolveEnableStateResult,
 } from "./config-activation-shared.js";
 import {
@@ -68,12 +73,21 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
     if (plugin.origin !== "bundled") {
       continue;
     }
-    lookup.set(plugin.id.toLowerCase(), plugin.id);
+    const pluginId = normalizeOptionalLowercaseString(plugin.id);
+    if (pluginId) {
+      lookup.set(pluginId, plugin.id);
+    }
     for (const providerId of plugin.providers) {
-      lookup.set(providerId.toLowerCase(), plugin.id);
+      const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
+      if (normalizedProviderId) {
+        lookup.set(normalizedProviderId, plugin.id);
+      }
     }
     for (const legacyPluginId of plugin.legacyPluginIds ?? []) {
-      lookup.set(legacyPluginId.toLowerCase(), plugin.id);
+      const normalizedLegacyPluginId = normalizeOptionalLowercaseString(legacyPluginId);
+      if (normalizedLegacyPluginId) {
+        lookup.set(normalizedLegacyPluginId, plugin.id);
+      }
     }
   }
   bundledPluginAliasLookupCache = lookup;
@@ -81,8 +95,9 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
 }
 
 export function normalizePluginId(id: string): string {
-  const trimmed = id.trim();
-  return getBundledPluginAliasLookup().get(trimmed.toLowerCase()) ?? trimmed;
+  const trimmed = normalizeOptionalString(id) ?? "";
+  const normalized = normalizeOptionalLowercaseString(trimmed) ?? "";
+  return getBundledPluginAliasLookup().get(normalized) ?? trimmed;
 }
 
 const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> = {
@@ -380,13 +395,8 @@ export function resolveEnableState(
   config: NormalizedPluginsConfig,
   enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } {
-  return resolveEnableStateResult(
-    {
-      id,
-      origin,
-      config,
-      enabledByDefault,
-    },
+  return resolveEnableStateShared(
+    { id, origin, config, enabledByDefault },
     resolvePluginActivationState,
   );
 }

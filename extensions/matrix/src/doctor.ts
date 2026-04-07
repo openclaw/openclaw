@@ -18,10 +18,7 @@ import {
   hasPendingMatrixMigration,
   maybeCreateMatrixMigrationSnapshot,
 } from "./matrix-migration.runtime.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "./record-shared.js";
 
 function hasConfiguredMatrixChannel(cfg: OpenClawConfig): boolean {
   const channels = cfg.channels as Record<string, unknown> | undefined;
