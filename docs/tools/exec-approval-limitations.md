@@ -2,18 +2,14 @@
 
 title: "Exec Approval Limitations"
 summary: "Explains behavior of exec approvals with parameterized commands and interpreter bindings"
-read\_when:
+read_when:
 
-* Understanding exec approval behavior
-* Working with dynamic commands
+- Understanding exec approval behavior
+- Working with dynamic commands
 
 \---
 
-
-
 # Exec Approval Limitations
-
-
 
 Example:
 
@@ -21,4 +17,3 @@ Example:
 python email\_sender.py --content-file Day\_007.md
 python email\_sender.py --content-file Day\_008.md
 ```
-
