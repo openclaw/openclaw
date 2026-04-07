@@ -1,9 +1,8 @@
+import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   formatThinkingLevels as formatThinkingLevelsFallback,
-  isBinaryThinkingProvider as isBinaryThinkingProviderFallback,
   listThinkingLevelLabels as listThinkingLevelLabelsFallback,
   listThinkingLevels as listThinkingLevelsFallback,
-  normalizeProviderId,
   resolveThinkingDefaultForModel as resolveThinkingDefaultForModelFallback,
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
@@ -33,10 +32,11 @@ import {
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
   resolveProviderXHighThinking,
-} from "../plugins/provider-runtime.js";
+} from "../plugins/provider-thinking.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
-  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedProvider = provider?.trim() ? normalizeProviderId(provider) : "";
   if (!normalizedProvider) {
     return false;
   }
@@ -51,15 +51,15 @@ export function isBinaryThinkingProvider(provider?: string | null, model?: strin
   if (typeof pluginDecision === "boolean") {
     return pluginDecision;
   }
-  return isBinaryThinkingProviderFallback(provider);
+  return false;
 }
 
 export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  const modelKey = model?.trim().toLowerCase();
+  const modelKey = normalizeOptionalLowercaseString(model);
   if (!modelKey) {
     return false;
   }
-  const providerKey = normalizeProviderId(provider);
+  const providerKey = provider?.trim() ? normalizeProviderId(provider) : "";
   if (providerKey) {
     const pluginDecision = resolveProviderXHighThinking({
       provider: providerKey,

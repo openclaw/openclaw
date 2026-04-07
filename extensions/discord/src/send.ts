@@ -44,7 +44,6 @@ export {
   sendWebhookMessageDiscord,
   sendVoiceMessageDiscord,
 } from "./send.outbound.js";
-export { sendDiscordComponentMessage } from "./send.components.js";
 export { sendTypingDiscord } from "./send.typing.js";
 export {
   fetchChannelPermissionsDiscord,
@@ -67,10 +66,12 @@ export type {
   DiscordMessageEdit,
   DiscordMessageQuery,
   DiscordModerationTarget,
+  DiscordReactionRuntimeContext,
   DiscordPermissionsSummary,
   DiscordReactionSummary,
   DiscordReactionUser,
   DiscordReactOpts,
+  DiscordRuntimeAccountContext,
   DiscordRoleChange,
   DiscordSearchQuery,
   DiscordSendResult,

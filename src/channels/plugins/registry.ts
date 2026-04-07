@@ -1,8 +1,9 @@
 import {
-  getActivePluginRegistryVersion,
-  requireActivePluginRegistry,
+  getActivePluginChannelRegistryVersion,
+  requireActivePluginChannelRegistry,
 } from "../../plugins/runtime.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
+import { getBundledChannelPlugin } from "./bundled.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
 function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
@@ -21,12 +22,14 @@ function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
 
 type CachedChannelPlugins = {
   registryVersion: number;
+  registryRef: object | null;
   sorted: ChannelPlugin[];
   byId: Map<string, ChannelPlugin>;
 };
 
 const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
   registryVersion: -1,
+  registryRef: null,
   sorted: [],
   byId: new Map(),
 };
@@ -34,14 +37,23 @@ const EMPTY_CHANNEL_PLUGIN_CACHE: CachedChannelPlugins = {
 let cachedChannelPlugins = EMPTY_CHANNEL_PLUGIN_CACHE;
 
 function resolveCachedChannelPlugins(): CachedChannelPlugins {
-  const registry = requireActivePluginRegistry();
-  const registryVersion = getActivePluginRegistryVersion();
+  const registry = requireActivePluginChannelRegistry();
+  const registryVersion = getActivePluginChannelRegistryVersion();
   const cached = cachedChannelPlugins;
-  if (cached.registryVersion === registryVersion) {
+  if (cached.registryVersion === registryVersion && cached.registryRef === registry) {
     return cached;
   }
 
-  const sorted = dedupeChannels(registry.channels.map((entry) => entry.plugin)).toSorted((a, b) => {
+  const channelPlugins: ChannelPlugin[] = [];
+  if (Array.isArray(registry.channels)) {
+    for (const entry of registry.channels) {
+      if (entry?.plugin) {
+        channelPlugins.push(entry.plugin);
+      }
+    }
+  }
+
+  const sorted = dedupeChannels(channelPlugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
@@ -58,6 +70,7 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
 
   const next: CachedChannelPlugins = {
     registryVersion,
+    registryRef: registry,
     sorted,
     byId,
   };
@@ -69,12 +82,20 @@ export function listChannelPlugins(): ChannelPlugin[] {
   return resolveCachedChannelPlugins().sorted.slice();
 }
 
-export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
+export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = String(id).trim();
   if (!resolvedId) {
     return undefined;
   }
   return resolveCachedChannelPlugins().byId.get(resolvedId);
+}
+
+export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
+  const resolvedId = String(id).trim();
+  if (!resolvedId) {
+    return undefined;
+  }
+  return getLoadedChannelPlugin(resolvedId) ?? getBundledChannelPlugin(resolvedId);
 }
 
 export function normalizeChannelId(raw?: string | null): ChannelId | null {

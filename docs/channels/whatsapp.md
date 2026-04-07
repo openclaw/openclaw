@@ -9,6 +9,21 @@ title: "WhatsApp"
 
 Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session(s).
 
+## Install (on demand)
+
+- Onboarding (`openclaw onboard`) and `openclaw channels add --channel whatsapp`
+  prompt to install the WhatsApp plugin the first time you select it.
+- `openclaw channels login --channel whatsapp` also offers the install flow when
+  the plugin is not present yet.
+- Dev channel + git checkout: defaults to the local plugin path.
+- Stable/Beta: defaults to the npm package `@openclaw/whatsapp`.
+
+Manual install stays available:
+
+```bash
+openclaw plugins install @openclaw/whatsapp
+```
+
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Default DM policy is pairing for unknown senders.
@@ -130,6 +145,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).
 - Group sessions are isolated (`agent:<agentId>:whatsapp:group:<jid>`).
+- WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` / lowercase variants). Prefer host-level proxy config over channel-specific WhatsApp proxy settings.
 
 ## Access control and activation
 
@@ -315,9 +331,35 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
   </Accordion>
 </AccordionGroup>
 
+## Reaction level
+
+`channels.whatsapp.reactionLevel` controls how broadly the agent uses emoji reactions on WhatsApp:
+
+| Level         | Ack reactions | Agent-initiated reactions | Description                                      |
+| ------------- | ------------- | ------------------------- | ------------------------------------------------ |
+| `"off"`       | No            | No                        | No reactions at all                              |
+| `"ack"`       | Yes           | No                        | Ack reactions only (pre-reply receipt)           |
+| `"minimal"`   | Yes           | Yes (conservative)        | Ack + agent reactions with conservative guidance |
+| `"extensive"` | Yes           | Yes (encouraged)          | Ack + agent reactions with encouraged guidance   |
+
+Default: `"minimal"`.
+
+Per-account overrides use `channels.whatsapp.accounts.<id>.reactionLevel`.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      reactionLevel: "ack",
+    },
+  },
+}
+```
+
 ## Acknowledgment reactions
 
 WhatsApp supports immediate ack reactions on inbound receipt via `channels.whatsapp.ackReaction`.
+Ack reactions are gated by `reactionLevel` — they are suppressed when `reactionLevel` is `"off"`.
 
 ```json5
 {
@@ -432,7 +474,7 @@ Primary reference:
 High-signal WhatsApp fields:
 
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
-- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`
+- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
@@ -440,6 +482,8 @@ High-signal WhatsApp fields:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)

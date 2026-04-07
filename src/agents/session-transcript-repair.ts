@@ -1,8 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
-const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
+const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -96,7 +97,7 @@ function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
-  const rawName = typeof block.name === "string" ? block.name : undefined;
+  const rawName = readStringValue(block.name);
   const trimmedName = rawName?.trim();
   const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
   const normalizedName = hasTrimmedName ? trimmedName : undefined;
@@ -151,20 +152,12 @@ function makeMissingToolResult(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
-function trimNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function normalizeToolResultName(
   message: Extract<AgentMessage, { role: "toolResult" }>,
   fallbackName?: string,
 ): Extract<AgentMessage, { role: "toolResult" }> {
   const rawToolName = (message as { toolName?: unknown }).toolName;
-  const normalizedToolName = trimNonEmptyString(rawToolName);
+  const normalizedToolName = normalizeOptionalString(rawToolName);
   if (normalizedToolName) {
     if (rawToolName === normalizedToolName) {
       return message;
@@ -172,7 +165,7 @@ function normalizeToolResultName(
     return { ...message, toolName: normalizedToolName };
   }
 
-  const normalizedFallback = trimNonEmptyString(fallbackName);
+  const normalizedFallback = normalizeOptionalString(fallbackName);
   if (normalizedFallback) {
     return { ...message, toolName: normalizedFallback };
   }
@@ -193,6 +186,12 @@ export type ToolCallInputRepairReport = {
 
 export type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
+};
+
+export type ErroredAssistantResultPolicy = "preserve" | "drop";
+
+export type ToolUseResultPairingOptions = {
+  erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
 };
 
 export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
@@ -327,8 +326,11 @@ export function sanitizeToolCallInputs(
   return repairToolCallInputs(messages, options).messages;
 }
 
-export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
-  return repairToolUseResultPairing(messages).messages;
+export function sanitizeToolUseResultPairing(
+  messages: AgentMessage[],
+  options?: ToolUseResultPairingOptions,
+): AgentMessage[] {
+  return repairToolUseResultPairing(messages, options).messages;
 }
 
 export type ToolUseRepairReport = {
@@ -339,7 +341,14 @@ export type ToolUseRepairReport = {
   moved: boolean;
 };
 
-export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRepairReport {
+function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions): boolean {
+  return options?.erroredAssistantResultPolicy === "drop";
+}
+
+export function repairToolUseResultPairing(
+  messages: AgentMessage[],
+  options?: ToolUseResultPairingOptions,
+): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
   // displaced (e.g. after user turns) or duplicated. Repair by:
@@ -389,18 +398,6 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
-
-    // Skip tool call extraction for aborted or errored assistant messages.
-    // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
-    // (e.g., partialJson: true) and should not have synthetic tool_results created.
-    // Creating synthetic results for incomplete tool calls causes API 400 errors:
-    // "unexpected tool_use_id found in tool_result blocks"
-    // See: https://github.com/openclaw/openclaw/issues/4597
-    const stopReason = (assistant as { stopReason?: string }).stopReason;
-    if (stopReason === "error" || stopReason === "aborted") {
-      out.push(msg);
-      continue;
-    }
 
     const toolCalls = extractToolCallsFromAssistant(assistant);
     if (toolCalls.length === 0) {
@@ -457,6 +454,30 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
         droppedOrphanCount += 1;
         changed = true;
       }
+    }
+
+    // Aborted/errored assistant turns should never synthesize missing tool results, but
+    // the replay sanitizer can still legitimately retain real tool results for surviving
+    // tool calls in the same turn after malformed siblings are dropped.
+    const stopReason = (assistant as { stopReason?: string }).stopReason;
+    if (stopReason === "error" || stopReason === "aborted") {
+      out.push(msg);
+      if (!shouldDropErroredAssistantResults(options)) {
+        for (const toolCall of toolCalls) {
+          const result = spanResultsById.get(toolCall.id);
+          if (!result) {
+            continue;
+          }
+          pushToolResult(result);
+        }
+      } else if (spanResultsById.size > 0) {
+        changed = true;
+      }
+      for (const rem of remainder) {
+        out.push(rem);
+      }
+      i = j - 1;
+      continue;
     }
 
     out.push(msg);

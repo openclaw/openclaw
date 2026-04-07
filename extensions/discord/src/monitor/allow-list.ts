@@ -1,11 +1,11 @@
 import type { Guild, User } from "@buape/carbon";
-import type { AllowlistMatch } from "openclaw/plugin-sdk/channel-runtime";
+import type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
   resolveChannelMatchConfig,
   type ChannelMatchSource,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-targets";
 import { evaluateGroupRouteAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import { formatDiscordUserTag } from "./format.js";
 
@@ -29,6 +29,7 @@ type DiscordChannelOverrideConfig = {
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
+  autoThreadName?: "message" | "generated";
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
 };
 
@@ -40,7 +41,7 @@ export type DiscordGuildEntryResolved = {
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: string[];
   roles?: string[];
-  channels?: Record<string, { allow?: boolean } & DiscordChannelOverrideConfig>;
+  channels?: Record<string, DiscordChannelOverrideConfig>;
 };
 
 export type DiscordChannelConfigResolved = DiscordChannelOverrideConfig & {
@@ -393,7 +394,7 @@ function resolveDiscordChannelConfigEntry(
   entry: DiscordChannelEntry,
 ): DiscordChannelConfigResolved {
   const resolved: DiscordChannelConfigResolved = {
-    allowed: entry.allow !== false,
+    allowed: entry.enabled !== false,
     requireMention: entry.requireMention,
     ignoreOtherMentions: entry.ignoreOtherMentions,
     skills: entry.skills,
@@ -403,6 +404,7 @@ function resolveDiscordChannelConfigEntry(
     systemPrompt: entry.systemPrompt,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,
+    autoThreadName: entry.autoThreadName,
     autoArchiveDuration: entry.autoArchiveDuration,
   };
   return resolved;
@@ -528,6 +530,26 @@ export function isDiscordGroupAllowedByPolicy(params: {
     routeAllowlistConfigured: params.channelAllowlistConfigured,
     routeMatched: params.channelAllowed,
   }).allowed;
+}
+
+export function resolveDiscordChannelPolicyCommandAuthorizer(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  guildInfo?: DiscordGuildEntryResolved | null;
+  channelConfig?: DiscordChannelConfigResolved | null;
+}) {
+  const channelAllowlistConfigured =
+    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  return {
+    configured:
+      params.groupPolicy === "allowlist" &&
+      (Boolean(params.guildInfo) || channelAllowlistConfigured),
+    allowed: isDiscordGroupAllowedByPolicy({
+      groupPolicy: params.groupPolicy,
+      guildAllowlisted: Boolean(params.guildInfo),
+      channelAllowlistConfigured,
+      channelAllowed: params.channelConfig?.allowed !== false,
+    }),
+  } as const;
 }
 
 export function resolveGroupDmAllow(params: {

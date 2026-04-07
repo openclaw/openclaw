@@ -1,6 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import {
+  isBlockedHostnameOrIp,
+  isPrivateNetworkOptInEnabled,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
+import { normalizeBlueBubblesServerUrl } from "./types.js";
 
 export type BlueBubblesAccountResolveOpts = {
   serverUrl?: string;
@@ -43,10 +48,19 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
+
+  let autoAllowPrivateNetwork = false;
+  try {
+    const hostname = new URL(normalizeBlueBubblesServerUrl(baseUrl)).hostname.trim();
+    autoAllowPrivateNetwork = Boolean(hostname) && isBlockedHostnameOrIp(hostname);
+  } catch {
+    autoAllowPrivateNetwork = false;
+  }
+
   return {
     baseUrl,
     password,
     accountId: account.accountId,
-    allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config) || autoAllowPrivateNetwork,
   };
 }

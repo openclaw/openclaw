@@ -9,12 +9,16 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "openclaw/plugin-sdk/text-runtime";
+import { z } from "openclaw/plugin-sdk/zod";
+import {
   createFixedWindowRateLimiter,
   isBlockedHostnameOrIp,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/nostr";
-import { z } from "zod";
+} from "../api.js";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
@@ -228,7 +232,7 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
   if (Array.isArray(value)) {
     return value[0];
   }
-  return typeof value === "string" ? value : undefined;
+  return readStringValue(value);
 }
 
 function normalizeIpCandidate(raw: string): string {
@@ -290,7 +294,9 @@ function enforceLoopbackMutationGuards(
     return false;
   }
 
-  const secFetchSite = firstHeaderValue(req.headers["sec-fetch-site"])?.trim().toLowerCase();
+  const secFetchSite = normalizeOptionalLowercaseString(
+    firstHeaderValue(req.headers["sec-fetch-site"]),
+  );
   if (secFetchSite === "cross-site") {
     ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
     sendJson(res, 403, { ok: false, error: "Forbidden" });

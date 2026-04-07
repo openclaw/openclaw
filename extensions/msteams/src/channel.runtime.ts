@@ -2,48 +2,47 @@ import {
   listMSTeamsDirectoryGroupsLive as listMSTeamsDirectoryGroupsLiveImpl,
   listMSTeamsDirectoryPeersLive as listMSTeamsDirectoryPeersLiveImpl,
 } from "./directory-live.js";
+import { getMemberInfoMSTeams as getMemberInfoMSTeamsImpl } from "./graph-members.js";
+import {
+  getMessageMSTeams as getMessageMSTeamsImpl,
+  listPinsMSTeams as listPinsMSTeamsImpl,
+  listReactionsMSTeams as listReactionsMSTeamsImpl,
+  pinMessageMSTeams as pinMessageMSTeamsImpl,
+  reactMessageMSTeams as reactMessageMSTeamsImpl,
+  searchMessagesMSTeams as searchMessagesMSTeamsImpl,
+  unpinMessageMSTeams as unpinMessageMSTeamsImpl,
+  unreactMessageMSTeams as unreactMessageMSTeamsImpl,
+} from "./graph-messages.js";
+import {
+  listChannelsMSTeams as listChannelsMSTeamsImpl,
+  getChannelInfoMSTeams as getChannelInfoMSTeamsImpl,
+} from "./graph-teams.js";
 import { msteamsOutbound as msteamsOutboundImpl } from "./outbound.js";
 import { probeMSTeams as probeMSTeamsImpl } from "./probe.js";
 import {
+  deleteMessageMSTeams as deleteMessageMSTeamsImpl,
+  editMessageMSTeams as editMessageMSTeamsImpl,
   sendAdaptiveCardMSTeams as sendAdaptiveCardMSTeamsImpl,
   sendMessageMSTeams as sendMessageMSTeamsImpl,
 } from "./send.js";
-
-type ListMSTeamsDirectoryGroupsLive =
-  typeof import("./directory-live.js").listMSTeamsDirectoryGroupsLive;
-type ListMSTeamsDirectoryPeersLive =
-  typeof import("./directory-live.js").listMSTeamsDirectoryPeersLive;
-type MSTeamsOutbound = typeof import("./outbound.js").msteamsOutbound;
-type ProbeMSTeams = typeof import("./probe.js").probeMSTeams;
-type SendAdaptiveCardMSTeams = typeof import("./send.js").sendAdaptiveCardMSTeams;
-type SendMessageMSTeams = typeof import("./send.js").sendMessageMSTeams;
-
-export function listMSTeamsDirectoryGroupsLive(
-  ...args: Parameters<ListMSTeamsDirectoryGroupsLive>
-): ReturnType<ListMSTeamsDirectoryGroupsLive> {
-  return listMSTeamsDirectoryGroupsLiveImpl(...args);
-}
-
-export function listMSTeamsDirectoryPeersLive(
-  ...args: Parameters<ListMSTeamsDirectoryPeersLive>
-): ReturnType<ListMSTeamsDirectoryPeersLive> {
-  return listMSTeamsDirectoryPeersLiveImpl(...args);
-}
-
-export const msteamsOutbound: MSTeamsOutbound = { ...msteamsOutboundImpl };
-
-export function probeMSTeams(...args: Parameters<ProbeMSTeams>): ReturnType<ProbeMSTeams> {
-  return probeMSTeamsImpl(...args);
-}
-
-export function sendAdaptiveCardMSTeams(
-  ...args: Parameters<SendAdaptiveCardMSTeams>
-): ReturnType<SendAdaptiveCardMSTeams> {
-  return sendAdaptiveCardMSTeamsImpl(...args);
-}
-
-export function sendMessageMSTeams(
-  ...args: Parameters<SendMessageMSTeams>
-): ReturnType<SendMessageMSTeams> {
-  return sendMessageMSTeamsImpl(...args);
-}
+export const msTeamsChannelRuntime = {
+  deleteMessageMSTeams: deleteMessageMSTeamsImpl,
+  editMessageMSTeams: editMessageMSTeamsImpl,
+  getChannelInfoMSTeams: getChannelInfoMSTeamsImpl,
+  getMemberInfoMSTeams: getMemberInfoMSTeamsImpl,
+  getMessageMSTeams: getMessageMSTeamsImpl,
+  listChannelsMSTeams: listChannelsMSTeamsImpl,
+  listPinsMSTeams: listPinsMSTeamsImpl,
+  listReactionsMSTeams: listReactionsMSTeamsImpl,
+  pinMessageMSTeams: pinMessageMSTeamsImpl,
+  reactMessageMSTeams: reactMessageMSTeamsImpl,
+  searchMessagesMSTeams: searchMessagesMSTeamsImpl,
+  unpinMessageMSTeams: unpinMessageMSTeamsImpl,
+  unreactMessageMSTeams: unreactMessageMSTeamsImpl,
+  listMSTeamsDirectoryGroupsLive: listMSTeamsDirectoryGroupsLiveImpl,
+  listMSTeamsDirectoryPeersLive: listMSTeamsDirectoryPeersLiveImpl,
+  msteamsOutbound: { ...msteamsOutboundImpl },
+  probeMSTeams: probeMSTeamsImpl,
+  sendAdaptiveCardMSTeams: sendAdaptiveCardMSTeamsImpl,
+  sendMessageMSTeams: sendMessageMSTeamsImpl,
+};

@@ -14,12 +14,14 @@ openclaw sessions
 openclaw sessions --agent work
 openclaw sessions --all-agents
 openclaw sessions --active 120
+openclaw sessions --verbose
 openclaw sessions --json
 ```
 
 Scope selection:
 
 - default: configured default agent store
+- `--verbose`: verbose logging
 - `--agent <id>`: one configured agent store
 - `--all-agents`: aggregate all configured agent stores
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
@@ -46,7 +48,7 @@ JSON examples:
   "activeMinutes": null,
   "sessions": [
     { "agentId": "main", "key": "agent:main:main", "model": "gpt-5" },
-    { "agentId": "work", "key": "agent:work:main", "model": "claude-opus-4-5" }
+    { "agentId": "work", "key": "agent:work:main", "model": "claude-opus-4-6" }
   ]
 }
 ```
@@ -71,6 +73,7 @@ openclaw sessions cleanup --json
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
+- `--fix-missing`: remove entries whose transcript files are missing, even if they would not normally age/count out yet.
 - `--active-key <key>`: protect a specific active key from disk-budget eviction.
 - `--agent <id>`: run cleanup for one configured agent store.
 - `--all-agents`: run cleanup for all configured agent stores.

@@ -1,7 +1,7 @@
-// Narrow plugin-sdk surface for the bundled lobster plugin.
-// Keep this list additive and scoped to symbols used under extensions/lobster.
+// Private Lobster plugin helpers for bundled extensions.
+// Keep this surface narrow and limited to the Lobster workflow/tool contract.
 
-export { definePluginEntry } from "./core.js";
+export { definePluginEntry } from "./plugin-entry.js";
 export {
   applyWindowsSpawnProgramPolicy,
   materializeWindowsSpawnProgram,

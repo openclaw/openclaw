@@ -1,57 +1,75 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { runExtraParamsCase } from "./extra-params.test-support.js";
+import { createKilocodeWrapper, isProxyReasoningUnsupported } from "./proxy-stream-wrappers.js";
 
-const TEST_CFG = {
-  plugins: {
-    entries: {
-      kilocode: {
-        enabled: true,
-      },
-    },
-  },
-} satisfies OpenClawConfig;
+type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
+  headers?: Record<string, string>;
+  payload: TPayload;
+};
 
 function applyAndCapture(params: {
   provider: string;
   modelId: string;
   callerHeaders?: Record<string, string>;
-  cfg?: OpenClawConfig;
 }) {
-  return runExtraParamsCase({
-    applyModelId: params.modelId,
-    applyProvider: params.provider,
-    callerHeaders: params.callerHeaders,
-    cfg: params.cfg ?? TEST_CFG,
-    model: {
+  const captured: ExtraParamsCapture<Record<string, unknown>> = { payload: {} };
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    captured.headers = options?.headers;
+    options?.onPayload?.(captured.payload, model);
+    return {} as ReturnType<StreamFn>;
+  };
+  const streamFn =
+    params.provider === "kilocode"
+      ? createKilocodeWrapper(baseStreamFn, params.modelId === "kilo/auto" ? undefined : "high")
+      : baseStreamFn;
+
+  const context: Context = { messages: [] };
+  void streamFn(
+    {
       api: "openai-completions",
       provider: params.provider,
       id: params.modelId,
     } as Model<"openai-completions">,
-    payload: {},
-  });
+    context,
+    {
+      headers: params.callerHeaders,
+    } as SimpleStreamOptions,
+  );
+
+  return captured;
 }
 
 function applyAndCaptureReasoning(params: {
-  cfg?: OpenClawConfig;
   modelId: string;
   initialPayload?: Record<string, unknown>;
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
 }) {
-  return runExtraParamsCase({
-    applyModelId: params.modelId,
-    applyProvider: "kilocode",
-    cfg: params.cfg ?? TEST_CFG,
-    model: {
+  const captured: ExtraParamsCapture<Record<string, unknown>> = {
+    payload: { ...params.initialPayload },
+  };
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    options?.onPayload?.(captured.payload, model);
+    return {} as ReturnType<StreamFn>;
+  };
+  const thinkingLevel =
+    params.modelId === "kilo/auto" || isProxyReasoningUnsupported(params.modelId)
+      ? undefined
+      : (params.thinkingLevel ?? "high");
+  const streamFn = createKilocodeWrapper(baseStreamFn, thinkingLevel);
+  const context: Context = { messages: [] };
+  void streamFn(
+    {
       api: "openai-completions",
       provider: "kilocode",
       id: params.modelId,
     } as Model<"openai-completions">,
-    payload: { ...params.initialPayload },
-    thinkingLevel: params.thinkingLevel ?? "high",
-  }).payload;
+    context,
+    {} as SimpleStreamOptions,
+  );
+
+  return captured.payload;
 }
 
 describe("extra-params: Kilocode wrapper", () => {
@@ -101,11 +119,6 @@ describe("extra-params: Kilocode wrapper", () => {
     const { headers } = applyAndCapture({
       provider: "kilocode",
       modelId: "anthropic/claude-sonnet-4",
-      cfg: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
     });
 
     expect(headers?.["X-KILOCODE-FEATURE"]).toBe("openclaw");
@@ -144,11 +157,6 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
 
   it("still normalizes reasoning for Kilocode under restrictive plugins.allow", () => {
     const capturedPayload = applyAndCaptureReasoning({
-      cfg: {
-        plugins: {
-          allow: ["openrouter"],
-        },
-      },
       modelId: "anthropic/claude-sonnet-4",
     });
 
@@ -156,18 +164,11 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
   });
 
   it("does not inject reasoning.effort for x-ai models", () => {
-    const capturedPayload = runExtraParamsCase({
-      applyModelId: "x-ai/grok-3",
-      applyProvider: "kilocode",
-      cfg: TEST_CFG,
-      model: {
-        api: "openai-completions",
-        provider: "kilocode",
-        id: "x-ai/grok-3",
-      } as Model<"openai-completions">,
-      payload: { reasoning_effort: "high" },
+    const capturedPayload = applyAndCaptureReasoning({
+      modelId: "x-ai/grok-3",
+      initialPayload: { reasoning_effort: "high" },
       thinkingLevel: "high",
-    }).payload;
+    });
 
     // x-ai models reject reasoning.effort — should be skipped
     expect(capturedPayload?.reasoning).toBeUndefined();

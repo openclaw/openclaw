@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
 export type AgentIdentityFile = {
@@ -26,8 +27,7 @@ function normalizeIdentityValue(value: string): string {
     normalized = normalized.slice(1, -1).trim();
   }
   normalized = normalized.replace(/[\u2013\u2014]/g, "-");
-  normalized = normalized.replace(/\s+/g, " ").toLowerCase();
-  return normalized;
+  return normalizeLowercaseStringOrEmpty(normalized.replace(/\s+/g, " "));
 }
 
 function isIdentityPlaceholder(value: string): boolean {
@@ -44,7 +44,9 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     if (colonIndex === -1) {
       continue;
     }
-    const label = cleaned.slice(0, colonIndex).replace(/[*_]/g, "").trim().toLowerCase();
+    const label = normalizeLowercaseStringOrEmpty(
+      cleaned.slice(0, colonIndex).replace(/[*_]/g, ""),
+    );
     const value = cleaned
       .slice(colonIndex + 1)
       .replace(/^[*_]+|[*_]+$/g, "")

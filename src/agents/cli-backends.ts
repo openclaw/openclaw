@@ -1,111 +1,74 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
-import {
-  CLI_FRESH_WATCHDOG_DEFAULTS,
-  CLI_RESUME_WATCHDOG_DEFAULTS,
-} from "./cli-watchdog-defaults.js";
+import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
+import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
+import type { CliBundleMcpMode } from "../plugins/types.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export type ResolvedCliBackend = {
   id: string;
   config: CliBackendConfig;
+  bundleMcp: boolean;
+  bundleMcpMode?: CliBundleMcpMode;
+  pluginId?: string;
 };
 
-const CLAUDE_MODEL_ALIASES: Record<string, string> = {
-  opus: "opus",
-  "opus-4.6": "opus",
-  "opus-4.5": "opus",
-  "opus-4": "opus",
-  "claude-opus-4-6": "opus",
-  "claude-opus-4-5": "opus",
-  "claude-opus-4": "opus",
-  sonnet: "sonnet",
-  "sonnet-4.6": "sonnet",
-  "sonnet-4.5": "sonnet",
-  "sonnet-4.1": "sonnet",
-  "sonnet-4.0": "sonnet",
-  "claude-sonnet-4-6": "sonnet",
-  "claude-sonnet-4-5": "sonnet",
-  "claude-sonnet-4-1": "sonnet",
-  "claude-sonnet-4-0": "sonnet",
-  haiku: "haiku",
-  "haiku-3.5": "haiku",
-  "claude-haiku-3-5": "haiku",
+export type ResolvedCliBackendLiveTest = {
+  defaultModelRef?: string;
+  defaultImageProbe: boolean;
+  defaultMcpProbe: boolean;
+  dockerNpmPackage?: string;
+  dockerBinaryName?: string;
 };
 
-const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
-const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
-const CLAUDE_BYPASS_PERMISSIONS_MODE = "bypassPermissions";
+export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  const normalizeConfig = resolveFallbackCliBackendPolicy("claude-cli")?.normalizeConfig;
+  return normalizeConfig ? normalizeConfig(config) : config;
+}
 
-const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
-  command: "claude",
-  args: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"],
-  resumeArgs: [
-    "-p",
-    "--output-format",
-    "json",
-    "--permission-mode",
-    "bypassPermissions",
-    "--resume",
-    "{sessionId}",
-  ],
-  output: "json",
-  input: "arg",
-  modelArg: "--model",
-  modelAliases: CLAUDE_MODEL_ALIASES,
-  sessionArg: "--session-id",
-  sessionMode: "always",
-  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
-  systemPromptArg: "--append-system-prompt",
-  systemPromptMode: "append",
-  systemPromptWhen: "first",
-  clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
-  reliability: {
-    watchdog: {
-      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-    },
-  },
-  serialize: true,
+type FallbackCliBackendPolicy = {
+  bundleMcp: boolean;
+  bundleMcpMode?: CliBundleMcpMode;
+  baseConfig?: CliBackendConfig;
+  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
 };
 
-const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
-  command: "codex",
-  args: [
-    "exec",
-    "--json",
-    "--color",
-    "never",
-    "--sandbox",
-    "workspace-write",
-    "--skip-git-repo-check",
-  ],
-  resumeArgs: [
-    "exec",
-    "resume",
-    "{sessionId}",
-    "--color",
-    "never",
-    "--sandbox",
-    "workspace-write",
-    "--skip-git-repo-check",
-  ],
-  output: "jsonl",
-  resumeOutput: "text",
-  input: "arg",
-  modelArg: "--model",
-  sessionIdFields: ["thread_id"],
-  sessionMode: "existing",
-  imageArg: "--image",
-  imageMode: "repeat",
-  reliability: {
-    watchdog: {
-      fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-      resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-    },
-  },
-  serialize: true,
-};
+const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
+
+function normalizeBundleMcpMode(
+  mode: CliBundleMcpMode | undefined,
+  enabled: boolean,
+): CliBundleMcpMode | undefined {
+  if (!enabled) {
+    return undefined;
+  }
+  return mode ?? "claude-config-file";
+}
+
+function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
+  const entry = resolvePluginSetupCliBackend({
+    backend: provider,
+  });
+  if (!entry) {
+    return undefined;
+  }
+  return {
+    // Setup-registered backends keep narrow CLI paths generic even when the
+    // runtime plugin registry has not booted yet.
+    bundleMcp: entry.backend.bundleMcp === true,
+    bundleMcpMode: normalizeBundleMcpMode(
+      entry.backend.bundleMcpMode,
+      entry.backend.bundleMcp === true,
+    ),
+    baseConfig: entry.backend.config,
+    normalizeConfig: entry.backend.normalizeConfig,
+  };
+}
+
+function resolveFallbackCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
+  return FALLBACK_CLI_BACKEND_POLICIES[provider] ?? resolveSetupCliBackendPolicy(provider);
+}
 
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
@@ -115,12 +78,23 @@ function pickBackendConfig(
   config: Record<string, CliBackendConfig>,
   normalizedId: string,
 ): CliBackendConfig | undefined {
+  const directKey = Object.keys(config).find(
+    (key) => normalizeOptionalLowercaseString(key) === normalizedId,
+  );
+  if (directKey) {
+    return config[directKey];
+  }
   for (const [key, entry] of Object.entries(config)) {
     if (normalizeBackendKey(key) === normalizedId) {
       return entry;
     }
   }
   return undefined;
+}
+
+function resolveRegisteredBackend(provider: string) {
+  const normalized = normalizeBackendKey(provider);
+  return resolveRuntimeCliBackends().find((entry) => normalizeBackendKey(entry.id) === normalized);
 }
 
 function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
@@ -160,53 +134,11 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   };
 }
 
-function normalizeClaudePermissionArgs(args?: string[]): string[] | undefined {
-  if (!args) {
-    return args;
-  }
-  const normalized: string[] = [];
-  let sawLegacySkip = false;
-  let hasPermissionMode = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (arg === CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG) {
-      sawLegacySkip = true;
-      continue;
-    }
-    if (arg === CLAUDE_PERMISSION_MODE_ARG) {
-      hasPermissionMode = true;
-      normalized.push(arg);
-      const maybeValue = args[i + 1];
-      if (typeof maybeValue === "string") {
-        normalized.push(maybeValue);
-        i += 1;
-      }
-      continue;
-    }
-    if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_ARG}=`)) {
-      hasPermissionMode = true;
-    }
-    normalized.push(arg);
-  }
-  if (sawLegacySkip && !hasPermissionMode) {
-    normalized.push(CLAUDE_PERMISSION_MODE_ARG, CLAUDE_BYPASS_PERMISSIONS_MODE);
-  }
-  return normalized;
-}
-
-function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
-  return {
-    ...config,
-    args: normalizeClaudePermissionArgs(config.args),
-    resumeArgs: normalizeClaudePermissionArgs(config.resumeArgs),
-  };
-}
-
 export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
-  const ids = new Set<string>([
-    normalizeBackendKey("claude-cli"),
-    normalizeBackendKey("codex-cli"),
-  ]);
+  const ids = new Set<string>();
+  for (const backend of resolveRuntimeCliBackends()) {
+    ids.add(normalizeBackendKey(backend.id));
+  }
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
     ids.add(normalizeBackendKey(key));
@@ -214,38 +146,84 @@ export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
   return ids;
 }
 
+export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
+  const normalized = normalizeBackendKey(provider);
+  const entry =
+    resolvePluginSetupCliBackend({ backend: normalized }) ??
+    resolveRuntimeCliBackends().find((backend) => normalizeBackendKey(backend.id) === normalized);
+  if (!entry) {
+    return null;
+  }
+  const backend = "backend" in entry ? entry.backend : entry;
+  return {
+    defaultModelRef: backend.liveTest?.defaultModelRef,
+    defaultImageProbe: backend.liveTest?.defaultImageProbe === true,
+    defaultMcpProbe: backend.liveTest?.defaultMcpProbe === true,
+    dockerNpmPackage: backend.liveTest?.docker?.npmPackage,
+    dockerBinaryName: backend.liveTest?.docker?.binaryName,
+  };
+}
+
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
+  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
-
-  if (normalized === "claude-cli") {
-    const merged = mergeBackendConfig(DEFAULT_CLAUDE_BACKEND, override);
-    const config = normalizeClaudeBackendConfig(merged);
+  const registered = resolveRegisteredBackend(normalized);
+  if (registered) {
+    const merged = mergeBackendConfig(registered.config, override);
+    const config = registered.normalizeConfig ? registered.normalizeConfig(merged) : merged;
     const command = config.command?.trim();
     if (!command) {
       return null;
     }
-    return { id: normalized, config: { ...config, command } };
-  }
-  if (normalized === "codex-cli") {
-    const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
-    const command = merged.command?.trim();
-    if (!command) {
-      return null;
-    }
-    return { id: normalized, config: { ...merged, command } };
+    return {
+      id: normalized,
+      config: { ...config, command },
+      bundleMcp: registered.bundleMcp === true,
+      bundleMcpMode: normalizeBundleMcpMode(
+        registered.bundleMcpMode,
+        registered.bundleMcp === true,
+      ),
+      pluginId: registered.pluginId,
+    };
   }
 
   if (!override) {
-    return null;
+    if (!fallbackPolicy?.baseConfig) {
+      return null;
+    }
+    const baseConfig = fallbackPolicy.normalizeConfig
+      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig)
+      : fallbackPolicy.baseConfig;
+    const command = baseConfig.command?.trim();
+    if (!command) {
+      return null;
+    }
+    return {
+      id: normalized,
+      config: { ...baseConfig, command },
+      bundleMcp: fallbackPolicy.bundleMcp,
+      bundleMcpMode: fallbackPolicy.bundleMcpMode,
+    };
   }
-  const command = override.command?.trim();
+  const mergedFallback = fallbackPolicy?.baseConfig
+    ? mergeBackendConfig(fallbackPolicy.baseConfig, override)
+    : override;
+  const config = fallbackPolicy?.normalizeConfig
+    ? fallbackPolicy.normalizeConfig(mergedFallback)
+    : mergedFallback;
+  const command = config.command?.trim();
   if (!command) {
     return null;
   }
-  return { id: normalized, config: { ...override, command } };
+  return {
+    id: normalized,
+    config: { ...config, command },
+    bundleMcp: fallbackPolicy?.bundleMcp === true,
+    bundleMcpMode: fallbackPolicy?.bundleMcpMode,
+  };
 }

@@ -14,7 +14,7 @@ It decides which messages to include, how to summarize older history, and how
 to manage context across subagent boundaries.
 
 OpenClaw ships with a built-in `legacy` engine. Plugins can register
-alternative engines that replace the entire context pipeline.
+alternative engines that replace the active context-engine lifecycle.
 
 ## Quick start
 
@@ -115,6 +115,8 @@ engine is used automatically.
 A plugin can register a context engine using the plugin API:
 
 ```ts
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
 export default function register(api) {
   api.registerContextEngine("my-engine", () => ({
     info: {
@@ -128,12 +130,15 @@ export default function register(api) {
       return { ingested: true };
     },
 
-    async assemble({ sessionId, messages, tokenBudget }) {
+    async assemble({ sessionId, messages, tokenBudget, availableTools, citationsMode }) {
       // Return messages that fit the budget
       return {
         messages: buildContext(messages, tokenBudget),
         estimatedTokens: countTokens(messages),
-        systemPromptAddition: "Use lcm_grep to search history...",
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
       };
     },
 
@@ -194,13 +199,31 @@ Optional members:
 
 ### ownsCompaction
 
-When `info.ownsCompaction` is `true`, the engine manages its own compaction
-lifecycle. OpenClaw will not trigger the built-in auto-compaction; instead it
-delegates entirely to the engine's `compact()` method. The engine may also
-run compaction proactively in `afterTurn()`.
+`ownsCompaction` controls whether Pi's built-in in-attempt auto-compaction stays
+enabled for the run:
 
-When `false` or unset, OpenClaw's built-in auto-compaction logic runs
-alongside the engine.
+- `true` — the engine owns compaction behavior. OpenClaw disables Pi's built-in
+  auto-compaction for that run, and the engine's `compact()` implementation is
+  responsible for `/compact`, overflow recovery compaction, and any proactive
+  compaction it wants to do in `afterTurn()`.
+- `false` or unset — Pi's built-in auto-compaction may still run during prompt
+  execution, but the active engine's `compact()` method is still called for
+  `/compact` and overflow recovery.
+
+`ownsCompaction: false` does **not** mean OpenClaw automatically falls back to
+the legacy engine's compaction path.
+
+That means there are two valid plugin patterns:
+
+- **Owning mode** — implement your own compaction algorithm and set
+  `ownsCompaction: true`.
+- **Delegating mode** — set `ownsCompaction: false` and have `compact()` call
+  `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk/core` to use
+  OpenClaw's built-in compaction behavior.
+
+A no-op `compact()` is unsafe for an active non-owning engine because it
+disables the normal `/compact` and overflow-recovery compaction path for that
+engine slot.
 
 ## Configuration reference
 
@@ -230,7 +253,13 @@ OpenClaw resolves when it needs a context engine.
 - **Memory plugins** (`plugins.slots.memory`) are separate from context engines.
   Memory plugins provide search/retrieval; context engines control what the
   model sees. They can work together — a context engine might use memory
-  plugin data during assembly.
+  plugin data during assembly. Plugin engines that want the active memory
+  prompt path should prefer `buildMemorySystemPromptAddition(...)` from
+  `openclaw/plugin-sdk/core`, which converts the active memory prompt sections
+  into a ready-to-prepend `systemPromptAddition`. If an engine needs lower-level
+  control, it can still pull raw lines from
+  `openclaw/plugin-sdk/memory-host-core` via
+  `buildActiveMemoryPromptSection(...)`.
 - **Session pruning** (trimming old tool results in-memory) still runs
   regardless of which context engine is active.
 
@@ -248,3 +277,9 @@ OpenClaw resolves when it needs a context engine.
 
 See also: [Compaction](/concepts/compaction), [Context](/concepts/context),
 [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest).
+
+## Related
+
+- [Context](/concepts/context) — how context is built for agent turns
+- [Plugin Architecture](/plugins/architecture) — registering context engine plugins
+- [Compaction](/concepts/compaction) — summarizing long conversations

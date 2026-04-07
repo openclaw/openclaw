@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
-import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../gateway/credentials.js";
+import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -44,7 +44,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   cfg: ReturnType<typeof loadConfig>,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  if (readGatewayPasswordEnv(env)) {
+  if (trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)) {
     return false;
   }
   const authMode = cfg.gateway?.auth?.mode;
@@ -54,7 +54,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   if (authMode === "token" || authMode === "none" || authMode === "trusted-proxy") {
     return false;
   }
-  const envToken = readGatewayTokenEnv(env);
+  const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   const configTokenConfigured = hasConfiguredSecretInput(
     cfg.gateway?.auth?.token,
     cfg.secrets?.defaults,
@@ -98,7 +98,7 @@ function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOption
 export function registerQrCli(program: Command) {
   program
     .command("qr")
-    .description("Generate an iOS pairing QR code and setup code")
+    .description("Generate a mobile pairing QR code and setup code")
     .addHelpText(
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.openclaw.ai/cli/qr")}\n`,
@@ -225,24 +225,18 @@ export function registerQrCli(program: Command) {
         }
 
         if (opts.json) {
-          defaultRuntime.log(
-            JSON.stringify(
-              {
-                setupCode,
-                gatewayUrl: resolved.payload.url,
-                auth: resolved.authLabel,
-                urlSource: resolved.urlSource,
-              },
-              null,
-              2,
-            ),
-          );
+          defaultRuntime.writeJson({
+            setupCode,
+            gatewayUrl: resolved.payload.url,
+            auth: resolved.authLabel,
+            urlSource: resolved.urlSource,
+          });
           return;
         }
 
         const lines: string[] = [
           theme.heading("Pairing QR"),
-          "Scan this with the OpenClaw iOS app (Onboarding -> Scan QR).",
+          "Scan this with the OpenClaw mobile app (Onboarding -> Scan QR).",
           "",
         ];
 

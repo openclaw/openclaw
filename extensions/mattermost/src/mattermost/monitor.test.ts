@@ -1,8 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   evaluateMattermostMentionGate,
+  resolveMattermostReactionChannelId,
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
@@ -12,10 +13,15 @@ import {
 
 function resolveRequireMentionForTest(params: MattermostRequireMentionResolverInput): boolean {
   const root = params.cfg.channels?.mattermost;
-  const accountGroups = root?.accounts?.[params.accountId]?.groups;
+  const accountGroups = (
+    root?.accounts?.[params.accountId] as
+      | { groups?: Record<string, { requireMention?: boolean }> }
+      | undefined
+  )?.groups;
   const groups = accountGroups ?? root?.groups;
-  const groupConfig = params.groupId ? groups?.[params.groupId] : undefined;
-  const defaultGroupConfig = groups?.["*"];
+  const typedGroups = groups as Record<string, { requireMention?: boolean }> | undefined;
+  const groupConfig = params.groupId ? typedGroups?.[params.groupId] : undefined;
+  const defaultGroupConfig = typedGroups?.["*"];
   const configMention =
     typeof groupConfig?.requireMention === "boolean"
       ? groupConfig.requireMention
@@ -169,6 +175,17 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("thread-root-456");
   });
 
+  it("suppresses existing thread roots when replyToMode is off", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "channel",
+        postId: "post-123",
+        replyToMode: "off",
+        threadRootId: "thread-root-456",
+      }),
+    ).toBeUndefined();
+  });
+
   it("starts a thread for top-level channel messages when replyToMode is all", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
@@ -232,6 +249,22 @@ describe("resolveMattermostThreadSessionContext", () => {
     });
   });
 
+  it("keeps threaded messages top-level when replyToMode is off", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:default:chan-1",
+        kind: "group",
+        postId: "post-123",
+        replyToMode: "off",
+        threadRootId: "root-456",
+      }),
+    ).toEqual({
+      effectiveReplyToId: undefined,
+      sessionKey: "agent:main:mattermost:default:chan-1",
+      parentSessionKey: undefined,
+    });
+  });
+
   it("keeps direct-message sessions linear", () => {
     expect(
       resolveMattermostThreadSessionContext({
@@ -245,5 +278,28 @@ describe("resolveMattermostThreadSessionContext", () => {
       sessionKey: "agent:main:mattermost:default:user-1",
       parentSessionKey: undefined,
     });
+  });
+});
+
+describe("resolveMattermostReactionChannelId", () => {
+  it("prefers broadcast channel_id when present", () => {
+    expect(
+      resolveMattermostReactionChannelId({
+        broadcast: { channel_id: "chan-broadcast" },
+        data: { channel_id: "chan-data" },
+      }),
+    ).toBe("chan-broadcast");
+  });
+
+  it("falls back to data.channel_id when broadcast channel_id is missing", () => {
+    expect(
+      resolveMattermostReactionChannelId({
+        data: { channel_id: "chan-data" },
+      }),
+    ).toBe("chan-data");
+  });
+
+  it("returns undefined when neither payload location includes channel_id", () => {
+    expect(resolveMattermostReactionChannelId({})).toBeUndefined();
   });
 });

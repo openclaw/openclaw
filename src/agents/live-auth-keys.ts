@@ -1,3 +1,5 @@
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const KEY_SPLIT_RE = /[\s,;]+/g;
@@ -59,7 +61,7 @@ function collectEnvPrefixedKeys(prefix: string): string[] {
     if (!name.startsWith(prefix)) {
       continue;
     }
-    const trimmed = value?.trim();
+    const trimmed = normalizeOptionalString(value);
     if (!trimmed) {
       continue;
     }
@@ -98,19 +100,27 @@ function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
 }
 
 export function collectProviderApiKeys(provider: string): string[] {
-  const config = resolveProviderApiKeyConfig(provider);
+  const normalizedProvider = normalizeProviderId(provider);
+  const config = resolveProviderApiKeyConfig(normalizedProvider);
 
-  const forcedSingle = config.liveSingle ? process.env[config.liveSingle]?.trim() : undefined;
+  const forcedSingle = config.liveSingle
+    ? normalizeOptionalString(process.env[config.liveSingle])
+    : undefined;
   if (forcedSingle) {
     return [forcedSingle];
   }
 
   const fromList = parseKeyList(config.listVar ? process.env[config.listVar] : undefined);
-  const primary = config.primaryVar ? process.env[config.primaryVar]?.trim() : undefined;
+  const primary = config.primaryVar
+    ? normalizeOptionalString(process.env[config.primaryVar])
+    : undefined;
   const fromPrefixed = config.prefixedVar ? collectEnvPrefixedKeys(config.prefixedVar) : [];
 
   const fallback = config.fallbackVars
-    .map((envVar) => process.env[envVar]?.trim())
+    .map((envVar) => normalizeOptionalString(process.env[envVar]))
+    .filter(Boolean) as string[];
+  const manifestFallback = getProviderEnvVars(normalizedProvider)
+    .map((envVar) => normalizeOptionalString(process.env[envVar]))
     .filter(Boolean) as string[];
 
   const seen = new Set<string>();
@@ -133,6 +143,9 @@ export function collectProviderApiKeys(provider: string): string[] {
     add(value);
   }
   for (const value of fallback) {
+    add(value);
+  }
+  for (const value of manifestFallback) {
     add(value);
   }
 

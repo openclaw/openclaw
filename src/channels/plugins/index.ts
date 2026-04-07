@@ -1,14 +1,9 @@
-export { getChannelPlugin, listChannelPlugins, normalizeChannelId } from "./registry.js";
 export {
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
-  listSlackDirectoryGroupsFromConfig,
-  listSlackDirectoryPeersFromConfig,
-  listTelegramDirectoryGroupsFromConfig,
-  listTelegramDirectoryPeersFromConfig,
-  listWhatsAppDirectoryGroupsFromConfig,
-  listWhatsAppDirectoryPeersFromConfig,
-} from "./directory-config.js";
+  getChannelPlugin,
+  getLoadedChannelPlugin,
+  listChannelPlugins,
+  normalizeChannelId,
+} from "./registry.js";
 export {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,
@@ -26,3 +21,4 @@ export {
   type AllowlistMatchSource,
 } from "./allowlist-match.js";
 export type { ChannelId, ChannelPlugin } from "./types.js";
+export { resolveChannelApprovalAdapter, resolveChannelApprovalCapability } from "./approvals.js";

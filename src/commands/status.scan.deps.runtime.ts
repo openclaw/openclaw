@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
-import { getMemorySearchManager as getMemorySearchManagerImpl } from "../memory/index.js";
-import type { MemoryProviderStatus } from "../memory/types.js";
+import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
+import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 
 export { getTailnetHostname };
 
 type StatusMemoryManager = {
-  probeVectorAvailability(): Promise<void>;
+  probeVectorAvailability(): Promise<boolean>;
   status(): MemoryProviderStatus;
   close?(): Promise<void>;
 };
@@ -16,14 +16,14 @@ export async function getMemorySearchManager(params: {
   agentId: string;
   purpose: "status";
 }): Promise<{ manager: StatusMemoryManager | null }> {
-  const { manager } = await getMemorySearchManagerImpl(params);
+  const { manager } = await getActiveMemorySearchManager(params);
   if (!manager) {
     return { manager: null };
   }
   return {
     manager: {
       async probeVectorAvailability() {
-        await manager.probeVectorAvailability();
+        return await manager.probeVectorAvailability();
       },
       status() {
         return manager.status();

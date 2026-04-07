@@ -1,30 +1,171 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { runMessageAction } from "./message-action-runner.js";
+
 const mocks = vi.hoisted(() => ({
   executePollAction: vi.fn(),
+  resolveOutboundChannelPlugin: vi.fn(),
 }));
 
-vi.mock("./outbound-send-service.js", async () => {
-  const actual = await vi.importActual<typeof import("./outbound-send-service.js")>(
-    "./outbound-send-service.js",
-  );
-  return {
-    ...actual,
-    executePollAction: mocks.executePollAction,
-  };
-});
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+  resetOutboundChannelResolutionStateForTest: vi.fn(),
+}));
 
-type MessageActionRunnerModule = typeof import("./message-action-runner.js");
-type MessageActionRunnerTestHelpersModule =
-  typeof import("./message-action-runner.test-helpers.js");
+vi.mock("./outbound-send-service.js", () => ({
+  executeSendAction: vi.fn(async () => {
+    throw new Error("executeSendAction should not run in poll tests");
+  }),
+  executePollAction: mocks.executePollAction,
+}));
 
-let runMessageAction: MessageActionRunnerModule["runMessageAction"];
-let installMessageActionRunnerTestRegistry: MessageActionRunnerTestHelpersModule["installMessageActionRunnerTestRegistry"];
-let resetMessageActionRunnerTestRegistry: MessageActionRunnerTestHelpersModule["resetMessageActionRunnerTestRegistry"];
-let slackConfig: MessageActionRunnerTestHelpersModule["slackConfig"];
-let telegramConfig: MessageActionRunnerTestHelpersModule["telegramConfig"];
+vi.mock("./outbound-session.js", () => ({
+  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  resolveOutboundSessionRoute: vi.fn(async () => null),
+}));
+
+vi.mock("./message-action-threading.js", () => ({
+  resolveAndApplyOutboundThreadId: vi.fn(
+    (
+      actionParams: Record<string, unknown>,
+      context: {
+        cfg: OpenClawConfig;
+        to: string;
+        accountId?: string | null;
+        toolContext?: Record<string, unknown>;
+        resolveAutoThreadId?: (params: {
+          cfg: OpenClawConfig;
+          accountId?: string | null;
+          to: string;
+          toolContext?: Record<string, unknown>;
+          replyToId?: string;
+        }) => string | undefined;
+      },
+    ) => {
+      const explicit =
+        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
+      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
+      const resolved =
+        explicit ??
+        context.resolveAutoThreadId?.({
+          cfg: context.cfg,
+          accountId: context.accountId,
+          to: context.to,
+          toolContext: context.toolContext,
+          replyToId,
+        });
+      if (resolved && !actionParams.threadId) {
+        actionParams.threadId = resolved;
+      }
+      return resolved ?? undefined;
+    },
+  ),
+  prepareOutboundMirrorRoute: vi.fn(
+    async ({
+      actionParams,
+      cfg,
+      to,
+      accountId,
+      toolContext,
+      agentId,
+      resolveAutoThreadId,
+    }: {
+      actionParams: Record<string, unknown>;
+      cfg: OpenClawConfig;
+      to: string;
+      accountId?: string | null;
+      toolContext?: Record<string, unknown>;
+      agentId?: string;
+      resolveAutoThreadId?: (params: {
+        cfg: OpenClawConfig;
+        accountId?: string | null;
+        to: string;
+        toolContext?: Record<string, unknown>;
+        replyToId?: string;
+      }) => string | undefined;
+    }) => {
+      const explicit =
+        typeof actionParams.threadId === "string" ? actionParams.threadId : undefined;
+      const replyToId = typeof actionParams.replyTo === "string" ? actionParams.replyTo : undefined;
+      const resolvedThreadId =
+        explicit ??
+        resolveAutoThreadId?.({
+          cfg,
+          accountId,
+          to,
+          toolContext,
+          replyToId,
+        });
+      if (resolvedThreadId && !actionParams.threadId) {
+        actionParams.threadId = resolvedThreadId;
+      }
+      if (agentId) {
+        actionParams.__agentId = agentId;
+      }
+      return {
+        resolvedThreadId,
+        outboundRoute: null,
+      };
+    },
+  ),
+}));
+const telegramConfig = {
+  channels: {
+    telegram: {
+      botToken: "telegram-test",
+    },
+  },
+} as OpenClawConfig;
+
+const telegramPollTestPlugin: ChannelPlugin = {
+  id: "telegram",
+  meta: {
+    id: "telegram",
+    label: "Telegram",
+    selectionLabel: "Telegram",
+    docsPath: "/channels/telegram",
+    blurb: "Telegram poll test plugin.",
+  },
+  capabilities: { chatTypes: ["direct", "group"] },
+  config: {
+    listAccountIds: () => ["default"],
+    resolveAccount: () => ({ botToken: "telegram-test" }),
+    isConfigured: () => true,
+  },
+  outbound: {
+    deliveryMode: "gateway",
+    sendPoll: async () => ({
+      messageId: "poll-test",
+    }),
+  },
+  messaging: {
+    targetResolver: {
+      looksLikeId: () => true,
+      resolveTarget: async ({ normalized }) => ({
+        to: normalized,
+        kind: "user",
+        source: "normalized",
+      }),
+    },
+  },
+  threading: {
+    resolveAutoThreadId: ({ toolContext, to, replyToId }) => {
+      if (replyToId) {
+        return undefined;
+      }
+      if (toolContext?.currentChannelId !== to) {
+        return undefined;
+      }
+      return toolContext.currentThreadTs;
+    },
+  },
+};
 
 async function runPollAction(params: {
-  cfg: MessageActionRunnerTestHelpersModule["slackConfig"];
+  cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
 }) {
@@ -34,81 +175,70 @@ async function runPollAction(params: {
     params: params.actionParams as never,
     toolContext: params.toolContext as never,
   });
-  return mocks.executePollAction.mock.calls[0]?.[0] as
+  const call = mocks.executePollAction.mock.calls[0]?.[0] as
     | {
-        durationSeconds?: number;
-        maxSelections?: number;
-        threadId?: string;
-        isAnonymous?: boolean;
+        resolveCorePoll?: () => {
+          durationHours?: number;
+          maxSelections?: number;
+          threadId?: string;
+        };
         ctx?: { params?: Record<string, unknown> };
       }
     | undefined;
+  if (!call) {
+    return undefined;
+  }
+  return {
+    ...call.resolveCorePoll?.(),
+    ctx: call.ctx,
+  };
 }
+
 describe("runMessageAction poll handling", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ runMessageAction } = await import("./message-action-runner.js"));
-    ({
-      installMessageActionRunnerTestRegistry,
-      resetMessageActionRunnerTestRegistry,
-      slackConfig,
-      telegramConfig,
-    } = await import("./message-action-runner.test-helpers.js"));
-    installMessageActionRunnerTestRegistry();
-    mocks.executePollAction.mockResolvedValue({
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: telegramPollTestPlugin,
+        },
+      ]),
+    );
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel }: { channel: string }) =>
+        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
+    );
+    mocks.executePollAction.mockReset();
+    mocks.executePollAction.mockImplementation(async (input) => ({
       handledBy: "core",
-      payload: { ok: true },
+      payload: { ok: true, corePoll: input.resolveCorePoll() },
       pollResult: { ok: true },
-    });
+    }));
   });
 
   afterEach(() => {
-    resetMessageActionRunnerTestRegistry?.();
+    setActivePluginRegistry(createTestRegistry([]));
     mocks.executePollAction.mockReset();
   });
 
-  it.each([
-    {
-      name: "requires at least two poll options",
-      getCfg: () => telegramConfig,
-      actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza"],
-      },
-      message: /pollOption requires at least two values/i,
-    },
-    {
-      name: "rejects durationSeconds outside telegram",
-      getCfg: () => slackConfig,
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-        pollDurationSeconds: 60,
-      },
-      message: /pollDurationSeconds is only supported for Telegram polls/i,
-    },
-    {
-      name: "rejects poll visibility outside telegram",
-      getCfg: () => slackConfig,
-      actionParams: {
-        channel: "slack",
-        target: "#C12345678",
-        pollQuestion: "Lunch?",
-        pollOption: ["Pizza", "Sushi"],
-        pollPublic: true,
-      },
-      message: /pollAnonymous\/pollPublic are only supported for Telegram polls/i,
-    },
-  ])("$name", async ({ getCfg, actionParams, message }) => {
-    await expect(runPollAction({ cfg: getCfg(), actionParams })).rejects.toThrow(message);
-    expect(mocks.executePollAction).not.toHaveBeenCalled();
+  it("requires at least two poll options", async () => {
+    await expect(
+      runPollAction({
+        cfg: telegramConfig,
+        actionParams: {
+          channel: "telegram",
+          target: "telegram:123",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza"],
+        },
+      }),
+    ).rejects.toThrow(/pollOption requires at least two values/i);
+    expect(mocks.executePollAction).toHaveBeenCalledTimes(1);
   });
 
-  it("passes Telegram durationSeconds, visibility, and auto threadId to executePollAction", async () => {
+  it("passes shared poll fields and auto threadId to executePollAction", async () => {
     const call = await runPollAction({
       cfg: telegramConfig,
       actionParams: {
@@ -116,8 +246,7 @@ describe("runMessageAction poll handling", () => {
         target: "telegram:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi"],
-        pollDurationSeconds: 90,
-        pollPublic: true,
+        pollDurationHours: 2,
       },
       toolContext: {
         currentChannelId: "telegram:123",
@@ -125,8 +254,7 @@ describe("runMessageAction poll handling", () => {
       },
     });
 
-    expect(call?.durationSeconds).toBe(90);
-    expect(call?.isAnonymous).toBe(false);
+    expect(call?.durationHours).toBe(2);
     expect(call?.threadId).toBe("42");
     expect(call?.ctx?.params?.threadId).toBe("42");
   });

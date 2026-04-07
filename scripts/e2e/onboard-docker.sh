@@ -247,7 +247,7 @@ TRASH
 
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
-    wait_for_log "Enable hooks?" 60 true || true
+    wait_for_log "Enable hooks?" 60
     send $'"'"' \r'"'"' 0.6
   }
 
@@ -261,29 +261,26 @@ TRASH
 
   send_reset_config_only() {
     # Risk acknowledgement (default is "No").
-    wait_for_log "Continue?" 40 true || true
+    wait_for_log "Continue?" 40
     send $'"'"'y\r'"'"' 0.8
     # Select reset flow for existing config.
-    wait_for_log "Config handling" 40 true || true
+    wait_for_log "Config handling" 40
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\r'"'"' 0.4
     # Reset scope -> Config only (default).
-    wait_for_log "Reset scope" 40 true || true
+    wait_for_log "Reset scope" 40
     send $'"'"'\r'"'"' 0.4
     select_skip_hooks
   }
 
   send_channels_flow() {
-    # Configure channels via configure wizard. Sync on prompt text so
-    # keystrokes do not drift into the wrong screen when render timing changes.
+    # Configure channels via configure wizard. Use the remove-config branch for
+    # a stable no-op smoke path when the config starts empty.
     wait_for_log "Where will the Gateway run?" 120
     send $'"'"'\r'"'"' 0.6
-    wait_for_log "Channels" 120
-    send $'"'"'\r'"'"' 0.6
-    # Select a channel -> Finished (last option; clack wraps on Up)
-    wait_for_log "Select a channel" 120
-    send $'"'"'\e[A\r'"'"' 0.8
+    wait_for_log "Configure/link" 120
+    send $'"'"'\e[B\r'"'"' 0.8
     # Keep stdin open until wizard exits.
     send "" 2.0
   }

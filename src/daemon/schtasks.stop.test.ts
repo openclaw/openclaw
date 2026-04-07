@@ -13,11 +13,24 @@ import {
 const findVerifiedGatewayListenerPidsOnPortSync = vi.hoisted(() =>
   vi.fn<(port: number) => number[]>(() => []),
 );
+const timeState = vi.hoisted(() => ({ now: 0 }));
+const sleepMock = vi.hoisted(() =>
+  vi.fn(async (ms: number) => {
+    timeState.now += ms;
+  }),
+);
 
 vi.mock("../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
     findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
+vi.mock("../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
+  return {
+    ...actual,
+    sleep: (ms: number) => sleepMock(ms),
+  };
+});
 
 const { restartScheduledTask, stopScheduledTask } = await import("./schtasks.js");
 const GATEWAY_PORT = 18789;
@@ -81,6 +94,12 @@ beforeEach(() => {
   resetSchtasksBaseMocks();
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
   findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+  timeState.now = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => timeState.now);
+  sleepMock.mockReset();
+  sleepMock.mockImplementation(async (ms: number) => {
+    timeState.now += ms;
+  });
   inspectPortUsage.mockResolvedValue(freePortUsage());
 });
 
@@ -164,6 +183,22 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
+  it("throws when /Run fails during restart", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        { code: 1, stdout: "", stderr: "ERROR: Access is denied." },
+      );
+
+      await expect(restartScheduledTask({ env, stdout })).rejects.toThrow(
+        "schtasks run failed: ERROR: Access is denied.",
+      );
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });

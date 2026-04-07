@@ -1,11 +1,12 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 /**
- * Inject `tool_stream=true` for Z.AI requests so tool-call deltas stream in
- * real time. Providers can disable this by setting `params.tool_stream=false`.
+ * Inject `tool_stream=true` so tool-call deltas stream in real time.
+ * Providers can disable this by setting `params.tool_stream=false`.
  */
-export function createZaiToolStreamWrapper(
+export function createToolStreamWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
 ): StreamFn {
@@ -15,15 +16,10 @@ export function createZaiToolStreamWrapper(
       return underlying(model, context, options);
     }
 
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          (payload as Record<string, unknown>).tool_stream = true;
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      payloadObj.tool_stream = true;
     });
   };
 }
+
+export const createZaiToolStreamWrapper = createToolStreamWrapper;

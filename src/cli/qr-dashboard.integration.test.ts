@@ -1,21 +1,19 @@
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
-
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const runtime = vi.hoisted(() => ({
-  log: (message: string) => runtimeLogs.push(message),
-  error: (message: string) => runtimeErrors.push(message),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-}));
+const {
+  runtimeLogs,
+  runtimeErrors,
+  defaultRuntime: runtime,
+  resetRuntimeCapture,
+} = createCliRuntimeCapture();
+const runtimeExit = runtime.exit;
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -31,12 +29,19 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
 }));
 
+vi.mock("../infra/device-bootstrap.js", () => ({
+  issueDeviceBootstrapToken: vi.fn(async () => ({
+    token: "bootstrap-123",
+    expiresAtMs: 123,
+  })),
+}));
+
 vi.mock("../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const { dashboardCommand } = await import("../commands/dashboard.js");
 const { registerQrCli } = await import("./qr-cli.js");
-const { registerMaintenanceCommands } = await import("./program/register.maintenance.js");
 
 function createGatewayTokenRefFixture() {
   return {
@@ -52,7 +57,7 @@ function createGatewayTokenRefFixture() {
     },
     gateway: {
       bind: "custom",
-      customBindHost: "gateway.local",
+      customBindHost: "127.0.0.1",
       port: 18789,
       auth: {
         mode: "token",
@@ -69,8 +74,6 @@ function createGatewayTokenRefFixture() {
 function decodeSetupCode(setupCode: string): {
   url?: string;
   bootstrapToken?: string;
-  token?: string;
-  password?: string;
 } {
   const padded = setupCode.replace(/-/g, "+").replace(/_/g, "/");
   const padLength = (4 - (padded.length % 4)) % 4;
@@ -79,15 +82,26 @@ function decodeSetupCode(setupCode: string): {
   return JSON.parse(json) as {
     url?: string;
     bootstrapToken?: string;
-    token?: string;
-    password?: string;
   };
+}
+
+function findSetupCodeLogLine(lines: string[]): string | undefined {
+  for (const line of lines) {
+    try {
+      const payload = decodeSetupCode(line);
+      if (payload.url || payload.bootstrapToken) {
+        return line;
+      }
+    } catch {
+      // Ignore non-setup-code log lines.
+    }
+  }
+  return undefined;
 }
 
 async function runCli(args: string[]): Promise<void> {
   const program = new Command();
   registerQrCli(program);
-  registerMaintenanceCommands(program);
   await program.parseAsync(args, { from: "user" });
 }
 
@@ -98,28 +112,20 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     envSnapshot = captureEnv([
       "SHARED_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_TOKEN",
-      "CLAWDBOT_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
-      "CLAWDBOT_GATEWAY_PASSWORD",
     ]);
   });
 
-  afterAll(() => {
-    envSnapshot.restore();
-  });
-
   beforeEach(() => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     vi.clearAllMocks();
+    runtimeExit.mockImplementation(() => {});
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
     delete process.env.SHARED_GATEWAY_TOKEN;
   });
 
-  it("uses the same resolved token SecretRef for both qr and dashboard commands", async () => {
+  it("uses the same resolved token SecretRef for qr auth validation and dashboard commands", async () => {
     const fixture = createGatewayTokenRefFixture();
     process.env.SHARED_GATEWAY_TOKEN = "shared-token-123";
     loadConfigMock.mockReturnValue(fixture);
@@ -132,17 +138,16 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     });
 
     await runCli(["qr", "--setup-code-only"]);
-    const setupCode = runtimeLogs.at(-1);
+    const setupCode = findSetupCodeLogLine(runtimeLogs);
     expect(setupCode).toBeTruthy();
     const payload = decodeSetupCode(setupCode ?? "");
-    expect(payload.url).toBe("ws://gateway.local:18789");
+    expect(payload.url).toBe("ws://127.0.0.1:18789");
     expect(payload.bootstrapToken).toBeTruthy();
-    expect(payload.token).toBeUndefined();
     expect(runtimeErrors).toEqual([]);
 
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
-    await runCli(["dashboard", "--no-open"]);
+    await dashboardCommand(runtime, { noOpen: true });
     const joined = runtimeLogs.join("\n");
     expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(joined).not.toContain("#token=");
@@ -164,16 +169,21 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       config: fixture,
     });
 
-    await expect(runCli(["qr", "--setup-code-only"])).rejects.toThrow("__exit__:1");
+    await runCli(["qr", "--setup-code-only"]);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtimeErrors.join("\n")).toMatch(/SHARED_GATEWAY_TOKEN/);
 
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
-    await runCli(["dashboard", "--no-open"]);
+    await dashboardCommand(runtime, { noOpen: true });
     const joined = runtimeLogs.join("\n");
     expect(joined).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(joined).not.toContain("#token=");
     expect(joined).toContain("Token auto-auth unavailable");
     expect(joined).toContain("Set OPENCLAW_GATEWAY_TOKEN");
+  });
+
+  afterAll(() => {
+    envSnapshot.restore();
   });
 });

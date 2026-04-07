@@ -16,6 +16,40 @@ import {
 
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
 
+function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
+  return {
+    includeGlobal: p.includeGlobal === true,
+    includeUnknown: p.includeUnknown === true,
+    spawnedBy: p.spawnedBy,
+    agentId: p.agentId,
+  };
+}
+
+function noSessionFoundResult(key: string): SessionsResolveResult {
+  return {
+    ok: false,
+    error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${key}`),
+  };
+}
+
+function isResolvedSessionKeyVisible(params: {
+  cfg: OpenClawConfig;
+  p: SessionsResolveParams;
+  storePath: string;
+  store: ReturnType<typeof loadSessionStore>;
+  key: string;
+}) {
+  if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
+    return true;
+  }
+  return listSessionsFromStore({
+    cfg: params.cfg,
+    storePath: params.storePath,
+    store: params.store,
+    opts: resolveSessionVisibilityFilterOptions(params.p),
+  }).sessions.some((session) => session.key === params.key);
+}
+
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
@@ -48,14 +82,22 @@ export async function resolveSessionKeyFromResolveParams(params: {
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const store = loadSessionStore(target.storePath);
     if (store[target.canonicalKey]) {
+      if (
+        !isResolvedSessionKeyVisible({
+          cfg,
+          p,
+          storePath: target.storePath,
+          store,
+          key: target.canonicalKey,
+        })
+      ) {
+        return noSessionFoundResult(key);
+      }
       return { ok: true, key: target.canonicalKey };
     }
     const legacyKey = target.storeKeys.find((candidate) => store[candidate]);
     if (!legacyKey) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${key}`),
-      };
+      return noSessionFoundResult(key);
     }
     await updateSessionStore(target.storePath, (s) => {
       const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
@@ -63,6 +105,17 @@ export async function resolveSessionKeyFromResolveParams(params: {
         s[primaryKey] = s[legacyKey];
       }
     });
+    if (
+      !isResolvedSessionKeyVisible({
+        cfg,
+        p,
+        storePath: target.storePath,
+        store: loadSessionStore(target.storePath),
+        key: target.canonicalKey,
+      })
+    ) {
+      return noSessionFoundResult(key);
+    }
     return { ok: true, key: target.canonicalKey };
   }
 
@@ -77,8 +130,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
         includeUnknown: p.includeUnknown === true,
         spawnedBy: p.spawnedBy,
         agentId: p.agentId,
-        search: sessionId,
-        limit: 8,
       },
     });
     const matches = list.sessions.filter(

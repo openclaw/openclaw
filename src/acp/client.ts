@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
@@ -13,7 +12,6 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
   materializeWindowsSpawnProgram,
@@ -23,19 +21,12 @@ import {
   listKnownProviderAuthEnvVarNames,
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
-import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
-
-const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
-const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
-const READ_TOOL_PATH_KEYS = ["path", "file_path", "filePath"];
-const TOOL_NAME_MAX_LENGTH = 128;
-const TOOL_NAME_PATTERN = /^[a-z0-9._-]+$/;
-const TOOL_KIND_BY_ID = new Map<string, string>([
-  ["read", "read"],
-  ["search", "search"],
-  ["web_search", "search"],
-  ["memory_search", "search"],
-]);
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { classifyAcpToolApproval, type AcpApprovalClass } from "./approval-classifier.js";
 
 type PermissionOption = RequestPermissionRequest["options"][number];
 
@@ -45,184 +36,20 @@ type PermissionResolverDeps = {
   cwd?: string;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readFirstStringValue(
-  source: Record<string, unknown> | undefined,
-  keys: string[],
+function resolveToolKindForPermission(
+  toolName: string | undefined,
+  approvalClass: AcpApprovalClass,
 ): string | undefined {
-  if (!source) {
+  if (!toolName && approvalClass === "unknown") {
     return undefined;
   }
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
+  if (approvalClass === "readonly_scoped") {
+    return "readonly_scoped";
   }
-  return undefined;
-}
-
-function normalizeToolName(value: string): string | undefined {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized || normalized.length > TOOL_NAME_MAX_LENGTH) {
-    return undefined;
+  if (approvalClass === "readonly_search") {
+    return "readonly_search";
   }
-  if (!TOOL_NAME_PATTERN.test(normalized)) {
-    return undefined;
-  }
-  return normalized;
-}
-
-function parseToolNameFromTitle(title: string | undefined | null): string | undefined {
-  if (!title) {
-    return undefined;
-  }
-  const head = title.split(":", 1)[0]?.trim();
-  if (!head) {
-    return undefined;
-  }
-  return normalizeToolName(head);
-}
-
-function resolveToolKindForPermission(toolName: string | undefined): string | undefined {
-  if (!toolName) {
-    return undefined;
-  }
-  return TOOL_KIND_BY_ID.get(toolName) ?? "other";
-}
-
-function resolveToolNameForPermission(params: RequestPermissionRequest): string | undefined {
-  const toolCall = params.toolCall;
-  const toolMeta = asRecord(toolCall?._meta);
-  const rawInput = asRecord(toolCall?.rawInput);
-
-  const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
-  const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
-  const fromTitle = parseToolNameFromTitle(toolCall?.title);
-  const metaName = fromMeta ? normalizeToolName(fromMeta) : undefined;
-  const rawInputName = fromRawInput ? normalizeToolName(fromRawInput) : undefined;
-  const titleName = fromTitle;
-  if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
-    return undefined;
-  }
-  if (metaName && titleName && metaName !== titleName) {
-    return undefined;
-  }
-  if (rawInputName && metaName && rawInputName !== metaName) {
-    return undefined;
-  }
-  if (rawInputName && titleName && rawInputName !== titleName) {
-    return undefined;
-  }
-  return metaName ?? titleName ?? rawInputName;
-}
-
-function extractPathFromToolTitle(
-  toolTitle: string | undefined,
-  toolName: string | undefined,
-): string | undefined {
-  if (!toolTitle) {
-    return undefined;
-  }
-  const separator = toolTitle.indexOf(":");
-  if (separator < 0) {
-    return undefined;
-  }
-  const tail = toolTitle.slice(separator + 1).trim();
-  if (!tail) {
-    return undefined;
-  }
-  const keyedMatch = tail.match(/(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/);
-  if (keyedMatch?.[1]) {
-    return keyedMatch[1].trim();
-  }
-  if (toolName === "read") {
-    return tail;
-  }
-  return undefined;
-}
-
-function resolveToolPathCandidate(
-  params: RequestPermissionRequest,
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-): string | undefined {
-  const rawInput = asRecord(params.toolCall?.rawInput);
-  const fromRawInput = readFirstStringValue(rawInput, READ_TOOL_PATH_KEYS);
-  const fromTitle = extractPathFromToolTitle(toolTitle, toolName);
-  return fromRawInput ?? fromTitle;
-}
-
-function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefined {
-  let candidate = value.trim();
-  if (!candidate) {
-    return undefined;
-  }
-  if (candidate.startsWith("file://")) {
-    try {
-      const parsed = new URL(candidate);
-      candidate = decodeURIComponent(parsed.pathname || "");
-    } catch {
-      return undefined;
-    }
-  }
-  if (candidate === "~") {
-    candidate = homedir();
-  } else if (candidate.startsWith("~/")) {
-    candidate = path.join(homedir(), candidate.slice(2));
-  }
-  const absolute = path.isAbsolute(candidate)
-    ? path.normalize(candidate)
-    : path.resolve(cwd, candidate);
-  return absolute;
-}
-
-function isPathWithinRoot(candidatePath: string, root: string): boolean {
-  const relative = path.relative(root, candidatePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function isReadToolCallScopedToCwd(
-  params: RequestPermissionRequest,
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-  cwd: string,
-): boolean {
-  if (toolName !== "read") {
-    return false;
-  }
-  const rawPath = resolveToolPathCandidate(params, toolName, toolTitle);
-  if (!rawPath) {
-    return false;
-  }
-  const absolutePath = resolveAbsoluteScopedPath(rawPath, cwd);
-  if (!absolutePath) {
-    return false;
-  }
-  return isPathWithinRoot(absolutePath, path.resolve(cwd));
-}
-
-function shouldAutoApproveToolCall(
-  params: RequestPermissionRequest,
-  toolName: string | undefined,
-  toolTitle: string | undefined,
-  cwd: string,
-): boolean {
-  const isTrustedToolId =
-    typeof toolName === "string" &&
-    (isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName));
-  if (!toolName || !isTrustedToolId || !SAFE_AUTO_APPROVE_TOOL_IDS.has(toolName)) {
-    return false;
-  }
-  if (toolName === "read") {
-    return isReadToolCallScopedToCwd(params, toolName, toolTitle, cwd);
-  }
-  return true;
+  return approvalClass;
 }
 
 function pickOption(
@@ -279,7 +106,7 @@ function promptUserPermission(toolName: string | undefined, toolTitle?: string):
         : toolTitle
       : (toolName ?? "unknown tool");
     rl.question(`\n[permission] Allow "${label}"? (y/N) `, (answer) => {
-      const approved = answer.trim().toLowerCase() === "y";
+      const approved = normalizeLowercaseStringOrEmpty(answer) === "y";
       console.error(`[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}`);
       finish(approved);
     });
@@ -294,9 +121,10 @@ export async function resolvePermissionRequest(
   const prompt = deps.prompt ?? promptUserPermission;
   const cwd = deps.cwd ?? process.cwd();
   const options = params.options ?? [];
-  const toolTitle = params.toolCall?.title ?? "tool";
-  const toolName = resolveToolNameForPermission(params);
-  const toolKind = resolveToolKindForPermission(toolName);
+  const toolTitle = sanitizeTerminalText(params.toolCall?.title ?? "tool");
+  const classification = classifyAcpToolApproval({ toolCall: params.toolCall, cwd });
+  const toolName = classification.toolName;
+  const toolKind = resolveToolKindForPermission(toolName, classification.approvalClass);
 
   if (options.length === 0) {
     log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
@@ -305,8 +133,7 @@ export async function resolvePermissionRequest(
 
   const allowOption = pickOption(options, ["allow_once", "allow_always"]);
   const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
-  const autoApproveAllowed = shouldAutoApproveToolCall(params, toolName, toolTitle, cwd);
-  const promptRequired = !toolName || !autoApproveAllowed || DANGEROUS_ACP_TOOLS.has(toolName);
+  const promptRequired = !classification.autoApprove;
 
   if (!promptRequired) {
     const option = allowOption ?? options[0];
@@ -386,11 +213,11 @@ export function shouldStripProviderAuthEnvVarsForAcpServer(
     defaultServerArgs?: string[];
   } = {},
 ): boolean {
-  const serverCommand = params.serverCommand?.trim();
+  const serverCommand = normalizeOptionalString(params.serverCommand);
   if (!serverCommand) {
     return true;
   }
-  const defaultServerCommand = params.defaultServerCommand?.trim();
+  const defaultServerCommand = normalizeOptionalString(params.defaultServerCommand);
   if (!defaultServerCommand || serverCommand !== defaultServerCommand) {
     return false;
   }
@@ -437,7 +264,6 @@ export function resolveAcpClientSpawnInvocation(
     env: runtime.env,
     execPath: runtime.execPath,
     packageName: "openclaw",
-    allowShellFallback: true,
   });
   const resolved = materializeWindowsSpawnProgram(program, params.serverArgs);
   return {
@@ -460,7 +286,7 @@ function resolveSelfEntryPath(): string | null {
     // ignore
   }
 
-  const argv1 = process.argv[1]?.trim();
+  const argv1 = normalizeOptionalString(process.argv[1]);
   if (argv1) {
     return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
   }

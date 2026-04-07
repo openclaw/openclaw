@@ -1,9 +1,10 @@
 import { resolveProviderBuiltInModelSuppression } from "../plugins/provider-runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 function resolveBuiltInModelSuppression(params: { provider?: string | null; id?: string | null }) {
-  const provider = normalizeProviderId(params.provider?.trim().toLowerCase() ?? "");
-  const modelId = params.id?.trim().toLowerCase() ?? "";
+  const provider = normalizeProviderId(params.provider ?? "");
+  const modelId = normalizeLowercaseStringOrEmpty(params.id);
   if (!provider || !modelId) {
     return undefined;
   }

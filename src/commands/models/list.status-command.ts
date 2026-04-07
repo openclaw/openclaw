@@ -15,9 +15,12 @@ import {
   resolveAuthStorePathForDisplay,
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
+import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
+  isCliProvider,
+  normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
@@ -36,7 +39,7 @@ import {
   type UsageProviderId,
 } from "../../infra/provider-usage.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
@@ -118,12 +121,12 @@ export async function modelsStatusCommand(
 
   const providersFromStore = new Set(
     Object.values(store.profiles)
-      .map((profile) => profile.provider)
+      .map((profile) => normalizeProviderId(profile.provider))
       .filter((p): p is string => Boolean(p)),
   );
   const providersFromConfig = new Set(
     Object.keys(cfg.models?.providers ?? {})
-      .map((p) => (typeof p === "string" ? p.trim() : ""))
+      .map((p) => (typeof p === "string" ? normalizeProviderId(p) : ""))
       .filter(Boolean),
   );
   const providersFromModels = new Set<string>();
@@ -131,34 +134,20 @@ export async function modelsStatusCommand(
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (parsed?.provider) {
-      providersFromModels.add(parsed.provider);
+      providersFromModels.add(normalizeProviderId(parsed.provider));
     }
   }
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (parsed?.provider) {
-      providersInUse.add(parsed.provider);
+      providersInUse.add(normalizeProviderId(parsed.provider));
     }
   }
 
   const providersFromEnv = new Set<string>();
-  // Keep in sync with resolveEnvApiKey() mappings (we want visibility even when
-  // a provider isn't currently selected in config/models).
-  const envProbeProviders = [
-    "anthropic",
-    "github-copilot",
-    "google-vertex",
-    "openai",
-    "google",
-    "groq",
-    "cerebras",
-    "xai",
-    "openrouter",
-    "zai",
-    "mistral",
-    "synthetic",
-  ];
-  for (const provider of envProbeProviders) {
+  // Use the shared provider-env registry so `models status` stays aligned with
+  // env-backed providers beyond the text-model defaults (for example image-gen).
+  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates()).toSorted()) {
     if (resolveEnvApiKey(provider)) {
       providersFromEnv.add(provider);
     }
@@ -189,6 +178,7 @@ export async function modelsStatusCommand(
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
   const missingProvidersInUse = Array.from(providersInUse)
     .filter((provider) => !providerAuthMap.has(provider))
+    .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
   const probeProfileIds = (() => {
@@ -271,7 +261,6 @@ export async function modelsStatusCommand(
     store,
     cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
-    providers,
   });
   const oauthProfiles = authHealth.profiles.filter(
     (profile) => profile.type === "oauth" || profile.type === "token",
@@ -324,49 +313,43 @@ export async function modelsStatusCommand(
   })();
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          configPath,
-          ...(agentId ? { agentId } : {}),
-          agentDir,
-          defaultModel: defaultLabel,
-          resolvedDefault: resolvedLabel,
-          fallbacks,
-          imageModel: imageModel || null,
-          imageFallbacks,
-          ...(agentId
-            ? {
-                modelConfig: {
-                  defaultSource: agentModelPrimary ? "agent" : "defaults",
-                  fallbacksSource: agentFallbacksOverride !== undefined ? "agent" : "defaults",
-                },
-              }
-            : {}),
-          aliases,
-          allowed,
-          auth: {
-            storePath: resolveAuthStorePathForDisplay(agentDir),
-            shellEnvFallback: {
-              enabled: shellFallbackEnabled,
-              appliedKeys: applied,
+    writeRuntimeJson(runtime, {
+      configPath,
+      ...(agentId ? { agentId } : {}),
+      agentDir,
+      defaultModel: defaultLabel,
+      resolvedDefault: resolvedLabel,
+      fallbacks,
+      imageModel: imageModel || null,
+      imageFallbacks,
+      ...(agentId
+        ? {
+            modelConfig: {
+              defaultSource: agentModelPrimary ? "agent" : "defaults",
+              fallbacksSource: agentFallbacksOverride !== undefined ? "agent" : "defaults",
             },
-            providersWithOAuth: providersWithOauth,
-            missingProvidersInUse,
-            providers: providerAuth,
-            unusableProfiles,
-            oauth: {
-              warnAfterMs: authHealth.warnAfterMs,
-              profiles: authHealth.profiles,
-              providers: authHealth.providers,
-            },
-            probes: probeSummary,
-          },
+          }
+        : {}),
+      aliases,
+      allowed,
+      auth: {
+        storePath: resolveAuthStorePathForDisplay(agentDir),
+        shellEnvFallback: {
+          enabled: shellFallbackEnabled,
+          appliedKeys: applied,
         },
-        null,
-        2,
-      ),
-    );
+        providersWithOAuth: providersWithOauth,
+        missingProvidersInUse,
+        providers: providerAuth,
+        unusableProfiles,
+        oauth: {
+          warnAfterMs: authHealth.warnAfterMs,
+          profiles: authHealth.profiles,
+          providers: authHealth.providers,
+        },
+        probes: probeSummary,
+      },
+    });
     if (opts.check) {
       runtime.exit(checkStatus);
     }

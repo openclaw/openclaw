@@ -6,6 +6,8 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { validateTalkConfigResult } from "./protocol/index.js";
@@ -26,14 +28,12 @@ type TalkConfigPayload = {
     talk?: {
       provider?: string;
       providers?: {
-        elevenlabs?: { voiceId?: string; apiKey?: string | SecretRef };
+        [providerId: string]: { voiceId?: string; apiKey?: string | SecretRef } | undefined;
       };
       resolved?: {
         provider?: string;
         config?: { voiceId?: string; apiKey?: string | SecretRef };
       };
-      apiKey?: string | SecretRef;
-      voiceId?: string;
       silenceTimeoutMs?: number;
     };
     session?: { mainKey?: string };
@@ -46,6 +46,8 @@ const TALK_CONFIG_DEVICE_PATH = path.join(
   `openclaw-talk-config-device-${process.pid}.json`,
 );
 const TALK_CONFIG_DEVICE = loadOrCreateDeviceIdentity(TALK_CONFIG_DEVICE_PATH);
+const GENERIC_TALK_PROVIDER_ID = "acme";
+const GENERIC_TALK_API_ENV = "ACME_SPEECH_API_KEY";
 
 async function createFreshOperatorDevice(scopes: string[], nonce: string) {
   const signedAtMs = Date.now();
@@ -80,12 +82,28 @@ async function connectOperator(ws: GatewaySocket, scopes: string[]) {
 }
 
 async function writeTalkConfig(config: {
+  provider?: string;
   apiKey?: string | { source: "env" | "file" | "exec"; provider: string; id: string };
   voiceId?: string;
   silenceTimeoutMs?: number;
 }) {
   const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile({ talk: config });
+  const providerId = config.provider ?? GENERIC_TALK_PROVIDER_ID;
+  await writeConfigFile({
+    talk: {
+      provider: providerId,
+      silenceTimeoutMs: config.silenceTimeoutMs,
+      providers:
+        config.apiKey !== undefined || config.voiceId !== undefined
+          ? {
+              [providerId]: {
+                ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
+                ...(config.voiceId !== undefined ? { voiceId: config.voiceId } : {}),
+              },
+            }
+          : undefined,
+    },
+  });
 }
 
 async function fetchTalkConfig(
@@ -95,24 +113,47 @@ async function fetchTalkConfig(
   return rpcReq<TalkConfigPayload>(ws, "talk.config", params ?? {});
 }
 
-function expectElevenLabsTalkConfig(
+async function withSpeechProviders<T>(
+  speechProviders: NonNullable<ReturnType<typeof createEmptyPluginRegistry>["speechProviders"]>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
+  setActivePluginRegistry({
+    ...createEmptyPluginRegistry(),
+    speechProviders,
+  });
+  try {
+    return await run();
+  } finally {
+    setActivePluginRegistry(previousRegistry);
+  }
+}
+
+function expectTalkConfig(
   talk: TalkConfig | undefined,
   expected: {
+    provider: string;
     voiceId?: string;
     apiKey?: string | SecretRef;
+    providerApiKey?: string | SecretRef;
+    resolvedApiKey?: string | SecretRef;
     silenceTimeoutMs?: number;
   },
 ) {
-  expect(talk?.provider).toBe("elevenlabs");
-  expect(talk?.providers?.elevenlabs?.voiceId).toBe(expected.voiceId);
-  expect(talk?.resolved?.provider).toBe("elevenlabs");
+  expect(talk?.provider).toBe(expected.provider);
+  expect(talk?.providers?.[expected.provider]?.voiceId).toBe(expected.voiceId);
+  expect(talk?.resolved?.provider).toBe(expected.provider);
   expect(talk?.resolved?.config?.voiceId).toBe(expected.voiceId);
-  expect(talk?.voiceId).toBe(expected.voiceId);
 
   if ("apiKey" in expected) {
-    expect(talk?.providers?.elevenlabs?.apiKey).toEqual(expected.apiKey);
+    expect(talk?.providers?.[expected.provider]?.apiKey).toEqual(expected.apiKey);
     expect(talk?.resolved?.config?.apiKey).toEqual(expected.apiKey);
-    expect(talk?.apiKey).toEqual(expected.apiKey);
+  }
+  if ("providerApiKey" in expected) {
+    expect(talk?.providers?.[expected.provider]?.apiKey).toEqual(expected.providerApiKey);
+  }
+  if ("resolvedApiKey" in expected) {
+    expect(talk?.resolved?.config?.apiKey).toEqual(expected.resolvedApiKey);
   }
   if ("silenceTimeoutMs" in expected) {
     expect(talk?.silenceTimeoutMs).toBe(expected.silenceTimeoutMs);
@@ -124,8 +165,13 @@ describe("gateway talk.config", () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       talk: {
-        voiceId: "voice-123",
-        apiKey: "secret-key-abc", // pragma: allowlist secret
+        provider: GENERIC_TALK_PROVIDER_ID,
+        providers: {
+          [GENERIC_TALK_PROVIDER_ID]: {
+            voiceId: "voice-123",
+            apiKey: "secret-key-abc", // pragma: allowlist secret
+          },
+        },
         silenceTimeoutMs: 1500,
       },
       session: {
@@ -140,7 +186,8 @@ describe("gateway talk.config", () => {
       await connectOperator(ws, ["operator.read"]);
       const res = await fetchTalkConfig(ws);
       expect(res.ok).toBe(true);
-      expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+      expectTalkConfig(res.payload?.config?.talk, {
+        provider: GENERIC_TALK_PROVIDER_ID,
         voiceId: "voice-123",
         apiKey: "__OPENCLAW_REDACTED__",
         silenceTimeoutMs: 1500,
@@ -182,7 +229,8 @@ describe("gateway talk.config", () => {
       await connectOperator(ws, [...scopes]);
       const res = await fetchTalkConfig(ws, { includeSecrets: true });
       expect(res.ok).toBe(true);
-      expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+      expectTalkConfig(res.payload?.config?.talk, {
+        provider: GENERIC_TALK_PROVIDER_ID,
         apiKey: "secret-key-abc",
       });
     });
@@ -193,45 +241,89 @@ describe("gateway talk.config", () => {
       apiKey: {
         source: "env",
         provider: "default",
-        id: "ELEVENLABS_API_KEY",
+        id: GENERIC_TALK_API_ENV,
       },
     });
 
-    await withEnvAsync({ ELEVENLABS_API_KEY: "env-elevenlabs-key" }, async () => {
+    await withEnvAsync({ [GENERIC_TALK_API_ENV]: "env-acme-key" }, async () => {
       await withServer(async (ws) => {
         await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
         const res = await fetchTalkConfig(ws, { includeSecrets: true });
-        expect(res.ok).toBe(true);
+        expect(res.ok, JSON.stringify(res.error)).toBe(true);
         expect(validateTalkConfigResult(res.payload)).toBe(true);
         const secretRef = {
           source: "env",
           provider: "default",
-          id: "ELEVENLABS_API_KEY",
+          id: GENERIC_TALK_API_ENV,
         } satisfies SecretRef;
-        expectElevenLabsTalkConfig(res.payload?.config?.talk, { apiKey: secretRef });
+        expectTalkConfig(res.payload?.config?.talk, {
+          provider: GENERIC_TALK_PROVIDER_ID,
+          apiKey: secretRef,
+        });
       });
     });
   });
 
-  it("prefers normalized provider payload over conflicting legacy talk keys", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        provider: "elevenlabs",
-        providers: {
-          elevenlabs: {
-            voiceId: "voice-normalized",
+  it("preserves configured Talk provider data when plugin-owned defaults exist", async () => {
+    await writeTalkConfig({
+      provider: GENERIC_TALK_PROVIDER_ID,
+      voiceId: "voice-from-config",
+    });
+
+    await withEnvAsync({ [GENERIC_TALK_API_ENV]: "env-acme-key" }, async () => {
+      await withSpeechProviders(
+        [
+          {
+            pluginId: "acme-talk-defaults-test",
+            source: "test",
+            provider: {
+              id: GENERIC_TALK_PROVIDER_ID,
+              label: "Acme Speech",
+              isConfigured: () => true,
+              resolveTalkConfig: ({ talkProviderConfig }) => ({
+                ...talkProviderConfig,
+                apiKey:
+                  typeof process.env[GENERIC_TALK_API_ENV] === "string"
+                    ? process.env[GENERIC_TALK_API_ENV]
+                    : undefined,
+              }),
+              synthesize: async () => ({
+                audioBuffer: Buffer.from([1]),
+                outputFormat: "mp3",
+                fileExtension: ".mp3",
+                voiceCompatible: false,
+              }),
+            },
           },
+        ],
+        async () => {
+          await withServer(async (ws) => {
+            await connectOperator(ws, ["operator.read"]);
+            const res = await fetchTalkConfig(ws);
+            expect(res.ok, JSON.stringify(res.error)).toBe(true);
+            expectTalkConfig(res.payload?.config?.talk, {
+              provider: GENERIC_TALK_PROVIDER_ID,
+              voiceId: "voice-from-config",
+              providerApiKey: undefined,
+            });
+          });
         },
-        voiceId: "voice-legacy",
-      },
+      );
+    });
+  });
+
+  it("returns canonical provider talk payloads", async () => {
+    await writeTalkConfig({
+      provider: GENERIC_TALK_PROVIDER_ID,
+      voiceId: "voice-normalized",
     });
 
     await withServer(async (ws) => {
       await connectOperator(ws, ["operator.read"]);
       const res = await fetchTalkConfig(ws);
       expect(res.ok).toBe(true);
-      expectElevenLabsTalkConfig(res.payload?.config?.talk, {
+      expectTalkConfig(res.payload?.config?.talk, {
+        provider: GENERIC_TALK_PROVIDER_ID,
         voiceId: "voice-normalized",
       });
     });

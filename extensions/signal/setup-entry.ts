@@ -1,4 +1,9 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { signalSetupPlugin } from "./src/channel.setup.js";
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export default defineSetupPluginEntry(signalSetupPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "signalSetupPlugin",
+  },
+});

@@ -40,6 +40,18 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
 
+  function expectSinglePayloadSummary(
+    payloads: ReturnType<typeof buildPayloads>,
+    expected: { text: string; isError?: boolean },
+  ) {
+    expectSinglePayloadText(payloads, expected.text);
+    if (expected.isError === undefined) {
+      expect(payloads[0]?.isError).toBeUndefined();
+      return;
+    }
+    expect(payloads[0]?.isError).toBe(expected.isError);
+  }
+
   function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
     const payloads = buildPayloads(params);
     expect(payloads).toHaveLength(0);
@@ -100,9 +112,10 @@ describe("buildEmbeddedRunPayloads", () => {
       model: "claude-3-5-sonnet",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
-    expect(payloads[0]?.isError).toBe(true);
+    expectSinglePayloadSummary(payloads, {
+      text: formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"),
+      isError: true,
+    });
   });
 
   it("does not emit a synthetic billing error for successful turns with stale errorMessage", () => {
@@ -242,52 +255,32 @@ describe("buildEmbeddedRunPayloads", () => {
       lastToolError: { toolName: "browser", error: "connection timeout" },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBeUndefined();
-    expect(payloads[0]?.text).toContain("recovered");
-  });
-
-  it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "url required" },
+    expectSinglePayloadSummary(payloads, {
+      text: "Checked the page and recovered with final answer.",
     });
-
-    // Recoverable errors should not be sent to the user
-    expect(payloads).toHaveLength(0);
   });
 
-  it("suppresses recoverable tool errors containing 'missing' for non-mutating tools", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "url missing" },
-    });
-
-    expect(payloads).toHaveLength(0);
-  });
-
-  it("suppresses recoverable tool errors containing 'invalid' for non-mutating tools", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "invalid parameter: url" },
-    });
-
-    expect(payloads).toHaveLength(0);
-  });
+  it.each(["url required", "url missing", "invalid parameter: url"])(
+    "suppresses recoverable non-mutating tool error: %s",
+    (error) => {
+      expectNoPayloads({
+        lastToolError: { toolName: "browser", error },
+      });
+    },
+  );
 
   it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
       config: { messages: { suppressToolErrors: true } },
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command not found" },
       suppressToolErrorWarnings: true,
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it.each([
@@ -346,8 +339,7 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Status loaded.");
+    expectSinglePayloadSummary(payloads, { text: "Status loaded." });
   });
 
   it("dedupes identical tool warning text already present in assistant output", () => {
@@ -371,8 +363,7 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(warningText);
+    expectSinglePayloadSummary(payloads, { text: warningText ?? "" });
   });
 
   it("includes non-recoverable tool error details when verbose mode is on", () => {

@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
 /**
  * Channel-agnostic status reaction controller.
  * Provides a unified interface for displaying agent status via message reactions.
@@ -102,7 +104,7 @@ export function resolveToolEmoji(
   toolName: string | undefined,
   emojis: Required<StatusReactionEmojis>,
 ): string {
-  const normalized = toolName?.trim().toLowerCase() ?? "";
+  const normalized = normalizeOptionalLowercaseString(toolName) ?? "";
   if (!normalized) {
     return emojis.tool;
   }
@@ -282,6 +284,7 @@ export function createStatusReactionController(params: {
     } else {
       // Debounced execution for intermediate states
       debounceTimer = setTimeout(() => {
+        debounceTimer = null;
         void enqueue(async () => {
           await applyEmoji(emoji);
           pendingEmoji = "";
@@ -379,7 +382,19 @@ export function createStatusReactionController(params: {
       return;
     }
 
+    const alreadyInitial = currentEmoji === initialEmoji;
+    const pendingBeforeClear = pendingEmoji;
+    const hadDebouncedPending = debounceTimer !== null;
     clearAllTimers();
+    if (alreadyInitial && (!pendingBeforeClear || hadDebouncedPending)) {
+      pendingEmoji = "";
+      return;
+    }
+    if (pendingBeforeClear === initialEmoji && !hadDebouncedPending) {
+      await chainPromise;
+      return;
+    }
+
     await enqueue(async () => {
       await applyEmoji(initialEmoji);
       pendingEmoji = "";

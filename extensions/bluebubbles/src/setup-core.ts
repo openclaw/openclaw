@@ -1,8 +1,9 @@
 import {
+  addWildcardAllowFrom,
+  createSetupInputPresenceValidator,
   normalizeAccountId,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
-  setTopLevelChannelDmPolicyWithAllowFrom,
   type ChannelSetupAdapter,
   type DmPolicy,
   type OpenClawConfig,
@@ -11,11 +12,30 @@ import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
 
 const channel = "bluebubbles" as const;
 
-export function setBlueBubblesDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
-  return setTopLevelChannelDmPolicyWithAllowFrom({
+export function setBlueBubblesDmPolicy(
+  cfg: OpenClawConfig,
+  accountId: string,
+  dmPolicy: DmPolicy,
+): OpenClawConfig {
+  const resolvedAccountId = normalizeAccountId(accountId);
+  const existingAllowFrom =
+    resolvedAccountId === "default"
+      ? cfg.channels?.bluebubbles?.allowFrom
+      : ((
+          cfg.channels?.bluebubbles?.accounts?.[resolvedAccountId] as
+            | { allowFrom?: ReadonlyArray<string | number> }
+            | undefined
+        )?.allowFrom ?? cfg.channels?.bluebubbles?.allowFrom);
+  return patchScopedAccountConfig({
     cfg,
-    channel,
-    dmPolicy,
+    channelKey: channel,
+    accountId: resolvedAccountId,
+    patch: {
+      dmPolicy,
+      ...(dmPolicy === "open" ? { allowFrom: addWildcardAllowFrom(existingAllowFrom) } : {}),
+    },
+    ensureChannelEnabled: false,
+    ensureAccountEnabled: false,
   });
 }
 
@@ -43,18 +63,20 @@ export const blueBubblesSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ input }) => {
-    if (!input.httpUrl && !input.password) {
-      return "BlueBubbles requires --http-url and --password.";
-    }
-    if (!input.httpUrl) {
-      return "BlueBubbles requires --http-url.";
-    }
-    if (!input.password) {
-      return "BlueBubbles requires --password.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    validate: ({ input }) => {
+      if (!input.httpUrl && !input.password) {
+        return "BlueBubbles requires --http-url and --password.";
+      }
+      if (!input.httpUrl) {
+        return "BlueBubbles requires --http-url.";
+      }
+      if (!input.password) {
+        return "BlueBubbles requires --password.";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const next = prepareScopedSetupConfig({
       cfg,

@@ -457,3 +457,55 @@
     transform: scale(1);
   }
 }
+
+@media (max-width: 768px) {
+  .chat-tool-card {
+    padding: 8px 10px;
+    max-height: 100px;
+  }
+
+  .chat-tool-card__title {
+    font-size: 12px;
+  }
+
+  .chat-tool-card__preview {
+    padding: 6px 8px;
+    margin-top: 6px;
+    font-size: 10px;
+    max-height: 36px;
+  }
+
+  .chat-tool-card__detail {
+    font-size: 11px;
+  }
+
+  .chat-tools-summary {
+    padding: 6px 10px;
+  }
+
+  .chat-tools-collapse__body {
+    padding: 4px 10px 10px;
+  }
+
+  .chat-json-content {
+    padding: 8px 10px;
+    font-size: 11px;
+    max-height: 300px;
+  }
+}
+
+@media (max-width: 480px) {
+  .chat-tool-card {
+    padding: 6px 8px;
+    max-height: 80px;
+  }
+
+  .chat-tool-card__preview {
+    padding: 4px 6px;
+    max-height: 28px;
+  }
+
+  .chat-json-content {
+    max-height: 200px;
+  }
+}

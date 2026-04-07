@@ -21,4 +21,16 @@ describe("shared/device-auth", () => {
       "z.scope",
     ]);
   });
+
+  it("expands implied operator scopes for stored device auth", () => {
+    expect(normalizeDeviceAuthScopes(["operator.write"])).toEqual([
+      "operator.read",
+      "operator.write",
+    ]);
+    expect(normalizeDeviceAuthScopes(["operator.admin"])).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+  });
 });

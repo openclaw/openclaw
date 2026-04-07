@@ -1,6 +1,16 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsListResult } from "../types.ts";
+import type {
+  SessionCompactionCheckpoint,
+  SessionsCompactionBranchResult,
+  SessionsCompactionListResult,
+  SessionsCompactionRestoreResult,
+  SessionsListResult,
+} from "../types.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "./scope-errors.ts";
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -12,7 +22,84 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsExpandedCheckpointKey: string | null;
+  sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
+  sessionsCheckpointLoadingKey: string | null;
+  sessionsCheckpointBusyKey: string | null;
+  sessionsCheckpointErrorByKey: Record<string, string>;
 };
+
+function checkpointSignature(
+  row:
+    | {
+        key: string;
+        compactionCheckpointCount?: number;
+        latestCompactionCheckpoint?: { checkpointId?: string; createdAt?: number } | null;
+      }
+    | undefined,
+): string {
+  return JSON.stringify({
+    key: row?.key ?? "",
+    count: row?.compactionCheckpointCount ?? 0,
+    latestCheckpointId: row?.latestCompactionCheckpoint?.checkpointId ?? "",
+    latestCreatedAt: row?.latestCompactionCheckpoint?.createdAt ?? 0,
+  });
+}
+
+function invalidateCheckpointCacheForKey(state: SessionsState, key: string) {
+  if (
+    !(key in state.sessionsCheckpointItemsByKey) &&
+    !(key in state.sessionsCheckpointErrorByKey)
+  ) {
+    return;
+  }
+  const nextItems = { ...state.sessionsCheckpointItemsByKey };
+  const nextErrors = { ...state.sessionsCheckpointErrorByKey };
+  delete nextItems[key];
+  delete nextErrors[key];
+  state.sessionsCheckpointItemsByKey = nextItems;
+  state.sessionsCheckpointErrorByKey = nextErrors;
+}
+
+async function fetchSessionCompactionCheckpoints(state: SessionsState, key: string) {
+  state.sessionsCheckpointLoadingKey = key;
+  state.sessionsCheckpointErrorByKey = {
+    ...state.sessionsCheckpointErrorByKey,
+    [key]: "",
+  };
+  try {
+    const result = await state.client?.request<SessionsCompactionListResult>(
+      "sessions.compaction.list",
+      { key },
+    );
+    if (result) {
+      state.sessionsCheckpointItemsByKey = {
+        ...state.sessionsCheckpointItemsByKey,
+        [key]: result.checkpoints ?? [],
+      };
+    }
+  } catch (err) {
+    state.sessionsCheckpointErrorByKey = {
+      ...state.sessionsCheckpointErrorByKey,
+      [key]: String(err),
+    };
+  } finally {
+    if (state.sessionsCheckpointLoadingKey === key) {
+      state.sessionsCheckpointLoadingKey = null;
+    }
+  }
+}
+
+export async function subscribeSessions(state: SessionsState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    await state.client.request("sessions.subscribe", {});
+  } catch (err) {
+    state.sessionsError = String(err);
+  }
+}
 
 export async function loadSessions(
   state: SessionsState,
@@ -32,6 +119,9 @@ export async function loadSessions(
   state.sessionsLoading = true;
   state.sessionsError = null;
   try {
+    const previousRows = new Map(
+      (state.sessionsResult?.sessions ?? []).map((row) => [row.key, row] as const),
+    );
     const includeGlobal = overrides?.includeGlobal ?? state.sessionsIncludeGlobal;
     const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
     const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
@@ -49,9 +139,38 @@ export async function loadSessions(
     const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = res;
+      const nextKeys = new Set(res.sessions.map((row) => row.key));
+      for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
+        if (!nextKeys.has(key)) {
+          invalidateCheckpointCacheForKey(state, key);
+        }
+      }
+      let expandedNeedsRefetch = false;
+      for (const row of res.sessions) {
+        const previous = previousRows.get(row.key);
+        if (checkpointSignature(previous) !== checkpointSignature(row)) {
+          invalidateCheckpointCacheForKey(state, row.key);
+          if (state.sessionsExpandedCheckpointKey === row.key) {
+            expandedNeedsRefetch = true;
+          }
+        }
+      }
+      const expandedKey = state.sessionsExpandedCheckpointKey;
+      if (
+        expandedKey &&
+        nextKeys.has(expandedKey) &&
+        (expandedNeedsRefetch || !state.sessionsCheckpointItemsByKey[expandedKey])
+      ) {
+        await fetchSessionCompactionCheckpoints(state, expandedKey);
+      }
     }
   } catch (err) {
-    state.sessionsError = String(err);
+    if (isMissingOperatorReadScopeError(err)) {
+      state.sessionsResult = null;
+      state.sessionsError = formatMissingOperatorReadScopeMessage("sessions");
+    } else {
+      state.sessionsError = String(err);
+    }
   } finally {
     state.sessionsLoading = false;
   }
@@ -95,37 +214,122 @@ export async function patchSession(
   }
 }
 
-export async function deleteSession(state: SessionsState, key: string): Promise<boolean> {
-  if (!state.client || !state.connected) {
-    return false;
+export async function deleteSessionsAndRefresh(
+  state: SessionsState,
+  keys: string[],
+): Promise<string[]> {
+  if (!state.client || !state.connected || keys.length === 0) {
+    return [];
   }
   if (state.sessionsLoading) {
-    return false;
+    return [];
   }
+  const noun = keys.length === 1 ? "session" : "sessions";
   const confirmed = window.confirm(
-    `Delete session "${key}"?\n\nDeletes the session entry and archives its transcript.`,
+    `Delete ${keys.length} ${noun}?\n\nThis will delete the session entries and archive their transcripts.`,
   );
   if (!confirmed) {
-    return false;
+    return [];
   }
   state.sessionsLoading = true;
   state.sessionsError = null;
+  const deleted: string[] = [];
+  const deleteErrors: string[] = [];
   try {
-    await state.client.request("sessions.delete", { key, deleteTranscript: true });
-    return true;
-  } catch (err) {
-    state.sessionsError = String(err);
-    return false;
+    for (const key of keys) {
+      try {
+        await state.client.request("sessions.delete", { key, deleteTranscript: true });
+        deleted.push(key);
+      } catch (err) {
+        deleteErrors.push(String(err));
+      }
+    }
   } finally {
     state.sessionsLoading = false;
   }
+  if (deleted.length > 0) {
+    await loadSessions(state);
+  }
+  if (deleteErrors.length > 0) {
+    state.sessionsError = deleteErrors.join("; ");
+  }
+  return deleted;
 }
 
-export async function deleteSessionAndRefresh(state: SessionsState, key: string): Promise<boolean> {
-  const deleted = await deleteSession(state, key);
-  if (!deleted) {
-    return false;
+export async function toggleSessionCompactionCheckpoints(state: SessionsState, key: string) {
+  const trimmedKey = key.trim();
+  if (!trimmedKey) {
+    return;
   }
-  await loadSessions(state);
-  return true;
+  if (state.sessionsExpandedCheckpointKey === trimmedKey) {
+    state.sessionsExpandedCheckpointKey = null;
+    return;
+  }
+  state.sessionsExpandedCheckpointKey = trimmedKey;
+  if (state.sessionsCheckpointItemsByKey[trimmedKey]) {
+    return;
+  }
+  await fetchSessionCompactionCheckpoints(state, trimmedKey);
+}
+
+export async function branchSessionFromCheckpoint(
+  state: SessionsState,
+  key: string,
+  checkpointId: string,
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const confirmed = window.confirm(
+    "Create a new child session from this pre-compaction checkpoint?",
+  );
+  if (!confirmed) {
+    return null;
+  }
+  state.sessionsCheckpointBusyKey = checkpointId;
+  try {
+    const result = await state.client.request<SessionsCompactionBranchResult>(
+      "sessions.compaction.branch",
+      { key, checkpointId },
+    );
+    await loadSessions(state);
+    return result?.key ?? null;
+  } catch (err) {
+    state.sessionsError = String(err);
+    return null;
+  } finally {
+    if (state.sessionsCheckpointBusyKey === checkpointId) {
+      state.sessionsCheckpointBusyKey = null;
+    }
+  }
+}
+
+export async function restoreSessionFromCheckpoint(
+  state: SessionsState,
+  key: string,
+  checkpointId: string,
+) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const confirmed = window.confirm(
+    "Restore this session to the selected pre-compaction checkpoint?\n\nThis replaces the current active transcript for the session key.",
+  );
+  if (!confirmed) {
+    return;
+  }
+  state.sessionsCheckpointBusyKey = checkpointId;
+  try {
+    await state.client.request<SessionsCompactionRestoreResult>("sessions.compaction.restore", {
+      key,
+      checkpointId,
+    });
+    await loadSessions(state);
+  } catch (err) {
+    state.sessionsError = String(err);
+  } finally {
+    if (state.sessionsCheckpointBusyKey === checkpointId) {
+      state.sessionsCheckpointBusyKey = null;
+    }
+  }
 }

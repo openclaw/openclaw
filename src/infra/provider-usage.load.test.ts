@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
@@ -9,8 +9,13 @@ import {
 } from "./provider-usage.test-support.js";
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
+const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
 
 describe("provider-usage.load", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("loads snapshots for copilot gemini codex and xiaomi", async () => {
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.github.com/copilot_internal/user")) {
@@ -46,7 +51,7 @@ describe("provider-usage.load", () => {
       loadProviderUsageSummary,
       [
         { provider: "github-copilot", token: "copilot-token" },
-        { provider: "google-gemini-cli", token: "gemini-token" },
+        { provider: googleGeminiCliProvider, token: "gemini-token" },
         { provider: "openai-codex", token: "codex-token", accountId: "acc-1" },
         { provider: "xiaomi", token: "xiaomi-token" },
       ],
@@ -55,7 +60,7 @@ describe("provider-usage.load", () => {
 
     expect(summary.providers.map((provider) => provider.provider)).toEqual([
       "github-copilot",
-      "google-gemini-cli",
+      googleGeminiCliProvider,
       "openai-codex",
       "xiaomi",
     ]);
@@ -63,8 +68,8 @@ describe("provider-usage.load", () => {
       summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
     ).toEqual([{ label: "Chat", usedPercent: 20 }]);
     expect(
-      summary.providers.find((provider) => provider.provider === "google-gemini-cli")?.windows[0]
-        ?.label,
+      summary.providers.find((provider) => provider.provider === googleGeminiCliProvider)
+        ?.windows[0]?.label,
     ).toBe("Pro");
     expect(
       summary.providers.find((provider) => provider.provider === "openai-codex")?.windows[0]?.label,

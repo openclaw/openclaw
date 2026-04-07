@@ -1,13 +1,14 @@
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
-import { monitorWebInbox } from "./inbound.js";
 import {
   DEFAULT_ACCOUNT_ID,
   expectPairingPromptSent,
   getAuthDir,
+  getMonitorWebInbox,
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
+  settleInboundWork,
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
@@ -19,10 +20,6 @@ const TIMESTAMP_OFF_MESSAGES_CFG = {
   ...DEFAULT_MESSAGES_CFG,
   timestampPrefix: false,
 } as const;
-
-async function flushInboundQueue() {
-  await new Promise((resolve) => setImmediate(resolve));
-}
 
 const createNotifyUpsert = (message: Record<string, unknown>) => ({
   type: "notify",
@@ -59,6 +56,7 @@ async function startWebInboxMonitor(params: {
   config?: Record<string, unknown>;
   sendReadReceipts?: boolean;
 }) {
+  const monitorWebInbox = getMonitorWebInbox();
   if (params.config) {
     mockLoadConfig.mockReturnValue(params.config);
   }
@@ -111,7 +109,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await flushInboundQueue();
+    await settleInboundWork();
 
     // Should NOT call onMessage for unauthorized senders
     expect(onMessage).not.toHaveBeenCalled();
@@ -147,7 +145,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await flushInboundQueue();
+    await settleInboundWork();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
@@ -172,7 +170,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await flushInboundQueue();
+    await settleInboundWork();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(sock.readMessages).not.toHaveBeenCalled();
@@ -197,7 +195,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await flushInboundQueue();
+    await settleInboundWork();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     const payload = onMessage.mock.calls[0][0];
@@ -224,7 +222,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await flushInboundQueue();
+    await settleInboundWork();
 
     // Should NOT call onMessage because groupPolicy is disabled
     expect(onMessage).not.toHaveBeenCalled();
@@ -254,7 +252,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await flushInboundQueue();
+    await settleInboundWork();
 
     // Should NOT call onMessage because sender +999 not in groupAllowFrom
     expect(onMessage).not.toHaveBeenCalled();
@@ -284,7 +282,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await flushInboundQueue();
+    await settleInboundWork();
 
     // Should call onMessage because sender is in groupAllowFrom
     expect(onMessage).toHaveBeenCalledTimes(1);
@@ -318,7 +316,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await flushInboundQueue();
+    await settleInboundWork();
 
     // Should call onMessage because wildcard allows all senders
     expect(onMessage).toHaveBeenCalledTimes(1);
@@ -349,7 +347,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await flushInboundQueue();
+    await settleInboundWork();
 
     expect(onMessage).not.toHaveBeenCalled();
 
