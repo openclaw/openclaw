@@ -836,8 +836,13 @@ export async function startGatewayServer(
     }
   };
   const setCurrentSharedGatewaySessionGeneration = (nextGeneration: string | undefined) => {
+    const previousGeneration = currentSharedGatewaySessionGeneration;
     currentSharedGatewaySessionGeneration = nextGeneration;
     if (requiredSharedGatewaySessionGeneration === nextGeneration) {
+      requiredSharedGatewaySessionGeneration = null;
+      return;
+    }
+    if (requiredSharedGatewaySessionGeneration !== null && previousGeneration !== nextGeneration) {
       requiredSharedGatewaySessionGeneration = null;
     }
   };
