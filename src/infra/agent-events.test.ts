@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import {
   clearAgentRunContext,
   emitAgentEvent,
@@ -22,9 +22,6 @@ describe("agent-events sequencing", () => {
     resetAgentEventsForTest();
   });
 
-  afterEach(() => {
-    resetAgentEventsForTest();
-  });
   test("stores and clears run context", async () => {
     registerAgentRunContext("run-1", { sessionKey: "main" });
     expect(getAgentRunContext("run-1")?.sessionKey).toBe("main");
