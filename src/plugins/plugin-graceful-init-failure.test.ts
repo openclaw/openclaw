@@ -194,6 +194,20 @@ describe("plugin module default-unwrapping", () => {
     expect(loaded?.error).toBeUndefined();
   });
 
+  it("treats register-only nested definitions as terminal exports", async () => {
+    const plugin = writePlugin({
+      id: "nested-default-register-only-definition",
+      body: `module.exports = { default: { register() {}, default: function helper() { throw new Error("helper should not run"); } } };`,
+    });
+
+    const registry = await loadPlugins([plugin.file]);
+    const loaded = registry.plugins.find((entry) => entry.id === "nested-default-register-only-definition");
+
+    expect(loaded?.status).toBe("loaded");
+    expect(loaded?.failurePhase).toBeUndefined();
+    expect(loaded?.error).toBeUndefined();
+  });
+
   it("prefers default plugin definitions over wrapper-level named register exports", async () => {
     const plugin = writePlugin({
       id: "nested-default-wrapper-with-named-register",

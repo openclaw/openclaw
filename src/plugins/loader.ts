@@ -572,11 +572,13 @@ function unwrapDefaultModuleExport(
     shouldContinueOnDefault?: (
       value: Record<string, unknown>,
       next: unknown,
+      depth: number,
     ) => boolean;
   },
 ): unknown {
   let resolved = moduleExport;
   const visited = new Set<unknown>();
+  let depth = 0;
   while (
     resolved &&
     typeof resolved === "object" &&
@@ -585,11 +587,15 @@ function unwrapDefaultModuleExport(
   ) {
     const record = resolved as Record<string, unknown>;
     const next = record.default;
-    if (options?.shouldStop?.(record) && !options?.shouldContinueOnDefault?.(record, next)) {
+    if (
+      options?.shouldStop?.(record) &&
+      !options?.shouldContinueOnDefault?.(record, next, depth)
+    ) {
       break;
     }
     visited.add(resolved);
     resolved = next;
+    depth += 1;
   }
   return resolved;
 }
@@ -608,6 +614,7 @@ function looksLikePluginDefinitionRecord(candidate: Record<string, unknown>): bo
 function defaultChainContainsPluginExport(
   candidate: Record<string, unknown>,
   next: unknown,
+  depth: number,
 ): boolean {
   let current = next;
   const visited = new Set<unknown>();
@@ -616,7 +623,18 @@ function defaultChainContainsPluginExport(
       // Wrapper layers can re-export the real default function while also exposing
       // named register/activate exports. But if the current object already looks
       // like a concrete plugin definition, prefer its own register/activate.
-      return !looksLikePluginDefinitionRecord(candidate);
+      if (looksLikePluginDefinitionRecord(candidate)) {
+        return false;
+      }
+      // Treat nested register/activate records as terminal plugin exports, while
+      // still allowing top-level interop wrappers to redirect to default functions.
+      if (
+        depth > 0 &&
+        (typeof candidate.register === "function" || typeof candidate.activate === "function")
+      ) {
+        return false;
+      }
+      return true;
     }
     if (!current || typeof current !== "object" || visited.has(current)) {
       return false;
@@ -640,8 +658,8 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   const resolved = unwrapDefaultModuleExport(moduleExport, {
     shouldStop: (candidate) =>
       typeof candidate.register === "function" || typeof candidate.activate === "function",
-    shouldContinueOnDefault: (candidate, next) =>
-      defaultChainContainsPluginExport(candidate, next),
+    shouldContinueOnDefault: (candidate, next, depth) =>
+      defaultChainContainsPluginExport(candidate, next, depth),
   });
   if (typeof resolved === "function") {
     return {
