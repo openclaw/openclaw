@@ -5,7 +5,7 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech";
-import { requireInRange } from "openclaw/plugin-sdk/speech";
+import { asObject, requireInRange, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import {
   DEFAULT_MINIMAX_TTS_BASE_URL,
   MINIMAX_TTS_EMOTIONS,
@@ -36,18 +36,8 @@ type MinimaxTtsProviderOverrides = {
   emotion?: string;
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function normalizeMinimaxProviderConfig(
@@ -131,32 +121,37 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
         }
         return { handled: true, overrides: { model: ctx.value } };
 
-      case "speed": {
+      case "minimax_speed":
+      case "minimaxspeed": {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
-        const value = Number.parseFloat(ctx.value);
+        const value = Number.parseInt(ctx.value, 10);
         if (!Number.isFinite(value)) {
           return { handled: true, warnings: ["invalid speed value"] };
         }
-        requireInRange(value, 0.5, 2, "speed");
+        requireInRange(value, 1, 2, "speed");
         return { handled: true, overrides: { speed: value } };
       }
 
       case "vol":
-      case "volume": {
+      case "volume":
+      case "minimax_vol":
+      case "minimaxvol": {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
-        const value = Number.parseFloat(ctx.value);
+        const value = Number.parseInt(ctx.value, 10);
         if (!Number.isFinite(value)) {
           return { handled: true, warnings: ["invalid vol value"] };
         }
-        requireInRange(value, 0.1, 10, "vol");
+        requireInRange(value, 1, 10, "vol");
         return { handled: true, overrides: { vol: value } };
       }
 
-      case "pitch": {
+      case "pitch":
+      case "minimax_pitch":
+      case "minimaxpitch": {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
@@ -168,7 +163,9 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
         return { handled: true, overrides: { pitch: value } };
       }
 
-      case "emotion": {
+      case "emotion":
+      case "minimax_emotion":
+      case "minimaxemotion": {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
