@@ -35,3 +35,11 @@ export {
   normalizeSpeechProviderId,
 } from "../tts/provider-registry.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
+export {
+  asBoolean,
+  asFiniteNumber,
+  asObject,
+  readResponseTextLimited,
+  trimToUndefined,
+  truncateErrorDetail,
+} from "../tts/provider-error-utils.js";

@@ -10,6 +10,7 @@ import {
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "../agents/simple-completion-transport.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ResolvedTtsConfig } from "./tts.js";
 
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
@@ -39,7 +40,7 @@ export function requireInRange(value: number, min: number, max: number, label: s
 }
 
 export function normalizeLanguageCode(code?: string): string | undefined {
-  const trimmed = code?.trim();
+  const trimmed = normalizeOptionalString(code);
   if (!trimmed) {
     return undefined;
   }
@@ -51,7 +52,7 @@ export function normalizeLanguageCode(code?: string): string | undefined {
 }
 
 export function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
-  const trimmed = mode?.trim();
+  const trimmed = normalizeOptionalString(mode);
   if (!trimmed) {
     return undefined;
   }
@@ -90,7 +91,7 @@ function resolveSummaryModelRef(
   config: ResolvedTtsConfig,
 ): SummaryModelSelection {
   const defaultRef = resolveDefaultModelForAgent({ cfg });
-  const override = config.summaryModel?.trim();
+  const override = normalizeOptionalString(config.summaryModel);
   if (!override) {
     return { ref: defaultRef, source: "default" };
   }

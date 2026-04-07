@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   listChannelCatalogEntries,
@@ -95,7 +96,7 @@ function resolveChannelPackageStateChecker(params: {
     registry.checkerCache.set(params.entry.pluginId, checker);
     return checker;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = formatErrorMessage(error);
     log.warn(
       `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
     );

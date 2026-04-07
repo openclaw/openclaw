@@ -1,7 +1,8 @@
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/core";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 
 function sendError(respond: (ok: boolean, payload?: unknown) => void, err: unknown) {
-  respond(false, { error: err instanceof Error ? err.message : String(err) });
+  respond(false, { error: formatMatrixErrorMessage(err) });
 }
 
 export async function ensureMatrixCryptoRuntime(

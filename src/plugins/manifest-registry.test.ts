@@ -417,6 +417,28 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("preserves channel env metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "slack",
+      channels: ["slack"],
+      channelEnvVars: {
+        slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "slack",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.channelEnvVars).toEqual({
+      slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
+    });
+  });
+
   it("preserves channel config metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -499,6 +521,87 @@ describe("loadPluginManifestRegistry", () => {
         }),
       }),
     );
+  });
+
+  it("preserves manifest-owned config contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acpx",
+      configSchema: { type: "object" },
+      configContracts: {
+        compatibilityMigrationPaths: ["models.bedrockDiscovery"],
+        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+        dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
+        secretInputs: {
+          bundledDefaultEnabled: false,
+          paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acpx",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.configContracts).toEqual({
+      compatibilityMigrationPaths: ["models.bedrockDiscovery"],
+      compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+      dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
+      secretInputs: {
+        bundledDefaultEnabled: false,
+        paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+      },
+    });
+  });
+
+  it("resolves contract plugin ids by compatibility runtime path", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "brave",
+      configSchema: { type: "object" },
+      contracts: {
+        webSearchProviders: ["brave"],
+      },
+      configContracts: {
+        compatibilityRuntimePaths: ["tools.web.search.apiKey"],
+      },
+    });
+
+    const otherDir = makeTempDir();
+    writeManifest(otherDir, {
+      id: "google",
+      configSchema: { type: "object" },
+      contracts: {
+        webSearchProviders: ["gemini"],
+      },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "brave",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "google",
+        rootDir: otherDir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(
+      registry.plugins
+        .filter(
+          (plugin) =>
+            (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+            (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(
+              "tools.web.search.apiKey",
+            ),
+        )
+        .map((plugin) => plugin.id),
+    ).toEqual(["brave"]);
   });
   it("does not promote legacy top-level capability fields into contracts", () => {
     const dir = makeTempDir();

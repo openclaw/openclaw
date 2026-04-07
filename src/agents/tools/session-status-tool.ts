@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-import { buildStatusText } from "../../auto-reply/reply/commands-status.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -53,6 +52,15 @@ const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
 });
+
+let commandsStatusRuntimePromise: Promise<
+  typeof import("../../auto-reply/reply/commands-status.runtime.js")
+> | null = null;
+
+function loadCommandsStatusRuntime() {
+  commandsStatusRuntimePromise ??= import("../../auto-reply/reply/commands-status.runtime.js");
+  return commandsStatusRuntimePromise;
+}
 
 function resolveSessionEntry(params: {
   store: Record<string, SessionEntry>;
@@ -478,6 +486,7 @@ export function createSessionStatusTool(opts?: {
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,
       });
+      const { buildStatusText } = await loadCommandsStatusRuntime();
       const statusText = await buildStatusText({
         cfg,
         sessionEntry: statusSessionEntry,

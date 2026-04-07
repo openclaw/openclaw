@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +40,7 @@ describe("qa-lab server", () => {
       kickoffTask: string;
       scenarios: Array<{ id: string; title: string }>;
       defaults: { conversationId: string; senderId: string };
+      runner: { status: string; selection: { providerMode: string; scenarioIds: string[] } };
     };
     expect(bootstrap.defaults.conversationId).toBe("qa-operator");
     expect(bootstrap.defaults.senderId).toBe("qa-operator");
@@ -48,6 +49,9 @@ describe("qa-lab server", () => {
     expect(bootstrap.kickoffTask).toContain("Lobster Invaders");
     expect(bootstrap.scenarios.length).toBeGreaterThanOrEqual(10);
     expect(bootstrap.scenarios.some((scenario) => scenario.id === "dm-chat-baseline")).toBe(true);
+    expect(bootstrap.runner.status).toBe("idle");
+    expect(bootstrap.runner.selection.providerMode).toBe("mock-openai");
+    expect(bootstrap.runner.selection.scenarioIds).toHaveLength(bootstrap.scenarios.length);
 
     const messageResponse = await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",
@@ -178,9 +182,20 @@ describe("qa-lab server", () => {
   });
 
   it("serves the built QA UI bundle when available", async () => {
+    const uiDistDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-ui-dist-"));
+    cleanups.push(async () => {
+      await rm(uiDistDir, { recursive: true, force: true });
+    });
+    await writeFile(
+      path.join(uiDistDir, "index.html"),
+      "<!doctype html><html><head><title>QA Lab</title></head><body><div id='app'></div></body></html>",
+      "utf8",
+    );
+
     const lab = await startQaLabServer({
       host: "127.0.0.1",
       port: 0,
+      uiDistDir,
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -191,6 +206,23 @@ describe("qa-lab server", () => {
     const html = await rootResponse.text();
     expect(html).not.toContain("QA Lab UI not built");
     expect(html).toContain("<title>");
+
+    const version1 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
+      version: string | null;
+    };
+    expect(version1.version).toMatch(/^[0-9a-f]{12}$/);
+
+    await writeFile(
+      path.join(uiDistDir, "index.html"),
+      "<!doctype html><html><head><title>QA Lab Updated</title></head><body><div id='app'></div></body></html>",
+      "utf8",
+    );
+
+    const version2 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
+      version: string | null;
+    };
+    expect(version2.version).toMatch(/^[0-9a-f]{12}$/);
+    expect(version2.version).not.toBe(version1.version);
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { talkHandlers } from "./server-methods/talk.js";
-import { withServer } from "./test-with-server.js";
 
 type TalkSpeakPayload = {
   audioBase64?: string;
@@ -60,51 +59,47 @@ describe("gateway talk runtime", () => {
       },
     });
 
-    await withServer(async () => {
-      await withSpeechProviders(
-        [
-          {
-            pluginId: "acme-plugin",
-            source: "test",
-            provider: {
-              id: "acme",
-              label: "Acme Speech",
-              isConfigured: () => true,
-              synthesize: async () => ({
-                audioBuffer: Buffer.from([7, 8, 9]),
-                outputFormat: "mp3",
-                fileExtension: ".mp3",
-                voiceCompatible: false,
-              }),
-            },
+    await withSpeechProviders(
+      [
+        {
+          pluginId: "acme-plugin",
+          source: "test",
+          provider: {
+            id: "acme",
+            label: "Acme Speech",
+            isConfigured: () => true,
+            synthesize: async () => ({
+              audioBuffer: Buffer.from([7, 8, 9]),
+              outputFormat: "mp3",
+              fileExtension: ".mp3",
+              voiceCompatible: false,
+            }),
           },
-        ],
-        async () => {
-          const res = await invokeTalkSpeakDirect({
-            text: "Hello from talk mode.",
-          });
-          expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-          expect((res?.payload as TalkSpeakPayload | undefined)?.provider).toBe("acme");
-          expect((res?.payload as TalkSpeakPayload | undefined)?.audioBase64).toBe(
-            Buffer.from([7, 8, 9]).toString("base64"),
-          );
         },
-      );
-    });
+      ],
+      async () => {
+        const res = await invokeTalkSpeakDirect({
+          text: "Hello from talk mode.",
+        });
+        expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
+        expect((res?.payload as TalkSpeakPayload | undefined)?.provider).toBe("acme");
+        expect((res?.payload as TalkSpeakPayload | undefined)?.audioBase64).toBe(
+          Buffer.from([7, 8, 9]).toString("base64"),
+        );
+      },
+    );
   });
 
   it("returns fallback-eligible details when talk provider is not configured", async () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({ talk: {} });
 
-    await withServer(async () => {
-      const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
-      expect(res?.ok).toBe(false);
-      expect(res?.error?.message).toContain("talk provider not configured");
-      expect((res?.error as { details?: unknown } | undefined)?.details).toEqual({
-        reason: "talk_unconfigured",
-        fallbackEligible: true,
-      });
+    const res = await invokeTalkSpeakDirect({ text: "Hello from talk mode." });
+    expect(res?.ok).toBe(false);
+    expect(res?.error?.message).toContain("talk provider not configured");
+    expect((res?.error as { details?: unknown } | undefined)?.details).toEqual({
+      reason: "talk_unconfigured",
+      fallbackEligible: true,
     });
   });
 

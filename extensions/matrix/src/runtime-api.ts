@@ -57,6 +57,7 @@ export {
   moveSingleAccountChannelSectionToDefaultAccount,
   promptAccountId,
   promptChannelAccessConfig,
+  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export {

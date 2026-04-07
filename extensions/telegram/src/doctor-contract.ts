@@ -11,6 +11,35 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return false;
+  }
+  if (
+    typeof entry.streamMode === "string" ||
+    typeof entry.chunkMode === "string" ||
+    typeof entry.blockStreaming === "boolean" ||
+    typeof entry.blockStreamingCoalesce === "boolean" ||
+    typeof entry.draftChunk === "boolean"
+  ) {
+    return true;
+  }
+  const streaming = entry.streaming;
+  return typeof streaming === "string" || typeof streaming === "boolean";
+}
+
+function hasLegacyAccountStreamingAliases(
+  value: unknown,
+  match: (entry: unknown) => boolean,
+): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => match(account));
+}
+
 function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
   const existing = asObjectRecord(owner[key]);
   if (existing) {
@@ -19,19 +48,22 @@ function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record
   return {};
 }
 
-function normalizeTelegramStreamingAliases(params: {
+function normalizeLegacyTelegramStreamingAliases(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
   changes: string[];
-}): { entry: Record<string, unknown>; changed: boolean } {
+  resolvedMode: string;
+}): {
+  entry: Record<string, unknown>;
+  changed: boolean;
+} {
   const beforeStreaming = params.entry.streaming;
   const hadLegacyStreamMode = params.entry.streamMode !== undefined;
   const hasLegacyFlatFields =
     params.entry.chunkMode !== undefined ||
     params.entry.blockStreaming !== undefined ||
-    params.entry.draftChunk !== undefined ||
-    params.entry.blockStreamingCoalesce !== undefined;
-  const resolved = resolveTelegramPreviewStreamMode(params.entry);
+    params.entry.blockStreamingCoalesce !== undefined ||
+    params.entry.draftChunk !== undefined;
   const shouldNormalize =
     hadLegacyStreamMode ||
     typeof beforeStreaming === "boolean" ||
@@ -53,18 +85,18 @@ function normalizeTelegramStreamingAliases(params: {
       typeof beforeStreaming === "string") &&
     streaming.mode === undefined
   ) {
-    streaming.mode = resolved;
+    streaming.mode = params.resolvedMode;
     if (hadLegacyStreamMode) {
       params.changes.push(
-        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${resolved}).`,
+        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
       );
     } else if (typeof beforeStreaming === "boolean") {
       params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${resolved}).`,
+        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
       );
     } else if (typeof beforeStreaming === "string") {
       params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${resolved}).`,
+        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
       );
     }
     changed = true;
@@ -116,30 +148,6 @@ function normalizeTelegramStreamingAliases(params: {
   return { entry: updated, changed };
 }
 
-function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
-  const entry = asObjectRecord(value);
-  if (!entry) {
-    return false;
-  }
-  return (
-    entry.streamMode !== undefined ||
-    typeof entry.streaming === "boolean" ||
-    typeof entry.streaming === "string" ||
-    entry.chunkMode !== undefined ||
-    entry.blockStreaming !== undefined ||
-    entry.draftChunk !== undefined ||
-    entry.blockStreamingCoalesce !== undefined
-  );
-}
-
-function hasLegacyTelegramAccountStreamingAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacyTelegramStreamingAliases(account));
-}
-
 function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
   groups: Record<string, unknown>;
   entry: Record<string, unknown>;
@@ -174,7 +182,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "telegram", "accounts"],
     message:
       "channels.telegram.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: hasLegacyTelegramAccountStreamingAliases,
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases),
   },
 ];
 
@@ -218,13 +226,14 @@ export function normalizeCompatibilityConfig({
     }
   }
 
-  const base = normalizeTelegramStreamingAliases({
+  const streaming = normalizeLegacyTelegramStreamingAliases({
     entry: updated,
     pathPrefix: "channels.telegram",
     changes,
+    resolvedMode: resolveTelegramPreviewStreamMode(updated),
   });
-  updated = base.entry;
-  changed = changed || base.changed;
+  updated = streaming.entry;
+  changed = changed || streaming.changed;
 
   const rawAccounts = asObjectRecord(updated.accounts);
   if (rawAccounts) {
@@ -235,10 +244,11 @@ export function normalizeCompatibilityConfig({
       if (!account) {
         continue;
       }
-      const accountStreaming = normalizeTelegramStreamingAliases({
+      const accountStreaming = normalizeLegacyTelegramStreamingAliases({
         entry: account,
         pathPrefix: `channels.telegram.accounts.${accountId}`,
         changes,
+        resolvedMode: resolveTelegramPreviewStreamMode(account),
       });
       if (accountStreaming.changed) {
         accounts[accountId] = accountStreaming.entry;

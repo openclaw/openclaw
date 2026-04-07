@@ -1,3 +1,4 @@
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
@@ -6,10 +7,48 @@ import {
 } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import "./zalo-js.test-mocks.js";
-import { zalouserPlugin } from "./channel.js";
+import {
+  listZalouserAccountIds,
+  resolveDefaultZalouserAccountId,
+  resolveZalouserAccountSync,
+} from "./accounts.js";
+import { zalouserSetupAdapter } from "./setup-core.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
 
-const zalouserConfigure = createPluginSetupWizardConfigure(zalouserPlugin);
+const zalouserSetupPlugin = {
+  id: "zalouser",
+  meta: {
+    id: "zalouser",
+    label: "ZaloUser",
+    selectionLabel: "ZaloUser",
+    docsPath: "/channels/zalouser",
+    blurb: "Unofficial Zalo personal account connector.",
+  },
+  capabilities: {
+    chatTypes: ["direct", "group"] as Array<"direct" | "group">,
+  },
+  config: {
+    listAccountIds: (cfg: unknown) => listZalouserAccountIds(cfg as never),
+    defaultAccountId: (cfg: unknown) => resolveDefaultZalouserAccountId(cfg as never),
+    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
+      resolveZalouserAccountSync({ cfg, accountId }),
+  },
+  security: {
+    resolveDmPolicy: createScopedDmSecurityResolver({
+      channelKey: "zalouser",
+      resolvePolicy: (account: ReturnType<typeof resolveZalouserAccountSync>) =>
+        account.config.dmPolicy,
+      resolveAllowFrom: (account: ReturnType<typeof resolveZalouserAccountSync>) =>
+        account.config.allowFrom,
+      policyPathSuffix: "dmPolicy",
+      normalizeEntry: (raw: string) => raw.trim().replace(/^(zalouser|zlu):/i, ""),
+    }),
+  },
+  setup: zalouserSetupAdapter,
+  setupWizard: zalouserSetupWizard,
+} as const;
+
+const zalouserConfigure = createPluginSetupWizardConfigure(zalouserSetupPlugin);
 
 async function runSetup(params: {
   cfg?: OpenClawConfig;
@@ -19,7 +58,7 @@ async function runSetup(params: {
 }) {
   return await runSetupWizardConfigure({
     configure: zalouserConfigure,
-    cfg: params.cfg as OpenClawConfig | undefined,
+    cfg: params.cfg,
     prompter: params.prompter,
     options: params.options,
     forceAllowFrom: params.forceAllowFrom,
@@ -295,7 +334,10 @@ describe("zalouser setup wizard", () => {
 
     const next = zalouserSetupWizard.dmPolicy?.setPolicy(cfg, "open");
     expect(next?.channels?.zalouser?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.zalouser?.accounts?.work?.dmPolicy).toBe("open");
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
@@ -317,8 +359,11 @@ describe("zalouser setup wizard", () => {
     );
 
     expect(next?.channels?.zalouser?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.zalouser?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next?.channels?.zalouser?.accounts?.work?.allowFrom).toEqual(["123456789", "*"]);
+    const workAccount = next?.channels?.zalouser?.accounts?.work as
+      | { dmPolicy?: string; allowFrom?: Array<string | number> }
+      | undefined;
+    expect(workAccount?.dmPolicy).toBe("open");
+    expect(workAccount?.allowFrom).toEqual(["123456789", "*"]);
   });
 
   it("shows the account-scoped current DM policy in quickstart notes", async () => {

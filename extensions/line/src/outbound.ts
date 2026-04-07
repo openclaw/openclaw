@@ -200,7 +200,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       }
 
       for (const flexMsg of processed.flexMessages) {
-        const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
+        const flexContents = flexMsg.contents;
         lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
           verbose: false,
           cfg,
@@ -322,7 +322,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         result = { messageId: "processed", chatId: to };
       }
       for (const flexMsg of processed.flexMessages) {
-        const flexContents = flexMsg.contents as Parameters<typeof sendFlex>[2];
+        const flexContents = flexMsg.contents;
         await sendFlex(to, flexMsg.altText, flexContents, {
           verbose: false,
           cfg,

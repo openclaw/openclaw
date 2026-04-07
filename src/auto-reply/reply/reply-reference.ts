@@ -1,4 +1,5 @@
 import type { ReplyToMode } from "../../config/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ReplyReferencePlanner = {
   /** Returns the effective reply/thread id for the next send and updates state. */
@@ -26,8 +27,8 @@ export function createReplyReferencePlanner(options: {
 }): ReplyReferencePlanner {
   let hasReplied = options.hasReplied ?? false;
   const allowReference = options.allowReference !== false;
-  const existingId = options.existingId?.trim();
-  const startId = options.startId?.trim();
+  const existingId = normalizeOptionalString(options.existingId);
+  const startId = normalizeOptionalString(options.startId);
 
   const use = (): string | undefined => {
     if (!allowReference) {

@@ -12,6 +12,7 @@ import {
 } from "../plugins/manifest-registry.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import type { OpenClawConfig } from "./config.js";
@@ -226,7 +227,7 @@ function resolvePluginIdForConfiguredWebFetchProvider(
 ): string | undefined {
   return resolveManifestContractOwnerPluginId({
     contract: "webFetchProviders",
-    value: typeof providerId === "string" ? providerId.trim().toLowerCase() : "",
+    value: normalizeOptionalLowercaseString(providerId) ?? "",
     origin: "bundled",
     env,
   });

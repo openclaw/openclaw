@@ -1,4 +1,5 @@
 import { callGateway } from "../gateway/call.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
@@ -137,7 +138,7 @@ export async function waitForAgentRun(params: {
     }
     return normalizeAgentWaitResult("ok", wait);
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
+    const error = formatErrorMessage(err);
     return {
       status: error.includes("gateway timeout") ? "timeout" : "error",
       error,

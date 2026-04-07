@@ -61,9 +61,16 @@ export function evaluateSystemRunPolicy(params: {
   cmdInvocation: boolean;
   shellWrapperInvocation: boolean;
 }): SystemRunPolicyDecision {
-  const shellWrapperBlocked = params.security === "allowlist" && params.shellWrapperInvocation;
+  // POSIX node execution intentionally uses `/bin/sh -lc` as a transport wrapper.
+  // Keep allowlist decisions based on the analyzed inner shell payload there.
+  // Windows `cmd.exe /c` wrappers still require explicit approval because they
+  // change execution semantics for builtins and quoting/parsing behavior.
   const windowsShellWrapperBlocked =
-    shellWrapperBlocked && params.isWindows && params.cmdInvocation;
+    params.security === "allowlist" &&
+    params.shellWrapperInvocation &&
+    params.isWindows &&
+    params.cmdInvocation;
+  const shellWrapperBlocked = windowsShellWrapperBlocked;
   const analysisOk = shellWrapperBlocked ? false : params.analysisOk;
   const allowlistSatisfied = shellWrapperBlocked ? false : params.allowlistSatisfied;
   const approvedByAsk = params.approvalDecision !== null || params.approved === true;

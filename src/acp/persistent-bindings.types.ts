@@ -3,7 +3,10 @@ import type { ChannelId } from "../channels/plugins/types.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
+import { normalizeText } from "./normalize-text.js";
 import type { AcpRuntimeSessionMode } from "./runtime/types.js";
+
+export { normalizeText } from "./normalize-text.js";
 
 export type ConfiguredAcpBindingChannel = ChannelId;
 
@@ -33,14 +36,6 @@ export type AcpBindingConfigShape = {
   backend?: string;
   label?: string;
 };
-
-export function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 export function normalizeMode(value: unknown): AcpRuntimeSessionMode {
   const raw = normalizeText(value)?.toLowerCase();
@@ -122,7 +117,7 @@ export function parseConfiguredAcpSessionKey(
   if (tokens.length !== 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
     return null;
   }
-  const channel = tokens[2]?.trim().toLowerCase();
+  const channel = normalizeText(tokens[2])?.toLowerCase();
   if (!channel) {
     return null;
   }

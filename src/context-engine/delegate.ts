@@ -1,3 +1,6 @@
+import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
 
 /**
@@ -60,4 +63,25 @@ export async function delegateCompactionToRuntime(
         }
       : undefined,
   };
+}
+
+/**
+ * Build a context-engine-ready systemPromptAddition from the active memory
+ * plugin prompt path. This lets non-legacy engines explicitly opt into the
+ * same memory/wiki guidance that the legacy engine gets via system prompt
+ * assembly, without reimplementing memory prompt formatting.
+ */
+export function buildMemorySystemPromptAddition(params: {
+  availableTools: Set<string>;
+  citationsMode?: MemoryCitationsMode;
+}): string | undefined {
+  const lines = buildMemoryPromptSection({
+    availableTools: params.availableTools,
+    citationsMode: params.citationsMode,
+  });
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const normalized = normalizeStructuredPromptSection(lines.join("\n"));
+  return normalized || undefined;
 }

@@ -471,6 +471,34 @@ describe("resolveSlackMedia", () => {
     expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
     expect(mockFetch).toHaveBeenCalledTimes(8);
   });
+
+  it("routes dispatcher-backed Slack media requests through runtime fetch", async () => {
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+    globalThis.fetch = (async () => {
+      throw new Error("global fetch should not receive dispatcher-backed Slack media requests");
+    }) as typeof fetch;
+    const runtimeFetchSpy = vi
+      .spyOn(ssrf, "fetchWithRuntimeDispatcher")
+      .mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        expect(init).toMatchObject({ redirect: "manual" });
+        expect(init && "dispatcher" in init).toBe(true);
+        return new Response(Buffer.from("image data"), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        });
+      });
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).not.toBeNull();
+    expect(runtimeFetchSpy).toHaveBeenCalled();
+  });
 });
 
 describe("Slack media SSRF policy", () => {

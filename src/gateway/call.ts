@@ -32,11 +32,13 @@ import {
   GatewaySecretRefUnavailableError,
   resolveGatewayCredentialsFromConfig,
   trimToUndefined,
+  type ExplicitGatewayAuth,
   type GatewayCredentialMode,
   type GatewayCredentialPrecedence,
   type GatewayRemoteCredentialFallback,
   type GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
+import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   resolveLeastPrivilegeOperatorScopesForMethod,
@@ -200,10 +202,7 @@ function resolveDeviceIdentityForGatewayCall(): ReturnType<
   }
 }
 
-export type ExplicitGatewayAuth = {
-  token?: string;
-  password?: string;
-};
+export type { ExplicitGatewayAuth } from "./credentials.js";
 
 export function resolveExplicitGatewayAuth(opts?: ExplicitGatewayAuth): ExplicitGatewayAuth {
   const token =
@@ -289,20 +288,25 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
 }
 
 function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
-  const config = opts.config ?? loadGatewayConfig();
-  const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
-  const isRemoteMode = config.gateway?.mode === "remote";
-  const remote = isRemoteMode
-    ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
-    : undefined;
   const cliUrlOverride = trimToUndefined(opts.url);
+  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   const envUrlOverride = cliUrlOverride
     ? undefined
     : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const urlOverrideSource = cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined;
+  const canSkipConfigLoad = canSkipGatewayConfigLoad({
+    config: opts.config,
+    urlOverride,
+    explicitAuth,
+  });
+  const config = opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : loadGatewayConfig());
+  const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
+  const isRemoteMode = config.gateway?.mode === "remote";
+  const remote = isRemoteMode
+    ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
+    : undefined;
   const remoteUrl = trimToUndefined(remote?.url);
-  const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   return {
     config,
     configPath,

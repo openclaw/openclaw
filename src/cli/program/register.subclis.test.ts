@@ -1,10 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  loadValidatedConfigForPluginRegistration,
-  registerSubCliByName,
-  registerSubCliCommands,
-} from "./register.subclis.js";
+import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 
 const { acpAction, registerAcpCli } = vi.hoisted(() => {
   const action = vi.fn();
@@ -30,15 +26,18 @@ const { registerQaCli } = vi.hoisted(() => ({
   }),
 }));
 
-const configModule = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
-  readConfigFileSnapshot: vi.fn(),
-}));
+const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
+  const action = vi.fn();
+  const register = vi.fn((program: Command) => {
+    program.command("infer").alias("capability").action(action);
+  });
+  return { inferAction: action, registerCapabilityCli: register };
+});
 
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../qa-cli.js", () => ({ registerQaCli }));
-vi.mock("../../config/config.js", () => configModule);
+vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
@@ -64,8 +63,8 @@ describe("registerSubCliCommands", () => {
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
-    configModule.loadConfig.mockReset();
-    configModule.readConfigFileSnapshot.mockReset();
+    registerCapabilityCli.mockClear();
+    inferAction.mockClear();
   });
 
   afterEach(() => {
@@ -99,28 +98,6 @@ describe("registerSubCliCommands", () => {
     expect(registerAcpCli).not.toHaveBeenCalled();
   });
 
-  it("returns null for plugin registration when the config snapshot is invalid", async () => {
-    configModule.readConfigFileSnapshot.mockResolvedValueOnce({
-      valid: false,
-      config: { plugins: { load: { paths: ["/tmp/evil"] } } },
-    });
-
-    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBeNull();
-    expect(configModule.loadConfig).not.toHaveBeenCalled();
-  });
-
-  it("loads validated config for plugin registration when the snapshot is valid", async () => {
-    const loadedConfig = { plugins: { enabled: true } };
-    configModule.readConfigFileSnapshot.mockResolvedValueOnce({
-      valid: true,
-      config: loadedConfig,
-    });
-    configModule.loadConfig.mockReturnValueOnce(loadedConfig);
-
-    await expect(loadValidatedConfigForPluginRegistration()).resolves.toBe(loadedConfig);
-    expect(configModule.loadConfig).toHaveBeenCalledTimes(1);
-  });
-
   it("re-parses argv for lazy subcommands", async () => {
     const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
 
@@ -130,6 +107,17 @@ describe("registerSubCliCommands", () => {
 
     expect(registerNodesCli).toHaveBeenCalledTimes(1);
     expect(nodesAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the infer placeholder and dispatches through the capability registrar", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "infer"], "openclaw");
+
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["infer"]);
+
+    await program.parseAsync(["infer"], { from: "user" });
+
+    expect(registerCapabilityCli).toHaveBeenCalledTimes(1);
+    expect(inferAction).toHaveBeenCalledTimes(1);
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {

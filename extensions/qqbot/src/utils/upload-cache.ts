@@ -4,7 +4,6 @@
  */
 
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import { debugLog } from "./debug-log.js";
 
 interface CacheEntry {
@@ -42,7 +41,9 @@ export function getCachedFileInfo(
   const key = buildCacheKey(contentHash, scope, targetId, fileType);
   const entry = cache.get(key);
 
-  if (!entry) return null;
+  if (!entry) {
+    return null;
+  }
 
   if (Date.now() >= entry.expiresAt) {
     cache.delete(key);
@@ -73,7 +74,7 @@ export function setCachedFileInfo(
     if (cache.size >= MAX_CACHE_SIZE) {
       const keys = Array.from(cache.keys());
       for (let i = 0; i < keys.length / 2; i++) {
-        cache.delete(keys[i]!);
+        cache.delete(keys[i]);
       }
     }
   }

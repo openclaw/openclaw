@@ -2,31 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const gatewayRuntimeHoisted = vi.hoisted(() => ({
   requestSpy: vi.fn(),
-  startSpy: vi.fn(),
-  stopSpy: vi.fn(),
-  stopAndWaitSpy: vi.fn(async () => undefined),
-  createClientSpy: vi.fn(),
+  withClientSpy: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
-  createOperatorApprovalsGatewayClient: gatewayRuntimeHoisted.createClientSpy,
+  withOperatorApprovalsGatewayClient: gatewayRuntimeHoisted.withClientSpy,
 }));
 
 describe("resolveMatrixExecApproval", () => {
   beforeEach(() => {
     gatewayRuntimeHoisted.requestSpy.mockReset();
-    gatewayRuntimeHoisted.startSpy.mockReset();
-    gatewayRuntimeHoisted.stopSpy.mockReset();
-    gatewayRuntimeHoisted.stopAndWaitSpy.mockReset().mockResolvedValue(undefined);
-    gatewayRuntimeHoisted.createClientSpy.mockReset().mockImplementation((opts) => ({
-      start: () => {
-        gatewayRuntimeHoisted.startSpy();
-        opts.onHelloOk?.();
-      },
-      request: gatewayRuntimeHoisted.requestSpy,
-      stop: gatewayRuntimeHoisted.stopSpy,
-      stopAndWait: gatewayRuntimeHoisted.stopAndWaitSpy,
-    }));
+    gatewayRuntimeHoisted.withClientSpy.mockReset().mockImplementation(async (_params, run) => {
+      await run({
+        request: gatewayRuntimeHoisted.requestSpy,
+      } as never);
+    });
   });
 
   it("submits exec approval resolutions through the gateway approvals client", async () => {

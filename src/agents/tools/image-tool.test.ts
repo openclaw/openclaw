@@ -107,6 +107,12 @@ vi.mock("../auth-profiles.js", () => ({
       return { version: 1, profiles: {} };
     }
   },
+  hasAnyAuthProfileStoreSource: (agentDir?: string) => {
+    if (!agentDir) {
+      return false;
+    }
+    return fsSync.existsSync(path.join(agentDir, "auth-profiles.json"));
+  },
   listProfilesForProvider: (
     store: { profiles?: Record<string, { provider?: string }> },
     provider: string,

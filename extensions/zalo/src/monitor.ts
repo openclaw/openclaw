@@ -19,14 +19,6 @@ import {
   isZaloSenderAllowed,
   resolveZaloRuntimeGroupPolicy,
 } from "./group-access.js";
-import {
-  clearZaloWebhookSecurityStateForTest,
-  getZaloWebhookRateLimitStateSizeForTest,
-  getZaloWebhookStatusCounterSizeForTest,
-  handleZaloWebhookRequest as handleZaloWebhookRequestInternal,
-  registerZaloWebhookTarget as registerZaloWebhookTargetInternal,
-  type ZaloWebhookTarget,
-} from "./monitor.webhook.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "./runtime-api.js";
 import {
@@ -135,38 +127,13 @@ function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: str
   }
 }
 
-export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
-  return registerZaloWebhookTargetInternal(target, {
-    route: {
-      auth: "plugin",
-      match: "exact",
-      pluginId: "zalo",
-      source: "zalo-webhook",
-      accountId: target.account.accountId,
-      log: target.runtime.log,
-      handler: async (req, res) => {
-        const handled = await handleZaloWebhookRequest(req, res);
-        if (!handled && !res.headersSent) {
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.end("Not Found");
-        }
-      },
-    },
-  });
-}
-
-export {
-  clearZaloWebhookSecurityStateForTest,
-  getZaloWebhookRateLimitStateSizeForTest,
-  getZaloWebhookStatusCounterSizeForTest,
-};
-
 export async function handleZaloWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  return handleZaloWebhookRequestInternal(req, res, async ({ update, target }) => {
+  const { handleZaloWebhookRequest: handleZaloWebhookRequestInternal } =
+    await import("./monitor.webhook.js");
+  return await handleZaloWebhookRequestInternal(req, res, async ({ update, target }) => {
     await processUpdate({
       update,
       token: target.token,
@@ -465,7 +432,6 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     config,
     runtime,
     core,
-    text,
     mediaPath,
     mediaType,
     statusSink,
@@ -646,7 +612,9 @@ async function deliverZaloReply(params: {
       statusSink?.({ lastOutboundAt: Date.now() });
     },
     onMediaError: (error) => {
-      runtime.error?.(`Zalo photo send failed: ${String(error)}`);
+      runtime.error?.(
+        `Zalo photo send failed: ${error instanceof Error ? error.message : JSON.stringify(error)}`,
+      );
     },
   });
 }
@@ -691,6 +659,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
   try {
     if (useWebhook) {
+      const { registerZaloWebhookTarget } = await import("./monitor.webhook.js");
       if (!webhookUrl || !webhookSecret) {
         throw new Error("Zalo webhookUrl and webhookSecret are required for webhook mode");
       }
@@ -731,18 +700,38 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       };
       runtime.log?.(`[${account.accountId}] Zalo webhook registered path=${path}`);
 
-      const unregister = registerZaloWebhookTarget({
-        token,
-        account,
-        config,
-        runtime,
-        core,
-        path,
-        secret: webhookSecret,
-        statusSink: (patch) => statusSink?.(patch),
-        mediaMaxMb: effectiveMediaMaxMb,
-        fetcher,
-      });
+      const unregister = registerZaloWebhookTarget(
+        {
+          token,
+          account,
+          config,
+          runtime,
+          core,
+          path,
+          secret: webhookSecret,
+          statusSink: (patch) => statusSink?.(patch),
+          mediaMaxMb: effectiveMediaMaxMb,
+          fetcher,
+        },
+        {
+          route: {
+            auth: "plugin",
+            match: "exact",
+            pluginId: "zalo",
+            source: "zalo-webhook",
+            accountId: account.accountId,
+            log: runtime.log,
+            handler: async (req, res) => {
+              const handled = await handleZaloWebhookRequest(req, res);
+              if (!handled && !res.headersSent) {
+                res.statusCode = 404;
+                res.setHeader("Content-Type", "text/plain; charset=utf-8");
+                res.end("Not Found");
+              }
+            },
+          },
+        },
+      );
       stopHandlers.push(unregister);
       await waitForAbortSignal(abortSignal);
       return;

@@ -4,6 +4,7 @@ import { readSecretFromFile } from "../acp/secret-file.js";
 import { serveAcpGateway } from "../acp/server.js";
 import { normalizeAcpProvenanceMode } from "../acp/types.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { inheritOptionFromParent } from "./command-options.js";
@@ -15,8 +16,8 @@ function resolveSecretOption(params: {
   fileFlag: string;
   label: string;
 }) {
-  const direct = params.direct?.trim();
-  const file = params.file?.trim();
+  const direct = normalizeOptionalString(params.direct);
+  const file = normalizeOptionalString(params.file);
   if (direct && file) {
     throw new Error(`Use either ${params.directFlag} or ${params.fileFlag} for ${params.label}.`);
   }

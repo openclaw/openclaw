@@ -19,7 +19,7 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       fetchFn,
       provider: "openai",
       defaultBaseUrl: "https://api.openai.com/v1",
-      defaultModel: "gpt-4o-mini-transcribe",
+      defaultModel: "gpt-4o-transcribe",
     });
 
     const headers = new Headers(getRequest().init?.headers);
@@ -40,7 +40,7 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       defaultBaseUrl: "https://api.openai.com/v1",
-      defaultModel: "gpt-4o-mini-transcribe",
+      defaultModel: "gpt-4o-transcribe",
     });
 
     const headers = new Headers(getRequest().init?.headers);

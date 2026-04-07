@@ -19,31 +19,29 @@ function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record
   return {};
 }
 
-function normalizeDiscordDmAliases(params: {
+function allowFromListsMatch(left: unknown, right: unknown): boolean {
+  if (!Array.isArray(left) || !Array.isArray(right)) {
+    return false;
+  }
+  const normalizedLeft = left.map((value) => String(value).trim()).filter(Boolean);
+  const normalizedRight = right.map((value) => String(value).trim()).filter(Boolean);
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return false;
+  }
+  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
+}
+
+function normalizeLegacyDmAliases(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
   changes: string[];
+  promoteAllowFrom?: boolean;
 }): { entry: Record<string, unknown>; changed: boolean } {
   let changed = false;
   let updated: Record<string, unknown> = params.entry;
   const rawDm = updated.dm;
   const dm = asObjectRecord(rawDm) ? (structuredClone(rawDm) as Record<string, unknown>) : null;
   let dmChanged = false;
-  const shouldPromoteLegacyAllowFrom = !(
-    params.pathPrefix === "channels.discord" && asObjectRecord(updated.accounts)
-  );
-
-  const allowFromEqual = (a: unknown, b: unknown): boolean => {
-    if (!Array.isArray(a) || !Array.isArray(b)) {
-      return false;
-    }
-    const na = a.map((v) => String(v).trim()).filter(Boolean);
-    const nb = b.map((v) => String(v).trim()).filter(Boolean);
-    if (na.length !== nb.length) {
-      return false;
-    }
-    return na.every((v, i) => v === nb[i]);
-  };
 
   const topDmPolicy = updated.dmPolicy;
   const legacyDmPolicy = dm?.policy;
@@ -67,9 +65,9 @@ function normalizeDiscordDmAliases(params: {
     }
   }
 
-  const topAllowFrom = updated.allowFrom;
-  const legacyAllowFrom = dm?.allowFrom;
-  if (shouldPromoteLegacyAllowFrom) {
+  if (params.promoteAllowFrom !== false) {
+    const topAllowFrom = updated.allowFrom;
+    const legacyAllowFrom = dm?.allowFrom;
     if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
       updated = { ...updated, allowFrom: legacyAllowFrom };
       changed = true;
@@ -83,7 +81,7 @@ function normalizeDiscordDmAliases(params: {
     } else if (
       topAllowFrom !== undefined &&
       legacyAllowFrom !== undefined &&
-      allowFromEqual(topAllowFrom, legacyAllowFrom)
+      allowFromListsMatch(topAllowFrom, legacyAllowFrom)
     ) {
       if (dm) {
         delete dm.allowFrom;
@@ -111,19 +109,23 @@ function normalizeDiscordDmAliases(params: {
   return { entry: updated, changed };
 }
 
-function normalizeDiscordStreamingAliases(params: {
+function normalizeLegacyStreamingAliases(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
   changes: string[];
+  resolvedMode: string;
+  includePreviewChunk?: boolean;
+  resolvedNativeTransport?: unknown;
+  offModeLegacyNotice?: (pathPrefix: string) => string;
 }): { entry: Record<string, unknown>; changed: boolean } {
   const beforeStreaming = params.entry.streaming;
   const hadLegacyStreamMode = params.entry.streamMode !== undefined;
   const hasLegacyFlatFields =
     params.entry.chunkMode !== undefined ||
     params.entry.blockStreaming !== undefined ||
-    params.entry.draftChunk !== undefined ||
-    params.entry.blockStreamingCoalesce !== undefined;
-  const resolved = resolveDiscordPreviewStreamMode(params.entry);
+    params.entry.blockStreamingCoalesce !== undefined ||
+    (params.includePreviewChunk === true && params.entry.draftChunk !== undefined) ||
+    params.entry.nativeStreaming !== undefined;
   const shouldNormalize =
     hadLegacyStreamMode ||
     typeof beforeStreaming === "boolean" ||
@@ -140,22 +142,23 @@ function normalizeDiscordStreamingAliases(params: {
   const preview = ensureNestedRecord(streaming, "preview");
 
   if (
-    (hadLegacyStreamMode || typeof beforeStreaming === "boolean" || typeof beforeStreaming === "string") &&
+    (hadLegacyStreamMode ||
+      typeof beforeStreaming === "boolean" ||
+      typeof beforeStreaming === "string") &&
     streaming.mode === undefined
   ) {
-    streaming.mode = resolved;
+    streaming.mode = params.resolvedMode;
     if (hadLegacyStreamMode) {
       params.changes.push(
-        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${resolved}).`,
+        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
       );
-    }
-    if (typeof beforeStreaming === "boolean") {
+    } else if (typeof beforeStreaming === "boolean") {
       params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${resolved}).`,
+        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
       );
     } else if (typeof beforeStreaming === "string") {
       params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${resolved}).`,
+        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
       );
     }
     changed = true;
@@ -180,7 +183,11 @@ function normalizeDiscordStreamingAliases(params: {
     );
     changed = true;
   }
-  if (updated.draftChunk !== undefined && preview.chunk === undefined) {
+  if (
+    params.includePreviewChunk === true &&
+    updated.draftChunk !== undefined &&
+    preview.chunk === undefined
+  ) {
     preview.chunk = updated.draftChunk;
     delete updated.draftChunk;
     params.changes.push(
@@ -196,6 +203,29 @@ function normalizeDiscordStreamingAliases(params: {
     );
     changed = true;
   }
+  if (
+    updated.nativeStreaming !== undefined &&
+    streaming.nativeTransport === undefined &&
+    params.resolvedNativeTransport !== undefined
+  ) {
+    streaming.nativeTransport = params.resolvedNativeTransport;
+    delete updated.nativeStreaming;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
+    );
+    changed = true;
+  } else if (
+    typeof beforeStreaming === "boolean" &&
+    streaming.nativeTransport === undefined &&
+    params.resolvedNativeTransport !== undefined
+  ) {
+    streaming.nativeTransport = params.resolvedNativeTransport;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
+    );
+    changed = true;
+  }
+
   if (Object.keys(preview).length > 0) {
     streaming.preview = preview;
   }
@@ -204,13 +234,11 @@ function normalizeDiscordStreamingAliases(params: {
   }
   updated.streaming = streaming;
   if (
-    params.pathPrefix.startsWith("channels.discord") &&
-    resolved === "off" &&
-    hadLegacyStreamMode
+    hadLegacyStreamMode &&
+    params.resolvedMode === "off" &&
+    params.offModeLegacyNotice !== undefined
   ) {
-    params.changes.push(
-      `${params.pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${params.pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
-    );
+    params.changes.push(params.offModeLegacyNotice(params.pathPrefix));
   }
   return { entry: updated, changed };
 }
@@ -220,23 +248,29 @@ function hasLegacyDiscordStreamingAliases(value: unknown): boolean {
   if (!entry) {
     return false;
   }
-  return (
-    entry.streamMode !== undefined ||
-    typeof entry.streaming === "boolean" ||
-    typeof entry.streaming === "string" ||
-    entry.chunkMode !== undefined ||
-    entry.blockStreaming !== undefined ||
-    entry.draftChunk !== undefined ||
-    entry.blockStreamingCoalesce !== undefined
-  );
+  if (
+    typeof entry.streamMode === "string" ||
+    typeof entry.chunkMode === "string" ||
+    typeof entry.blockStreaming === "boolean" ||
+    typeof entry.blockStreamingCoalesce === "boolean" ||
+    typeof entry.draftChunk === "boolean" ||
+    (entry.draftChunk && typeof entry.draftChunk === "object")
+  ) {
+    return true;
+  }
+  const streaming = entry.streaming;
+  return typeof streaming === "string" || typeof streaming === "boolean";
 }
 
-function hasLegacyDiscordAccountStreamingAliases(value: unknown): boolean {
+function hasLegacyAccountStreamingAliases(
+  value: unknown,
+  match: (entry: unknown) => boolean,
+): boolean {
   const accounts = asObjectRecord(value);
   if (!accounts) {
     return false;
   }
-  return Object.values(accounts).some((account) => hasLegacyDiscordStreamingAliases(account));
+  return Object.values(accounts).some((account) => match(account));
 }
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
@@ -347,7 +381,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "discord", "accounts"],
     message:
       "channels.discord.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: hasLegacyDiscordAccountStreamingAliases,
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyDiscordStreamingAliases),
   },
   {
     path: ["channels", "discord", "voice", "tts"],
@@ -376,19 +410,25 @@ export function normalizeCompatibilityConfig({
   const changes: string[] = [];
   let updated = rawEntry;
   let changed = false;
+  const shouldPromoteRootDmAllowFrom = !asObjectRecord(updated.accounts);
 
-  const dm = normalizeDiscordDmAliases({
+  const dm = normalizeLegacyDmAliases({
     entry: updated,
     pathPrefix: "channels.discord",
     changes,
+    promoteAllowFrom: shouldPromoteRootDmAllowFrom,
   });
   updated = dm.entry;
   changed = changed || dm.changed;
 
-  const streaming = normalizeDiscordStreamingAliases({
+  const streaming = normalizeLegacyStreamingAliases({
     entry: updated,
     pathPrefix: "channels.discord",
     changes,
+    includePreviewChunk: true,
+    resolvedMode: resolveDiscordPreviewStreamMode(updated),
+    offModeLegacyNotice: (pathPrefix) =>
+      `${pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
   });
   updated = streaming.entry;
   changed = changed || streaming.changed;
@@ -404,17 +444,21 @@ export function normalizeCompatibilityConfig({
       }
       let accountEntry = account;
       let accountChanged = false;
-      const accountDm = normalizeDiscordDmAliases({
+      const accountDm = normalizeLegacyDmAliases({
         entry: accountEntry,
         pathPrefix: `channels.discord.accounts.${accountId}`,
         changes,
       });
       accountEntry = accountDm.entry;
       accountChanged = accountDm.changed;
-      const accountStreaming = normalizeDiscordStreamingAliases({
+      const accountStreaming = normalizeLegacyStreamingAliases({
         entry: accountEntry,
         pathPrefix: `channels.discord.accounts.${accountId}`,
         changes,
+        includePreviewChunk: true,
+        resolvedMode: resolveDiscordPreviewStreamMode(accountEntry),
+        offModeLegacyNotice: (pathPrefix) =>
+          `${pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
       });
       accountEntry = accountStreaming.entry;
       accountChanged = accountChanged || accountStreaming.changed;

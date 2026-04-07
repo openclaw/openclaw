@@ -46,6 +46,21 @@ function createOpenClawRoot(params: {
   return repoRoot;
 }
 
+function seedBundledPluginTree(rootDir: string, relativeDir: string, pluginId = "discord") {
+  const pluginDir = path.join(rootDir, relativeDir, pluginId);
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    `${JSON.stringify({ name: `@openclaw/${pluginId}` }, null, 2)}\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    `${JSON.stringify({ id: pluginId }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 function expectResolvedBundledDir(params: {
   cwd: string;
   expectedDir: string;
@@ -205,10 +220,36 @@ describe("resolveBundledPluginsDir", () => {
     ],
   ] as const)("%s", (_name, layout, expectation) => {
     const repoRoot = createOpenClawRoot(layout);
+    if (expectation.expectedRelativeDir === path.join("dist-runtime", "extensions")) {
+      seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
+      seedBundledPluginTree(repoRoot, path.join("dist-runtime", "extensions"));
+    } else if (expectation.expectedRelativeDir === path.join("dist", "extensions")) {
+      seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
+    }
     expectResolvedBundledDirFromRoot({
       repoRoot,
       expectedRelativeDir: expectation.expectedRelativeDir,
       ...("vitest" in expectation ? { vitest: expectation.vitest } : {}),
+    });
+  });
+
+  it("falls back to source extensions when dist trees exist but do not contain real plugin manifests", () => {
+    const repoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-incomplete-built-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasDistRuntimeExtensions: true,
+      hasDistExtensions: true,
+      hasGitCheckout: true,
+    });
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions", "discord"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions", "discord"), {
+      recursive: true,
+    });
+
+    expectResolvedBundledDirFromRoot({
+      repoRoot,
+      expectedRelativeDir: "extensions",
     });
   });
 
@@ -239,6 +280,7 @@ describe("resolveBundledPluginsDir", () => {
           prefix: "openclaw-bundled-dir-installed-",
           hasDistExtensions: true,
         });
+        seedBundledPluginTree(installedRoot, path.join("dist", "extensions"));
         const cwdRepoRoot = createOpenClawRoot({
           prefix: "openclaw-bundled-dir-cwd-",
           hasExtensions: true,
@@ -259,6 +301,7 @@ describe("resolveBundledPluginsDir", () => {
           prefix: "openclaw-bundled-dir-override-",
           hasDistExtensions: true,
         });
+        seedBundledPluginTree(installedRoot, path.join("dist", "extensions"));
         return {
           installedRoot,
           argv1: path.join(installedRoot, "openclaw.mjs"),
