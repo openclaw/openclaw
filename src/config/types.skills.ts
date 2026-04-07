@@ -40,6 +40,12 @@ export type SkillsLimitsConfig = {
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
+  /**
+   * List of external directory prefixes whose real paths are allowed to host
+   * skill files even when they resolve outside the configured skills root
+   * (e.g. `/nix/store` for Nix-installed skills).
+   */
+  allowExternalSkillsIn?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;
