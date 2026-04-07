@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AnyAgentTool } from "../agents/pi-tools.types.js";
 
 // Result types
 
@@ -9,6 +10,12 @@ export type AssembleResult = {
   estimatedTokens: number;
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */
   systemPromptAddition?: string;
+  /**
+   * Optional filtered list of tools to send to the model instead of the default full set.
+   * When present, only the schemas for these tools are included in the model request,
+   * reducing token usage. Tool executors for all registered tools remain available.
+   */
+  toolsOverride?: AnyAgentTool[];
 };
 
 export type CompactResult = {

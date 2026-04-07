@@ -151,6 +151,7 @@ import {
   normalizeProviderToolSchemas,
 } from "../tool-schema-runtime.js";
 import { splitSdkTools } from "../tool-split.js";
+import { wrapStreamFnWithToolsOverride } from "../stream-payload-utils.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import {
@@ -1273,6 +1274,15 @@ export async function runEmbeddedAttempt(
               applySystemPromptOverrideToSession(activeSession, systemPromptText);
               log.debug(
                 `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
+              );
+            }
+            if (assembled.toolsOverride && assembled.toolsOverride.length > 0) {
+              activeSession.agent.streamFn = wrapStreamFnWithToolsOverride(
+                activeSession.agent.streamFn,
+                assembled.toolsOverride,
+              );
+              log.debug(
+                `context engine: applied tools override (${assembled.toolsOverride.length} tools)`,
               );
             }
           } catch (assembleErr) {
