@@ -17,7 +17,68 @@ import {
   storeRoleRefsForTarget,
   type WithSnapshotForAI,
 } from "./pw-session.js";
-import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { markBackendDomRefsOnPage, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+
+function buildStoredAriaRefs(
+  nodes: AriaSnapshotNode[],
+  markedRefs: Set<string>,
+): Record<string, { role: string; name?: string; nth?: number; backendDOMNodeId?: number }> {
+  const refs: Record<
+    string,
+    { role: string; name?: string; nth?: number; backendDOMNodeId?: number }
+  > = {};
+  const counts = new Map<string, number>();
+
+  for (const node of nodes) {
+    const role =
+      String(node.role ?? "")
+        .trim()
+        .toLowerCase() || "unknown";
+    const name = String(node.name ?? "").trim() || undefined;
+    const key = `${role}:${name ?? ""}`;
+    const nth = counts.get(key) ?? 0;
+    counts.set(key, nth + 1);
+    refs[node.ref] = {
+      role,
+      ...(name ? { name } : {}),
+      ...(nth > 0 ? { nth } : {}),
+      ...(markedRefs.has(node.ref) && typeof node.backendDOMNodeId === "number"
+        ? { backendDOMNodeId: node.backendDOMNodeId }
+        : {}),
+    };
+  }
+
+  return refs;
+}
+
+export async function storeAriaSnapshotRefsViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  nodes: AriaSnapshotNode[];
+}): Promise<void> {
+  const page = await getPageForTargetId({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+  });
+  ensurePageState(page);
+
+  const markedRefs = await markBackendDomRefsOnPage({
+    page,
+    refs: opts.nodes.flatMap((node) =>
+      typeof node.backendDOMNodeId === "number"
+        ? [{ ref: node.ref, backendDOMNodeId: node.backendDOMNodeId }]
+        : [],
+    ),
+  });
+
+  storeRoleRefsForTarget({
+    page,
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    refs: buildStoredAriaRefs(opts.nodes, markedRefs),
+    mode: "role",
+  });
+}
 
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
@@ -44,7 +105,13 @@ export async function snapshotAriaViaPlaywright(opts: {
     nodes?: RawAXNode[];
   };
   const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
-  return { nodes: formatAriaSnapshot(nodes, limit) };
+  const formatted = formatAriaSnapshot(nodes, limit);
+  await storeAriaSnapshotRefsViaPlaywright({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    nodes: formatted,
+  });
+  return { nodes: formatted };
 }
 
 export async function snapshotAiViaPlaywright(opts: {

@@ -6,6 +6,7 @@ import {
   rememberRoleRefsForTarget,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 
 function fakePage(): {
   page: Page;
@@ -70,6 +71,26 @@ describe("pw-session refLocator", () => {
     refLocator(page, "e1");
 
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
+  });
+
+  it("uses backend-marked DOM locators for ax refs", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.roleRefs = { ax1: { role: "button", name: "OK", backendDOMNodeId: 42 } };
+
+    refLocator(page, "ax1");
+
+    expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="ax1"]`);
+  });
+
+  it("falls back to role heuristics for ax refs without backend markers", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.roleRefs = { ax1: { role: "button", name: "OK" } };
+
+    refLocator(page, "ax1");
+
+    expect(mocks.getByRole).toHaveBeenCalledWith("button", { name: "OK", exact: true });
   });
 });
 
