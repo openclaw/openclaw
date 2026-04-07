@@ -338,7 +338,7 @@ export async function resolveFocusTargetSession(params: {
         method: "sessions.resolve",
         params: attempt,
       });
-      const key = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+      const key = normalizeOptionalString(resolved?.key) ?? "";
       if (!key) {
         continue;
       }
