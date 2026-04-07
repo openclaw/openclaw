@@ -277,6 +277,8 @@ export const sharedVitestConfig = {
       "vitest.extension-whatsapp.config.ts",
       "vitest.extension-zalo-paths.mjs",
       "vitest.extension-zalo.config.ts",
+      "vitest.extension-zalo-lifecycle.config.ts",
+      "vitest.extension-zalo-unit.config.ts",
       "vitest.extension-provider-paths.mjs",
       "vitest.extension-providers.config.ts",
       "vitest.logging.config.ts",

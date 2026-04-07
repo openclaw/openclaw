@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,
@@ -8,27 +8,10 @@ import {
 import type { ResolvedZaloAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
-  monitorZaloProvider: vi.fn(),
-  probeZalo: vi.fn(async () => ({
-    ok: false as const,
-    error: "probe failed",
-    elapsedMs: 1,
-  })),
+  startZaloGatewayAccount: vi.fn(),
 }));
 
-vi.mock("./monitor.js", () => {
-  return {
-    monitorZaloProvider: hoisted.monitorZaloProvider,
-  };
-});
-
-vi.mock("./probe.js", () => {
-  return {
-    probeZalo: hoisted.probeZalo,
-  };
-});
-
-import { zaloPlugin } from "./channel.js";
+let zaloPlugin: typeof import("./channel.js").zaloPlugin;
 
 function buildAccount(): ResolvedZaloAccount {
   return {
@@ -41,14 +24,35 @@ function buildAccount(): ResolvedZaloAccount {
 }
 
 describe("zaloPlugin gateway.startAccount", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    hoisted.startZaloGatewayAccount.mockReset();
+
+    vi.doMock("./channel.runtime.js", () => ({
+      startZaloGatewayAccount: hoisted.startZaloGatewayAccount,
+    }));
+
+    ({ zaloPlugin } = await import("./channel.js"));
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
+    vi.doUnmock("./channel.runtime.js");
   });
 
   it("keeps startAccount pending until abort", async () => {
-    hoisted.monitorZaloProvider.mockImplementationOnce(
-      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+    hoisted.startZaloGatewayAccount.mockImplementationOnce(
+      async ({
+        account,
+        abortSignal,
+        setStatus,
+      }: {
+        account: ResolvedZaloAccount;
+        abortSignal: AbortSignal;
+        setStatus: (patch: { accountId: string }) => void;
+      }) =>
         await new Promise<void>((resolve) => {
+          setStatus({ accountId: account.accountId });
           if (abortSignal.aborted) {
             resolve();
             return;
@@ -63,7 +67,7 @@ describe("zaloPlugin gateway.startAccount", () => {
     });
 
     await expectPendingUntilAbort({
-      waitForStarted: waitForStartedMocks(hoisted.probeZalo, hoisted.monitorZaloProvider),
+      waitForStarted: waitForStartedMocks(hoisted.startZaloGatewayAccount),
       isSettled,
       abort,
       task,
@@ -71,12 +75,10 @@ describe("zaloPlugin gateway.startAccount", () => {
 
     expectLifecyclePatch(patches, { accountId: "default" });
     expect(isSettled()).toBe(true);
-    expect(hoisted.monitorZaloProvider).toHaveBeenCalledWith(
+    expect(hoisted.startZaloGatewayAccount).toHaveBeenCalledWith(
       expect.objectContaining({
-        token: "test-token",
         account: expect.objectContaining({ accountId: "default" }),
         abortSignal: abort.signal,
-        useWebhook: false,
       }),
     );
   });

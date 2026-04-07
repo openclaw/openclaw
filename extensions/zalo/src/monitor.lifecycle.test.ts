@@ -1,40 +1,26 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { PluginRuntime } from "../runtime-api.js";
+import {
+  deleteWebhookMock,
+  getWebhookInfoMock,
+  getUpdatesMock,
+  getZaloRuntimeMock,
+  loadLifecycleMonitorModule,
+  resetLifecycleTestState,
+  resolvePendingGetUpdates,
+  setWebhookMock,
+} from "../test-support/monitor-mocks-test-support.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
-
-const getWebhookInfoMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
-const deleteWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
-const getUpdatesMock = vi.fn(() => new Promise(() => {}));
-const setWebhookMock = vi.fn(async () => ({ ok: true, result: { url: "" } }));
-
-vi.mock("./api.js", async () => {
-  const actual = await vi.importActual<typeof import("./api.js")>("./api.js");
-  return {
-    ...actual,
-    deleteWebhook: deleteWebhookMock,
-    getWebhookInfo: getWebhookInfoMock,
-    getUpdates: getUpdatesMock,
-    setWebhook: setWebhookMock,
-  };
-});
-
-vi.mock("./runtime.js", () => ({
-  getZaloRuntime: () => ({
-    logging: {
-      shouldLogVerbose: () => false,
-    },
-  }),
-}));
 
 const TEST_ACCOUNT = {
   accountId: "default",
   config: {},
 } as unknown as ResolvedZaloAccount;
 
-const TEST_CONFIG = {} as OpenClawConfig;
+let monitorZaloProvider: typeof import("./monitor.js").monitorZaloProvider;
 
 async function startLifecycleMonitor(
   options: {
@@ -43,13 +29,12 @@ async function startLifecycleMonitor(
     webhookUrl?: string;
   } = {},
 ) {
-  const { monitorZaloProvider } = await import("./monitor.js");
   const abort = new AbortController();
   const runtime = createRuntimeEnv();
   const run = monitorZaloProvider({
     token: "test-token",
     account: TEST_ACCOUNT,
-    config: TEST_CONFIG,
+    config: {},
     runtime,
     abortSignal: abort.signal,
     ...options,
@@ -58,8 +43,19 @@ async function startLifecycleMonitor(
 }
 
 describe("monitorZaloProvider lifecycle", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    await resetLifecycleTestState();
+    getZaloRuntimeMock.mockReturnValue({
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as Pick<PluginRuntime, "logging">);
+    ({ monitorZaloProvider } = await loadLifecycleMonitorModule());
+  });
+
+  afterEach(async () => {
+    resolvePendingGetUpdates();
+    await resetLifecycleTestState();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -78,6 +74,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(settled).toBe(false);
 
     abort.abort();
+    resolvePendingGetUpdates();
     await monitoredRun;
 
     expect(settled).toBe(true);
@@ -103,6 +100,7 @@ describe("monitorZaloProvider lifecycle", () => {
     );
 
     abort.abort();
+    resolvePendingGetUpdates();
     await run;
   });
 
@@ -122,6 +120,7 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(runtime.error).not.toHaveBeenCalled();
 
     abort.abort();
+    resolvePendingGetUpdates();
     await run;
   });
 

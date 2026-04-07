@@ -6,7 +6,6 @@ import {
   stopWithText,
   type SubagentsCommandContext,
 } from "./commands-subagents-dispatch.js";
-import { handleSubagentsHelpAction } from "./commands-subagents/action-help.js";
 import type { CommandHandler } from "./commands-types.js";
 
 export { extractMessageText } from "./commands-subagents-text.js";

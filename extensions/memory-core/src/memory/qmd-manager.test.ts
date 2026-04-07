@@ -280,20 +280,22 @@ describe("QmdMemoryManager", () => {
 
   it("debounces back-to-back sync calls", async () => {
     const { manager, resolved } = await createManager();
-
-    const baselineCalls = spawnMock.mock.calls.length;
+    const runUpdateSpy = vi.spyOn(
+      manager as unknown as { runUpdate: (reason: string, force?: boolean) => Promise<void> },
+      "runUpdate",
+    );
 
     await manager.sync({ reason: "manual" });
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
+    expect(runUpdateSpy).toHaveBeenCalledTimes(1);
 
     await manager.sync({ reason: "manual-again" });
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 2);
+    expect(runUpdateSpy).toHaveBeenCalledTimes(1);
 
     (manager as unknown as { lastUpdateAt: number | null }).lastUpdateAt =
       Date.now() - (resolved.qmd?.update.debounceMs ?? 0) - 10;
 
     await manager.sync({ reason: "after-wait" });
-    expect(spawnMock.mock.calls.length).toBe(baselineCalls + 3);
+    expect(runUpdateSpy).toHaveBeenCalledTimes(2);
 
     await manager.close();
   });

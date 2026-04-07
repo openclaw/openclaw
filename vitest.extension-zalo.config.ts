@@ -1,26 +1,18 @@
-import { zaloExtensionTestRoots } from "./vitest.extension-zalo-paths.mjs";
-import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
-import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { defineConfig } from "vitest/config";
 
-export function loadIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
+export { createExtensionZaloUnitVitestConfig as createExtensionZaloVitestConfig } from "./vitest.extension-zalo-unit.config.ts";
 
-export function createExtensionZaloVitestConfig(
-  env: Record<string, string | undefined> = process.env,
-) {
-  return createScopedVitestConfig(
-    loadIncludePatternsFromEnv(env) ?? zaloExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
-    {
-      dir: "extensions",
-      env,
-      name: "extension-zalo",
+export function createExtensionZaloWorkspaceVitestConfig() {
+  return defineConfig({
+    test: {
+      name: "extension-zalo-workspace",
       passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
+      projects: [
+        "vitest.extension-zalo-unit.config.ts",
+        "vitest.extension-zalo-lifecycle.config.ts",
+      ],
     },
-  );
+  });
 }
 
-export default createExtensionZaloVitestConfig();
+export default createExtensionZaloWorkspaceVitestConfig();
