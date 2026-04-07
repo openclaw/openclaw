@@ -982,6 +982,11 @@ async function agentCommandInternal(
               model,
               result,
             }),
+          // Propagate the caller's abort signal so the fallback layer can
+          // recognize terminal aborts (run-budget timeout, HTTP client
+          // disconnect) via signal.reason and skip pointless retries.
+          // See openclaw/openclaw#60388.
+          abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;

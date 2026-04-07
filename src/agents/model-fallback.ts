@@ -104,7 +104,64 @@ function isFallbackAbortError(err: unknown): boolean {
   return name === "AbortError";
 }
 
-function shouldRethrowAbort(err: unknown): boolean {
+/**
+ * "Terminal" aborts are aborts where retrying with another model is wasteful
+ * because the *run* is over regardless of which provider handles it. These
+ * should propagate up immediately instead of triggering the fallback chain.
+ *
+ * Two terminal sources:
+ *
+ * 1. **Run-budget timeout** (closes openclaw/openclaw#60388): when the
+ *    embedded runner's `scheduleAbortTimer` fires, `abortRun(true)` calls
+ *    `runAbortController.abort(makeTimeoutAbortReason())` which tags the
+ *    signal with an Error whose `name === "TimeoutError"`. After this fires,
+ *    the run's time budget is exhausted — falling back to another model with
+ *    near-zero remaining budget is guaranteed to fail and wastes API calls.
+ *
+ * 2. **HTTP client disconnect**: when an HTTP client closes the connection
+ *    mid-request, `watchClientDisconnect` calls `abortController.abort(new
+ *    ClientDisconnectError())`. After this, no caller is left to receive a
+ *    response — fallback retries waste tokens generating output for nobody.
+ *
+ * Detection is via `signal.reason` (not via the error's name) because the
+ * fetch wrapper re-throws aborts as a generic AbortError that loses the
+ * original tag in `.name`. The `signal.reason` survives this round-trip.
+ */
+function isTerminalAbort(signal: AbortSignal | undefined): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  const reason = signal.reason;
+  if (!(reason instanceof Error)) {
+    return false;
+  }
+  // Walk up to one cause level: makeAbortError() in pi-embedded-runner wraps
+  // the original reason in an outer AbortError with `.cause` set, and our
+  // fetch shim does the same in some paths.
+  const candidates: unknown[] = [reason];
+  if ("cause" in reason && reason.cause !== undefined) {
+    candidates.push(reason.cause);
+  }
+  for (const candidate of candidates) {
+    if (!(candidate instanceof Error)) {
+      continue;
+    }
+    if (candidate.name === "TimeoutError") {
+      return true;
+    }
+    if (candidate.name === "ClientDisconnectError") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function shouldRethrowAbort(err: unknown, signal?: AbortSignal): boolean {
+  // Terminal aborts (run timeout, client disconnect) always propagate up.
+  // The whole run is over — retrying with another model wastes resources.
+  if (isTerminalAbort(signal)) {
+    return true;
+  }
   return isFallbackAbortError(err) && !isTimeoutError(err);
 }
 
@@ -210,6 +267,7 @@ async function runFallbackCandidate<T>(params: {
   model: string;
   options?: ModelFallbackRunOptions;
   attribution?: FailoverAttribution;
+  abortSignal?: AbortSignal;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
     const result = params.options
@@ -228,7 +286,7 @@ async function runFallbackCandidate<T>(params: {
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,
     });
-    if (shouldRethrowAbort(err) && !normalizedFailover) {
+    if (shouldRethrowAbort(err, params.abortSignal) && !normalizedFailover) {
       throw err;
     }
     return { ok: false, error: normalizedFailover ?? err };
@@ -245,6 +303,7 @@ async function runFallbackAttempt<T>(params: {
   attempt: number;
   total: number;
   attribution?: FailoverAttribution;
+  abortSignal?: AbortSignal;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
@@ -252,6 +311,7 @@ async function runFallbackAttempt<T>(params: {
     model: params.model,
     options: params.options,
     attribution: params.attribution,
+    abortSignal: params.abortSignal,
   });
   if (runResult.ok) {
     const classification = await params.classifyResult?.({
@@ -792,6 +852,13 @@ export async function runWithModelFallback<T>(params: {
   onError?: ModelFallbackErrorHandler;
   onFallbackStep?: ModelFallbackStepHandler;
   classifyResult?: ModelFallbackResultClassifier<T>;
+  /**
+   * Optional abort signal from the caller. When the signal aborts with a
+   * "terminal" reason (run-budget timeout, HTTP client disconnect — see
+   * `isTerminalAbort`), the fallback chain stops and rethrows immediately
+   * instead of trying further models. Closes openclaw/openclaw#60388.
+   */
+  abortSignal?: AbortSignal;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
@@ -967,6 +1034,7 @@ export async function runWithModelFallback<T>(params: {
       attempt: i + 1,
       total: candidates.length,
       attribution: { sessionId: params.sessionId, lane: params.lane },
+      abortSignal: params.abortSignal,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
@@ -1123,6 +1191,8 @@ export async function runWithImageModelFallback<T>(params: {
   modelOverride?: string;
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
+  /** Optional abort signal — see runWithModelFallback's abortSignal docs. */
+  abortSignal?: AbortSignal;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
@@ -1146,6 +1216,7 @@ export async function runWithImageModelFallback<T>(params: {
       attempts,
       attempt: i + 1,
       total: candidates.length,
+      abortSignal: params.abortSignal,
     });
     if ("success" in attemptRun) {
       return attemptRun.success;
