@@ -43,6 +43,28 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
+  it("forwards audioAsVoice for direct media sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice" });
+
+    await telegramOutbound.sendMedia!({
+      cfg: {} as never,
+      to: "12345",
+      text: "voice note",
+      mediaUrl: "/tmp/note.mp3",
+      audioAsVoice: true,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "voice note",
+      expect.objectContaining({
+        mediaUrl: "/tmp/note.mp3",
+        asVoice: true,
+      }),
+    );
+  });
+
   it("sends payload media in sequence and keeps buttons on the first message only", async () => {
     sendMessageTelegramMock
       .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })
@@ -93,5 +115,30 @@ describe("telegramOutbound", () => {
       (sendMessageTelegramMock.mock.calls[1]?.[2] as Record<string, unknown>)?.buttons,
     ).toBeUndefined();
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
+  });
+
+  it("forwards payload audioAsVoice into Telegram send options", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice", chatId: "12345" });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "Voice payload",
+        mediaUrl: "https://example.com/note.mp3",
+        audioAsVoice: true,
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "Voice payload",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/note.mp3",
+        asVoice: true,
+      }),
+    );
   });
 });

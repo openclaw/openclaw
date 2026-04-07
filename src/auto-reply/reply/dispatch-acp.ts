@@ -21,6 +21,7 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { listSpeechProviders } from "../../tts/provider-registry.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { loadDispatchAcpMediaRuntime, resolveAcpAttachments } from "./dispatch-acp-attachments.js";
@@ -52,6 +53,14 @@ function loadDispatchAcpSessionRuntime() {
 function loadDispatchAcpTtsRuntime() {
   dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
   return dispatchAcpTtsRuntimePromise;
+}
+
+async function maybeApplyAcpTtsToPayload(
+  params: Parameters<Awaited<ReturnType<typeof loadDispatchAcpTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
+) {
+  listSpeechProviders(params.cfg);
+  const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
+  return maybeApplyTtsToPayload(params);
 }
 
 type DispatchProcessedRecorder = (
@@ -207,8 +216,7 @@ async function finalizeAcpTurnOutput(params: {
   let finalMediaDelivered = false;
   if (ttsMode === "final" && hasAccumulatedBlockText && canAttemptFinalTts) {
     try {
-      const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
-      const ttsSyntheticReply = await maybeApplyTtsToPayload({
+      const ttsSyntheticReply = await maybeApplyAcpTtsToPayload({
         payload: { text: accumulatedBlockText },
         cfg: params.cfg,
         channel: params.ttsChannel,

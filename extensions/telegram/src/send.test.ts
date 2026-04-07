@@ -1229,6 +1229,7 @@ describe("sendMessageTelegram", () => {
       contentType: string;
       fileName: string;
       asVoice?: boolean;
+      audioAsVoice?: boolean;
       messageThreadId?: number;
       replyToMessageId?: number;
       expectedMethod: "sendAudio" | "sendVoice";
@@ -1286,6 +1287,17 @@ describe("sendMessageTelegram", () => {
         expectedOptions: { caption: "caption", parse_mode: "HTML" },
       },
       {
+        name: "audioAsVoice alias routes compatible audio to sendVoice",
+        chatId: "123",
+        text: "caption",
+        mediaUrl: "https://example.com/clip.mp3",
+        contentType: "audio/mpeg",
+        fileName: "clip.mp3",
+        audioAsVoice: true,
+        expectedMethod: "sendVoice" as const,
+        expectedOptions: { caption: "caption", parse_mode: "HTML" },
+      },
+      {
         name: "normalizes parameterized audio MIME with mixed casing",
         chatId: "123",
         text: "caption",
@@ -1322,6 +1334,9 @@ describe("sendMessageTelegram", () => {
         api,
         mediaUrl: testCase.mediaUrl,
         ...("asVoice" in testCase && testCase.asVoice ? { asVoice: true } : {}),
+        ...("audioAsVoice" in testCase && testCase.audioAsVoice
+          ? { audioAsVoice: true }
+          : {}),
         ...("messageThreadId" in testCase && testCase.messageThreadId !== undefined
           ? { messageThreadId: testCase.messageThreadId }
           : {}),

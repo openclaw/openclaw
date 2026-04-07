@@ -2,6 +2,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
+import { listSpeechProviders } from "../../tts/provider-registry.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -24,6 +25,7 @@ let messageConfigRuntimePromise: Promise<typeof import("./message.config.runtime
   null;
 let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runtime.js")> | null =
   null;
+let messageTtsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
 
 function loadMessageConfigRuntime() {
   messageConfigRuntimePromise ??= import("./message.config.runtime.js");
@@ -33,6 +35,11 @@ function loadMessageConfigRuntime() {
 function loadMessageGatewayRuntime() {
   messageGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
   return messageGatewayRuntimePromise;
+}
+
+function loadMessageTtsRuntime() {
+  messageTtsRuntimePromise ??= import("../../tts/tts.runtime.js");
+  return messageTtsRuntimePromise;
 }
 
 export type MessageGatewayOptions = {
@@ -217,6 +224,30 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
   return randomIdempotencyKey();
 }
 
+async function maybeApplyTtsToOutboundPayloads(params: {
+  payloads: ReturnType<typeof normalizeReplyPayloadsForDelivery>;
+  cfg: OpenClawConfig;
+  channel: string;
+}): Promise<ReturnType<typeof normalizeReplyPayloadsForDelivery>> {
+  if (params.payloads.length === 0) {
+    return params.payloads;
+  }
+  listSpeechProviders(params.cfg);
+  const { maybeApplyTtsToPayload } = await loadMessageTtsRuntime();
+  const nextPayloads: ReturnType<typeof normalizeReplyPayloadsForDelivery> = [];
+  for (const payload of params.payloads) {
+    nextPayloads.push(
+      await maybeApplyTtsToPayload({
+        payload,
+        cfg: params.cfg,
+        channel: params.channel,
+        kind: "final",
+      }),
+    );
+  }
+  return nextPayloads;
+}
+
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
@@ -251,6 +282,19 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
 
   if (deliveryMode !== "gateway") {
     const outboundChannel = channel;
+    const ttsPayloads = await maybeApplyTtsToOutboundPayloads({
+      payloads: normalizedPayloads,
+      cfg,
+      channel: outboundChannel,
+    });
+    const ttsMirrorText = ttsPayloads
+      .map((payload) => payload.text)
+      .filter(Boolean)
+      .join("\n");
+    const ttsMirrorMediaUrls = ttsPayloads.flatMap(
+      (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
+    );
+    const ttsPrimaryMediaUrl = ttsMirrorMediaUrls[0] ?? primaryMediaUrl;
     const resolvedTarget = resolveOutboundTarget({
       channel: outboundChannel,
       to: params.to,
@@ -273,7 +317,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       to: resolvedTarget.to,
       session: outboundSession,
       accountId: params.accountId,
-      payloads: normalizedPayloads,
+      payloads: ttsPayloads,
       replyToId: params.replyToId,
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
@@ -285,8 +329,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mirror: params.mirror
         ? {
             ...params.mirror,
-            text: mirrorText || params.content,
-            mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+            text: ttsMirrorText || params.content,
+            mediaUrls: ttsMirrorMediaUrls.length ? ttsMirrorMediaUrls : undefined,
             idempotencyKey: params.mirror.idempotencyKey ?? params.idempotencyKey,
           }
         : undefined,
@@ -296,8 +340,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       channel,
       to: params.to,
       via: "direct",
-      mediaUrl: primaryMediaUrl,
-      mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
+      mediaUrl: ttsPrimaryMediaUrl,
+      mediaUrls: ttsMirrorMediaUrls.length ? ttsMirrorMediaUrls : undefined,
       result: results.at(-1),
     };
   }

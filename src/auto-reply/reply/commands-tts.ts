@@ -183,7 +183,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   }
 
   if (action === "provider") {
-    const currentProvider = getTtsProvider(config, prefsPath);
+    const currentProvider = getTtsProvider(config, prefsPath, params.cfg);
     if (!args.trim()) {
       const providers = listSpeechProviders(params.cfg);
       return {
@@ -289,7 +289,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
 
   if (action === "status") {
     const enabled = isTtsEnabled(config, prefsPath);
-    const provider = getTtsProvider(config, prefsPath);
+    const provider = getTtsProvider(config, prefsPath, params.cfg);
     const hasKey = isTtsProviderConfigured(config, provider, params.cfg);
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);

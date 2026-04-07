@@ -28,7 +28,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const cfg = loadConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
-      const provider = getTtsProvider(config, prefsPath);
+      const provider = getTtsProvider(config, prefsPath, cfg);
       const autoMode = resolveTtsAutoMode({ config, prefsPath });
       const fallbackProviders = resolveTtsProviderOrder(provider, cfg)
         .slice(1)
@@ -173,7 +173,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
           models: [...(provider.models ?? [])],
           voices: [...(provider.voices ?? [])],
         })),
-        active: getTtsProvider(config, prefsPath),
+        active: getTtsProvider(config, prefsPath, cfg),
       });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));

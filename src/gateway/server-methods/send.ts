@@ -17,6 +17,7 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.j
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { listSpeechProviders } from "../../tts/provider-registry.js";
 import {
   ErrorCodes,
   errorShape,
@@ -47,6 +48,37 @@ const getInflightMap = (context: GatewayRequestContext) => {
   }
   return inflight;
 };
+
+let sendTtsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
+
+function loadSendTtsRuntime() {
+  sendTtsRuntimePromise ??= import("../../tts/tts.runtime.js");
+  return sendTtsRuntimePromise;
+}
+
+async function maybeApplyTtsToOutboundPayloads(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  channel: string;
+  payloads: ReturnType<typeof normalizeReplyPayloadsForDelivery>;
+}) {
+  if (params.payloads.length === 0) {
+    return params.payloads;
+  }
+  listSpeechProviders(params.cfg);
+  const { maybeApplyTtsToPayload } = await loadSendTtsRuntime();
+  const nextPayloads: ReturnType<typeof normalizeReplyPayloadsForDelivery> = [];
+  for (const payload of params.payloads) {
+    nextPayloads.push(
+      await maybeApplyTtsToPayload({
+        payload,
+        cfg: params.cfg,
+        channel: params.channel,
+        kind: "final",
+      }),
+    );
+  }
+  return nextPayloads;
+}
 
 async function resolveRequestedChannel(params: {
   requestChannel: unknown;
@@ -289,14 +321,19 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const mirrorPayloads = normalizeReplyPayloadsForDelivery([
+        const normalizedPayloads = normalizeReplyPayloadsForDelivery([
           { text: message, mediaUrl, mediaUrls },
         ]);
-        const mirrorText = mirrorPayloads
+        const preparedPayloads = await maybeApplyTtsToOutboundPayloads({
+          cfg,
+          channel: outboundChannel,
+          payloads: normalizedPayloads,
+        });
+        const mirrorText = preparedPayloads
           .map((payload) => payload.text)
           .filter(Boolean)
           .join("\n");
-        const mirrorMediaUrls = mirrorPayloads.flatMap(
+        const mirrorMediaUrls = preparedPayloads.flatMap(
           (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
         );
         const providedSessionKey =
@@ -350,7 +387,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           channel: outboundChannel,
           to: deliveryTarget,
           accountId,
-          payloads: [{ text: message, mediaUrl, mediaUrls }],
+          payloads: preparedPayloads,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,

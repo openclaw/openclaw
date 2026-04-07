@@ -63,6 +63,9 @@ const ttsMocks = vi.hoisted(() => ({
   }),
   resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
 }));
+const ttsProviderRegistryMocks = vi.hoisted(() => ({
+  listSpeechProviders: vi.fn(() => []),
+}));
 
 const mediaUnderstandingMocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn(async (_params: unknown) => undefined),
@@ -277,6 +280,15 @@ describe("tryDispatchAcpReply", () => {
     vi.doMock("../../tts/tts.runtime.js", () => ({
       maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
     }));
+    vi.doMock("../../tts/provider-registry.js", async () => {
+      const actual = await vi.importActual<typeof import("../../tts/provider-registry.js")>(
+        "../../tts/provider-registry.js",
+      );
+      return {
+        ...actual,
+        listSpeechProviders: (cfg: OpenClawConfig) => ttsProviderRegistryMocks.listSpeechProviders(cfg),
+      };
+    });
     vi.doMock("../../tts/status-config.js", () => ({
       resolveStatusTtsSnapshot: () => ({
         autoMode: "always",
@@ -332,6 +344,8 @@ describe("tryDispatchAcpReply", () => {
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.resolveTtsConfig.mockReset();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsProviderRegistryMocks.listSpeechProviders.mockReset();
+    ttsProviderRegistryMocks.listSpeechProviders.mockReturnValue([]);
     mediaUnderstandingMocks.applyMediaUnderstanding.mockReset();
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
     sessionMetaMocks.readAcpSessionEntry.mockReset();
@@ -1236,6 +1250,19 @@ describe("tryDispatchAcpReply", () => {
     expectRoutedPayload(1, {
       text: "Task completed",
     });
+  });
+
+  it("warms speech providers before accumulated final TTS delivery", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "Task completed" }, {
+      mediaUrl: "https://example.com/final.mp3",
+      audioAsVoice: true,
+    } as MockTtsReply);
+
+    await runRoutedAcpTextTurn("Task completed");
+
+    expect(ttsProviderRegistryMocks.listSpeechProviders).toHaveBeenCalled();
   });
 
   it("skips fallback when TTS mode is all (blocks already processed with TTS)", async () => {

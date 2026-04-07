@@ -252,6 +252,27 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(body.voice_setting.voice_id).toBe("English_expressive_narrator");
     });
 
+    it("marks voice-note targets as voice compatible", async () => {
+      const hexAudio = Buffer.from("voice-note").toString("hex");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { audio: hexAudio } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      const result = await provider.synthesize({
+        text: "Voice note",
+        cfg: {} as never,
+        providerConfig: { apiKey: "sk-test", baseUrl: "https://api.minimaxi.com" },
+        target: "voice-note",
+        timeoutMs: 30000,
+      });
+
+      expect(result.voiceCompatible).toBe(true);
+    });
+
     it("applies overrides", async () => {
       const hexAudio = Buffer.from("audio").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);

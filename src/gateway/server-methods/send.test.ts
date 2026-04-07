@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
+  listSpeechProviders: vi.fn(() => []),
+  maybeApplyTtsToPayload: vi.fn(async (params: { payload: Record<string, unknown> }) => params.payload),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -90,6 +92,20 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("../../tts/provider-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../../tts/provider-registry.js")>(
+    "../../tts/provider-registry.js",
+  );
+  return {
+    ...actual,
+    listSpeechProviders: mocks.listSpeechProviders,
+  };
+});
+
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: mocks.maybeApplyTtsToPayload,
 }));
 
 vi.mock("../../config/sessions.js", async () => {
@@ -199,6 +215,12 @@ describe("gateway send mirroring", () => {
     });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
+    mocks.listSpeechProviders.mockReset();
+    mocks.listSpeechProviders.mockReturnValue([]);
+    mocks.maybeApplyTtsToPayload.mockReset();
+    mocks.maybeApplyTtsToPayload.mockImplementation(
+      async (params: { payload: Record<string, unknown> }) => params.payload,
+    );
     await loadFreshSendHandlersForTest();
   });
 
@@ -214,7 +236,12 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        payloads: [{ text: "", mediaUrl: "https://example.com/a.png", mediaUrls: undefined }],
+        payloads: [
+          expect.objectContaining({
+            text: "",
+            mediaUrl: "https://example.com/a.png",
+          }),
+        ],
       }),
     );
     expect(respond).toHaveBeenCalledWith(
@@ -242,6 +269,42 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({
         channel: "slack",
         gatewayClientScopes: ["operator.write"],
+      }),
+    );
+  });
+
+  it("applies TTS before gateway delivery for send requests", async () => {
+    mockDeliverySuccess("m-tts");
+    mocks.maybeApplyTtsToPayload.mockResolvedValue({
+      text: "hello world",
+      mediaUrl: "file:///tmp/voice.mp3",
+      audioAsVoice: true,
+    });
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello world",
+      channel: "slack",
+      idempotencyKey: "idem-tts",
+    });
+
+    expect(mocks.listSpeechProviders).toHaveBeenCalledWith({});
+    expect(mocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        kind: "final",
+        payload: expect.objectContaining({ text: "hello world" }),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "hello world",
+            mediaUrl: "file:///tmp/voice.mp3",
+            audioAsVoice: true,
+          }),
+        ],
       }),
     );
   });

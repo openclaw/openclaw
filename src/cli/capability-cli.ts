@@ -983,7 +983,7 @@ async function runTtsProviders(transport: CapabilityTransport) {
   }
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
-  const active = getTtsProvider(config, prefsPath);
+  const active = getTtsProvider(config, prefsPath, cfg);
   return {
     providers: listSpeechProviders(cfg).map((provider) => ({
       available: true,
@@ -1003,7 +1003,7 @@ async function runTtsVoices(providerRaw?: string) {
   const cfg = loadConfig();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
-  const provider = providerRaw?.trim() || getTtsProvider(config, prefsPath);
+  const provider = providerRaw?.trim() || getTtsProvider(config, prefsPath, cfg);
   return await listSpeechVoices({
     provider,
     cfg,

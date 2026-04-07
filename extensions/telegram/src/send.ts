@@ -86,6 +86,8 @@ type TelegramSendOpts = {
   plainText?: string;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   asVoice?: boolean;
+  /** Backward-compatible alias for `asVoice`. */
+  audioAsVoice?: boolean;
   /** Send video as video note instead of regular video. Defaults to false. */
   asVideoNote?: boolean;
   /** Send message silently (no notification). Defaults to false. */
@@ -922,7 +924,7 @@ export async function sendMessageTelegram(
       }
       if (kind === "audio") {
         const { useVoice } = resolveTelegramVoiceSend({
-          wantsVoice: opts.asVoice === true, // default false (backward compatible)
+          wantsVoice: opts.asVoice === true || opts.audioAsVoice === true,
           contentType: media.contentType,
           fileName,
           logFallback: logVerbose,

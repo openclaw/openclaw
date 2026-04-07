@@ -142,6 +142,9 @@ const ttsMocks = vi.hoisted(() => {
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
   };
 });
+const ttsProviderRegistryMocks = vi.hoisted(() => ({
+  listSpeechProviders: vi.fn(() => []),
+}));
 const threadInfoMocks = vi.hoisted(() => ({
   parseSessionThreadInfo: vi.fn<
     (sessionKey: string | undefined) => {
@@ -324,6 +327,15 @@ vi.mock("../../tts/tts.js", () => ({
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
+vi.mock("../../tts/provider-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../../tts/provider-registry.js")>(
+    "../../tts/provider-registry.js",
+  );
+  return {
+    ...actual,
+    listSpeechProviders: (cfg: OpenClawConfig) => ttsProviderRegistryMocks.listSpeechProviders(cfg),
+  };
+});
 vi.mock("../../tts/status-config.js", () => ({
   resolveStatusTtsSnapshot: () => ({
     autoMode: "always",
@@ -2869,6 +2881,8 @@ describe("before_dispatch hook", () => {
     threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
+    ttsProviderRegistryMocks.listSpeechProviders.mockReset();
+    ttsProviderRegistryMocks.listSpeechProviders.mockReturnValue([]);
     setNoAbort();
     hookMocks.runner.runBeforeDispatch.mockClear();
     hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
@@ -2951,6 +2965,19 @@ describe("before_dispatch hook", () => {
       }),
     );
     expect(result.queuedFinal).toBe(true);
+  });
+
+  it("warms speech providers before routed final TTS delivery", async () => {
+    ttsMocks.state.synthesizeFinalAudio = true;
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });
+
+    await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+    });
+
+    expect(ttsProviderRegistryMocks.listSpeechProviders).toHaveBeenCalledWith(emptyConfig);
   });
 
   it("continues default dispatch when hook returns not handled", async () => {

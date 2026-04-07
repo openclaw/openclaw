@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
   resolveRuntimePluginRegistry: vi.fn(),
+  listSpeechProviders: vi.fn(() => []),
+  maybeApplyTtsToPayload: vi.fn(async (params: { payload: Record<string, unknown> }) => params.payload),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -44,6 +46,14 @@ vi.mock("./deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
 }));
 
+vi.mock("../../tts/provider-registry.js", () => ({
+  listSpeechProviders: mocks.listSpeechProviders,
+}));
+
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: mocks.maybeApplyTtsToPayload,
+}));
+
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
@@ -63,6 +73,12 @@ describe("sendMessage", () => {
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
     mocks.resolveRuntimePluginRegistry.mockClear();
+    mocks.listSpeechProviders.mockClear();
+    mocks.listSpeechProviders.mockReturnValue([]);
+    mocks.maybeApplyTtsToPayload.mockClear();
+    mocks.maybeApplyTtsToPayload.mockImplementation(
+      async (params: { payload: Record<string, unknown> }) => params.payload,
+    );
 
     mocks.getChannelPlugin.mockReturnValue({
       outbound: { deliveryMode: "direct" },
@@ -135,5 +151,41 @@ describe("sendMessage", () => {
     });
 
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies TTS to direct outbound payloads before delivery", async () => {
+    mocks.maybeApplyTtsToPayload.mockResolvedValue({
+      text: "hello world",
+      mediaUrl: "file:///tmp/voice.mp3",
+      audioAsVoice: true,
+    });
+
+    const result = await sendMessage({
+      cfg: {},
+      channel: "telegram",
+      to: "123456",
+      content: "hello world",
+    });
+
+    expect(mocks.listSpeechProviders).toHaveBeenCalledWith({});
+    expect(mocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        kind: "final",
+        payload: expect.objectContaining({ text: "hello world" }),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "hello world",
+            mediaUrl: "file:///tmp/voice.mp3",
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+    expect(result.mediaUrl).toBe("file:///tmp/voice.mp3");
   });
 });

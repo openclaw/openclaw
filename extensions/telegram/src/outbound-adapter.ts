@@ -37,6 +37,7 @@ async function resolveTelegramSendContext(params: {
   accountId?: string | null;
   replyToId?: string | null;
   threadId?: string | number | null;
+  audioAsVoice?: boolean | null;
   gatewayClientScopes?: readonly string[];
 }): Promise<{
   send: TelegramSendFn;
@@ -46,6 +47,7 @@ async function resolveTelegramSendContext(params: {
     textMode: "html";
     messageThreadId?: number;
     replyToMessageId?: number;
+    asVoice?: boolean;
     accountId?: string;
     gatewayClientScopes?: readonly string[];
   };
@@ -61,6 +63,7 @@ async function resolveTelegramSendContext(params: {
       cfg: params.cfg,
       messageThreadId: parseTelegramThreadId(params.threadId),
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
+      asVoice: params.audioAsVoice === true ? true : undefined,
       accountId: params.accountId ?? undefined,
       gatewayClientScopes: params.gatewayClientScopes,
     },
@@ -131,6 +134,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       deps,
       replyToId,
       threadId,
+      audioAsVoice,
       gatewayClientScopes,
     }) => {
       const { send, baseOpts } = await resolveTelegramSendContext({
@@ -139,6 +143,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         accountId,
         replyToId,
         threadId,
+        audioAsVoice,
         gatewayClientScopes,
       });
       return await send(to, text, {
@@ -156,6 +161,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       deps,
       replyToId,
       threadId,
+      audioAsVoice,
       forceDocument,
       gatewayClientScopes,
     }) => {
@@ -165,6 +171,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         accountId,
         replyToId,
         threadId,
+        audioAsVoice,
         gatewayClientScopes,
       });
       return await send(to, text, {
@@ -203,6 +210,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       payload,
       baseOpts: {
         ...baseOpts,
+        asVoice: payload.audioAsVoice === true ? true : baseOpts.asVoice,
         mediaLocalRoots,
         mediaReadFile,
         forceDocument: forceDocument ?? false,

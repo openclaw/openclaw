@@ -473,10 +473,14 @@ export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
   setTtsAutoMode(prefsPath, enabled ? "always" : "off");
 }
 
-export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
+export function getTtsProvider(
+  config: ResolvedTtsConfig,
+  prefsPath: string,
+  cfg?: OpenClawConfig,
+): TtsProvider {
   const prefs = readPrefs(prefsPath);
   const prefsProvider =
-    canonicalizeSpeechProviderId(prefs.tts?.provider) ??
+    canonicalizeSpeechProviderId(prefs.tts?.provider, cfg) ??
     normalizeConfiguredSpeechProviderId(prefs.tts?.provider);
   if (prefsProvider) {
     return prefsProvider;
@@ -485,7 +489,7 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
     return normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider;
   }
 
-  for (const provider of sortSpeechProvidersForAutoSelection()) {
+  for (const provider of sortSpeechProvidersForAutoSelection(cfg)) {
     if (
       provider.isConfigured({
         providerConfig: config.providerConfigs[provider.id] ?? {},
@@ -518,7 +522,7 @@ export function resolveExplicitTtsOverrides(params: {
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const selectedProvider =
     canonicalizeSpeechProviderId(providerInput, params.cfg) ??
-    (modelId || voiceId ? getTtsProvider(config, prefsPath) : undefined);
+    (modelId || voiceId ? getTtsProvider(config, prefsPath, params.cfg) : undefined);
 
   if (providerInput && !selectedProvider) {
     throw new Error(`Unknown TTS provider "${providerInput}".`);
@@ -741,7 +745,7 @@ function resolveTtsRequestSetup(params: {
     };
   }
 
-  const userProvider = getTtsProvider(config, prefsPath);
+  const userProvider = getTtsProvider(config, prefsPath, params.cfg);
   const provider =
     canonicalizeSpeechProviderId(params.providerOverride, params.cfg) ?? userProvider;
   return {
@@ -1055,8 +1059,8 @@ export async function maybeApplyTtsToPayload(params: {
   if (isVerbose()) {
     const effectiveProvider = directives.overrides?.provider
       ? (canonicalizeSpeechProviderId(directives.overrides.provider, params.cfg) ??
-        getTtsProvider(config, prefsPath))
-      : getTtsProvider(config, prefsPath);
+        getTtsProvider(config, prefsPath, params.cfg))
+      : getTtsProvider(config, prefsPath, params.cfg);
     logVerbose(
       `TTS: auto mode enabled (${autoMode}), channel=${params.channel}, selected provider=${effectiveProvider}, config.provider=${config.provider}, config.providerSource=${config.providerSource}`,
     );

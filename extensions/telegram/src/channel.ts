@@ -151,6 +151,7 @@ function buildTelegramSendOptions(params: {
   accountId?: string | null;
   replyToId?: string | null;
   threadId?: string | number | null;
+  audioAsVoice?: boolean | null;
   silent?: boolean | null;
   forceDocument?: boolean | null;
   gatewayClientScopes?: readonly string[] | null;
@@ -162,6 +163,7 @@ function buildTelegramSendOptions(params: {
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     messageThreadId: parseTelegramThreadId(params.threadId),
     replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
+    asVoice: params.audioAsVoice === true ? true : undefined,
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
     forceDocument: params.forceDocument ?? undefined,
@@ -181,6 +183,7 @@ async function sendTelegramOutbound(params: {
   deps?: OutboundSendDeps;
   replyToId?: string | null;
   threadId?: string | number | null;
+  audioAsVoice?: boolean | null;
   silent?: boolean | null;
   gatewayClientScopes?: readonly string[] | null;
 }) {
@@ -195,6 +198,7 @@ async function sendTelegramOutbound(params: {
       accountId: params.accountId,
       replyToId: params.replyToId,
       threadId: params.threadId,
+      audioAsVoice: params.audioAsVoice,
       silent: params.silent,
       gatewayClientScopes: params.gatewayClientScopes,
     }),
@@ -1052,6 +1056,7 @@ export const telegramPlugin = createChatChannelPlugin({
             accountId,
             replyToId,
             threadId,
+            audioAsVoice: payload.audioAsVoice,
             silent,
             forceDocument,
             gatewayClientScopes,
@@ -1070,6 +1075,7 @@ export const telegramPlugin = createChatChannelPlugin({
         deps,
         replyToId,
         threadId,
+        audioAsVoice,
         silent,
         gatewayClientScopes,
       }) =>
@@ -1081,6 +1087,7 @@ export const telegramPlugin = createChatChannelPlugin({
           deps,
           replyToId,
           threadId,
+          audioAsVoice,
           silent,
           gatewayClientScopes,
         }),
@@ -1094,6 +1101,7 @@ export const telegramPlugin = createChatChannelPlugin({
         deps,
         replyToId,
         threadId,
+        audioAsVoice,
         silent,
         gatewayClientScopes,
       }) =>
@@ -1107,6 +1115,7 @@ export const telegramPlugin = createChatChannelPlugin({
           deps,
           replyToId,
           threadId,
+          audioAsVoice,
           silent,
           gatewayClientScopes,
         }),
