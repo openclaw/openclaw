@@ -1,3 +1,10 @@
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  buildOutboundMediaLoadOptions,
+  isGifMedia,
+  kindFromMime,
+  normalizePollInput,
+} from "openclaw/plugin-sdk/media-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 
@@ -89,14 +96,6 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
-  return {
-    ...actual,
-    getImageMetadata: vi.fn(async () => ({ ...imageMetadata })),
-  };
-});
-
 vi.mock("grammy", () => ({
   API_CONSTANTS: {
     DEFAULT_UPDATE_TYPES: ["message"],
@@ -136,14 +135,17 @@ vi.mock("undici", () => ({
   setGlobalDispatcher: undiciSetGlobalDispatcher,
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig,
-    resolveStorePath,
-  };
-});
+vi.mock("./send.runtime.js", () => ({
+  buildOutboundMediaLoadOptions,
+  getImageMetadata: vi.fn(async () => ({ ...imageMetadata })),
+  isGifMedia,
+  kindFromMime,
+  loadConfig,
+  loadWebMedia,
+  normalizePollInput,
+  resolveMarkdownTableMode,
+  resolveStorePath,
+}));
 
 vi.mock("./target-writeback.js", () => ({
   maybePersistResolvedTelegramTarget,

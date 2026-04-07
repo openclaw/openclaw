@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { CronDeliveryStatus, CronRunStatus, CronRunTelemetry } from "./types.js";
 
 export type CronRunLogEntry = {
@@ -239,7 +240,7 @@ function normalizeDeliveryStatuses(opts?: {
 }
 
 function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunLogEntry[] {
-  const jobId = opts?.jobId?.trim() || undefined;
+  const jobId = normalizeOptionalString(opts?.jobId);
   if (!raw.trim()) {
     return [];
   }

@@ -24,6 +24,9 @@ export type {
   MemoryCitationsMode,
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
+  MemoryPluginCapability,
+  MemoryPluginPublicArtifact,
+  MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
   OpenClawConfig,
@@ -46,6 +49,20 @@ export {
   withProgress,
   withProgressTotals,
 } from "./memory-core-host-runtime-cli.js";
+export {
+  appendMemoryHostEvent,
+  readMemoryHostEvents,
+  resolveMemoryHostEventLogPath,
+} from "./memory-core-host-events.js";
+export type { MemoryHostEvent } from "./memory-core-host-events.js";
+export {
+  resolveMemoryCorePluginConfig,
+  formatMemoryDreamingDay,
+  isSameMemoryDreamingDay,
+  resolveMemoryDeepDreamingConfig,
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspaces,
+} from "./memory-core-host-status.js";
 export {
   listMemoryFiles,
   normalizeExtraMemoryPaths,

@@ -1,34 +1,51 @@
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
 } from "../../../test/helpers/plugins/plugin-registry.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../src/types.js";
 
 type MonitorModule = typeof import("../src/monitor.js");
 type SecretInputModule = typeof import("../src/secret-input.js");
+type WebhookModule = typeof import("../src/monitor.webhook.js");
 
 const monitorModuleUrl = new URL("../src/monitor.ts", import.meta.url).href;
 const secretInputModuleUrl = new URL("../src/secret-input.ts", import.meta.url).href;
+const webhookModuleUrl = new URL("../src/monitor.webhook.ts", import.meta.url).href;
 const apiModuleId = new URL("../src/api.js", import.meta.url).pathname;
 const runtimeModuleId = new URL("../src/runtime.js", import.meta.url).pathname;
 
-const lifecycleMocks = vi.hoisted(() => ({
-  setWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-  deleteWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-  getWebhookInfoMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-  getUpdatesMock: vi.fn(() => new Promise(() => {})),
-  sendChatActionMock: vi.fn(async () => ({ ok: true })),
-  sendMessageMock: vi.fn(async () => ({
-    ok: true,
-    result: { message_id: "zalo-test-reply-1" },
-  })),
-  sendPhotoMock: vi.fn(async () => ({ ok: true })),
-  getZaloRuntimeMock: vi.fn(),
-}));
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type ZaloLifecycleMocks = {
+  setWebhookMock: AsyncUnknownMock;
+  deleteWebhookMock: AsyncUnknownMock;
+  getWebhookInfoMock: AsyncUnknownMock;
+  getUpdatesMock: UnknownMock;
+  sendChatActionMock: AsyncUnknownMock;
+  sendMessageMock: AsyncUnknownMock;
+  sendPhotoMock: AsyncUnknownMock;
+  getZaloRuntimeMock: UnknownMock;
+};
+
+const lifecycleMocks = vi.hoisted(
+  (): ZaloLifecycleMocks => ({
+    setWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
+    deleteWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
+    getWebhookInfoMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
+    getUpdatesMock: vi.fn(() => new Promise(() => {})),
+    sendChatActionMock: vi.fn(async () => ({ ok: true })),
+    sendMessageMock: vi.fn(async () => ({
+      ok: true,
+      result: { message_id: "zalo-test-reply-1" },
+    })),
+    sendPhotoMock: vi.fn(async () => ({ ok: true })),
+    getZaloRuntimeMock: vi.fn(),
+  }),
+);
 
 export const setWebhookMock = lifecycleMocks.setWebhookMock;
 export const deleteWebhookMock = lifecycleMocks.deleteWebhookMock;
@@ -37,11 +54,11 @@ export const getUpdatesMock = lifecycleMocks.getUpdatesMock;
 export const sendChatActionMock = lifecycleMocks.sendChatActionMock;
 export const sendMessageMock = lifecycleMocks.sendMessageMock;
 export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
-export const getZaloRuntimeMock = lifecycleMocks.getZaloRuntimeMock;
+export const getZaloRuntimeMock: UnknownMock = lifecycleMocks.getZaloRuntimeMock;
 
 function installLifecycleModuleMocks() {
-  vi.doMock(apiModuleId, async (importOriginal) => {
-    const actual = await importOriginal<object>();
+  vi.doMock(apiModuleId, async () => {
+    const actual = await vi.importActual<object>(apiModuleId);
     return {
       ...actual,
       deleteWebhook: lifecycleMocks.deleteWebhookMock,
@@ -79,13 +96,13 @@ async function importSecretInputModule(cacheBust: string): Promise<SecretInputMo
   )) as SecretInputModule;
 }
 
+async function importWebhookModule(cacheBust: string): Promise<WebhookModule> {
+  return (await import(`${webhookModuleUrl}?t=${cacheBust}-${Date.now()}`)) as WebhookModule;
+}
+
 export async function resetLifecycleTestState() {
   vi.clearAllMocks();
-  const { clearZaloWebhookSecurityStateForTest } = await importMonitorModule({
-    cacheBust: "reset",
-    mocked: false,
-  });
-  clearZaloWebhookSecurityStateForTest();
+  (await importWebhookModule("reset-webhook")).clearZaloWebhookSecurityStateForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
 

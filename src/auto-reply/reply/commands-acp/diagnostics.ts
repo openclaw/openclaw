@@ -6,6 +6,7 @@ import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta
 import { loadSessionStore } from "../../../config/sessions.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandBindingContext } from "./context.js";
 import {
@@ -14,7 +15,6 @@ import {
   ACP_SESSIONS_USAGE,
   formatAcpCapabilitiesText,
   resolveAcpInstallCommandHint,
-  resolveConfiguredAcpBackendId,
   stopWithText,
 } from "./shared.js";
 import { resolveBoundAcpThreadSessionKey } from "./targets.js";
@@ -27,7 +27,7 @@ export async function handleAcpDoctorAction(
     return stopWithText(`⚠️ ${ACP_DOCTOR_USAGE}`);
   }
 
-  const backendId = resolveConfiguredAcpBackendId(params.cfg);
+  const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const registeredBackend = getAcpRuntimeBackend(backendId);
   const managerSnapshot = getAcpSessionManager().getObservabilitySnapshot(params.cfg);
@@ -115,7 +115,7 @@ export function handleAcpInstallAction(
   if (restTokens.length > 0) {
     return stopWithText(`⚠️ ${ACP_INSTALL_USAGE}`);
   }
-  const backendId = resolveConfiguredAcpBackendId(params.cfg);
+  const backendId = normalizeOptionalString(params.cfg.acp?.backend) ?? "acpx";
   const installHint = resolveAcpInstallCommandHint(params.cfg);
   const lines = [
     "ACP install:",
@@ -139,7 +139,7 @@ function formatAcpSessionLine(params: {
     return "";
   }
   const marker = params.currentSessionKey === params.key ? "*" : " ";
-  const label = params.entry.label?.trim() || acp.agent;
+  const label = normalizeOptionalString(params.entry.label) || acp.agent;
   const threadText = params.threadId ? `, thread:${params.threadId}` : "";
   return `${marker} ${label} (${acp.mode}, ${acp.state}, backend:${acp.backend}${threadText}) -> ${params.key}`;
 }

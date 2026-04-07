@@ -14,31 +14,10 @@ import {
   createHybridChannelConfigBase,
   mapAllowFromEntries,
   resolveChannelConfigWrites,
-  resolveIMessageConfigAllowFrom,
-  resolveIMessageConfigDefaultTo,
   resolveOptionalConfigString,
-  resolveWhatsAppConfigAllowFrom,
-  resolveWhatsAppConfigDefaultTo,
 } from "./channel-config-helpers.js";
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
-
-function createMergedReaderCfg(
-  channelId: "whatsapp" | "imessage",
-  accountConfig: { allowFrom: string[]; defaultTo: string },
-) {
-  return {
-    channels: {
-      [channelId]: {
-        allowFrom: ["root"],
-        defaultTo: " root:chat ",
-        accounts: {
-          alt: accountConfig,
-        },
-      },
-    },
-  };
-}
 
 function createConfigWritesCfg() {
   return {
@@ -116,34 +95,6 @@ describe("resolveOptionalConfigString", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(resolveOptionalConfigString(input)).toBe(expected);
-  });
-});
-
-describe("provider config readers", () => {
-  it.each([
-    {
-      name: "reads merged WhatsApp allowFrom/defaultTo without the channel registry",
-      cfg: createMergedReaderCfg("whatsapp", {
-        allowFrom: ["49123", "42"],
-        defaultTo: " alt:chat ",
-      }),
-      resolveAllowFrom: resolveWhatsAppConfigAllowFrom,
-      resolveDefaultTo: resolveWhatsAppConfigDefaultTo,
-      expectedAllowFrom: ["49123", "42"],
-    },
-    {
-      name: "reads merged iMessage allowFrom/defaultTo without the channel registry",
-      cfg: createMergedReaderCfg("imessage", {
-        allowFrom: ["chat_id:9", "user@example.com"],
-        defaultTo: " alt:chat ",
-      }),
-      resolveAllowFrom: resolveIMessageConfigAllowFrom,
-      resolveDefaultTo: resolveIMessageConfigDefaultTo,
-      expectedAllowFrom: ["chat_id:9", "user@example.com"],
-    },
-  ])("$name", ({ cfg, resolveAllowFrom, resolveDefaultTo, expectedAllowFrom }) => {
-    expect(resolveAllowFrom({ cfg, accountId: "alt" })).toEqual(expectedAllowFrom);
-    expect(resolveDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
   });
 });
 

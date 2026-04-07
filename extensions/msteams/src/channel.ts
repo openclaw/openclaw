@@ -6,12 +6,12 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
   projectConfigWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -20,16 +20,20 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { msTeamsApprovalAuth } from "./approval-auth.js";
 import {
   buildProbeChannelStatusSummary,
   chunkTextForOutbound,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
-} from "../runtime-api.js";
-import { msTeamsApprovalAuth } from "./approval-auth.js";
+  type ChannelMessageActionName,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "./channel-api.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
+import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
 import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
@@ -41,7 +45,7 @@ import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { getMSTeamsRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 import { msteamsSetupAdapter } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
@@ -200,13 +204,6 @@ function resolveActionContent(params: Record<string, unknown>): string {
         : "";
 }
 
-function readOptionalTrimmedString(
-  params: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  return typeof params[key] === "string" ? params[key].trim() || undefined : undefined;
-}
-
 function resolveActionUploadFilePath(params: Record<string, unknown>): string | undefined {
   for (const key of ["filePath", "path", "media"] as const) {
     if (typeof params[key] === "string") {
@@ -331,6 +328,8 @@ function describeMSTeamsMessageTool({
           "reactions",
           "search",
           "member-info",
+          "channel-list",
+          "channel-info",
         ] satisfies ChannelMessageActionName[])
       : [],
     capabilities: enabled ? ["cards"] : [],
@@ -383,7 +382,18 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }),
       },
       auth: msTeamsApprovalAuth,
+      doctor: {
+        dmAllowFromMode: "topOnly",
+        groupModel: "hybrid",
+        groupAllowFromFallbackToAllowFrom: false,
+        warnOnEmptyGroupSenderAllowlist: true,
+        collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
+      },
       setup: msteamsSetupAdapter,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
@@ -623,8 +633,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                   text: resolveActionContent(ctx.params),
                   mediaUrl,
                   filename:
-                    readOptionalTrimmedString(ctx.params, "filename") ??
-                    readOptionalTrimmedString(ctx.params, "title"),
+                    normalizeOptionalString(ctx.params.filename) ??
+                    normalizeOptionalString(ctx.params.title),
                   mediaLocalRoots: ctx.mediaLocalRoots,
                   mediaReadFile: ctx.mediaReadFile,
                 });
@@ -855,6 +865,34 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             return jsonMSTeamsOkActionResult("member-info", result);
           }
 
+          if (ctx.action === "channel-list") {
+            const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
+            if (!teamId) {
+              return actionError("channel-list requires a teamId.");
+            }
+            const { listChannelsMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await listChannelsMSTeams({ cfg: ctx.cfg, teamId });
+            return jsonMSTeamsOkActionResult("channel-list", result);
+          }
+
+          if (ctx.action === "channel-info") {
+            const teamId = typeof ctx.params.teamId === "string" ? ctx.params.teamId.trim() : "";
+            const channelId =
+              typeof ctx.params.channelId === "string" ? ctx.params.channelId.trim() : "";
+            if (!teamId || !channelId) {
+              return actionError("channel-info requires teamId and channelId.");
+            }
+            const { getChannelInfoMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await getChannelInfoMSTeams({
+              cfg: ctx.cfg,
+              teamId,
+              channelId,
+            });
+            return jsonMSTeamsOkActionResult("channel-info", {
+              channelInfo: result.channel,
+            });
+          }
+
           // Return null to fall through to default handler
           return null as never;
         },
@@ -886,7 +924,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               const hint = TEAMS_GRAPH_PERMISSION_HINTS[permission];
               return hint ? `${permission} (${hint})` : permission;
             };
-            if (graph.ok === false) {
+            if (!graph.ok) {
               lines.push({ text: `Graph: ${graph.error ?? "failed"}`, tone: "error" });
             } else if (roles.length > 0 || scopes.length > 0) {
               if (roles.length > 0) {
@@ -895,7 +933,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               if (scopes.length > 0) {
                 lines.push({ text: `Graph scopes: ${scopes.map(formatPermission).join(", ")}` });
               }
-            } else if (graph.ok === true) {
+            } else if (graph.ok) {
               lines.push({ text: "Graph: ok" });
             }
           }
@@ -946,7 +984,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
+        currentChannelId: normalizeOptionalString(context.To),
         currentThreadTs: context.ReplyToId,
         hasRepliedRef,
       }),

@@ -4,6 +4,7 @@ import { matchesApprovalRequestFilters } from "../infra/approval-request-filters
 import { getExecApprovalReplyMetadata } from "../infra/exec-approval-reply.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 import { normalizeAccountId } from "./routing.js";
 
@@ -23,11 +24,6 @@ type ApprovalProfileParams = {
   accountId?: string | null;
 };
 
-function defaultNormalizeSenderId(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
   const execApprovals = cfg.approvals?.exec;
   if (!execApprovals?.enabled) {
@@ -35,6 +31,8 @@ function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
   }
   return execApprovals.mode === "targets" || execApprovals.mode === "both";
 }
+
+export { getExecApprovalReplyMetadata, matchesApprovalRequestFilters };
 
 export function isChannelExecApprovalClientEnabledFromConfig(params: {
   enabled?: ChannelExecApprovalEnableMode;
@@ -58,7 +56,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
     normalizedAccountId?: string;
   }) => boolean;
 }): boolean {
-  const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
+  const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
   const normalizedSenderId = params.senderId ? normalizeSenderId(params.senderId) : undefined;
   const normalizedChannel = params.channel.trim().toLowerCase();
   if (!normalizedSenderId || !isApprovalTargetsMode(params.cfg)) {
@@ -98,7 +96,7 @@ export function createChannelExecApprovalProfile(params: {
   fallbackAgentIdFromSessionKey?: boolean;
   requireClientEnabledForLocalPromptSuppression?: boolean;
 }) {
-  const normalizeSenderId = params.normalizeSenderId ?? defaultNormalizeSenderId;
+  const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
 
   const isClientEnabled = (input: ApprovalProfileParams): boolean => {
     const config = params.resolveConfig(input);

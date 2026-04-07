@@ -15,6 +15,7 @@ import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
+  backfillMatrixAuthDeviceIdAfterStartup,
   isBunRuntime,
   resolveMatrixAuth,
   resolveMatrixAuthContext,
@@ -207,6 +208,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
+  const dmSessionScope = dmConfig?.sessionScope ?? "per-user";
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix", effectiveAccountId);
   const globalGroupChatHistoryLimit = (
     cfg.messages as { groupChat?: { historyLimit?: number } } | undefined
@@ -214,8 +216,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const historyLimit = Math.max(0, accountConfig.historyLimit ?? globalGroupChatHistoryLimit ?? 0);
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
-  const streaming: "partial" | "off" =
-    accountConfig.streaming === true || accountConfig.streaming === "partial" ? "partial" : "off";
+  const streaming: "partial" | "quiet" | "off" =
+    accountConfig.streaming === true || accountConfig.streaming === "partial"
+      ? "partial"
+      : accountConfig.streaming === "quiet"
+        ? "quiet"
+        : "off";
   const blockStreamingEnabled = accountConfig.blockStreaming === true;
   const startupMs = Date.now();
   const startupGraceMs = 0;
@@ -271,6 +277,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     replyToMode,
     threadReplies,
     dmThreadReplies,
+    dmSessionScope,
     streaming,
     blockStreamingEnabled,
     dmEnabled,
@@ -345,6 +352,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
     // Shared client is already started via resolveSharedMatrixClient.
     logger.info(`matrix: logged in as ${auth.userId}`);
+    void backfillMatrixAuthDeviceIdAfterStartup({
+      auth,
+      env: process.env,
+      abortSignal: opts.abortSignal,
+    }).catch((err) => {
+      logVerboseMessage(`matrix: failed to backfill deviceId after startup (${String(err)})`);
+    });
 
     execApprovalsHandler = new MatrixExecApprovalHandler({
       client,

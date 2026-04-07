@@ -200,7 +200,7 @@ export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
   return XAI_MODEL_CATALOG.map((entry) => toModelDefinition(entry));
 }
 
-export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig | undefined {
+export function resolveXaiCatalogEntry(modelId: string) {
   const lower = modelId.trim().toLowerCase();
   const exact = XAI_MODEL_CATALOG.find((entry) => entry.id.toLowerCase() === lower);
   if (exact) {

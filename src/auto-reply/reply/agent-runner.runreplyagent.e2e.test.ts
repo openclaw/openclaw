@@ -42,7 +42,6 @@ type EmbeddedRunParams = {
 const state = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
   runEmbeddedPiAgentMock: vi.fn(),
-  runCliAgentMock: vi.fn(),
 }));
 
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
@@ -86,10 +85,6 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
 
-vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: (params: unknown) => state.runCliAgentMock(params),
-}));
-
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
@@ -106,7 +101,6 @@ beforeAll(async () => {
 beforeEach(() => {
   state.compactEmbeddedPiSessionMock.mockClear();
   state.runEmbeddedPiAgentMock.mockClear();
-  state.runCliAgentMock.mockClear();
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
@@ -162,6 +156,7 @@ function createMinimalRun(params?: {
       },
       timeoutMs: 1_000,
       blockReplyBreak: "message_end",
+      skipProviderRuntimeHints: process.env.OPENCLAW_TEST_FAST === "1",
       ...params?.runOverrides,
     },
   } as unknown as FollowupRun;
@@ -188,7 +183,7 @@ function createMinimalRun(params?: {
         sessionKey,
         storePath: params?.storePath,
         sessionCtx,
-        defaultModel: "anthropic/claude-opus-4-5",
+        defaultModel: "anthropic/claude-opus-4-6",
         resolvedVerboseLevel: params?.resolvedVerboseLevel ?? "off",
         isNewSession: false,
         blockStreamingEnabled: params?.blockStreamingEnabled ?? false,
@@ -294,7 +289,7 @@ async function runReplyAgentWithBase(params: {
     sessionStore: { [params.sessionKey]: params.sessionEntry } as Record<string, SessionEntry>,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
-    defaultModel: "anthropic/claude-opus-4-5",
+    defaultModel: "anthropic/claude-opus-4-6",
     agentCfgContextTokens: 100_000,
     resolvedVerboseLevel: "off",
     isNewSession: false,
@@ -899,7 +894,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           attempts: [
             {
               provider: "fireworks",
-              model: "fireworks/minimax-m2p5",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
               error: "Provider fireworks is in cooldown (all profiles unavailable)",
               reason: "rate_limit",
             },
@@ -960,7 +955,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           attempts: [
             {
               provider: "fireworks",
-              model: "fireworks/minimax-m2p5",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
               error: "Provider fireworks is in cooldown (all profiles unavailable)",
               reason: "rate_limit",
             },
@@ -1034,7 +1029,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
             attempts: [
               {
                 provider: "fireworks",
-                model: "fireworks/minimax-m2p5",
+                model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
                 error: "Provider fireworks is in cooldown (all profiles unavailable)",
                 reason: "rate_limit",
               },
@@ -1097,7 +1092,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
               attempts: [
                 {
                   provider: "fireworks",
-                  model: "fireworks/minimax-m2p5",
+                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
                   error: "Provider fireworks is in cooldown (all profiles unavailable)",
                   reason: "rate_limit",
                 },
@@ -1177,7 +1172,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
               attempts: [
                 {
                   provider: "fireworks",
-                  model: "fireworks/minimax-m2p5",
+                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
                   error: "Provider fireworks is in cooldown (all profiles unavailable)",
                   reason: "rate_limit",
                 },
@@ -1299,7 +1294,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionId,
         updatedAt: Date.now(),
         sessionFile: transcriptPath,
-        fallbackNoticeSelectedModel: "fireworks/minimax-m2p5",
+        fallbackNoticeSelectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
         fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
         fallbackNoticeReason: "rate limit",
       };
@@ -1756,11 +1751,6 @@ describe("runReplyAgent memory flush", () => {
         payloads: [{ text: "ok" }],
         meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       }));
-      state.runCliAgentMock.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-      });
-
       const baseRun = createBaseRun({
         storePath,
         sessionEntry,
@@ -1775,10 +1765,11 @@ describe("runReplyAgent memory flush", () => {
         commandBody: "hello",
       });
 
-      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
-      const call = state.runCliAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined;
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      const call = state.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+        | { prompt?: string }
+        | undefined;
       expect(call?.prompt).toBe("hello");
-      expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 

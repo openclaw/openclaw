@@ -112,9 +112,9 @@ describe("models-config: explicit reasoning override", () => {
     });
   });
 
-  it("falls back to built-in reasoning:true when user omits the field (MiniMax-M2.7)", async () => {
-    // When the user does not set reasoning at all, the built-in catalog value
-    // (true for MiniMax-M2.7) should be used so the model works out of the box.
+  it("keeps reasoning unset when user omits the field (MiniMax-M2.7)", async () => {
+    // Inline user model entries preserve omitted fields instead of silently
+    // inheriting built-in defaults from the provider catalog.
     await withTempHome(async () => {
       await withMinimaxApiKey(async () => {
         // Omit 'reasoning' to simulate a user config that doesn't set it.
@@ -140,8 +140,7 @@ describe("models-config: explicit reasoning override", () => {
 
         const m25 = await generateAndReadMinimaxModel(cfg);
         expect(m25).toBeDefined();
-        // Built-in catalog has reasoning:true — should be applied as default.
-        expect(m25?.reasoning).toBe(true);
+        expect(m25?.reasoning).toBeUndefined();
       });
     });
   });

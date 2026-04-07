@@ -5,10 +5,12 @@ import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
   type SessionArchiveReason,
+} from "../config/sessions/artifacts.js";
+import {
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
-} from "../config/sessions.js";
+} from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 
 export type ArchiveFileReason = SessionArchiveReason;

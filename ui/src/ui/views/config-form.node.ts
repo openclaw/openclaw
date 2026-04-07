@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { formatUnknownText } from "../format.ts";
 import { icons as sharedIcons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
@@ -28,6 +29,27 @@ function jsonValue(value: unknown): string {
   } catch {
     return "";
   }
+}
+
+function formatComparablePrimitive(value: unknown): string | null {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  return null;
+}
+
+function matchesComparablePrimitiveValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  const leftComparable = formatComparablePrimitive(left);
+  const rightComparable = formatComparablePrimitive(right);
+  return leftComparable !== null && leftComparable === rightComparable;
 }
 
 // SVG Icons as template literals
@@ -474,17 +496,13 @@ export function renderNode(params: {
               (lit) => html`
                 <button
                   type="button"
-                  class="cfg-segmented__btn ${
-                    // oxlint-disable typescript/no-base-to-string
-                    lit === resolvedValue || String(lit) === String(resolvedValue) ? "active" : ""
-                  }"
+                  class="cfg-segmented__btn ${matchesComparablePrimitiveValue(lit, resolvedValue)
+                    ? "active"
+                    : ""}"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, lit)}
                 >
-                  ${
-                    // oxlint-disable typescript/no-base-to-string
-                    String(lit)
-                  }
+                  ${formatUnknownText(lit)}
                 </button>
               `,
             )}
@@ -553,14 +571,13 @@ export function renderNode(params: {
               (opt) => html`
                 <button
                   type="button"
-                  class="cfg-segmented__btn ${opt === resolvedValue ||
-                  String(opt) === String(resolvedValue)
+                  class="cfg-segmented__btn ${matchesComparablePrimitiveValue(opt, resolvedValue)
                     ? "active"
                     : ""}"
                   ?disabled=${disabled}
                   @click=${() => onPatch(path, opt)}
                 >
-                  ${String(opt)}
+                  ${formatUnknownText(opt)}
                 </button>
               `,
             )}
@@ -666,8 +683,7 @@ function renderTextInput(params: {
         : "Structured value (SecretRef) - edit the config file directly"
       : REDACTED_PLACEHOLDER
     : (hint?.placeholder ??
-      // oxlint-disable typescript/no-base-to-string
-      (schema.default !== undefined ? `Default: ${String(schema.default)}` : ""));
+      (schema.default !== undefined ? `Default: ${formatUnknownText(schema.default)}` : ""));
   const displayValue = effectiveRedacted
     ? ""
     : isStructuredValue
@@ -684,7 +700,7 @@ function renderTextInput(params: {
           type=${effectiveInputType}
           class="cfg-input${effectiveRedacted ? " cfg-input--redacted" : ""}"
           placeholder=${placeholder}
-          .value=${displayValue == null ? "" : String(displayValue)}
+          .value=${formatUnknownText(displayValue)}
           ?disabled=${disabled}
           ?readonly=${effectiveRedacted}
           @click=${() => {
@@ -778,7 +794,7 @@ function renderNumberInput(params: {
         <input
           type="number"
           class="cfg-number__input"
-          .value=${displayValue == null ? "" : String(displayValue)}
+          .value=${formatUnknownText(displayValue)}
           ?disabled=${disabled}
           @input=${(e: Event) => {
             const raw = (e.target as HTMLInputElement).value;

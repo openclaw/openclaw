@@ -3,6 +3,7 @@ import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js"
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 import {
   type AcpHiddenBoundarySeparator,
@@ -140,15 +141,15 @@ function shouldFlushLiveBufferOnIdle(text: string): boolean {
 
 function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_call" }>): string {
   const detailParts: string[] = [];
-  const title = event.title?.trim();
+  const title = normalizeOptionalString(event.title);
   if (title) {
     detailParts.push(title);
   }
-  const status = event.status?.trim();
+  const status = normalizeOptionalString(event.status);
   if (status) {
     detailParts.push(`status=${status}`);
   }
-  const fallback = event.text?.trim();
+  const fallback = normalizeOptionalString(event.text);
   if (detailParts.length === 0 && fallback) {
     detailParts.push(fallback);
   }
@@ -334,7 +335,7 @@ export function createAcpReplyProjector(params: {
     const renderedToolSummary = renderToolSummaryText(event);
     const toolSummary = truncateText(renderedToolSummary, settings.maxSessionUpdateChars);
     const hash = hashText(renderedToolSummary);
-    const toolCallId = event.toolCallId?.trim() || undefined;
+    const toolCallId = normalizeOptionalString(event.toolCallId);
     const status = normalizeToolStatus(event.status);
     const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;
     const isStart = status === "in_progress" || event.tag === "tool_call";
