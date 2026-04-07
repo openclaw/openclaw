@@ -9,14 +9,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
-export const BUNDLED_PLUGIN_INSTALL_TARGETS = [
-  {
-    name: "@buape/carbon",
-    version: "0.14.0",
-    pluginIds: ["discord"],
-  },
-];
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
@@ -42,20 +34,10 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
   const pathExists = params.existsSync ?? existsSync;
   const readDir = params.readdirSync ?? readdirSync;
   const readJsonFile = params.readJson ?? readJson;
-  const deps = new Map(
-    BUNDLED_PLUGIN_INSTALL_TARGETS.map((target) => [
-      target.name,
-      {
-        name: target.name,
-        version: target.version,
-        sentinelPath: dependencySentinelPath(target.name),
-        pluginIds: [...(target.pluginIds ?? [])],
-      },
-    ]),
-  );
+  const deps = new Map();
 
   if (!pathExists(extensionsDir)) {
-    return [...deps.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+    return [];
   }
 
   for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
