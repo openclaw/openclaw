@@ -89,9 +89,20 @@ describe("check-extension-package-tsc-boundary", () => {
     const processObject = new EventEmitter();
     const release = acquireBoundaryCheckLock({ processObject, rootDir });
 
-    expect(() => acquireBoundaryCheckLock({ rootDir })).toThrow(
-      "another extension package boundary check is already running",
-    );
+    let thrownError = null;
+    try {
+      acquireBoundaryCheckLock({ rootDir });
+    } catch (error) {
+      thrownError = error;
+    }
+
+    expect(thrownError).toMatchObject({
+      message: expect.stringContaining("kind: lock-contention"),
+      fullOutput: expect.stringContaining(
+        "another extension package boundary check is already running",
+      ),
+      kind: "lock-contention",
+    });
 
     release();
 
@@ -106,12 +117,16 @@ describe("check-extension-package-tsc-boundary", () => {
     const message = formatStepFailure("demo-plugin", {
       stdout,
       stderr,
+      kind: "timeout",
+      elapsedMs: 4_321,
       note: "demo-plugin timed out after 5000ms",
     });
     const messageLines = message.split("\n");
 
     expect(message).toContain("demo-plugin");
     expect(message).toContain("[... 5 earlier lines omitted ...]");
+    expect(message).toContain("kind: timeout");
+    expect(message).toContain("elapsed: 4321ms");
     expect(message).toContain("stdout 45");
     expect(messageLines).not.toContain("stdout 1");
     expect(message).toContain("stderr:\nstderr 1\nstderr 2\nstderr 3");
@@ -136,6 +151,8 @@ describe("check-extension-package-tsc-boundary", () => {
     ).rejects.toMatchObject({
       message: expect.stringContaining("[... 6 earlier lines omitted ...]"),
       fullOutput: expect.stringContaining("src/cli/acp-cli.ts"),
+      kind: "nonzero-exit",
+      elapsedMs: expect.any(Number),
     });
   });
 

@@ -14,6 +14,7 @@ import {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./group-policy.js";
+import { blueBubblesSetupAdapter, blueBubblesSetupWizard } from "./setup-surface.js";
 import {
   inferBlueBubblesTargetChatType,
   isAllowedBlueBubblesSender,
@@ -26,7 +27,6 @@ import {
 import { DEFAULT_WEBHOOK_PATH } from "./webhook-shared.js";
 
 async function createBlueBubblesConfigureAdapter() {
-  const { blueBubblesSetupAdapter, blueBubblesSetupWizard } = await import("./setup-surface.js");
   const plugin = {
     id: "bluebubbles",
     meta: {
@@ -143,7 +143,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("disables the channel through the setup wizard", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
     const next = blueBubblesSetupWizard.disable?.({
       channels: {
         bluebubbles: {
@@ -157,8 +156,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("reads the named-account DM policy instead of the channel root", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     expect(
       blueBubblesSetupWizard.dmPolicy?.getCurrent(
         {
@@ -181,8 +178,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("reports account-scoped config keys for named accounts", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     expect(blueBubblesSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "work")).toEqual({
       policyKey: "channels.bluebubbles.accounts.work.dmPolicy",
       allowFromKey: "channels.bluebubbles.accounts.work.allowFrom",
@@ -190,8 +185,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("uses configured defaultAccount for omitted DM policy account context", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     const cfg = {
       channels: {
         bluebubbles: {
@@ -226,8 +219,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("uses configured defaultAccount when accountId is omitted in account resolution", async () => {
-    const { resolveBlueBubblesAccount } = await import("./accounts.js");
-
     const resolved = resolveBlueBubblesAccount({
       cfg: {
         channels: {
@@ -254,8 +245,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     const configured = await blueBubblesSetupWizard.status.resolveConfigured({
       cfg: {
         channels: {
@@ -282,8 +271,6 @@ describe("bluebubbles setup surface", () => {
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
-    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
-
     const next = blueBubblesSetupWizard.dmPolicy?.setPolicy(
       {
         channels: {

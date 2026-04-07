@@ -54,14 +54,32 @@ function summarizeOutputSection(name, output) {
   return `${name}:\n[... ${omittedLineCount} earlier lines omitted ...]\n${tail}`;
 }
 
+function formatFailureFooter(params = {}) {
+  const footerLines = [];
+  if (params.kind) {
+    footerLines.push(`kind: ${params.kind}`);
+  }
+  if (Number.isFinite(params.elapsedMs)) {
+    footerLines.push(`elapsed: ${params.elapsedMs}ms`);
+  }
+  if (params.note) {
+    footerLines.push(params.note);
+  }
+  return footerLines.join("\n");
+}
+
 export function formatStepFailure(label, params = {}) {
   const stdoutSection = summarizeOutputSection("stdout", params.stdout ?? "");
   const stderrSection = summarizeOutputSection("stderr", params.stderr ?? "");
-  return [label, stdoutSection, stderrSection, params.note ?? ""].filter(Boolean).join("\n\n");
+  const footer = formatFailureFooter(params);
+  return [label, stdoutSection, stderrSection, footer].filter(Boolean).join("\n\n");
 }
 
 function attachStepFailureMetadata(error, label, params = {}) {
-  error.fullOutput = [label, params.stdout ?? "", params.stderr ?? "", params.note ?? ""]
+  error.stepLabel = label;
+  error.kind = params.kind ?? "unknown";
+  error.elapsedMs = params.elapsedMs ?? null;
+  error.fullOutput = [label, params.stdout ?? "", params.stderr ?? "", formatFailureFooter(params)]
     .filter(Boolean)
     .join("\n")
     .trim();
@@ -105,6 +123,7 @@ function collectCanaryExtensionIds(extensionIds) {
 }
 
 function runNodeStep(label, args, timeoutMs) {
+  const startedAt = Date.now();
   const result = spawnSync(process.execPath, args, {
     cwd: repoRoot,
     encoding: "utf8",
@@ -122,11 +141,15 @@ function runNodeStep(label, args, timeoutMs) {
       : "";
   const errorSuffix = result.error ? result.error.message : "";
   const note = [timeoutSuffix, errorSuffix].filter(Boolean).join("\n");
+  const elapsedMs = Date.now() - startedAt;
+  const kind = timeoutSuffix ? "timeout" : result.error ? "spawn-error" : "nonzero-exit";
   const failure = attachStepFailureMetadata(
     new Error(
       formatStepFailure(label, {
         stdout: result.stdout,
         stderr: result.stderr,
+        kind,
+        elapsedMs,
         note,
       }),
     ),
@@ -134,6 +157,8 @@ function runNodeStep(label, args, timeoutMs) {
     {
       stdout: result.stdout,
       stderr: result.stderr,
+      kind,
+      elapsedMs,
       note,
     },
   );
@@ -150,6 +175,7 @@ function abortSiblingSteps(abortController) {
 export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
   const onFailure = params.onFailure;
+  const startedAt = Date.now();
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, args, {
       cwd: repoRoot,
@@ -172,6 +198,8 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
           formatStepFailure(label, {
             stdout,
             stderr,
+            kind: "timeout",
+            elapsedMs: Date.now() - startedAt,
             note: `${label} timed out after ${timeoutMs}ms`,
           }),
         ),
@@ -179,6 +207,8 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
         {
           stdout,
           stderr,
+          kind: "timeout",
+          elapsedMs: Date.now() - startedAt,
           note: `${label} timed out after ${timeoutMs}ms`,
         },
       );
@@ -202,7 +232,13 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       clearTimeout(timer);
       settled = true;
       if (error.name === "AbortError" && abortController?.signal.aborted) {
-        rejectPromise(new Error(`${label} canceled after sibling failure`));
+        rejectPromise(
+          attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
+            kind: "canceled",
+            elapsedMs: Date.now() - startedAt,
+            note: "canceled after sibling failure",
+          }),
+        );
         return;
       }
       const failure = attachStepFailureMetadata(
@@ -210,6 +246,8 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
           formatStepFailure(label, {
             stdout,
             stderr,
+            kind: "spawn-error",
+            elapsedMs: Date.now() - startedAt,
             note: error.message,
           }),
         ),
@@ -217,6 +255,8 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
         {
           stdout,
           stderr,
+          kind: "spawn-error",
+          elapsedMs: Date.now() - startedAt,
           note: error.message,
         },
       );
@@ -239,12 +279,16 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
           formatStepFailure(label, {
             stdout,
             stderr,
+            kind: "nonzero-exit",
+            elapsedMs: Date.now() - startedAt,
           }),
         ),
         label,
         {
           stdout,
           stderr,
+          kind: "nonzero-exit",
+          elapsedMs: Date.now() - startedAt,
         },
       );
       onFailure?.(error);
@@ -334,9 +378,21 @@ export function acquireBoundaryCheckLock(params = {}) {
     mkdirSync(lockPath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      throw new Error(
-        `another extension package boundary check is already running in this checkout\n${lockPath}`,
-        { cause: error },
+      throw attachStepFailureMetadata(
+        new Error(
+          [
+            "extension package boundary check",
+            "kind: lock-contention",
+            `lock: ${lockPath}`,
+            "another extension package boundary check is already running in this checkout",
+          ].join("\n\n"),
+          { cause: error },
+        ),
+        "extension package boundary check",
+        {
+          kind: "lock-contention",
+          note: `lock: ${lockPath}\nanother extension package boundary check is already running in this checkout`,
+        },
       );
     }
     throw error;
