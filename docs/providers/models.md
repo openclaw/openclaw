@@ -18,7 +18,7 @@ model as `provider/model`.
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+  agents: { defaults: { model: { primary: "<provider>/<model>" } } },
 }
 ```
 
