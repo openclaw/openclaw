@@ -22,11 +22,14 @@ export function getConnectChallengeTimeoutMsFromEnv(
   return undefined;
 }
 
-export function resolveConnectChallengeTimeoutMs(timeoutMs?: number | null): number {
+export function resolveConnectChallengeTimeoutMs(
+  timeoutMs?: number | null,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
   if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
     return clampConnectChallengeTimeoutMs(timeoutMs);
   }
-  const envOverride = getConnectChallengeTimeoutMsFromEnv();
+  const envOverride = getConnectChallengeTimeoutMsFromEnv(env);
   if (envOverride !== undefined) {
     return clampConnectChallengeTimeoutMs(envOverride);
   }
@@ -47,5 +50,6 @@ export function getPreauthHandshakeTimeoutMsFromEnv(
   }
   return resolveConnectChallengeTimeoutMs(
     typeof configuredMs === "number" && Number.isFinite(configuredMs) ? configuredMs : undefined,
+    env,
   );
 }
