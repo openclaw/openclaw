@@ -568,7 +568,11 @@ async function finalizeCronRun(params: {
     prepared.cronSession.sessionEntry.status = "timeout";
     try {
       await prepared.persistSessionEntry();
-    } catch {}
+    } catch (err) {
+      logWarn(
+        `[cron:${prepared.input.job.id}] Failed to persist terminal timeout session entry: ${String(err)}`,
+      );
+    }
     return prepared.withRunSession({ status: "error", error: params.abortReason(), ...telemetry });
   }
   let {
@@ -586,7 +590,11 @@ async function finalizeCronRun(params: {
   prepared.cronSession.sessionEntry.status = hasFatalErrorPayload ? "failed" : "done";
   try {
     await prepared.persistSessionEntry();
-  } catch {}
+  } catch (err) {
+    logWarn(
+      `[cron:${prepared.input.job.id}] Failed to persist terminal session entry: ${String(err)}`,
+    );
+  }
   const resolveRunOutcome = (result?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     prepared.withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
