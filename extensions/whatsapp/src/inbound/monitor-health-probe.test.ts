@@ -88,6 +88,29 @@ describe("WA health probe", () => {
     await listener.close();
   });
 
+  it("does not accumulate probes when fetchStatus hangs", async () => {
+    const onMessage = vi.fn();
+    const sock = getSock();
+    // fetchStatus never resolves — simulates hung connection
+    const fetchStatus = vi.fn().mockReturnValue(new Promise(() => {}));
+    sock.fetchStatus = fetchStatus;
+
+    const { listener } = await startInboxMonitor(onMessage);
+    // Advance past timeout (10s) so first probe times out
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(fetchStatus).toHaveBeenCalledTimes(1);
+
+    // Advance 60s — interval fires but probeInFlight should block a new call
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchStatus).toHaveBeenCalledTimes(1);
+
+    // Advance another 60s — still blocked
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetchStatus).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
   it("clears interval on close", async () => {
     const onMessage = vi.fn();
     const sock = getSock();

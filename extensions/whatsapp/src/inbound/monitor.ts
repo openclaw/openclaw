@@ -633,15 +633,17 @@ export async function monitorWebInbox(options: {
       }
       probeInFlight = true;
       let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+      let timedOut = false;
+      const fetchPromise = sock.fetchStatus(selfJid);
       try {
         const timeout = new Promise<never>((_, reject) => {
-          timeoutHandle = setTimeout(
-            () => reject(new Error("probe timeout")),
-            HEALTH_PROBE_TIMEOUT_MS,
-          );
+          timeoutHandle = setTimeout(() => {
+            timedOut = true;
+            reject(new Error("probe timeout"));
+          }, HEALTH_PROBE_TIMEOUT_MS);
           activeProbeTimeout = timeoutHandle;
         });
-        await Promise.race([sock.fetchStatus(selfJid), timeout]);
+        await Promise.race([fetchPromise, timeout]);
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
           activeProbeTimeout = null;
@@ -668,7 +670,17 @@ export async function monitorWebInbox(options: {
         healthProbeState.error = String(err);
         inboundLogger.warn({ error: String(err) }, "WA health probe failed");
       } finally {
-        probeInFlight = false;
+        if (timedOut) {
+          // fetchStatus is still pending — keep probeInFlight true to prevent
+          // accumulation of hung promises. Release only when it settles.
+          void fetchPromise
+            .catch(() => {})
+            .finally(() => {
+              probeInFlight = false;
+            });
+        } else {
+          probeInFlight = false;
+        }
       }
     };
     void doProbe();
