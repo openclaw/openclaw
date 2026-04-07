@@ -4,6 +4,7 @@ import type {
   ChannelApprovalNativeAdapter,
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
@@ -387,6 +388,25 @@ function consumeActiveWrappedEntries(
   const entries = activeEntries.get(requestId)?.entries ?? fallbackEntries;
   activeEntries.delete(requestId);
   return entries;
+}
+
+async function finalizeWrappedEntries(params: {
+  entries: WrappedPendingEntry[];
+  phase: "resolved" | "expired";
+  request: ApprovalRequest;
+  log: ReturnType<typeof createSubsystemLogger>;
+  runEntry: (wrapped: WrappedPendingEntry) => Promise<void>;
+}): Promise<void> {
+  for (const wrapped of params.entries) {
+    try {
+      await params.runEntry(wrapped);
+    } catch (error) {
+      params.log.error(
+        `failed to finalize ${params.phase} native approval entry ` +
+          `approval=${params.request.id}: ${String(error)}`,
+      );
+    }
+  }
 }
 
 async function applyApprovalFinalAction(params: {
@@ -785,6 +805,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
   if (!nativeRuntime) {
     return null;
   }
+  const log = createSubsystemLogger(params.label);
   const activeEntries = new Map<string, ActiveApprovalEntries>();
   const resolveApprovalKind =
     nativeRuntime.resolveApprovalKind ??
@@ -931,59 +952,71 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       finalizeResolved: async ({ request, resolved, entries }) => {
         const resolvedEntries = consumeActiveWrappedEntries(activeEntries, request.id, entries);
         const view = buildResolvedApprovalView(request, resolved);
-        for (const wrapped of resolvedEntries) {
-          if (wrapped.binding !== undefined) {
-            await nativeRuntime.interactions?.unbindPending?.({
+        await finalizeWrappedEntries({
+          entries: resolvedEntries,
+          phase: "resolved",
+          request,
+          log,
+          runEntry: async (wrapped) => {
+            if (wrapped.binding !== undefined) {
+              await nativeRuntime.interactions?.unbindPending?.({
+                ...baseContext,
+                entry: wrapped.entry,
+                binding: wrapped.binding,
+                request,
+                approvalKind: resolveApprovalKind(request),
+              });
+            }
+            const result = await nativeRuntime.presentation.buildResolvedResult({
               ...baseContext,
-              entry: wrapped.entry,
-              binding: wrapped.binding,
               request,
-              approvalKind: resolveApprovalKind(request),
+              resolved,
+              view,
+              entry: wrapped.entry,
             });
-          }
-          const result = await nativeRuntime.presentation.buildResolvedResult({
-            ...baseContext,
-            request,
-            resolved,
-            view,
-            entry: wrapped.entry,
-          });
-          await applyApprovalFinalAction({
-            nativeRuntime,
-            baseContext,
-            wrapped,
-            result,
-            phase: "resolved",
-          });
-        }
+            await applyApprovalFinalAction({
+              nativeRuntime,
+              baseContext,
+              wrapped,
+              result,
+              phase: "resolved",
+            });
+          },
+        });
       },
       finalizeExpired: async ({ request, entries }) => {
         const expiredEntries = consumeActiveWrappedEntries(activeEntries, request.id, entries);
         const view = buildExpiredApprovalView(request);
-        for (const wrapped of expiredEntries) {
-          if (wrapped.binding !== undefined) {
-            await nativeRuntime.interactions?.unbindPending?.({
+        await finalizeWrappedEntries({
+          entries: expiredEntries,
+          phase: "expired",
+          request,
+          log,
+          runEntry: async (wrapped) => {
+            if (wrapped.binding !== undefined) {
+              await nativeRuntime.interactions?.unbindPending?.({
+                ...baseContext,
+                entry: wrapped.entry,
+                binding: wrapped.binding,
+                request,
+                approvalKind: resolveApprovalKind(request),
+              });
+            }
+            const result = await nativeRuntime.presentation.buildExpiredResult({
               ...baseContext,
-              entry: wrapped.entry,
-              binding: wrapped.binding,
               request,
-              approvalKind: resolveApprovalKind(request),
+              view,
+              entry: wrapped.entry,
             });
-          }
-          const result = await nativeRuntime.presentation.buildExpiredResult({
-            ...baseContext,
-            request,
-            view,
-            entry: wrapped.entry,
-          });
-          await applyApprovalFinalAction({
-            nativeRuntime,
-            baseContext,
-            wrapped,
-            result,
-            phase: "expired",
-          });
-        }
+            await applyApprovalFinalAction({
+              nativeRuntime,
+              baseContext,
+              wrapped,
+              result,
+              phase: "expired",
+            });
+          },
+        });
       },
       onStopped: async () => {
         if (!nativeRuntime.interactions?.unbindPending || activeEntries.size === 0) {

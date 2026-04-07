@@ -19,6 +19,7 @@ vi.mock("./approval-handler-runtime.js", async () => {
 describe("startChannelApprovalHandlerBootstrap", () => {
   beforeEach(() => {
     createChannelApprovalHandlerFromCapability.mockReset();
+    vi.useRealTimers();
   });
 
   const flushTransitions = async () => {
@@ -264,6 +265,75 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     expect(stopSecond).toHaveBeenCalledTimes(1);
 
     firstLease.dispose();
+    await cleanup();
+  });
+
+  it("retries registered-context startup failures until the handler starts", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const start = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      child: vi.fn(),
+      isEnabled: vi.fn().mockReturnValue(true),
+      isVerboseEnabled: vi.fn().mockReturnValue(false),
+      verbose: vi.fn(),
+    } as never;
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({ start, stop })
+      .mockResolvedValueOnce({ start, stop });
+
+    const cleanup = await startChannelApprovalHandlerBootstrap({
+      plugin: {
+        id: "slack",
+        meta: { label: "Slack" },
+        approvalCapability: {
+          nativeRuntime: {
+            availability: {
+              isConfigured: vi.fn().mockReturnValue(true),
+              shouldHandle: vi.fn().mockReturnValue(true),
+            },
+            presentation: {
+              buildPendingPayload: vi.fn(),
+              buildResolvedResult: vi.fn(),
+              buildExpiredResult: vi.fn(),
+            },
+            transport: {
+              prepareTarget: vi.fn(),
+              deliverPending: vi.fn(),
+            },
+          },
+        },
+      } as never,
+      cfg: {} as never,
+      accountId: "default",
+      channelRuntime,
+      logger,
+    });
+
+    channelRuntime.runtimeContexts.register({
+      channelId: "slack",
+      accountId: "default",
+      capability: "approval.native",
+      context: { app: { ok: true } },
+    });
+    await flushTransitions();
+
+    expect(start).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTransitions();
+
+    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      "failed to start native approval handler: Error: boom",
+    );
+
     await cleanup();
   });
 });
