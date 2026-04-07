@@ -40,6 +40,7 @@ type SharedServiceEnvironmentFields = {
   tmpDir: string;
   minimalPath: string | undefined;
   proxyEnv: Record<string, string | undefined>;
+  cloudProviderEnv: Record<string, string | undefined>;
   nodeCaCerts: string | undefined;
   nodeUseSystemCa: string | undefined;
 };
@@ -55,11 +56,43 @@ const SERVICE_PROXY_ENV_KEYS = [
   "all_proxy",
 ] as const;
 
-function readServiceProxyEnvironment(
+/**
+ * Cloud provider environment variables that should be passed through to the
+ * gateway service. Without these, providers like Amazon Bedrock cannot discover
+ * IAM credentials on cloud VMs (EC2 instance profiles, ECS task roles, etc.).
+ *
+ * pi-coding-agent checks these env vars at runtime to resolve cloud credentials.
+ * If the gateway service strips them, headless cloud deployments fail with
+ * "No API key found for <provider>".
+ *
+ * See: https://github.com/openclaw/openclaw/issues/61847
+ */
+const SERVICE_CLOUD_PROVIDER_ENV_KEYS = [
+  // AWS / Amazon Bedrock
+  "AWS_PROFILE",
+  "AWS_REGION",
+  "AWS_DEFAULT_REGION",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_BEARER_TOKEN_BEDROCK",
+  // Azure OpenAI
+  "AZURE_OPENAI_API_KEY",
+  "AZURE_OPENAI_BASE_URL",
+  "AZURE_OPENAI_RESOURCE_NAME",
+  "AZURE_OPENAI_API_VERSION",
+  "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
+  // Google Cloud (Vertex AI / Gemini)
+  "GOOGLE_CLOUD_PROJECT",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+] as const;
+
+function readServiceKeysFromEnv(
   env: Record<string, string | undefined>,
+  keys: readonly string[],
 ): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {};
-  for (const key of SERVICE_PROXY_ENV_KEYS) {
+  for (const key of keys) {
     const value = env[key];
     if (typeof value !== "string") {
       continue;
@@ -71,6 +104,18 @@ function readServiceProxyEnvironment(
     out[key] = trimmed;
   }
   return out;
+}
+
+function readServiceProxyEnvironment(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  return readServiceKeysFromEnv(env, SERVICE_PROXY_ENV_KEYS);
+}
+
+function readServiceCloudProviderEnvironment(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  return readServiceKeysFromEnv(env, SERVICE_CLOUD_PROVIDER_ENV_KEYS);
 }
 
 function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
@@ -320,6 +365,7 @@ function buildCommonServiceEnvironment(
     HOME: env.HOME,
     TMPDIR: sharedEnv.tmpDir,
     ...sharedEnv.proxyEnv,
+    ...sharedEnv.cloudProviderEnv,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,
     OPENCLAW_STATE_DIR: sharedEnv.stateDir,
@@ -342,6 +388,7 @@ function resolveSharedServiceEnvironmentFields(
   // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   const proxyEnv = readServiceProxyEnvironment(env);
+  const cloudProviderEnv = readServiceCloudProviderEnvironment(env);
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
@@ -362,6 +409,7 @@ function resolveSharedServiceEnvironmentFields(
         ? undefined
         : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs }),
     proxyEnv,
+    cloudProviderEnv,
     nodeCaCerts: startupTlsEnv.NODE_EXTRA_CA_CERTS,
     nodeUseSystemCa: startupTlsEnv.NODE_USE_SYSTEM_CA,
   };
