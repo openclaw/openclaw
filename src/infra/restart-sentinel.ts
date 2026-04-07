@@ -55,6 +55,10 @@ export type RestartSentinelPayload = {
   kind: "config-apply" | "config-patch" | "update" | "restart";
   status: "ok" | "error" | "skipped";
   ts: number;
+  reason?: string;
+  initiator?: string;
+  restartId?: string;
+  correlationId?: string;
   sessionKey?: string;
   /** Delivery context captured at restart time to ensure channel routing survives restart. */
   deliveryContext?: {
