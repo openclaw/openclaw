@@ -345,6 +345,14 @@ class WearChatController(
 
   private fun handleEvent(event: GatewayEvent) {
     when (event.event) {
+      "seqGap" -> {
+        _streamingText.value = null
+        _isLoading.value = false
+        _errorText.value = stringResolver(R.string.wear_chat_error_stream_interrupted)
+        clearPendingRuns()
+        clearQueuedOutboundMessages()
+        refreshHistoryImmediately(emitLatestAssistantReply = false)
+      }
       "mainSessionKey" -> {
         val key = event.payloadJson?.trim()
         if (!key.isNullOrEmpty()) {

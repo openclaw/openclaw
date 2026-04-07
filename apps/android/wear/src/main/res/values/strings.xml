@@ -42,6 +42,7 @@
     <string name="wear_chat_error_loading_failed">Couldn\'t load chat</string>
     <string name="wear_chat_error_send_failed">Couldn\'t send reply</string>
     <string name="wear_chat_error_timed_out">Timed out waiting for a reply. Try again.</string>
+    <string name="wear_chat_error_stream_interrupted">Event stream interrupted. Refresh and try again.</string>
     <string name="wear_notification_reply_channel_name">Replies</string>
     <string name="wear_notification_reply_channel_description">Assistant replies while OpenClaw is off-screen</string>
     <string name="wear_notification_reply_title">New reply</string>

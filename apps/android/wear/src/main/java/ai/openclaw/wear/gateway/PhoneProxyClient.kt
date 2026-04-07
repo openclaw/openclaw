@@ -233,8 +233,7 @@ class PhoneProxyClient internal constructor(
     phoneNodeId = null
     _connected.value = false
     _statusText.value = stringResolver(R.string.wear_status_phone_proxy_offline)
-    pendingRequests.values.forEach { it.completeExceptionally(Exception("Disconnected")) }
-    pendingRequests.clear()
+    failPendingRequests(Exception("Disconnected"))
   }
 
   override suspend fun request(method: String, paramsJson: String?, timeoutMs: Long): String {
@@ -327,10 +326,13 @@ class PhoneProxyClient internal constructor(
         val code = (error?.get("code") as? JsonPrimitive)?.content ?: "UNKNOWN"
         val message = (error?.get("message") as? JsonPrimitive)?.content ?: "Request failed"
         if (code == "PROXY_ERROR") {
+          val transportError = Exception("$code: $message")
           handleTransportFailure(
             statusText = stringResolver(R.string.wear_status_phone_gateway_unavailable),
             generation = connectionGeneration,
+            transportError = transportError,
           )
+          return
         }
         pendingRequests.remove(id)?.completeExceptionally(Exception("$code: $message"))
       }
@@ -523,7 +525,11 @@ class PhoneProxyClient internal constructor(
     }
   }
 
-  private fun handleTransportFailure(statusText: String, generation: Long) {
+  private fun handleTransportFailure(
+    statusText: String,
+    generation: Long,
+    transportError: Exception = Exception(statusText),
+  ) {
     if (generation != connectionGeneration) return
     livenessJob?.cancel()
     livenessJob = null
@@ -531,7 +537,16 @@ class PhoneProxyClient internal constructor(
     phoneNodeId = null
     _connected.value = false
     _statusText.value = statusText
+    failPendingRequests(transportError)
     scheduleReconnect(generation = generation)
+  }
+
+  private fun failPendingRequests(error: Exception) {
+    val pending = pendingRequests.entries.toList()
+    pendingRequests.clear()
+    pending.forEach { (_, deferred) ->
+      deferred.completeExceptionally(error)
+    }
   }
 
   private fun startLivenessChecks(nodeId: String, generation: Long) {

@@ -6,6 +6,8 @@ import android.os.Build
 import android.util.Log
 import ai.openclaw.android.gateway.GatewayClientProfiles
 import ai.openclaw.android.gateway.GatewayConnectBuilder
+import ai.openclaw.android.gateway.GatewayDeviceAuthPayload
+import ai.openclaw.android.gateway.GatewayDeviceIdentityStore
 import ai.openclaw.android.gateway.GatewayEvent
 import ai.openclaw.android.gateway.GatewayEventQueue
 import java.util.UUID
@@ -70,6 +72,7 @@ class WearGatewayClient internal constructor(
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val json = Json { ignoreUnknownKeys = true }
   private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<String>>()
+  private val identityStore = GatewayDeviceIdentityStore(context.applicationContext)
 
   private var ws: WebSocket? = null
   private var config: WearGatewayConfig = WearGatewayConfig()
@@ -168,8 +171,7 @@ class WearGatewayClient internal constructor(
             if (nonce == null) {
               Log.w(TAG, "connect.challenge not received within timeout; proceeding anyway")
             }
-            // The challenge nonce is currently a readiness signal; we do not include it in connect params.
-            sendConnect(webSocket, epoch)
+            sendConnect(webSocket, epoch, nonce)
           } catch (e: Throwable) {
             Log.w(TAG, "Connect handshake failed: ${e.message}")
             handleDisconnect("Connect handshake failed", epoch)
@@ -196,8 +198,15 @@ class WearGatewayClient internal constructor(
     })
   }
 
-  private fun sendConnect(socket: WebSocket, epoch: Long) {
-    val connectParams = buildWearConnectParams(config, deviceId, resolveWearVersionName(context))
+  private fun sendConnect(socket: WebSocket, epoch: Long, connectNonce: String?) {
+    val versionName = resolveWearVersionName(context)
+    val connectParams =
+      buildWearConnectParams(
+        config = config,
+        deviceId = deviceId,
+        versionName = versionName,
+        signedDeviceIdentity = buildSignedDeviceIdentity(connectNonce, versionName),
+      )
 
     val msg = buildJsonObject {
       put("type", JsonPrimitive("req"))
@@ -334,12 +343,55 @@ class WearGatewayClient internal constructor(
     client.dispatcher.executorService.shutdown()
     client.connectionPool.evictAll()
   }
+
+  private fun buildSignedDeviceIdentity(connectNonce: String?, versionName: String): WearSignedDeviceIdentity? {
+    val nonce = connectNonce?.trim().orEmpty()
+    if (nonce.isEmpty()) return null
+
+    val identity = identityStore.loadOrCreate()
+    val clientInfo = GatewayConnectBuilder.buildWearClientInfo(deviceId = deviceId, versionName = versionName)
+    val signedAtMs = System.currentTimeMillis()
+    val signatureToken =
+      config.token.trim().takeIf { it.isNotEmpty() }
+        ?: config.bootstrapToken.trim().takeIf { it.isNotEmpty() }
+    val payload =
+      GatewayDeviceAuthPayload.buildV3(
+        deviceId = identity.deviceId,
+        clientId = clientInfo.id,
+        clientMode = clientInfo.mode,
+        role = "operator",
+        scopes = GatewayConnectBuilder.OperatorScopes,
+        signedAtMs = signedAtMs,
+        token = signatureToken,
+        nonce = nonce,
+        platform = clientInfo.platform,
+        deviceFamily = clientInfo.deviceFamily,
+      )
+    val signature = identityStore.signPayload(payload, identity) ?: return null
+    val publicKey = identityStore.publicKeyBase64Url(identity) ?: return null
+    return WearSignedDeviceIdentity(
+      deviceId = identity.deviceId,
+      publicKeyBase64Url = publicKey,
+      signatureBase64Url = signature,
+      signedAtMs = signedAtMs,
+      nonce = nonce,
+    )
+  }
 }
+
+internal data class WearSignedDeviceIdentity(
+  val deviceId: String,
+  val publicKeyBase64Url: String,
+  val signatureBase64Url: String,
+  val signedAtMs: Long,
+  val nonce: String,
+)
 
 internal fun buildWearConnectParams(
   config: WearGatewayConfig,
   deviceId: String,
   versionName: String = "dev",
+  signedDeviceIdentity: WearSignedDeviceIdentity? = null,
 ): JsonObject {
   val authJson =
     when {
@@ -364,6 +416,16 @@ internal fun buildWearConnectParams(
         versionName = versionName,
       ),
     authJson = authJson,
+    deviceJson =
+      signedDeviceIdentity?.let { identity ->
+        buildJsonObject {
+          put("id", JsonPrimitive(identity.deviceId))
+          put("publicKey", JsonPrimitive(identity.publicKeyBase64Url))
+          put("signature", JsonPrimitive(identity.signatureBase64Url))
+          put("signedAt", JsonPrimitive(identity.signedAtMs))
+          put("nonce", JsonPrimitive(identity.nonce))
+        }
+      },
   )
 }
 

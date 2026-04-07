@@ -515,6 +515,48 @@ class WearChatControllerTest {
 
     controllerScope.cancel()
   }
+
+  @Test
+  fun `seq gap clears pending state and streaming text immediately`() = runTest {
+    val client = FakeGatewayClient().apply {
+      chatSendDeferred = CompletableDeferred()
+      historyResponses += """{"messages":[]}"""
+      historyResponses += """{"messages":[]}"""
+    }
+    val controllerScope = TestScope(StandardTestDispatcher(testScheduler))
+    val controller = WearChatController(controllerScope, client, ::testString)
+    advanceUntilIdle()
+
+    controller.sendMessage("Stay pending")
+    runCurrent()
+
+    val chatSendParams =
+      client.requests.last { it.first == "chat.send" }.second ?: error("missing chat.send params")
+    val runId =
+      Json.parseToJsonElement(chatSendParams)
+        .jsonObject["idempotencyKey"]
+        ?.jsonPrimitive
+        ?.content ?: error("missing idempotencyKey")
+
+    client.emitEvent(
+      GatewayEvent(
+        event = "agent",
+        payloadJson =
+          """{"sessionKey":"main","runId":"$runId","stream":"assistant","data":{"text":"local delta"}}""",
+      ),
+    )
+    runCurrent()
+    assertEquals("local delta", controller.streamingText.value)
+    assertTrue(controller.isSending.value)
+
+    client.emitEvent(GatewayEvent(event = "seqGap", payloadJson = null))
+    runCurrent()
+
+    assertFalse(controller.isSending.value)
+    assertEquals(null, controller.streamingText.value)
+    assertEquals("Event stream interrupted. Refresh and try again.", controller.errorText.value)
+    controllerScope.cancel()
+  }
 }
 
 private fun testString(resId: Int): String =
@@ -523,6 +565,7 @@ private fun testString(resId: Int): String =
     R.string.wear_chat_error_loading_failed -> "Couldn't load chat"
     R.string.wear_chat_error_send_failed -> "Couldn't send reply"
     R.string.wear_chat_error_timed_out -> "Timed out waiting for a reply. Try again."
+    R.string.wear_chat_error_stream_interrupted -> "Event stream interrupted. Refresh and try again."
     else -> error("Unexpected string resource: $resId")
   }
 

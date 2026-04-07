@@ -331,6 +331,51 @@ class PhoneProxyClientTest {
   }
 
   @Test
+  fun `proxy error responses fail every in flight request immediately`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val client = connectedProxyClient(scope, messageTransport)
+
+    val firstRequest = scope.async { client.request("chat.history", "{}", timeoutMs = 1_000) }
+    val secondRequest = scope.async { client.request("sessions.list", "{}", timeoutMs = 1_000) }
+    runCurrent()
+
+    val requestId =
+      kotlinx.serialization.json.Json
+        .parseToJsonElement(String(messageTransport.sentMessages().last().third))
+        .jsonObject["id"]!!
+        .jsonPrimitive
+        .content
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/rpc-response",
+        sourceNodeId = "phone-node",
+        data =
+          """{"id":"$requestId","ok":false,"error":{"code":"PROXY_ERROR","message":"Gateway disconnected"}}"""
+            .toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertTrue(firstRequest.isCompleted)
+    assertTrue(secondRequest.isCompleted)
+    try {
+      firstRequest.await()
+      fail("Expected first request to fail")
+    } catch (e: Throwable) {
+      assertEquals("PROXY_ERROR: Gateway disconnected", e.message)
+    }
+    try {
+      secondRequest.await()
+      fail("Expected second request to fail")
+    } catch (e: Throwable) {
+      assertEquals("PROXY_ERROR: Gateway disconnected", e.message)
+    }
+    scope.cancel()
+  }
+
+  @Test
   fun `proxy handshake does not sync direct fallback config from a not ready phone`() = runTest {
     val scope = TestScope(StandardTestDispatcher(testScheduler))
     val messageTransport = FakeProxyMessageTransport()

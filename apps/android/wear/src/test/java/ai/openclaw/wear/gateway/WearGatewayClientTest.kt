@@ -68,6 +68,31 @@ class WearGatewayClientTest {
   }
 
   @Test
+  fun `wear connect params include signed device identity for bootstrap auth`() {
+    val connectParams =
+      buildWearConnectParams(
+        config = WearGatewayConfig(bootstrapToken = "bootstrap-token"),
+        deviceId = "watch-device-123",
+        versionName = "2026.3.14-dev",
+        signedDeviceIdentity =
+          WearSignedDeviceIdentity(
+            deviceId = "pairing-device-id",
+            publicKeyBase64Url = "pub-key",
+            signatureBase64Url = "sig-value",
+            signedAtMs = 1234L,
+            nonce = "challenge-nonce",
+          ),
+      )
+
+    val device = connectParams["device"]?.jsonObject
+    assertEquals("pairing-device-id", device?.get("id")?.jsonPrimitive?.content)
+    assertEquals("pub-key", device?.get("publicKey")?.jsonPrimitive?.content)
+    assertEquals("sig-value", device?.get("signature")?.jsonPrimitive?.content)
+    assertEquals(1234L, device?.get("signedAt")?.jsonPrimitive?.content?.toLong())
+    assertEquals("challenge-nonce", device?.get("nonce")?.jsonPrimitive?.content)
+  }
+
+  @Test
   fun `current socket frame gate rejects stale epoch or socket`() {
     val activeSocket = TestWebSocket()
 
