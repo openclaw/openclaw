@@ -83,7 +83,7 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("warns when read tool has neither path nor file_path", async () => {
+  it("fails when read tool has neither path nor file_path", async () => {
     const { ctx, warn } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
@@ -93,10 +93,10 @@ describe("handleToolExecutionStart read path checks", () => {
       args: {},
     };
 
-    await handleToolExecutionStart(ctx, evt);
-
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
+    await expect(Promise.resolve().then(() => handleToolExecutionStart(ctx, evt))).rejects.toThrow(
+      "Missing required parameter: path",
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {

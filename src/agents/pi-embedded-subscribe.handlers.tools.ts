@@ -108,6 +108,14 @@ function buildPatchItemTitle(meta?: string): string {
   return meta ? `patch ${meta}` : "apply patch";
 }
 
+function buildMissingReadPathError(args: unknown): Error {
+  const argsPreview = readStringValue(args)?.slice(0, 200);
+  const receivedHint = argsPreview ? ` (received: ${argsPreview})` : "";
+  return new Error(
+    `Missing required parameter: path${receivedHint}. Supply correct parameters before retrying.`,
+  );
+}
+
 function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventData): void {
   if (itemData.phase === "start") {
     ctx.state.itemActiveIds.add(itemData.itemId);
@@ -557,10 +565,7 @@ export function handleToolExecutionStart(
             : "";
       const filePath = filePathValue.trim();
       if (!filePath) {
-        const argsPreview = readStringValue(args)?.slice(0, 200);
-        ctx.log.warn(
-          `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
-        );
+        throw buildMissingReadPathError(args);
       }
     }
 

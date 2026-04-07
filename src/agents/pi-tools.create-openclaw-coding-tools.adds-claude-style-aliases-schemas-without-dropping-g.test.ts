@@ -130,4 +130,25 @@ describe("createOpenClawCodingTools read behavior", () => {
     });
     expect(details?.truncation).not.toHaveProperty("content");
   });
+
+  it("throws when path is missing for read tool execution", async () => {
+    const baseRead: AgentTool = {
+      name: "read",
+      label: "read",
+      description: "test read",
+      parameters: Type.Object({ path: Type.String() }),
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+        details: {},
+      })),
+    };
+
+    const wrapped = createOpenClawReadTool(
+      baseRead as unknown as Parameters<typeof createOpenClawReadTool>[0],
+    );
+
+    await expect(wrapped.execute("read-missing-path", {})).rejects.toThrow(
+      "Missing required parameter: path",
+    );
+  });
 });
