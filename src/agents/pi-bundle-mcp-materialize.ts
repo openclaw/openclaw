@@ -128,12 +128,14 @@ export async function materializeBundleMcpToolsForRun(params: {
 
 export async function createBundleMcpToolRuntime(params: {
   workspaceDir: string;
+  sourceWorkspaceDir?: string;
   cfg?: OpenClawConfig;
   reservedToolNames?: Iterable<string>;
 }): Promise<BundleMcpToolRuntime> {
   const runtime = createSessionMcpRuntime({
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
+    sourceWorkspaceDir: params.sourceWorkspaceDir,
     cfg: params.cfg,
   });
   const materialized = await materializeBundleMcpToolsForRun({

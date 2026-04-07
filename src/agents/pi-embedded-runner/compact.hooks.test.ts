@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExtraParamsToAgentMock,
+  createBundleMcpToolRuntimeMock,
   contextEngineCompactMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
@@ -13,6 +14,7 @@ import {
   resolveEmbeddedAgentStreamFnMock,
   resolveMemorySearchConfigMock,
   resolveModelMock,
+  resolveSandboxContextMock,
   resolveSessionAgentIdMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
@@ -207,6 +209,30 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
+  });
+
+  it("forwards the source workspace when compaction uses a copied sandbox workspace", async () => {
+    resolveContextEngineMock.mockResolvedValue({ info: { ownsCompaction: false } } as never);
+    resolveSandboxContextMock.mockResolvedValue({
+      enabled: true,
+      workspaceAccess: "ro",
+      workspaceDir: "/tmp/workspace-copy",
+    });
+
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(createBundleMcpToolRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace-copy",
+        sourceWorkspaceDir: "/tmp/workspace",
+      }),
+    );
   });
 
   it("routes compaction through shared stream resolution and extra params", async () => {

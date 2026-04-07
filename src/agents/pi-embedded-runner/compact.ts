@@ -588,6 +588,7 @@ export async function compactEmbeddedPiSessionDirect(
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
+          sourceWorkspaceDir: resolvedWorkspace,
           cfg: params.config,
           reservedToolNames: tools.map((tool) => tool.name),
         })
