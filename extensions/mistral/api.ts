@@ -12,7 +12,6 @@ export {
 
 const MISTRAL_MAX_TOKENS_FIELD = "max_tokens";
 
-/** Transport-only flags merged for hinted Mistral routes; omits reasoning so `mistral-small-latest` is not clobbered after normalization. */
 export const MISTRAL_MODEL_TRANSPORT_PATCH = {
   supportsStore: false,
   maxTokensField: MISTRAL_MAX_TOKENS_FIELD,
@@ -21,7 +20,6 @@ export const MISTRAL_MODEL_TRANSPORT_PATCH = {
   maxTokensField: "max_tokens";
 };
 
-/** Resolves to Mistral Chat Completions `reasoning_effort` (`none` | `high`). */
 export const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> = {
   off: "none",
   minimal: "none",
@@ -34,28 +32,17 @@ export const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> =
 
 export const MISTRAL_SMALL_LATEST_ID = "mistral-small-latest";
 
-function mistralReasoningCompatForModelId(modelId: string | undefined): {
-  supportsReasoningEffort: boolean;
-  reasoningEffortMap?: Record<string, string>;
-} {
-  if (modelId === MISTRAL_SMALL_LATEST_ID) {
-    return {
-      supportsReasoningEffort: true,
-      reasoningEffortMap: MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP,
-    };
-  }
-  return { supportsReasoningEffort: false };
-}
-
 export function resolveMistralCompatPatch(model: { id?: string }): {
   supportsStore: boolean;
   supportsReasoningEffort: boolean;
   maxTokensField: "max_tokens";
   reasoningEffortMap?: Record<string, string>;
 } {
+  const reasoningEnabled = model.id === MISTRAL_SMALL_LATEST_ID;
   return {
     ...MISTRAL_MODEL_TRANSPORT_PATCH,
-    ...mistralReasoningCompatForModelId(model.id),
+    supportsReasoningEffort: reasoningEnabled,
+    reasoningEffortMap: reasoningEnabled ? MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP : undefined,
   };
 }
 
@@ -64,29 +51,12 @@ function compatMatchesResolved(
   modelId: string | undefined,
 ): boolean {
   const expected = resolveMistralCompatPatch({ id: modelId });
-  for (const [key, value] of Object.entries(expected)) {
-    if (key === "reasoningEffortMap") {
-      const a = compat?.[key];
-      const b = value;
-      if (a === b) {
-        continue;
-      }
-      if (
-        a &&
-        b &&
-        typeof a === "object" &&
-        typeof b === "object" &&
-        JSON.stringify(a) === JSON.stringify(b)
-      ) {
-        continue;
-      }
-      return false;
-    }
-    if (compat?.[key] !== value) {
-      return false;
-    }
-  }
-  return true;
+  return (
+    compat?.supportsStore === expected.supportsStore &&
+    compat?.supportsReasoningEffort === expected.supportsReasoningEffort &&
+    compat?.maxTokensField === expected.maxTokensField &&
+    compat?.reasoningEffortMap === expected.reasoningEffortMap
+  );
 }
 
 export function applyMistralModelCompat<T extends { compat?: unknown; id?: string }>(model: T): T {
