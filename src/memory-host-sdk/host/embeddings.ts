@@ -131,6 +131,7 @@ export async function createLocalEmbeddingProvider(
   let embeddingContext: LlamaEmbeddingContext | null = null;
   let initPromise: Promise<LlamaEmbeddingContext> | null = null;
   let resolvedModelPathPromise: Promise<string> | null = null;
+  let vramRecoveryPromise: Promise<LlamaEmbeddingContext> | null = null;
 
   const getResolvedModelPath = async (): Promise<string> => {
     if (!resolvedModelPathPromise) {
@@ -225,6 +226,30 @@ export async function createLocalEmbeddingProvider(
     };
   };
 
+  const retryGpuContextAfterVramFailure = async (): Promise<LlamaEmbeddingContext> => {
+    if (!vramRecoveryPromise) {
+      vramRecoveryPromise = (async () => {
+        console.warn(
+          "[openclaw] local memory embeddings hit VRAM limits during GPU-fit init; retrying once with a fresh GPU-fit calculation.",
+        );
+        await disposeGpuResources();
+        initPromise = null;
+        try {
+          return await ensureGpuContext();
+        } catch (err) {
+          if (isVramError(err)) {
+            await disposeGpuResources();
+            initPromise = null;
+          }
+          throw err;
+        }
+      })().finally(() => {
+        vramRecoveryPromise = null;
+      });
+    }
+    return vramRecoveryPromise;
+  };
+
   const withEmbeddingContext = async <T>(
     run: (context: LlamaEmbeddingContext) => Promise<T>,
   ): Promise<T> => {
@@ -234,13 +259,8 @@ export async function createLocalEmbeddingProvider(
       if (!isVramError(firstError)) {
         throw firstError;
       }
-      console.warn(
-        "[openclaw] local memory embeddings hit VRAM limits during GPU-fit init; retrying once with a fresh GPU-fit calculation.",
-      );
-      await disposeGpuResources();
-      initPromise = null;
       try {
-        return await run(await ensureGpuContext());
+        return await run(await retryGpuContextAfterVramFailure());
       } catch (secondError) {
         if (!isVramError(secondError)) {
           throw secondError;
@@ -248,8 +268,6 @@ export async function createLocalEmbeddingProvider(
         console.warn(
           "[openclaw] local memory embeddings hit VRAM limits again; falling back to CPU-only for this operation.",
         );
-        await disposeGpuResources();
-        initPromise = null;
         const temporary = await createTemporaryCpuContext();
         try {
           return await run(temporary.context);

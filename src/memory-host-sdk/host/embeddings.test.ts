@@ -644,7 +644,9 @@ describe("local embedding normalization", () => {
     const result = await createLocalProviderForTest();
     const provider = requireProvider(result);
 
-    await expect(provider.embedQuery("first")).rejects.toThrow("transient model resolution failure");
+    await expect(provider.embedQuery("first")).rejects.toThrow(
+      "transient model resolution failure",
+    );
 
     const embedding = await provider.embedQuery("second");
 
@@ -875,6 +877,66 @@ describe("local embedding ensureContext concurrency", () => {
     expect(getLlamaSpy).toHaveBeenCalledTimes(1);
     expect(loadModelSpy).toHaveBeenCalledTimes(1);
     expect(createContextSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes the GPU-fit retry after a shared VRAM-style initialization failure", async () => {
+    let releaseFirstModelDispose: (() => void) | null = null;
+    const firstModelDispose = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirstModelDispose = resolve;
+        }),
+    );
+    const recoveredContext = {
+      getEmbeddingFor: vi.fn().mockResolvedValue({
+        vector: new Float32Array([1, 0, 0, 0]),
+      }),
+      dispose: vi.fn(),
+    };
+    const recoveredModel = {
+      createEmbeddingContext: vi.fn().mockResolvedValue(recoveredContext),
+      dispose: vi.fn(),
+    };
+    const loadModelSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        createEmbeddingContext: vi
+          .fn()
+          .mockRejectedValue(new Error("A context size of 24 is too large for the available VRAM")),
+        dispose: firstModelDispose,
+      })
+      .mockResolvedValueOnce(recoveredModel);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    vi.mocked(nodeLlamaModule.importNodeLlamaCpp).mockResolvedValue({
+      getLlama: vi.fn(async () => ({
+        loadModel: loadModelSpy,
+      })),
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    } as never);
+
+    const result = await createLocalProvider();
+    const provider = requireProvider(result);
+
+    const first = provider.embedQuery("retry-a");
+    const second = provider.embedQuery("retry-b");
+
+    await vi.waitFor(() => {
+      expect(firstModelDispose).toHaveBeenCalledTimes(1);
+    });
+    releaseFirstModelDispose?.();
+
+    const [embeddingA, embeddingB] = await Promise.all([first, second]);
+
+    expect(embeddingA).toEqual([1, 0, 0, 0]);
+    expect(embeddingB).toEqual([1, 0, 0, 0]);
+    expect(loadModelSpy).toHaveBeenCalledTimes(2);
+    expect(recoveredModel.createEmbeddingContext).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("retrying once with a fresh GPU-fit calculation"),
+    );
   });
 });
 
