@@ -42,7 +42,11 @@ export async function listFeishuDirectoryPeersLive(params: {
     for (const user of response.data?.items ?? []) {
       if (user.open_id) {
         const name = user.name || "";
-        if (!q || user.open_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
+        if (
+          !q ||
+          normalizeLowercaseStringOrEmpty(user.open_id).includes(q) ||
+          normalizeLowercaseStringOrEmpty(name).includes(q)
+        ) {
           peers.push({
             kind: "user",
             id: user.open_id,
@@ -95,7 +99,11 @@ export async function listFeishuDirectoryGroupsLive(params: {
     for (const chat of response.data?.items ?? []) {
       if (chat.chat_id) {
         const name = chat.name || "";
-        if (!q || chat.chat_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
+        if (
+          !q ||
+          normalizeLowercaseStringOrEmpty(chat.chat_id).includes(q) ||
+          normalizeLowercaseStringOrEmpty(name).includes(q)
+        ) {
           groups.push({
             kind: "group",
             id: chat.chat_id,

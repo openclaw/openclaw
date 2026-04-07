@@ -120,11 +120,12 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: (...args: unknown[]) => mocks.loadConfig(...args),
+  loadConfig: mocks.loadConfig as typeof import("../config/config.js").loadConfig,
 }));
 
 vi.mock("../agents/agent-command.js", () => ({
-  agentCommand: (...args: unknown[]) => mocks.agentCommand(...args),
+  agentCommand:
+    mocks.agentCommand as unknown as typeof import("../agents/agent-command.js").agentCommand,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -133,31 +134,35 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: (...args: unknown[]) => mocks.loadModelCatalog(...args),
+  loadModelCatalog:
+    mocks.loadModelCatalog as typeof import("../agents/model-catalog.js").loadModelCatalog,
 }));
 
 vi.mock("../agents/auth-profiles.js", () => ({
-  loadAuthProfileStoreForRuntime: (...args: unknown[]) =>
-    mocks.loadAuthProfileStoreForRuntime(...args),
-  listProfilesForProvider: (...args: unknown[]) => mocks.listProfilesForProvider(...args),
+  loadAuthProfileStoreForRuntime:
+    mocks.loadAuthProfileStoreForRuntime as unknown as typeof import("../agents/auth-profiles.js").loadAuthProfileStoreForRuntime,
+  listProfilesForProvider:
+    mocks.listProfilesForProvider as typeof import("../agents/auth-profiles.js").listProfilesForProvider,
 }));
 
 vi.mock("../agents/auth-profiles/store.js", () => ({
-  updateAuthProfileStoreWithLock: (...args: unknown[]) =>
-    mocks.updateAuthProfileStoreWithLock(...args),
+  updateAuthProfileStoreWithLock:
+    mocks.updateAuthProfileStoreWithLock as typeof import("../agents/auth-profiles/store.js").updateAuthProfileStoreWithLock,
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
-  resolveMemorySearchConfig: (...args: unknown[]) => mocks.resolveMemorySearchConfig(...args),
+  resolveMemorySearchConfig:
+    mocks.resolveMemorySearchConfig as typeof import("../agents/memory-search.js").resolveMemorySearchConfig,
 }));
 
 vi.mock("../commands/models.js", () => ({
   modelsAuthLoginCommand: vi.fn(),
-  modelsStatusCommand: (...args: unknown[]) => mocks.modelsStatusCommand(...args),
+  modelsStatusCommand:
+    mocks.modelsStatusCommand as typeof import("../commands/models.js").modelsStatusCommand,
 }));
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => mocks.callGateway(...args),
+  callGateway: mocks.callGateway as typeof import("../gateway/call.js").callGateway,
   randomIdempotencyKey: () => "run-1",
 }));
 
@@ -170,21 +175,25 @@ vi.mock("../gateway/connection-details.js", () => ({
 }));
 
 vi.mock("../media-understanding/runtime.js", () => ({
-  describeImageFile: (...args: unknown[]) => mocks.describeImageFile(...args),
+  describeImageFile:
+    mocks.describeImageFile as typeof import("../media-understanding/runtime.js").describeImageFile,
   describeVideoFile: vi.fn(),
-  transcribeAudioFile: (...args: unknown[]) => mocks.transcribeAudioFile(...args),
+  transcribeAudioFile:
+    mocks.transcribeAudioFile as typeof import("../media-understanding/runtime.js").transcribeAudioFile,
 }));
 
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
-  listMemoryEmbeddingProviders: (...args: unknown[]) => mocks.listMemoryEmbeddingProviders(...args),
-  registerMemoryEmbeddingProvider: (...args: unknown[]) =>
-    mocks.registerMemoryEmbeddingProvider(...args),
+  listMemoryEmbeddingProviders:
+    mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
+  registerMemoryEmbeddingProvider:
+    mocks.registerMemoryEmbeddingProvider as unknown as typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider,
 }));
 
 vi.mock("../../extensions/memory-core/runtime-api.js", () => ({
-  createEmbeddingProvider: (...args: unknown[]) => mocks.createEmbeddingProvider(...args),
-  registerBuiltInMemoryEmbeddingProviders: (...args: unknown[]) =>
-    mocks.registerBuiltInMemoryEmbeddingProviders(...args),
+  createEmbeddingProvider:
+    mocks.createEmbeddingProvider as unknown as typeof import("../../extensions/memory-core/runtime-api.js").createEmbeddingProvider,
+  registerBuiltInMemoryEmbeddingProviders:
+    mocks.registerBuiltInMemoryEmbeddingProviders as typeof import("../../extensions/memory-core/runtime-api.js").registerBuiltInMemoryEmbeddingProviders,
 }));
 
 vi.mock("../image-generation/runtime.js", () => ({
@@ -203,9 +212,10 @@ vi.mock("../tts/tts.js", () => ({
   resolveTtsConfig: vi.fn(() => ({})),
   resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
   setTtsEnabled: vi.fn(),
-  setTtsProvider: (...args: unknown[]) => mocks.setTtsProvider(...args),
-  resolveExplicitTtsOverrides: (...args: unknown[]) => mocks.resolveExplicitTtsOverrides(...args),
-  textToSpeech: (...args: unknown[]) => mocks.textToSpeech(...args),
+  setTtsProvider: mocks.setTtsProvider as typeof import("../tts/tts.js").setTtsProvider,
+  resolveExplicitTtsOverrides:
+    mocks.resolveExplicitTtsOverrides as typeof import("../tts/tts.js").resolveExplicitTtsOverrides,
+  textToSpeech: mocks.textToSpeech as typeof import("../tts/tts.js").textToSpeech,
 }));
 
 vi.mock("../tts/provider-registry.js", () => ({
@@ -215,14 +225,15 @@ vi.mock("../tts/provider-registry.js", () => ({
 
 vi.mock("../web-search/runtime.js", () => ({
   listWebSearchProviders: vi.fn(() => []),
-  isWebSearchProviderConfigured: (...args: unknown[]) =>
-    mocks.isWebSearchProviderConfigured(...args),
+  isWebSearchProviderConfigured:
+    mocks.isWebSearchProviderConfigured as typeof import("../web-search/runtime.js").isWebSearchProviderConfigured,
   runWebSearch: vi.fn(),
 }));
 
 vi.mock("../web-fetch/runtime.js", () => ({
   listWebFetchProviders: vi.fn(() => []),
-  isWebFetchProviderConfigured: (...args: unknown[]) => mocks.isWebFetchProviderConfigured(...args),
+  isWebFetchProviderConfigured:
+    mocks.isWebFetchProviderConfigured as typeof import("../web-fetch/runtime.js").isWebFetchProviderConfigured,
   resolveWebFetchDefinition: vi.fn(),
 }));
 
@@ -233,7 +244,7 @@ describe("capability cli", () => {
     mocks.runtime.writeJson.mockClear();
     mocks.loadModelCatalog
       .mockReset()
-      .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }]);
+      .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
     mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
     mocks.updateAuthProfileStoreWithLock
@@ -251,7 +262,7 @@ describe("capability cli", () => {
       });
     mocks.resolveMemorySearchConfig.mockReset().mockReturnValue(null);
     mocks.agentCommand.mockClear();
-    mocks.callGateway.mockClear().mockImplementation(async ({ method }: { method: string }) => {
+    mocks.callGateway.mockClear().mockImplementation((async ({ method }: { method: string }) => {
       if (method === "tts.status") {
         return { enabled: true, provider: "openai" };
       }
@@ -264,7 +275,7 @@ describe("capability cli", () => {
         };
       }
       return {};
-    });
+    }) as never);
     mocks.describeImageFile.mockClear();
     mocks.generateImage.mockReset();
     mocks.transcribeAudioFile.mockClear();
@@ -277,7 +288,7 @@ describe("capability cli", () => {
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.modelsStatusCommand.mockClear();
-    mocks.callGateway.mockImplementation(async ({ method }: { method: string }) => {
+    mocks.callGateway.mockImplementation((async ({ method }: { method: string }) => {
       if (method === "tts.status") {
         return { enabled: true, provider: "openai" };
       }
@@ -298,7 +309,7 @@ describe("capability cli", () => {
         };
       }
       return {};
-    });
+    }) as never);
   });
 
   it("lists canonical capabilities", async () => {
@@ -364,7 +375,7 @@ describe("capability cli", () => {
       text: undefined,
       provider: undefined,
       model: undefined,
-    });
+    } as never);
 
     await expect(
       runRegisteredCli({
@@ -441,7 +452,7 @@ describe("capability cli", () => {
   });
 
   it("fails audio transcribe when no transcript text is returned", async () => {
-    mocks.transcribeAudioFile.mockResolvedValueOnce({ text: undefined });
+    mocks.transcribeAudioFile.mockResolvedValueOnce({ text: undefined } as never);
 
     await expect(
       runRegisteredCli({
@@ -653,8 +664,8 @@ describe("capability cli", () => {
         "openai:secondary": { errorCount: 1 },
         "anthropic:default": { errorCount: 3 },
       },
-    });
-    mocks.listProfilesForProvider.mockReturnValue(["openai:default", "openai:secondary"]);
+    } as never);
+    mocks.listProfilesForProvider.mockReturnValue(["openai:default", "openai:secondary"] as never);
 
     let updatedStore: Record<string, any> | null = null;
     mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
@@ -702,8 +713,8 @@ describe("capability cli", () => {
   });
 
   it("fails logout if the auth store update does not complete", async () => {
-    mocks.listProfilesForProvider.mockReturnValue(["openai:default"]);
-    mocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null);
+    mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
+    mocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null as never);
 
     await expect(
       runRegisteredCli({
@@ -868,7 +879,7 @@ describe("capability cli", () => {
     mocks.resolveMemorySearchConfig.mockReturnValue({
       provider: "gemini",
       model: "gemini-embedding-001",
-    });
+    } as never);
     mocks.listMemoryEmbeddingProviders.mockReturnValue([
       { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
       { id: "gemini", defaultModel: "gemini-embedding-001", transport: "remote" },

@@ -8,10 +8,9 @@ import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/typ
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
-  buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   resolveLoaderPackageRoot,
-  resolvePluginLoaderJitiTryNative,
+  resolvePluginLoaderJitiConfig,
 } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
 
@@ -252,13 +251,11 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
 }
 
 function getJiti(modulePath: string) {
-  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, {
+  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
+    modulePath,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
     preferBuiltDist: true,
-  });
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
   });
   const cached = jitiLoaders.get(cacheKey);
   if (cached) {

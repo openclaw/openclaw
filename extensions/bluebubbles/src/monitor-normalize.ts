@@ -1,6 +1,7 @@
 import { parseFiniteNumber } from "openclaw/plugin-sdk/infra-runtime";
 import {
   asNullableRecord,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringField,
 } from "openclaw/plugin-sdk/text-runtime";
@@ -356,7 +357,7 @@ export function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[]
     if (!normalized?.id) {
       continue;
     }
-    const key = normalized.id.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(normalized.id);
     if (seen.has(key)) {
       continue;
     }
@@ -376,7 +377,7 @@ export function formatGroupMembers(params: {
     if (!entry?.id) {
       continue;
     }
-    const key = entry.id.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(entry.id);
     if (seen.has(key)) {
       continue;
     }

@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
-import type { MediaUnderstandingProvider } from "./types.js";
+import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
 
 function createProviderRegistry(
   providers: Record<string, MediaUnderstandingProvider>,
@@ -17,7 +17,7 @@ function createProviderRegistry(
 }
 
 function createOpenAiAudioProvider(
-  transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>,
+  transcribeAudio: (req: AudioTranscriptionRequest) => Promise<{ text: string; model: string }>,
 ) {
   return createProviderRegistry({
     openai: {
@@ -43,7 +43,7 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
 }
 
 async function runAutoAudioCase(params: {
-  transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>;
+  transcribeAudio: (req: AudioTranscriptionRequest) => Promise<{ text: string; model: string }>;
   cfgExtra?: Partial<OpenClawConfig>;
 }) {
   let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;

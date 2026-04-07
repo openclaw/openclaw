@@ -170,7 +170,18 @@ describe("subagent registry persistence resume", () => {
 
     await flushQueuedRegistryWork();
 
-    const announce = announceSpy.mock.lastCall?.[0];
+    const announceCalls = announceSpy.mock.calls as unknown as Array<[unknown]>;
+    const announce = (announceCalls.at(-1)?.[0] ?? undefined) as
+      | {
+          childRunId?: string;
+          childSessionKey?: string;
+          requesterSessionKey?: string;
+          requesterOrigin?: { channel?: string; accountId?: string };
+          task?: string;
+          cleanup?: string;
+          outcome?: { status?: string };
+        }
+      | undefined;
     if (announce) {
       expect(announce).toMatchObject({
         childRunId: "run-1",

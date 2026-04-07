@@ -441,13 +441,13 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
   };
 }
 
-function isNativeJitiDisabledByRuntime(): boolean {
+function supportsNativeJitiRuntime(): boolean {
   const versions = process.versions as { bun?: string };
-  return typeof versions.bun === "string" || process.platform === "win32";
+  return typeof versions.bun !== "string" && process.platform !== "win32";
 }
 
 export function shouldPreferNativeJiti(modulePath: string): boolean {
-  if (isNativeJitiDisabledByRuntime()) {
+  if (!supportsNativeJitiRuntime()) {
     return false;
   }
   switch (path.extname(modulePath).toLowerCase()) {
@@ -467,11 +467,65 @@ export function resolvePluginLoaderJitiTryNative(
     preferBuiltDist?: boolean;
   },
 ): boolean {
-  if (isNativeJitiDisabledByRuntime()) {
-    return false;
-  }
   return (
     shouldPreferNativeJiti(modulePath) ||
-    (options?.preferBuiltDist === true && modulePath.includes(`${path.sep}dist${path.sep}`))
+    (supportsNativeJitiRuntime() &&
+      options?.preferBuiltDist === true &&
+      modulePath.includes(`${path.sep}dist${path.sep}`))
+  );
+}
+
+export function createPluginLoaderJitiCacheKey(params: {
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+}): string {
+  return JSON.stringify({
+    tryNative: params.tryNative,
+    aliasMap: Object.entries(params.aliasMap).toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    ),
+  });
+}
+
+export function resolvePluginLoaderJitiConfig(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl: string;
+  preferBuiltDist?: boolean;
+}): {
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+  cacheKey: string;
+} {
+  const tryNative = resolvePluginLoaderJitiTryNative(
+    params.modulePath,
+    params.preferBuiltDist ? { preferBuiltDist: true } : {},
+  );
+  const aliasMap = buildPluginLoaderAliasMap(params.modulePath, params.argv1, params.moduleUrl);
+  return {
+    tryNative,
+    aliasMap,
+    cacheKey: createPluginLoaderJitiCacheKey({
+      tryNative,
+      aliasMap,
+    }),
+  };
+}
+
+export function isBundledPluginExtensionPath(params: {
+  modulePath: string;
+  openClawPackageRoot: string;
+  bundledPluginsDir?: string;
+}): boolean {
+  const normalizedModulePath = path.resolve(params.modulePath);
+  const roots = [
+    params.bundledPluginsDir ? path.resolve(params.bundledPluginsDir) : null,
+    path.join(params.openClawPackageRoot, "extensions"),
+    path.join(params.openClawPackageRoot, "dist", "extensions"),
+    path.join(params.openClawPackageRoot, "dist-runtime", "extensions"),
+  ].filter((root): root is string => typeof root === "string");
+  return roots.some(
+    (root) =>
+      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
   );
 }

@@ -1,4 +1,11 @@
 import { describe, expect, it } from "vitest";
+import {
+  IMessageConfigSchema,
+  SignalConfigSchema,
+  TelegramConfigSchema,
+  WhatsAppConfigSchema,
+} from "../plugin-sdk/channel-config-schema.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { validateConfigObject } from "./validation.js";
 import {
   DiscordConfigSchema,
