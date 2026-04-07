@@ -12,6 +12,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
   drainSystemEventEntries,
+  drainWakeRequestedEvents,
   enqueueSystemEvent,
   hasSystemEvents,
   isSystemEventContextChanged,
@@ -214,11 +215,11 @@ describe("system events (session routing)", () => {
     expect(result).toMatch(/^System \(untrusted\): \[[^\]]+\] Notification posted:/);
   });
 
-  it("skips system events for periodic heartbeats (not event-driven)", async () => {
+  it("skips non-wake system events for periodic heartbeats", async () => {
     const key = "agent:main:whatsapp:direct:+1234";
-    enqueueSystemEvent("Exec completed (session abc, code 0)", { sessionKey: key });
+    enqueueSystemEvent("Model switched to sonnet-4.6", { sessionKey: key });
 
-    // Periodic heartbeat: events should be skipped (not consumed, not even visible)
+    // Periodic heartbeat: non-wake events should be skipped
     const heartbeatResult = await drainFormattedSystemEvents({
       cfg,
       sessionKey: key,
@@ -228,7 +229,7 @@ describe("system events (session routing)", () => {
     });
     expect(heartbeatResult).toBeUndefined();
     // Events still in queue — periodic heartbeat didn't touch them
-    expect(peekSystemEvents(key)).toEqual(["Exec completed (session abc, code 0)"]);
+    expect(peekSystemEvents(key)).toEqual(["Model switched to sonnet-4.6"]);
 
     // Normal run: events should be drained (consumed)
     const normalResult = await drainFormattedSystemEvents({
@@ -237,9 +238,32 @@ describe("system events (session routing)", () => {
       isMainSession: false,
       isNewSession: false,
     });
-    expect(normalResult).toMatch(/Exec completed/);
-    // Events now gone after normal drain
+    expect(normalResult).toMatch(/Model switched/);
     expect(peekSystemEvents(key)).toEqual([]);
+  });
+
+  it("drains wakeRequested events on periodic heartbeats", async () => {
+    const key = "agent:main:whatsapp:direct:+wake-test";
+    enqueueSystemEvent("Model switched to sonnet-4.6", { sessionKey: key });
+    enqueueSystemEvent("Exec completed (session abc, code 0)", {
+      sessionKey: key,
+      wakeRequested: true,
+    });
+    enqueueSystemEvent("Presence update", { sessionKey: key });
+
+    // Periodic heartbeat: only wakeRequested events should be drained
+    const heartbeatResult = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+      isHeartbeat: true,
+    });
+    expect(heartbeatResult).toMatch(/Exec completed/);
+    expect(heartbeatResult).not.toMatch(/Model switched/);
+    expect(heartbeatResult).not.toMatch(/Presence update/);
+    // Non-wake events still queued
+    expect(peekSystemEvents(key)).toEqual(["Model switched to sonnet-4.6", "Presence update"]);
   });
 
   it("drains system events for event-driven heartbeats (exec/cron)", async () => {
@@ -267,6 +291,62 @@ describe("system events (session routing)", () => {
     const result = await drainFormattedEvents(key);
     expect(result).toContain("Node: Mac Studio");
     expect(result).not.toContain("last input");
+  });
+});
+
+describe("drainWakeRequestedEvents", () => {
+  beforeEach(() => {
+    resetSystemEventsForTest();
+  });
+
+  it("drains only wakeRequested events and leaves the rest", () => {
+    const key = "agent:main:test-wake-drain";
+    enqueueSystemEvent("non-wake event", { sessionKey: key });
+    enqueueSystemEvent("wake event 1", { sessionKey: key, wakeRequested: true });
+    enqueueSystemEvent("another non-wake", { sessionKey: key });
+    enqueueSystemEvent("wake event 2", { sessionKey: key, wakeRequested: true });
+
+    const drained = drainWakeRequestedEvents(key);
+    expect(drained.map((e) => e.text)).toEqual(["wake event 1", "wake event 2"]);
+    expect(peekSystemEvents(key)).toEqual(["non-wake event", "another non-wake"]);
+  });
+
+  it("returns empty array when no wakeRequested events exist", () => {
+    const key = "agent:main:test-no-wake";
+    enqueueSystemEvent("regular event", { sessionKey: key });
+
+    const drained = drainWakeRequestedEvents(key);
+    expect(drained).toEqual([]);
+    expect(peekSystemEvents(key)).toEqual(["regular event"]);
+  });
+
+  it("cleans up the queue entry when all events are wakeRequested", () => {
+    const key = "agent:main:test-wake-cleanup";
+    enqueueSystemEvent("wake only", { sessionKey: key, wakeRequested: true });
+
+    const drained = drainWakeRequestedEvents(key);
+    expect(drained.map((e) => e.text)).toEqual(["wake only"]);
+    expect(hasSystemEvents(key)).toBe(false);
+  });
+
+  it("returns cloned events", () => {
+    const key = "agent:main:test-wake-clone";
+    enqueueSystemEvent("wake event", { sessionKey: key, wakeRequested: true });
+
+    const drained = drainWakeRequestedEvents(key);
+    drained[0].text = "mutated";
+    // Re-enqueue same text — should succeed since queue was drained
+    expect(enqueueSystemEvent("wake event", { sessionKey: key, wakeRequested: true })).toBe(true);
+  });
+
+  it("propagates wakeRequested through enqueue", () => {
+    const key = "agent:main:test-wake-propagate";
+    enqueueSystemEvent("with wake", { sessionKey: key, wakeRequested: true });
+    enqueueSystemEvent("without wake", { sessionKey: key });
+
+    const peeked = peekSystemEventEntries(key);
+    expect(peeked[0].wakeRequested).toBe(true);
+    expect(peeked[1].wakeRequested).toBeUndefined();
   });
 });
 

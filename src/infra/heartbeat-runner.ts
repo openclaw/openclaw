@@ -954,11 +954,12 @@ export async function runHeartbeatOnce(opts: {
     // or another event-driven wake happens to drain the queue.
     const reasonKind = resolveHeartbeatReasonKind(opts.reason);
     const isPeriodicHeartbeat = reasonKind === "interval" || reasonKind === "retry";
-    // Periodic heartbeats only drain when tagged cron events are queued
-    // (hasCronEvents).  We intentionally do NOT drain on arbitrary queued
-    // events — some events (model switch, fast-mode toggle) are enqueued
-    // without requestHeartbeatNow and are meant for the next user turn.
-    // Draining them here would silently discard them.
+    // Periodic heartbeats drain tagged cron events normally (hasCronEvents →
+    // isEventDriven) and selectively drain wakeRequested events via the
+    // session-system-events layer.  We intentionally do NOT treat arbitrary
+    // queued events as event-driven — some (model switch, fast-mode toggle)
+    // are enqueued without requestHeartbeatNow and are meant for the next
+    // user turn.
     const isEventDriven = !isPeriodicHeartbeat || hasCronEvents;
     const replyOpts = heartbeatModelOverride
       ? {

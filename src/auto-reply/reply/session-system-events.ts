@@ -6,7 +6,7 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { drainSystemEventEntries } from "../../infra/system-events.js";
+import { drainSystemEventEntries, drainWakeRequestedEvents } from "../../infra/system-events.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -85,18 +85,17 @@ export async function drainFormattedSystemEvents(params: {
   };
 
   const systemLines: string[] = [];
-  // Periodic heartbeat runs skip system events entirely.  They don't persist
-  // to the session transcript (JSONL), so processing events here would
-  // silently discard them — and repeated peeks would re-trigger the same
-  // events on every heartbeat cycle, wasting tokens and risking duplicate
-  // side-effects.  Events stay queued untouched for the next run to drain.
+  // Event-driven heartbeats (exec completion, cron) drain all events so the
+  // agent can act on results referenced by their prompt.
   //
-  // Event-driven heartbeats (exec completion, cron) are the designated
-  // consumer of those events — they MUST drain so the agent can act on the
-  // results referenced by their prompt (e.g. "The result is shown in the
-  // system messages above").
-  const skipDrain = params.isHeartbeat && !params.isEventDrivenHeartbeat;
-  const queued = skipDrain ? [] : drainSystemEventEntries(params.sessionKey);
+  // Periodic heartbeats only drain events whose dedicated wake was missed
+  // (wakeRequested=true) — e.g. when heartbeats were temporarily disabled
+  // at the time the event was enqueued.  Non-wake events (model switch,
+  // presence updates) stay queued for the next user turn or event-driven wake.
+  const isPeriodicOnly = params.isHeartbeat && !params.isEventDrivenHeartbeat;
+  const queued = isPeriodicOnly
+    ? drainWakeRequestedEvents(params.sessionKey)
+    : drainSystemEventEntries(params.sessionKey);
   systemLines.push(
     ...queued.flatMap((event) => {
       const compacted = compactSystemEvent(event.text);

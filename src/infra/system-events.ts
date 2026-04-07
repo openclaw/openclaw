@@ -19,6 +19,8 @@ export type SystemEvent = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  /** True when this event was enqueued alongside a requestHeartbeatNow call. */
+  wakeRequested?: boolean;
 };
 
 const MAX_EVENTS = 20;
@@ -38,6 +40,8 @@ type SystemEventOptions = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  /** Mark true when this enqueue is paired with a requestHeartbeatNow call. */
+  wakeRequested?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -107,6 +111,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
     trusted: options.trusted !== false,
+    ...(options.wakeRequested ? { wakeRequested: true } : {}),
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -126,6 +131,39 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   entry.lastContextKey = null;
   queues.delete(key);
   return out;
+}
+
+/**
+ * Drain only events tagged with `wakeRequested`, leaving the rest queued.
+ * Used by periodic heartbeats to pick up events whose dedicated wake was
+ * missed without consuming presence/config events meant for the next user turn.
+ */
+export function drainWakeRequestedEvents(sessionKey: string): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0) {
+    return [];
+  }
+  const wakeEvents: SystemEvent[] = [];
+  const remaining: SystemEvent[] = [];
+  for (const event of entry.queue) {
+    if (event.wakeRequested) {
+      wakeEvents.push(cloneSystemEvent(event));
+    } else {
+      remaining.push(event);
+    }
+  }
+  if (wakeEvents.length === 0) {
+    return [];
+  }
+  entry.queue.length = 0;
+  entry.queue.push(...remaining);
+  if (entry.queue.length === 0) {
+    entry.lastText = null;
+    entry.lastContextKey = null;
+    queues.delete(key);
+  }
+  return wakeEvents;
 }
 
 export function drainSystemEvents(sessionKey: string): string[] {
