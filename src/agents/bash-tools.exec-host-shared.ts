@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { loadConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
   hasConfiguredExecApprovalDmRoute,
@@ -413,7 +414,7 @@ export async function sendExecApprovalFollowupResult(
     turnSourceThreadId: target.turnSourceThreadId,
     resultText,
   }).catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {
       return;

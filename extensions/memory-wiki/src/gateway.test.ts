@@ -1,6 +1,9 @@
-import type { MemoryWikiMutationInput } from "openclaw/plugin-sdk/memory-wiki";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
+import {
+  applyMemoryWikiMutation,
+  normalizeMemoryWikiMutationInput,
+  type ApplyMemoryWikiMutation,
+} from "./apply.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { searchMemoryWiki } from "./query.js";
@@ -69,9 +72,16 @@ describe("memory-wiki gateway methods", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(syncMemoryWikiImportedSources).mockResolvedValue({
-      importedFiles: [],
-      skippedFiles: [],
-      refreshedIndexes: false,
+      importedCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
+      removedCount: 0,
+      artifactCount: 0,
+      workspaces: 0,
+      pagePaths: [],
+      indexesRefreshed: false,
+      indexUpdatedFiles: [],
+      indexRefreshReason: "no-import-changes",
     });
     vi.mocked(resolveMemoryWikiStatus).mockResolvedValue({
       vaultMode: "isolated",
@@ -85,7 +95,7 @@ describe("memory-wiki gateway methods", () => {
       title: "Gateway Alpha",
       body: "Gateway summary.",
       sourceIds: ["source.alpha"],
-    } satisfies MemoryWikiMutationInput);
+    } satisfies ApplyMemoryWikiMutation);
     vi.mocked(applyMemoryWikiMutation).mockResolvedValue({
       operation: "create_synthesis",
       pagePath: "syntheses/gateway-alpha.md",

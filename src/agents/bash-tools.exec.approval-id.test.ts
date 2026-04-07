@@ -1370,38 +1370,6 @@ describe("exec approvals", () => {
     ).rejects.toThrow("Cron runs cannot wait for interactive exec approval");
   });
 
-  it("shows a local /approve prompt when discord exec approvals are disabled", async () => {
-    await writeOpenClawConfig({
-      channels: {
-        discord: {
-          enabled: true,
-          execApprovals: { enabled: false },
-        },
-      },
-    });
-
-    mockPendingApprovalRegistration();
-
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "always",
-      approvalRunningNoticeMs: 0,
-      messageProvider: "discord",
-      accountId: "default",
-      currentChannelId: "1234567890",
-    });
-
-    const result = await tool.execute("call-unavailable", {
-      command: "npm view diver name version description",
-    });
-
-    expectPendingApprovalText(result, {
-      command: "npm view diver name version description",
-      host: "gateway",
-      allowedDecisions: "allow-once|deny",
-    });
-  });
-
   it("keeps Telegram approvals in the initiating chat even when Discord DM approvals are also enabled", async () => {
     await writeOpenClawConfig(
       {

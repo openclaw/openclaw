@@ -5,19 +5,10 @@ const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, agentId: string) => `/workspace/${agentId}`),
 );
-const resolveMemorySearchConfig = vi.hoisted(() =>
-  vi.fn<(_cfg: OpenClawConfig, _agentId: string) => { enabled: boolean } | null>(() => ({
-    enabled: true,
-  })),
-);
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
-}));
-
-vi.mock("../agents/memory-search.js", () => ({
-  resolveMemorySearchConfig,
 }));
 
 import {
@@ -114,10 +105,7 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.phases.rem.cron).toBe("15 */8 * * *");
   });
 
-  it("dedupes shared workspaces and skips agents without memory search", () => {
-    resolveMemorySearchConfig.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
-      agentId === "beta" ? null : { enabled: true },
-    );
+  it("dedupes shared workspaces across all configured agents", () => {
     resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
       if (agentId === "alpha") {
         return "/workspace/shared";
@@ -138,6 +126,10 @@ describe("memory dreaming host helpers", () => {
       {
         workspaceDir: "/workspace/shared",
         agentIds: ["alpha", "gamma"],
+      },
+      {
+        workspaceDir: "/workspace/beta",
+        agentIds: ["beta"],
       },
     ]);
   });

@@ -4,6 +4,7 @@ import {
   discoverGatewayBeacons,
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { pickAutoSshTargetFromDiscovery } from "./discovery.js";
 import {
   extractConfigSummary,
@@ -70,7 +71,7 @@ export async function runGatewayStatusProbePass(params: {
       sshTunnelStarted = true;
       return tunnel;
     } catch (err) {
-      sshTunnelError = err instanceof Error ? err.message : String(err);
+      sshTunnelError = formatErrorMessage(err);
       return null;
     }
   };

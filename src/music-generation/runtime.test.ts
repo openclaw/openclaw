@@ -398,6 +398,12 @@ describe("music-generation runtime", () => {
       durationSeconds: 30,
     });
     expect(result.ignoredOverrides).toEqual([]);
+    expect(result.normalization).toMatchObject({
+      durationSeconds: {
+        requested: 45,
+        applied: 30,
+      },
+    });
     expect(result.metadata).toMatchObject({
       requestedDurationSeconds: 45,
       normalizedDurationSeconds: 30,

@@ -2,6 +2,7 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -272,7 +273,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return true;
     } catch (error) {
       logVerbose(
-        `dispatch-acp: tool message edit failed for ${toolCallId}: ${error instanceof Error ? error.message : String(error)}`,
+        `dispatch-acp: tool message edit failed for ${toolCallId}: ${formatErrorMessage(error)}`,
       );
       return false;
     }

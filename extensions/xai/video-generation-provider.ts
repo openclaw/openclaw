@@ -257,6 +257,8 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       generate: {
         maxVideos: 1,
         maxDurationSeconds: 15,
+        aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
+        resolutions: ["480P", "720P"],
         supportsAspectRatio: true,
         supportsResolution: true,
       },
@@ -265,6 +267,8 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         maxVideos: 1,
         maxInputImages: 1,
         maxDurationSeconds: 15,
+        aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
+        resolutions: ["480P", "720P"],
         supportsAspectRatio: true,
         supportsResolution: true,
       },

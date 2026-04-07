@@ -616,24 +616,29 @@ export function createImageGenerateTool(options?: {
           ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredImageGenerationOverride).join(", ")}.`
           : undefined;
       const normalizedSize =
-        typeof result.metadata?.normalizedSize === "string" && result.metadata.normalizedSize.trim()
+        result.normalization?.size?.applied ??
+        (typeof result.metadata?.normalizedSize === "string" &&
+        result.metadata.normalizedSize.trim()
           ? result.metadata.normalizedSize
-          : undefined;
+          : undefined);
       const normalizedAspectRatio =
-        typeof result.metadata?.normalizedAspectRatio === "string" &&
+        result.normalization?.aspectRatio?.applied ??
+        (typeof result.metadata?.normalizedAspectRatio === "string" &&
         result.metadata.normalizedAspectRatio.trim()
           ? result.metadata.normalizedAspectRatio
-          : undefined;
+          : undefined);
       const normalizedResolution =
-        typeof result.metadata?.normalizedResolution === "string" &&
+        result.normalization?.resolution?.applied ??
+        (typeof result.metadata?.normalizedResolution === "string" &&
         result.metadata.normalizedResolution.trim()
           ? result.metadata.normalizedResolution
-          : undefined;
+          : undefined);
       const sizeTranslatedToAspectRatio =
-        !normalizedSize &&
-        typeof result.metadata?.requestedSize === "string" &&
-        result.metadata.requestedSize === size &&
-        Boolean(normalizedAspectRatio);
+        result.normalization?.aspectRatio?.derivedFrom === "size" ||
+        (!normalizedSize &&
+          typeof result.metadata?.requestedSize === "string" &&
+          result.metadata.requestedSize === size &&
+          Boolean(normalizedAspectRatio));
 
       const savedImages = await Promise.all(
         result.images.map((image) =>
@@ -694,6 +699,7 @@ export function createImageGenerateTool(options?: {
             : {}),
           ...(filename ? { filename } : {}),
           attempts: result.attempts,
+          ...(result.normalization ? { normalization: result.normalization } : {}),
           metadata: result.metadata,
           ...(warning ? { warning } : {}),
           ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),

@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
@@ -408,15 +409,17 @@ async function executeMusicGenerationJob(params: {
   const ignoredOverrides = result.ignoredOverrides ?? [];
   const ignoredOverrideKeys = new Set(ignoredOverrides.map((entry) => entry.key));
   const requestedDurationSeconds =
-    typeof result.metadata?.requestedDurationSeconds === "number" &&
+    result.normalization?.durationSeconds?.requested ??
+    (typeof result.metadata?.requestedDurationSeconds === "number" &&
     Number.isFinite(result.metadata.requestedDurationSeconds)
       ? result.metadata.requestedDurationSeconds
-      : params.durationSeconds;
+      : params.durationSeconds);
   const runtimeNormalizedDurationSeconds =
-    typeof result.metadata?.normalizedDurationSeconds === "number" &&
+    result.normalization?.durationSeconds?.applied ??
+    (typeof result.metadata?.normalizedDurationSeconds === "number" &&
     Number.isFinite(result.metadata.normalizedDurationSeconds)
       ? result.metadata.normalizedDurationSeconds
-      : undefined;
+      : undefined);
   const appliedDurationSeconds =
     runtimeNormalizedDurationSeconds ??
     (!ignoredOverrideKeys.has("durationSeconds") && typeof params.durationSeconds === "number"
@@ -492,6 +495,7 @@ async function executeMusicGenerationJob(params: {
           : {}),
       ...(result.lyrics?.length ? { lyrics: result.lyrics } : {}),
       attempts: result.attempts,
+      ...(result.normalization ? { normalization: result.normalization } : {}),
       metadata: result.metadata,
       ...(warning ? { warning } : {}),
       ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
@@ -644,7 +648,7 @@ export function createMusicGenerateTool(options?: {
               handle: taskHandle,
               status: "error",
               statusLabel: "failed",
-              result: error instanceof Error ? error.message : String(error),
+              result: formatErrorMessage(error),
             });
             return;
           }

@@ -1,5 +1,6 @@
 import type { TSchema } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
@@ -63,7 +64,7 @@ function logMessageActionError(params: {
   operation: "describeMessageTool";
   error: unknown;
 }) {
-  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const message = formatErrorMessage(params.error);
   const key = `${params.pluginId}:${params.operation}:${message}`;
   if (loggedMessageActionErrors.has(key)) {
     return;

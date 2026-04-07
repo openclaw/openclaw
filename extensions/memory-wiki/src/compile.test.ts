@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -8,9 +9,26 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("compileMemoryWikiVault", () => {
+  let suiteRoot = "";
+  let caseId = 0;
+
+  beforeAll(async () => {
+    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-suite-"));
+  });
+
+  afterAll(async () => {
+    if (suiteRoot) {
+      await fs.rm(suiteRoot, { recursive: true, force: true });
+    }
+  });
+
+  function nextCaseRoot() {
+    return path.join(suiteRoot, `case-${caseId++}`);
+  }
+
   it("writes root and directory indexes for native markdown", async () => {
     const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-compile-",
+      rootDir: nextCaseRoot(),
       initialize: true,
     });
 
@@ -36,7 +54,7 @@ describe("compileMemoryWikiVault", () => {
 
   it("renders obsidian-friendly links when configured", async () => {
     const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-compile-",
+      rootDir: nextCaseRoot(),
       initialize: true,
       config: {
         vault: { renderMode: "obsidian" },
@@ -61,7 +79,7 @@ describe("compileMemoryWikiVault", () => {
 
   it("writes related blocks from source ids and shared sources", async () => {
     const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-compile-",
+      rootDir: nextCaseRoot(),
       initialize: true,
     });
 
@@ -121,7 +139,7 @@ describe("compileMemoryWikiVault", () => {
 
   it("writes dashboard report pages when createDashboards is enabled", async () => {
     const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-compile-",
+      rootDir: nextCaseRoot(),
       initialize: true,
     });
 
@@ -174,7 +192,7 @@ describe("compileMemoryWikiVault", () => {
 
   it("skips dashboard report pages when createDashboards is disabled", async () => {
     const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-compile-",
+      rootDir: nextCaseRoot(),
       initialize: true,
       config: {
         render: { createDashboards: false },
@@ -203,7 +221,7 @@ describe("compileMemoryWikiVault", () => {
 
   it("ignores generated related links when computing backlinks on repeated compile", async () => {
     const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-compile-",
+      rootDir: nextCaseRoot(),
       initialize: true,
     });
 

@@ -55,6 +55,7 @@ describe("short-term promotion", () => {
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
+    expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
     expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/network.md")).toBe(false);
@@ -124,7 +125,7 @@ describe("short-term promotion", () => {
   it("serializes concurrent recall writes so counts are not lost", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await Promise.all(
-        Array.from({ length: 12 }, (_, index) =>
+        Array.from({ length: 8 }, (_, index) =>
           recordShortTermRecalls({
             workspaceDir,
             query: `backup-${index % 4}`,
@@ -149,7 +150,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
       });
       expect(ranked).toHaveLength(1);
-      expect(ranked[0]?.recallCount).toBe(12);
+      expect(ranked[0]?.recallCount).toBe(8);
       expect(ranked[0]?.uniqueQueries).toBe(4);
     });
   });

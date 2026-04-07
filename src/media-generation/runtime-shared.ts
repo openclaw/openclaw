@@ -16,6 +16,27 @@ export type ParsedProviderModelRef = {
   model: string;
 };
 
+export type MediaNormalizationValue = string | number | boolean;
+
+export type MediaNormalizationEntry<TValue extends MediaNormalizationValue> = {
+  requested?: TValue;
+  applied?: TValue;
+  derivedFrom?: string;
+  supportedValues?: readonly TValue[];
+};
+
+export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
+  entry: MediaNormalizationEntry<TValue> | undefined,
+): entry is MediaNormalizationEntry<TValue> {
+  return Boolean(
+    entry &&
+    (entry.requested !== undefined ||
+      entry.applied !== undefined ||
+      entry.derivedFrom !== undefined ||
+      (entry.supportedValues?.length ?? 0) > 0),
+  );
+}
+
 const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
 type CapabilityProviderCandidate = {

@@ -177,6 +177,13 @@ function isShortTermMemoryPath(filePath: string): boolean {
   if (/(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized)) {
     return true;
   }
+  if (
+    /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
   return /^(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized);
 }
 

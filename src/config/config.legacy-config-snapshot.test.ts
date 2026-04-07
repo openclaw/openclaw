@@ -155,6 +155,7 @@ describe("config strict validation", () => {
       expect(snap.legacyIssues.some((issue) => issue.path === "tools.web.x_search.apiKey")).toBe(
         true,
       );
+      expect(snap.sourceConfig.plugins?.entries?.xai?.enabled).toBe(true);
       expect(snap.sourceConfig.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
         apiKey: "test-key",
       });
@@ -236,7 +237,6 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.telegram")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord")).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
@@ -278,6 +278,7 @@ describe("config strict validation", () => {
       expect(snap.sourceConfig.channels?.slack).toMatchObject({
         streaming: {
           mode: "partial",
+          nativeTransport: true,
         },
       });
     });

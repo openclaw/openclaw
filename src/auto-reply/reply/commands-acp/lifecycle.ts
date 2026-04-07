@@ -33,6 +33,7 @@ import {
 import type { OpenClawConfig } from "../../../config/config.js";
 import { updateSessionStore } from "../../../config/sessions.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   getSessionBindingService,
   type ConversationRef,
@@ -171,7 +172,7 @@ async function bindSpawnedAcpSession(params: {
       binding,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     return {
       ok: false,
       error: message || params.bindError,
@@ -607,7 +608,7 @@ export async function handleAcpSpawnAction(
       shouldDeleteSession: true,
       initializedRuntime,
     });
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return stopWithText(`⚠️ ACP spawn failed: ${message}`);
   }
 

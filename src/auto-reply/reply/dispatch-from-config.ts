@@ -20,6 +20,7 @@ import {
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   logMessageProcessed,
   logMessageQueued,
@@ -1020,7 +1021,7 @@ export async function dispatchReplyFromConfig(params: {
         }
       } catch (err) {
         logVerbose(
-          `dispatch-from-config: accumulated block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
+          `dispatch-from-config: accumulated block TTS failed: ${formatErrorMessage(err)}`,
         );
       }
     }

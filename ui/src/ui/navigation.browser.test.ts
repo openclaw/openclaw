@@ -381,6 +381,15 @@ describe("control UI routing", () => {
     });
     const targetScrollTop = container.scrollHeight;
     expect(targetScrollTop).toBeGreaterThan(container.clientHeight);
+    app.chatMessages = [
+      ...app.chatMessages,
+      {
+        role: "assistant",
+        content: `Line 60 - ${"x".repeat(200)}`,
+        timestamp: Date.now() + 60,
+      },
+    ];
+    await app.updateComplete;
     for (let i = 0; i < 10; i++) {
       if (container.scrollTop === targetScrollTop) {
         break;

@@ -1,4 +1,5 @@
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   azLoginDeviceCode,
   azLoginDeviceCodeWithOptions,
@@ -422,7 +423,7 @@ export async function loginWithTenantFallback(
     await azLoginDeviceCode();
     return { account: getLoggedInAccount() };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     const isAzureTenantError =
       /AADSTS\d+/i.test(message) ||
       /no subscriptions found/i.test(message) ||

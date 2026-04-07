@@ -787,10 +787,11 @@ describeWin("exec script preflight on windows path syntax", () => {
 describe("exec interpreter heuristics ReDoS guard", () => {
   it("does not hang on long commands with VAR=value assignments and whitespace-heavy text", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
-    // Simulate a heredoc with HTML content after a VAR= assignment — the pattern
-    // that triggers catastrophic backtracking when .* is used instead of \S*
+    // Simulate a heredoc with HTML content after a VAR= assignment. Keep the
+    // command-substitution failure local so the test measures parser behavior,
+    // not external network timing.
     const htmlBlock = '<section style="padding: 30px 20px; font-family: Arial;">'.repeat(50);
-    const command = `ACCESS_TOKEN=$(curl -s https://api.example.com/token)\ncat > /tmp/out.html << 'EOF'\n${htmlBlock}\nEOF`;
+    const command = `ACCESS_TOKEN=$(__openclaw_missing_redos_guard__)\ncat > /tmp/out.html << 'EOF'\n${htmlBlock}\nEOF`;
 
     const start = Date.now();
     // The command itself will fail — we only care that the interpreter

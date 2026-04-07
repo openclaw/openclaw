@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.js";
 import { isValidEnvSecretRefId, type SecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import {
@@ -31,13 +32,6 @@ export type SecretRefSetupPromptCopy = {
   envValidatedMessage?: (envVar: string) => string;
   providerValidatedMessage?: (provider: string, id: string, source: "file" | "exec") => string;
 };
-
-function formatErrorMessage(error: unknown): string {
-  if (error instanceof Error && typeof error.message === "string" && error.message.trim()) {
-    return error.message;
-  }
-  return String(error);
-}
 
 export function extractEnvVarFromSourceLabel(source: string): string | undefined {
   const match = ENV_SOURCE_LABEL_RE.exec(source.trim());

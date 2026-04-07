@@ -70,6 +70,8 @@ Use `action: "list"` to inspect available providers and models at runtime:
 
 Not all providers support all parameters. When a fallback provider supports a nearby geometry option instead of the exact requested one, OpenClaw remaps to the closest supported size, aspect ratio, or resolution before submission. Truly unsupported overrides are still reported in the tool result.
 
+Tool results report the applied settings. When OpenClaw remaps geometry during provider fallback, the returned `size`, `aspectRatio`, and `resolution` values reflect what was actually sent, and `details.normalization` captures the requested-to-applied translation.
+
 ## Configuration
 
 ### Model selection

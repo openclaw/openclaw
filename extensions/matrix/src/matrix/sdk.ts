@@ -10,6 +10,7 @@ import {
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeNullableString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
@@ -173,10 +174,7 @@ async function loadMatrixCryptoRuntime(): Promise<MatrixCryptoRuntime> {
   return await matrixCryptoRuntimePromise;
 }
 
-function normalizeOptionalString(value: string | null | undefined): string | null {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
-}
+const normalizeOptionalString = normalizeNullableString;
 
 function isUnsupportedAuthenticatedMediaEndpointError(err: unknown): boolean {
   const statusCode = (err as { statusCode?: number })?.statusCode;

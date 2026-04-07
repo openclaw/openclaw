@@ -8,6 +8,7 @@ import {
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
@@ -957,7 +958,7 @@ async function notifyPluginConversationBindingResolved(params: {
       await registration.handler(event);
     } catch (error) {
       log.warn(
-        `plugin binding resolved callback failed plugin=${registration.pluginId} root=${registration.pluginRoot ?? "<none>"}: ${error instanceof Error ? error.message : String(error)}`,
+        `plugin binding resolved callback failed plugin=${registration.pluginId} root=${registration.pluginRoot ?? "<none>"}: ${formatErrorMessage(error)}`,
       );
     }
   }

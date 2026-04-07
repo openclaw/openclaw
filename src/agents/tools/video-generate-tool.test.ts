@@ -258,6 +258,13 @@ describe("createVideoGenerateTool", () => {
           fileName: "lobster.mp4",
         },
       ],
+      normalization: {
+        durationSeconds: {
+          requested: 5,
+          applied: 6,
+          supportedValues: [4, 6, 8],
+        },
+      },
       metadata: {
         requestedDurationSeconds: 5,
         normalizedDurationSeconds: 6,
@@ -295,6 +302,13 @@ describe("createVideoGenerateTool", () => {
       durationSeconds: 6,
       requestedDurationSeconds: 5,
       supportedDurationSeconds: [4, 6, 8],
+      normalization: {
+        durationSeconds: {
+          requested: 5,
+          applied: 6,
+          supportedValues: [4, 6, 8],
+        },
+      },
     });
   });
 
@@ -311,6 +325,12 @@ describe("createVideoGenerateTool", () => {
           fileName: "lobster.mp4",
         },
       ],
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
       metadata: {
         requestedSize: "1280x720",
         normalizedAspectRatio: "16:9",
@@ -343,6 +363,12 @@ describe("createVideoGenerateTool", () => {
 
     expect(result.details).toMatchObject({
       aspectRatio: "16:9",
+      normalization: {
+        aspectRatio: {
+          applied: "16:9",
+          derivedFrom: "size",
+        },
+      },
       metadata: {
         requestedSize: "1280x720",
         normalizedAspectRatio: "16:9",

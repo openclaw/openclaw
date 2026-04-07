@@ -85,6 +85,72 @@ describe("matrix onboarding", () => {
     ).toBe(true);
   });
 
+  it("routes env-shortcut add-account flow through Matrix invite auto-join setup", async () => {
+    installMatrixTestRuntime();
+
+    process.env.MATRIX_HOMESERVER = "https://matrix.env.example.org";
+    process.env.MATRIX_USER_ID = "@env:example.org";
+    process.env.MATRIX_PASSWORD = "env-password"; // pragma: allowlist secret
+    process.env.MATRIX_ACCESS_TOKEN = "";
+    process.env.MATRIX_OPS_HOMESERVER = "https://matrix.ops.env.example.org";
+    process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-env-token";
+
+    const notes: string[] = [];
+    const prompter = createMatrixWizardPrompter({
+      notes,
+      select: {
+        "Matrix already configured. What do you want to do?": "add-account",
+        "Matrix rooms access": "allowlist",
+        "Matrix invite auto-join": "allowlist",
+      },
+      text: {
+        "Matrix account name": "ops",
+        "Matrix rooms allowlist (comma-separated)": "!ops-room:example.org",
+        "Matrix invite auto-join allowlist (comma-separated)": "#ops-invites:example.org",
+      },
+      confirm: {
+        "Configure Matrix rooms access?": true,
+        "Configure Matrix invite auto-join?": true,
+      },
+      onConfirm: (message) => message.startsWith("Matrix env vars detected"),
+    });
+
+    const result = await runMatrixInteractiveConfigure({
+      cfg: {
+        channels: {
+          matrix: {
+            accounts: {
+              default: {
+                homeserver: "https://matrix.main.example.org",
+                accessToken: "main-token",
+              },
+            },
+          },
+        },
+      } as CoreConfig,
+      prompter,
+      shouldPromptAccountIds: true,
+      configured: true,
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(result.accountId).toBe("ops");
+    expect(result.cfg.channels?.matrix?.accounts?.ops).toMatchObject({
+      enabled: true,
+      groupPolicy: "allowlist",
+      groups: {
+        "!ops-room:example.org": { enabled: true },
+      },
+      autoJoin: "allowlist",
+      autoJoinAllowlist: ["#ops-invites:example.org"],
+    });
+    expect(notes.join("\n")).toContain("WARNING: Matrix invite auto-join defaults to off.");
+  });
+
   it("promotes legacy top-level Matrix config before adding a named account", async () => {
     installMatrixTestRuntime();
 
@@ -289,6 +355,7 @@ describe("matrix onboarding", () => {
         "Matrix credentials already configured. Keep them?": true,
         "Enable end-to-end encryption (E2EE)?": false,
         "Configure Matrix rooms access?": false,
+        "Configure Matrix invite auto-join?": false,
       },
     });
 
@@ -353,6 +420,7 @@ describe("matrix onboarding", () => {
 
   it("writes allowlists and room access to the selected Matrix account", async () => {
     installMatrixTestRuntime();
+    const notes: string[] = [];
 
     const result = await runMatrixAddAccountAllowlistConfigure({
       cfg: {
@@ -369,7 +437,9 @@ describe("matrix onboarding", () => {
       } as CoreConfig,
       allowFromInput: "@alice:example.org",
       roomsAllowlistInput: "!ops-room:example.org",
+      autoJoinAllowlistInput: "#ops-invites:example.org",
       deviceName: "Ops Gateway",
+      notes,
     });
 
     expect(result).not.toBe("skip");
@@ -387,12 +457,124 @@ describe("matrix onboarding", () => {
         allowFrom: ["@alice:example.org"],
       },
       groupPolicy: "allowlist",
+      autoJoin: "allowlist",
+      autoJoinAllowlist: ["#ops-invites:example.org"],
       groups: {
         "!ops-room:example.org": { enabled: true },
       },
     });
     expect(result.cfg.channels?.["matrix"]?.dm).toBeUndefined();
     expect(result.cfg.channels?.["matrix"]?.groups).toBeUndefined();
+    expect(notes.join("\n")).toContain("WARNING: Matrix invite auto-join defaults to off.");
+  });
+
+  it("clears Matrix invite auto-join allowlists when switching auto-join off", async () => {
+    installMatrixTestRuntime();
+    const notes: string[] = [];
+
+    const prompter = createMatrixWizardPrompter({
+      notes,
+      select: {
+        "Matrix already configured. What do you want to do?": "update",
+        "Matrix invite auto-join": "off",
+      },
+      text: {
+        "Matrix homeserver URL": "https://matrix.example.org",
+        "Matrix device name (optional)": "OpenClaw Gateway",
+      },
+      confirm: {
+        "Matrix credentials already configured. Keep them?": true,
+        "Enable end-to-end encryption (E2EE)?": false,
+        "Configure Matrix rooms access?": false,
+        "Configure Matrix invite auto-join?": true,
+        "Update Matrix invite auto-join?": true,
+      },
+    });
+
+    const result = await runMatrixInteractiveConfigure({
+      cfg: {
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            accessToken: "matrix-token",
+            autoJoin: "allowlist",
+            autoJoinAllowlist: ["#ops:example.org"],
+          },
+        },
+      } as CoreConfig,
+      prompter,
+      configured: true,
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(result.cfg.channels?.matrix?.autoJoin).toBe("off");
+    expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toBeUndefined();
+    expect(notes.join("\n")).toContain("Matrix invite auto-join remains off.");
+    expect(notes.join("\n")).toContain(
+      "Agents will not join invited rooms or fresh DM-style invites until you change autoJoin.",
+    );
+  });
+
+  it("re-prompts Matrix invite auto-join allowlists until entries are stable invite targets", async () => {
+    installMatrixTestRuntime();
+    const notes: string[] = [];
+    let inviteAllowlistPrompts = 0;
+
+    const prompter = createMatrixWizardPrompter({
+      notes,
+      select: {
+        "Matrix already configured. What do you want to do?": "update",
+        "Matrix invite auto-join": "allowlist",
+      },
+      text: {
+        "Matrix homeserver URL": "https://matrix.example.org",
+        "Matrix device name (optional)": "OpenClaw Gateway",
+      },
+      confirm: {
+        "Matrix credentials already configured. Keep them?": true,
+        "Enable end-to-end encryption (E2EE)?": false,
+        "Configure Matrix rooms access?": false,
+        "Configure Matrix invite auto-join?": true,
+        "Update Matrix invite auto-join?": true,
+      },
+      onText: async (message) => {
+        if (message === "Matrix invite auto-join allowlist (comma-separated)") {
+          inviteAllowlistPrompts += 1;
+          return inviteAllowlistPrompts === 1 ? "Project Room" : "#ops:example.org";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      },
+    });
+
+    const result = await runMatrixInteractiveConfigure({
+      cfg: {
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            accessToken: "matrix-token",
+          },
+        },
+      } as CoreConfig,
+      prompter,
+      configured: true,
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(inviteAllowlistPrompts).toBe(2);
+    expect(result.cfg.channels?.matrix?.autoJoin).toBe("allowlist");
+    expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual(["#ops:example.org"]);
+    expect(notes.join("\n")).toContain(
+      "Use only stable Matrix invite targets for auto-join: !roomId:server, #alias:server, or *.",
+    );
+    expect(notes.join("\n")).toContain("Invalid: Project Room");
   });
 
   it("reports account-scoped DM config keys for named accounts", () => {

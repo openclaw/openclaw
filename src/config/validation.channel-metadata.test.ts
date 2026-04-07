@@ -143,7 +143,7 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
 });
 
 describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
-  it("does not inject plugin AJV defaults in raw mode for required defaulted fields", async () => {
+  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", async () => {
     setupPluginSchemaWithRequiredDefault();
     await loadValidationModule();
 

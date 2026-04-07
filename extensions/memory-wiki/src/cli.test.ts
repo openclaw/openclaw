@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWikiCli } from "./cli.js";
+import type { MemoryWikiPluginConfig } from "./config.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -35,7 +36,7 @@ describe("memory-wiki cli", () => {
   });
 
   async function createCliVault(options?: {
-    config?: Parameters<typeof createVault>[0]["config"];
+    config?: MemoryWikiPluginConfig;
     initialize?: boolean;
   }) {
     return createVault({

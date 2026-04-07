@@ -5,7 +5,6 @@ import type {
   ChannelThreadingAdapter,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { compileSlackInteractiveReplies } from "../../plugin-sdk/slack.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
