@@ -464,4 +464,59 @@ describe("createGatewayCloseHandler", () => {
       harness.dispose();
     }
   });
+
+  it("preserves numeric thread ids while normalizing persisted outbox tasks", async () => {
+    triggerInternalHook.mockImplementation(
+      async (event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => {
+        if (event.type === "gateway" && event.action === "pre-restart") {
+          const outbox = event.context?.outbox as Array<Record<string, unknown>>;
+          outbox.push({
+            kind: "notify-session",
+            message: "notify after restart",
+            sessionKey: "agent:main:main",
+            threadId: 20,
+          });
+          outbox.push({
+            message: "message after restart",
+            sessionKey: "agent:main:main",
+            deliveryContext: {
+              channel: "telegram",
+              to: "119707338",
+              accountId: "default",
+              threadId: 21,
+            },
+          });
+        }
+      },
+    );
+
+    const harness = createCloseHarness();
+    try {
+      await harness.close({
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      });
+
+      const payload = (writeRestartSentinel.mock.calls as Array<[RestartSentinelPayload]>).at(-1)?.[0];
+      expect(payload?.outbox).toEqual([
+        expect.objectContaining({
+          kind: "notify-session",
+          message: "notify after restart",
+          threadId: "20",
+        }),
+        expect.objectContaining({
+          kind: "message",
+          message: "message after restart",
+          deliveryContext: expect.objectContaining({
+            channel: "telegram",
+            to: "119707338",
+            accountId: "default",
+            threadId: "21",
+          }),
+        }),
+      ]);
+    } finally {
+      harness.dispose();
+    }
+  });
 });

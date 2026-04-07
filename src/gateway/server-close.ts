@@ -38,6 +38,19 @@ function normalizeNonEmptyString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function normalizeThreadId(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return normalizeNonEmptyString(value);
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return undefined;
+}
+
 async function closeWssWithTimeout(
   closeFn: (cb: () => void) => void,
   timeoutMs: number,
@@ -81,8 +94,8 @@ function normalizeGatewayDeliveryContext(
     ...(normalizeNonEmptyString(deliveryContextRecord?.accountId ?? item.accountId)
       ? { accountId: normalizeNonEmptyString(deliveryContextRecord?.accountId ?? item.accountId)! }
       : {}),
-    ...(normalizeNonEmptyString(deliveryContextRecord?.threadId)
-      ? { threadId: normalizeNonEmptyString(deliveryContextRecord?.threadId)! }
+    ...(normalizeThreadId(deliveryContextRecord?.threadId ?? item.threadId)
+      ? { threadId: normalizeThreadId(deliveryContextRecord?.threadId ?? item.threadId)! }
       : {}),
   };
   return Object.keys(deliveryContext).length > 0 ? deliveryContext : undefined;
@@ -133,9 +146,7 @@ function normalizeGatewayOutbox(outbox: unknown[]): RestartOutboxTask[] {
         ...(normalizeNonEmptyString(item.accountId)
           ? { accountId: normalizeNonEmptyString(item.accountId)! }
           : {}),
-        ...(normalizeNonEmptyString(item.threadId)
-          ? { threadId: normalizeNonEmptyString(item.threadId)! }
-          : {}),
+        ...(normalizeThreadId(item.threadId) ? { threadId: normalizeThreadId(item.threadId)! } : {}),
       });
       continue;
     }
@@ -146,9 +157,7 @@ function normalizeGatewayOutbox(outbox: unknown[]): RestartOutboxTask[] {
       kind,
       message,
       ...(sessionKey ? { sessionKey } : {}),
-      ...(normalizeNonEmptyString(item.threadId)
-        ? { threadId: normalizeNonEmptyString(item.threadId)! }
-        : {}),
+      ...(normalizeThreadId(item.threadId) ? { threadId: normalizeThreadId(item.threadId)! } : {}),
       ...(deliveryContext && Object.keys(deliveryContext).length > 0 ? { deliveryContext } : {}),
       ...(normalizeNonEmptyString(item.restartId)
         ? { restartId: normalizeNonEmptyString(item.restartId)! }
