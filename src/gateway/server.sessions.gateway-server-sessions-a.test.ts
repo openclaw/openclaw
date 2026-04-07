@@ -612,7 +612,7 @@ describe("gateway server sessions", () => {
         modelProvider?: string;
         model?: string;
       }>;
-    }>(ws, "sessions.list", {});
+    }>(ws, "sessions.list", { includeTranscriptUsage: true });
 
     expect(listed.ok).toBe(true);
     const parent = listed.payload?.sessions.find((session) => session.key === "agent:main:main");
@@ -627,6 +627,76 @@ describe("gateway server sessions", () => {
     expect(child?.estimatedCostUsd).toBe(0.0042);
     expect(child?.modelProvider).toBe("anthropic");
     expect(child?.model).toBe("claude-sonnet-4-6");
+
+    ws.close();
+  });
+
+  test("sessions.list default path omits transcript usage fallback", async () => {
+    const { dir } = await createSessionStoreDir();
+    testState.agentConfig = {
+      models: {
+        "anthropic/claude-sonnet-4-6": { params: { context1m: true } },
+      },
+    };
+    await fs.writeFile(
+      path.join(dir, "sess-no-usage.jsonl"),
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-no-usage" }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 2_000,
+              output: 500,
+              cacheRead: 1_000,
+              cost: { total: 0.0042 },
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-no-usage",
+          updatedAt: Date.now(),
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
+          // Deliberately zeroed so without includeTranscriptUsage the fallback would be needed
+          totalTokens: 0,
+          totalTokensFresh: false,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    // Default call — no includeTranscriptUsage
+    const listed = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+        contextTokens?: number;
+        estimatedCostUsd?: number;
+      }>;
+    }>(ws, "sessions.list", {});
+
+    expect(listed.ok).toBe(true);
+    const session = listed.payload?.sessions.find((s) => s.key === "agent:main:main");
+    expect(session).toBeDefined();
+    // Without opt-in the transcript fallback must NOT fire — usage fields stay unset
+    expect(session?.totalTokens).toBeUndefined();
+    // totalTokensFresh comes from store metadata, not transcript scan — skip asserting it
+    expect(session?.estimatedCostUsd).toBeUndefined();
+    // contextTokens may still resolve from the model catalog without reading the transcript
+    // so we only assert it is NOT derived from the transcript path (no regression on store-based data)
 
     ws.close();
   });

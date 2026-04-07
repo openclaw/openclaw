@@ -293,7 +293,7 @@ describe("listSessionsFromStore search", () => {
             totalTokensFresh: false,
           } as SessionEntry,
         },
-        opts: {},
+        opts: { includeTranscriptUsage: true },
       });
 
       expect(result.sessions[0]?.estimatedCostUsd).toBe(0.1234);
@@ -385,7 +385,7 @@ describe("listSessionsFromStore search", () => {
             cacheWrite: 0,
           } as SessionEntry,
         },
-        opts: {},
+        opts: { includeTranscriptUsage: true },
       });
 
       expect(result.sessions[0]?.totalTokens).toBe(6_643);
@@ -449,7 +449,7 @@ describe("listSessionsFromStore search", () => {
             cacheWrite: 0,
           } as SessionEntry,
         },
-        opts: {},
+        opts: { includeTranscriptUsage: true },
       });
 
       expect(result.sessions[0]?.totalTokens).toBe(3_200);
@@ -523,7 +523,7 @@ describe("listSessionsFromStore search", () => {
             totalTokensFresh: false,
           } as SessionEntry,
         },
-        opts: {},
+        opts: { includeTranscriptUsage: true },
       });
 
       expect(result.sessions[0]).toMatchObject({
@@ -605,7 +605,7 @@ describe("listSessionsFromStore search", () => {
             totalTokensFresh: false,
           } as SessionEntry,
         },
-        opts: {},
+        opts: { includeTranscriptUsage: true },
       });
 
       expect(result.sessions[0]).toMatchObject({
@@ -673,7 +673,7 @@ describe("listSessionsFromStore search", () => {
             totalTokensFresh: false,
           } as SessionEntry,
         },
-        opts: {},
+        opts: { includeTranscriptUsage: true },
       });
 
       expect(result.sessions[0]).toMatchObject({
