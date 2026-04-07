@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
@@ -647,7 +648,7 @@ export function createMusicGenerateTool(options?: {
               handle: taskHandle,
               status: "error",
               statusLabel: "failed",
-              result: error instanceof Error ? error.message : String(error),
+              result: formatErrorMessage(error),
             });
             return;
           }

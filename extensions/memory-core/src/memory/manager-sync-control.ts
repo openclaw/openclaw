@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
   type OpenClawConfig,
@@ -49,7 +50,7 @@ export function isMemoryReadonlyDbError(err: unknown): boolean {
     messages.add(normalized);
   };
 
-  pushValue(err instanceof Error ? err.message : String(err));
+  pushValue(formatErrorMessage(err));
   if (err && typeof err === "object") {
     const record = err as Record<string, unknown>;
     pushValue(record.message);

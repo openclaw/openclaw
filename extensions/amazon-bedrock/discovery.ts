@@ -6,6 +6,7 @@ import {
   type ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   BedrockDiscoveryConfig,
@@ -214,7 +215,7 @@ async function fetchInferenceProfileSummaries(
     return profiles;
   } catch (error) {
     log.debug?.("Skipping inference profile discovery", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return [];
   }
@@ -406,7 +407,7 @@ export async function discoverBedrockModels(params: {
     if (!hasLoggedBedrockError) {
       hasLoggedBedrockError = true;
       log.warn("Failed to discover Bedrock models", {
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       });
     }
     return [];

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import {
@@ -92,7 +93,7 @@ function parseBlueBubblesWebhookPayload(
     try {
       return { ok: true, value: JSON.parse(payload) as unknown };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, error: formatErrorMessage(error) };
     }
   }
 }

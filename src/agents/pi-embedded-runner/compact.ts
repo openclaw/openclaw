@@ -22,6 +22,7 @@ import {
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
@@ -1084,7 +1085,7 @@ export async function compactEmbeddedPiSessionDirect(
               }
             } catch (err) {
               log.warn("[compaction] post-compaction truncation failed", {
-                errorMessage: err instanceof Error ? err.message : String(err),
+                errorMessage: formatErrorMessage(err),
                 errorStack: err instanceof Error ? err.stack : undefined,
               });
             }
@@ -1279,7 +1280,7 @@ export async function compactEmbeddedPiSession(
             );
           } catch (err) {
             log.warn("before_compaction hook failed", {
-              errorMessage: err instanceof Error ? err.message : String(err),
+              errorMessage: formatErrorMessage(err),
             });
           }
         }
@@ -1356,7 +1357,7 @@ export async function compactEmbeddedPiSession(
             );
           } catch (err) {
             log.warn("after_compaction hook failed", {
-              errorMessage: err instanceof Error ? err.message : String(err),
+              errorMessage: formatErrorMessage(err),
             });
           }
         }

@@ -4,6 +4,7 @@ import {
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
 import type { startGatewayServer } from "../../gateway/server.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
@@ -261,7 +262,7 @@ export async function runGatewayLoop(params: {
         // Without this, the process holds the lock but is not listening,
         // forcing manual cleanup. (#35862)
         await releaseLockIfHeld();
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const errMsg = formatErrorMessage(err);
         const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
         gatewayLog.error(
           `gateway startup failed: ${errMsg}. ` +

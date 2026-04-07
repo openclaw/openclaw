@@ -6,6 +6,7 @@ import {
 } from "@mariozechner/pi-ai/oauth";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
@@ -119,7 +120,7 @@ async function buildOAuthProfileResult(params: {
 }
 
 function extractErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error);
 }
 
 function isRefreshTokenReusedError(error: unknown): boolean {
@@ -207,7 +208,7 @@ function adoptNewerMainOAuthCredential(params: {
     // Best-effort: don't crash if main agent store is missing or unreadable.
     log.debug("adoptNewerMainOAuthCredential failed", {
       profileId: params.profileId,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     });
   }
   return null;
@@ -403,7 +404,7 @@ async function resolveProfileSecretString(params: {
         log.debug(params.inlineFailureMessage, {
           profileId: params.profileId,
           provider: params.provider,
-          error: err instanceof Error ? err.message : String(err),
+          error: formatErrorMessage(err),
         });
       }
     }
@@ -421,7 +422,7 @@ async function resolveProfileSecretString(params: {
       log.debug(params.refFailureMessage, {
         profileId: params.profileId,
         provider: params.provider,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
       });
     }
   }

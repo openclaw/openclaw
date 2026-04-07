@@ -26,6 +26,7 @@ import {
   type SessionPatchHookContext,
   type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -306,7 +307,7 @@ function ensureSessionTranscriptFile(params: {
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }

@@ -83,6 +83,14 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
   return null;
 }
 
+function hasStoredAuthProfileFiles(agentDir?: string): boolean {
+  return (
+    fs.existsSync(resolveAuthStorePath(agentDir)) ||
+    fs.existsSync(resolveAuthStatePath(agentDir)) ||
+    fs.existsSync(resolveLegacyAuthStorePath(agentDir))
+  );
+}
+
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
 ): void {
@@ -347,6 +355,25 @@ export function ensureAuthProfileStore(
   const merged = mergeAuthProfileStores(mainStore, store);
 
   return overlayExternalAuthProfiles(merged, { agentDir });
+}
+
+export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
+  const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
+  if (runtimeStore && Object.keys(runtimeStore.profiles).length > 0) {
+    return true;
+  }
+
+  if (hasStoredAuthProfileFiles(agentDir)) {
+    return true;
+  }
+
+  const authPath = resolveAuthStorePath(agentDir);
+  const mainAuthPath = resolveAuthStorePath();
+  if (agentDir && authPath !== mainAuthPath && hasStoredAuthProfileFiles(undefined)) {
+    return true;
+  }
+
+  return false;
 }
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {

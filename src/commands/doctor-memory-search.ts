@@ -8,6 +8,7 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/engine-embeddings.js";
 import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
@@ -108,10 +109,7 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
       note(message, "Memory search");
     }
   } catch (err) {
-    note(
-      `Memory recall audit could not be completed: ${err instanceof Error ? err.message : String(err)}`,
-      "Memory search",
-    );
+    note(`Memory recall audit could not be completed: ${formatErrorMessage(err)}`, "Memory search");
   }
 }
 
@@ -161,7 +159,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
     note(lines.join("\n"), "Doctor changes");
   } catch (err) {
     note(
-      `Memory recall repair could not be completed: ${err instanceof Error ? err.message : String(err)}`,
+      `Memory recall repair could not be completed: ${formatErrorMessage(err)}`,
       "Memory search",
     );
   }

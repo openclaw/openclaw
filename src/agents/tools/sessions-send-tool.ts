@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
@@ -156,7 +157,7 @@ export function createSessionsSendTool(opts?: {
           });
           resolvedKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = formatErrorMessage(err);
           if (restrictToSpawned) {
             return jsonResult({
               runId: crypto.randomUUID(),

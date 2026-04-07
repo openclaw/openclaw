@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { upsertAuthProfileWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
@@ -195,7 +196,7 @@ async function pullOllamaModelCore(params: {
       await release();
     }
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = formatErrorMessage(err);
     return { ok: false, message: `Failed to download ${modelName}: ${reason}` };
   }
 }

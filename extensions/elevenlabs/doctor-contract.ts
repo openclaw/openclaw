@@ -1,10 +1,10 @@
 import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  ELEVENLABS_TALK_PROVIDER_ID,
-  isRecord,
-  migrateElevenLabsLegacyTalkConfig,
-} from "./config-compat.js";
+import { ELEVENLABS_TALK_PROVIDER_ID, migrateElevenLabsLegacyTalkConfig } from "./config-compat.js";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 export function hasLegacyTalkFields(value: unknown): boolean {
   const talk = isRecord(value) ? value : null;
