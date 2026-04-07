@@ -441,7 +441,7 @@ async function resetGatewayTestRuntimeOnly() {
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
-  resetAgentRunContextForTest();
+  resetAgentEventsForTest();
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
