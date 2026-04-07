@@ -23,8 +23,10 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-ada-002": 8191,
 };
 
-const OPENAI_EMBEDDING3_SMALL_DIMENSIONS = [256, 512, 768, 1024, 1536] as const;
-const OPENAI_EMBEDDING3_LARGE_DIMENSIONS = [256, 512, 768, 1024, 1536, 2048, 3072] as const;
+const MODEL_MAX_DIMENSIONS: Record<string, number> = {
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+} as const;
 
 export function normalizeOpenAiModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
@@ -52,15 +54,11 @@ export function resolveOpenAiOutputDimensionality(
     return undefined;
   }
 
-  const validDimensions =
-    model === "text-embedding-3-small"
-      ? (OPENAI_EMBEDDING3_SMALL_DIMENSIONS as readonly number[])
-      : (OPENAI_EMBEDDING3_LARGE_DIMENSIONS as readonly number[]);
-
-  if (!validDimensions.includes(dimensionality)) {
+  const maxDim = MODEL_MAX_DIMENSIONS[model];
+  if (!Number.isInteger(dimensionality) || dimensionality < 1 || dimensionality > maxDim) {
     throw new Error(
       `Invalid output dimensionality ${dimensionality} for ${model}. ` +
-        `Supported dimensions: ${validDimensions.join(", ")}`,
+        `Must be a positive integer no greater than ${maxDim}.`,
     );
   }
 

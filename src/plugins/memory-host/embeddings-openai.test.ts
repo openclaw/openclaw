@@ -67,40 +67,52 @@ describe("OpenAI Matryoshka dimensionality support", () => {
       ).toBeUndefined();
     });
 
-    it("accepts valid dimension for text-embedding-3-small", () => {
-      const validDimensions = [256, 512, 768, 1024, 1536];
+    it("accepts any valid dimension for text-embedding-3-small", () => {
+      const validDimensions = [1, 512, 1000, 1536];
       for (const dim of validDimensions) {
         expect(resolveOpenAiOutputDimensionality("text-embedding-3-small", dim)).toBe(dim);
       }
     });
 
-    it("accepts valid dimension for text-embedding-3-large", () => {
-      const validDimensions = [256, 512, 768, 1024, 1536, 2048, 3072];
+    it("accepts any valid dimension for text-embedding-3-large", () => {
+      const validDimensions = [1, 256, 1800, 3072];
       for (const dim of validDimensions) {
         expect(resolveOpenAiOutputDimensionality("text-embedding-3-large", dim)).toBe(dim);
       }
     });
 
-    it("throws error for invalid dimension for text-embedding-3-small", () => {
-      expect(() => resolveOpenAiOutputDimensionality("text-embedding-3-small", 5120)).toThrow(
-        /Invalid output dimensionality 5120 for text-embedding-3-small/,
+    it("throws error for invalid dimension: too large for text-embedding-3-small", () => {
+      expect(() => resolveOpenAiOutputDimensionality("text-embedding-3-small", 2000)).toThrow(
+        /Invalid output dimensionality 2000 for text-embedding-3-small/,
       );
     });
 
-    it("throws error for invalid dimension for text-embedding-3-large", () => {
-      expect(() => resolveOpenAiOutputDimensionality("text-embedding-3-large", 5120)).toThrow(
-        /Invalid output dimensionality 5120 for text-embedding-3-large/,
+    it("throws error for invalid dimension: too large for text-embedding-3-large", () => {
+      expect(() => resolveOpenAiOutputDimensionality("text-embedding-3-large", 5000)).toThrow(
+        /Invalid output dimensionality 5000 for text-embedding-3-large/,
       );
     });
 
-    it("includes supported dimensions in error message", () => {
-      try {
-        resolveOpenAiOutputDimensionality("text-embedding-3-small", 5120);
-      } catch (err) {
-        expect(err).toBeInstanceOf(Error);
-        const message = (err as Error).message;
-        expect(message).toContain("256, 512, 768, 1024, 1536");
-      }
+    it("throws error for invalid dimension: zero", () => {
+      expect(() => resolveOpenAiOutputDimensionality("text-embedding-3-small", 0)).toThrow(
+        /Invalid output dimensionality 0 for text-embedding-3-small/,
+      );
+    });
+
+    it("throws错误消息中包含最大维度值", () => {
+      expect.assertions(2);
+      expect(() => resolveOpenAiOutputDimensionality("text-embedding-3-small", 0)).toThrow(
+        /Must be a positive integer no greater than 1536/,
+      );
+      expect(() => resolveOpenAiOutputDimensionality("text-embedding-3-large", 0)).toThrow(
+        /Must be a positive integer no greater than 3072/,
+      );
+    });
+
+    it("accepts intermediate dimension values", () => {
+      // Test that intermediate values are accepted (not just specific ones)
+      expect(resolveOpenAiOutputDimensionality("text-embedding-3-small", 1000)).toBe(1000);
+      expect(resolveOpenAiOutputDimensionality("text-embedding-3-large", 1800)).toBe(1800);
     });
   });
 
@@ -233,27 +245,56 @@ describe("OpenAI Matryoshka dimensionality support", () => {
           config: {} as never,
           provider: "openai",
           model: "text-embedding-3-small",
-          outputDimensionality: 5120,
+          outputDimensionality: 2000,
           fallback: "none",
         }),
-      ).rejects.toThrow(/Invalid output dimensionality 5120/);
+      ).rejects.toThrow(/Invalid output dimensionality 2000/);
     });
 
-    it("includes supported dimensions in provider creation error", async () => {
+    it("throws error for invalid dimension: negative", async () => {
       mockResolvedProviderKey("openai-key");
+
+      await expect(
+        createEmbeddingProvider({
+          config: {} as never,
+          provider: "openai",
+          model: "text-embedding-3-small",
+          outputDimensionality: -1,
+          fallback: "none",
+        }),
+      ).rejects.toThrow(/Invalid output dimensionality -1/);
+    });
+
+    it("错误消息中包含最大维度值", async () => {
+      mockResolvedProviderKey("openai-key");
+      expect.assertions(4);
 
       try {
         await createEmbeddingProvider({
           config: {} as never,
           provider: "openai",
           model: "text-embedding-3-small",
-          outputDimensionality: 5120,
+          outputDimensionality: 2000,
           fallback: "none",
         });
       } catch (err) {
         expect(err).toBeInstanceOf(Error);
         const message = (err as Error).message;
-        expect(message).toContain("256, 512, 768, 1024, 1536");
+        expect(message).toContain("Must be a positive integer no greater than 1536");
+      }
+
+      try {
+        await createEmbeddingProvider({
+          config: {} as never,
+          provider: "openai",
+          model: "text-embedding-3-large",
+          outputDimensionality: 5000,
+          fallback: "none",
+        });
+      } catch (err) {
+        expect(err).toBeInstanceOf(Error);
+        const message = (err as Error).message;
+        expect(message).toContain("Must be a positive integer no greater than 3072");
       }
     });
   });
