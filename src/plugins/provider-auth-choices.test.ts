@@ -265,6 +265,13 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
 
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      expect.objectContaining({
+        pluginId: "openai",
+        providerId: "openai",
+        choiceId: "openai-api-key",
+      }),
+    ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
     expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
       {

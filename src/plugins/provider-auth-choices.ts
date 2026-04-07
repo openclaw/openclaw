@@ -144,13 +144,36 @@ function pickPreferredManifestAuthChoice(
   return preferred;
 }
 
+function resolvePreferredManifestAuthChoicesByChoiceId(
+  candidates: readonly ProviderAuthChoiceCandidate[],
+): ProviderAuthChoiceCandidate[] {
+  const preferredByChoiceId = new Map<string, ProviderAuthChoiceCandidate>();
+  for (const candidate of candidates) {
+    const normalizedChoiceId = candidate.choiceId.trim();
+    if (!normalizedChoiceId) {
+      continue;
+    }
+    const existing = preferredByChoiceId.get(normalizedChoiceId);
+    if (
+      !existing ||
+      resolveProviderAuthChoiceOriginPriority(candidate.origin) <
+        resolveProviderAuthChoiceOriginPriority(existing.origin)
+    ) {
+      preferredByChoiceId.set(normalizedChoiceId, candidate);
+    }
+  }
+  return [...preferredByChoiceId.values()];
+}
+
 export function resolveManifestProviderAuthChoices(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderAuthChoiceMetadata[] {
-  return resolveManifestProviderAuthChoiceCandidates(params).map(stripChoiceOrigin);
+  return resolvePreferredManifestAuthChoicesByChoiceId(
+    resolveManifestProviderAuthChoiceCandidates(params),
+  ).map(stripChoiceOrigin);
 }
 
 export function resolveManifestProviderAuthChoice(

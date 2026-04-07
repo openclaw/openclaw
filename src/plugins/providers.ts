@@ -83,9 +83,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
     env: params.env,
   });
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
-  const normalizedConfig = shouldFilterUntrustedWorkspacePlugins
-    ? normalizePluginsConfig(params.config?.plugins)
-    : undefined;
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   return registry.plugins
     .filter((plugin) => {
       if (!(plugin.providers.length > 0 && (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)))) {
@@ -97,10 +95,10 @@ export function resolveDiscoveredProviderPluginIds(params: {
       return resolveEffectivePluginActivationState({
         id: plugin.id,
         origin: plugin.origin,
-        config: normalizedConfig ?? normalizePluginsConfig(params.config?.plugins),
+        config: normalizedConfig,
         rootConfig: params.config,
         enabledByDefault: plugin.enabledByDefault,
-      }).enabled;
+      }).activated;
     })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
