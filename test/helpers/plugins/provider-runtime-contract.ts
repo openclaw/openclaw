@@ -21,22 +21,15 @@ const getOAuthProvidersMock = vi.hoisted(() =>
   ]),
 );
 const providerRuntimeContractModules = vi.hoisted(() => ({
-  anthropicIndexModuleUrl: new URL("../../../extensions/anthropic/index.ts", import.meta.url).href,
-  githubCopilotIndexModuleUrl: new URL(
-    "../../../extensions/github-copilot/index.ts",
-    import.meta.url,
-  ).href,
-  googleIndexModuleUrl: new URL("../../../extensions/google/index.ts", import.meta.url).href,
-  openAIIndexModuleUrl: new URL("../../../extensions/openai/index.ts", import.meta.url).href,
-  openAICodexProviderRuntimeModuleId: new URL(
-    "../../../extensions/openai/openai-codex-provider.runtime.js",
-    import.meta.url,
-  ).pathname,
-  openRouterIndexModuleUrl: new URL("../../../extensions/openrouter/index.ts", import.meta.url)
-    .href,
-  veniceIndexModuleUrl: new URL("../../../extensions/venice/index.ts", import.meta.url).href,
-  xAIIndexModuleUrl: new URL("../../../extensions/xai/index.ts", import.meta.url).href,
-  zaiIndexModuleUrl: new URL("../../../extensions/zai/index.ts", import.meta.url).href,
+  anthropicIndexModuleId: "../../../extensions/anthropic/index.ts",
+  githubCopilotIndexModuleId: "../../../extensions/github-copilot/index.ts",
+  googleIndexModuleId: "../../../extensions/google/index.ts",
+  openAIIndexModuleId: "../../../extensions/openai/index.ts",
+  openAICodexProviderRuntimeModuleId: "../../../extensions/openai/openai-codex-provider.runtime.js",
+  openRouterIndexModuleId: "../../../extensions/openrouter/index.ts",
+  veniceIndexModuleId: "../../../extensions/venice/index.ts",
+  xAIIndexModuleId: "../../../extensions/xai/index.ts",
+  zaiIndexModuleId: "../../../extensions/zai/index.ts",
 }));
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
@@ -88,7 +81,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.anthropicIndexModuleUrl),
+      }>(providerRuntimeContractModules.anthropicIndexModuleId),
   },
   {
     providerIds: ["github-copilot"],
@@ -97,7 +90,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.githubCopilotIndexModuleUrl),
+      }>(providerRuntimeContractModules.githubCopilotIndexModuleId),
   },
   {
     providerIds: ["google", "google-gemini-cli"],
@@ -106,7 +99,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.googleIndexModuleUrl),
+      }>(providerRuntimeContractModules.googleIndexModuleId),
   },
   {
     providerIds: ["openai", "openai-codex"],
@@ -115,7 +108,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.openAIIndexModuleUrl),
+      }>(providerRuntimeContractModules.openAIIndexModuleId),
   },
   {
     providerIds: ["openrouter"],
@@ -124,7 +117,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.openRouterIndexModuleUrl),
+      }>(providerRuntimeContractModules.openRouterIndexModuleId),
   },
   {
     providerIds: ["venice"],
@@ -133,7 +126,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.veniceIndexModuleUrl),
+      }>(providerRuntimeContractModules.veniceIndexModuleId),
   },
   {
     providerIds: ["xai"],
@@ -142,7 +135,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.xAIIndexModuleUrl),
+      }>(providerRuntimeContractModules.xAIIndexModuleId),
   },
   {
     providerIds: ["zai"],
@@ -151,7 +144,7 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     load: async () =>
       await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-      }>(providerRuntimeContractModules.zaiIndexModuleUrl),
+      }>(providerRuntimeContractModules.zaiIndexModuleId),
   },
 ] as const;
 

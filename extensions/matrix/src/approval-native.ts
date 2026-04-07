@@ -39,7 +39,7 @@ const MATRIX_PLUGIN_NATIVE_DELIVERY_DISABLED = {
 function normalizeComparableTarget(value: string): string {
   const target = resolveMatrixTargetIdentity(value);
   if (!target) {
-    return value.trim().toLowerCase();
+    return normalizeLowercaseStringOrEmpty(value);
   }
   if (target.kind === "user") {
     return `user:${normalizeMatrixUserId(target.id)}`;

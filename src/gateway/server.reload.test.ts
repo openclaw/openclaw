@@ -38,6 +38,10 @@ const hoisted = vi.hoisted(() => {
     stop: heartbeatStop,
     updateConfig: heartbeatUpdateConfig,
   }));
+  const activeEmbeddedRunCount = { value: 0 };
+  const totalPendingReplies = { value: 0 };
+  const totalQueueSize = { value: 0 };
+  const activeTaskCount = { value: 0 };
 
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
@@ -135,6 +139,10 @@ const hoisted = vi.hoisted(() => {
     heartbeatStop,
     heartbeatUpdateConfig,
     startHeartbeatRunner,
+    activeEmbeddedRunCount,
+    totalPendingReplies,
+    totalQueueSize,
+    activeTaskCount,
     startGmailWatcher,
     stopGmailWatcher,
     providerManager,
@@ -158,6 +166,51 @@ vi.mock("../hooks/gmail-watcher.js", () => ({
   startGmailWatcher: hoisted.startGmailWatcher,
   stopGmailWatcher: hoisted.stopGmailWatcher,
 }));
+
+vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-embedded-runner/runs.js")>(
+    "../agents/pi-embedded-runner/runs.js",
+  );
+  return {
+    ...actual,
+    getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
+  };
+});
+
+vi.mock("../auto-reply/reply/dispatcher-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../auto-reply/reply/dispatcher-registry.js")>(
+    "../auto-reply/reply/dispatcher-registry.js",
+  );
+  return {
+    ...actual,
+    getTotalPendingReplies: () => hoisted.totalPendingReplies.value,
+  };
+});
+
+vi.mock("../process/command-queue.js", async () => {
+  const actual = await vi.importActual<typeof import("../process/command-queue.js")>(
+    "../process/command-queue.js",
+  );
+  return {
+    ...actual,
+    getTotalQueueSize: () => hoisted.totalQueueSize.value,
+  };
+});
+
+vi.mock("../tasks/task-registry.maintenance.js", async () => {
+  const actual = await vi.importActual<typeof import("../tasks/task-registry.maintenance.js")>(
+    "../tasks/task-registry.maintenance.js",
+  );
+  return {
+    ...actual,
+    getInspectableTaskRegistrySummary: () => ({
+      active: hoisted.activeTaskCount.value,
+      queued: 0,
+      completed: 0,
+      failed: 0,
+    }),
+  };
+});
 
 vi.mock("./server-channels.js", () => ({
   createChannelManager: hoisted.createChannelManager,
@@ -185,6 +238,10 @@ describe("gateway hot reload", () => {
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
+    hoisted.activeEmbeddedRunCount.value = 0;
+    hoisted.totalPendingReplies.value = 0;
+    hoisted.totalQueueSize.value = 0;
+    hoisted.activeTaskCount.value = 0;
   });
 
   afterEach(() => {

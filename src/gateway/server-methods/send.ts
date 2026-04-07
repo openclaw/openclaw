@@ -16,7 +16,7 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
-import { readStringValue } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
   ErrorCodes,
   errorShape,
@@ -64,7 +64,7 @@ async function resolveRequestedChannel(params: {
   const channelInput = readStringValue(params.requestChannel);
   const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
   if (channelInput && !normalizedChannel) {
-    const normalizedInput = channelInput.trim().toLowerCase();
+    const normalizedInput = normalizeOptionalLowercaseString(channelInput) ?? "";
     if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
       return {
         error: errorShape(
@@ -301,7 +301,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         );
         const providedSessionKey =
           typeof request.sessionKey === "string" && request.sessionKey.trim()
-            ? request.sessionKey.trim().toLowerCase()
+            ? (normalizeOptionalLowercaseString(request.sessionKey) ?? undefined)
             : undefined;
         const explicitAgentId =
           typeof request.agentId === "string" && request.agentId.trim()

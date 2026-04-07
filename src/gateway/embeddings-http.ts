@@ -13,6 +13,7 @@ import type {
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
 } from "../plugins/memory-embedding-providers.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson } from "./http-common.js";
@@ -175,7 +176,7 @@ function resolveEmbeddingsTarget(params: {
     return { provider: params.configuredProvider, model: raw };
   }
 
-  const provider = raw.slice(0, slash).trim().toLowerCase();
+  const provider = normalizeLowercaseStringOrEmpty(raw.slice(0, slash));
   const model = raw.slice(slash + 1).trim();
   if (!model) {
     return { errorMessage: "Unsupported embedding model reference." };

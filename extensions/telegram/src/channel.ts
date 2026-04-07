@@ -32,7 +32,10 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
@@ -281,7 +284,10 @@ function targetsMatchTelegramReplySuppression(params: {
     (target.messageThreadId != null && String(target.messageThreadId).trim()
       ? String(target.messageThreadId).trim()
       : undefined);
-  if (origin.chatId.trim().toLowerCase() !== target.chatId.trim().toLowerCase()) {
+  if (
+    normalizeOptionalLowercaseString(origin.chatId) !==
+    normalizeOptionalLowercaseString(target.chatId)
+  ) {
     return false;
   }
   if (originThreadId && targetThreadId) {
@@ -408,7 +414,7 @@ function shouldStripTelegramThreadFromAnnounceOrigin(params: {
     threadId?: string | number;
   };
 }): boolean {
-  const requesterChannel = params.requester.channel?.trim().toLowerCase();
+  const requesterChannel = normalizeOptionalLowercaseString(params.requester.channel);
   if (requesterChannel && requesterChannel !== "telegram") {
     return true;
   }

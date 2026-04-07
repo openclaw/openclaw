@@ -4,6 +4,7 @@ import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -241,7 +242,10 @@ function buildEntryKey(result: {
 }
 
 function hashQuery(query: string): string {
-  return createHash("sha1").update(query.trim().toLowerCase()).digest("hex").slice(0, 12);
+  return createHash("sha1")
+    .update(normalizeLowercaseStringOrEmpty(query))
+    .digest("hex")
+    .slice(0, 12);
 }
 
 function mergeQueryHashes(existing: string[], queryHash: string): string[] {

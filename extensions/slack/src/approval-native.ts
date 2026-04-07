@@ -36,7 +36,7 @@ function extractSlackSessionKind(
 }
 
 function normalizeComparableTarget(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function normalizeSlackThreadMatchKey(threadId?: string): string {

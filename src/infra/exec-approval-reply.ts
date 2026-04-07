@@ -1,6 +1,9 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   describeNativeExecApprovalClientSetup,
   listNativeExecApprovalClientLabels,
@@ -375,7 +378,7 @@ export function buildExecApprovalUnavailableReplyPayload(
     lines.push(
       `Exec approval is required, but native chat exec approvals are not configured on ${params.channelLabel ?? "this platform"}.`,
     );
-    const channel = params.channel?.trim().toLowerCase();
+    const channel = normalizeOptionalLowercaseString(params.channel);
     const setupText =
       channel && params.channelLabel && supportsNativeExecApprovalClient(channel)
         ? describeNativeExecApprovalClientSetup({

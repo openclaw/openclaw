@@ -230,7 +230,7 @@ export type AdminCommand =
  *   - "pending" - list all pending approvals
  */
 export function parseAdminCommand(text: string): AdminCommand | null {
-  const trimmed = text.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(text);
 
   // "blocked" - list blocked ships
   if (trimmed === "blocked") {

@@ -1581,8 +1581,7 @@ export class AcpSessionManager {
     if (!status) {
       return false;
     }
-    const detailsStatus =
-      typeof status.details?.status === "string" ? status.details.status.trim().toLowerCase() : "";
+    const detailsStatus = normalizeText(status.details?.status)?.toLowerCase() ?? "";
     if (detailsStatus === "dead" || detailsStatus === "no-session") {
       return true;
     }

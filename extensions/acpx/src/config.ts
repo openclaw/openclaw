@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { z } from "openclaw/plugin-sdk/zod";
 import { AcpxPluginConfigSchema } from "./config-schema.js";
 import type {
@@ -223,7 +224,7 @@ export function resolveAcpxPluginConfig(params: {
   });
   const agents = Object.fromEntries(
     Object.entries(normalized.agents ?? {}).map(([name, entry]) => [
-      name.trim().toLowerCase(),
+      normalizeLowercaseStringOrEmpty(name),
       entry.command.trim(),
     ]),
   );

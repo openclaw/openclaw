@@ -8,7 +8,11 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -27,7 +31,7 @@ const PI_AI_OAUTH_ANTHROPIC_BETAS = [
 type AnthropicServiceTier = "auto" | "standard_only";
 
 function isAnthropic1MModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 

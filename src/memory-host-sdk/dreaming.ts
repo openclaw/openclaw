@@ -2,6 +2,10 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
@@ -190,7 +194,7 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
     return value;
   }
   if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(value);
     if (normalized === "true") {
       return true;
     }
@@ -591,7 +595,7 @@ export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDrea
     if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
       continue;
     }
-    const id = entry.id.trim().toLowerCase();
+    const id = normalizeOptionalLowercaseString(entry.id);
     if (!id || seenAgents.has(id)) {
       continue;
     }

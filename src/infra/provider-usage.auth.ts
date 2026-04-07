@@ -23,10 +23,17 @@ type AuthStore = ReturnType<typeof ensureAuthProfileStore>;
 
 type UsageAuthState = {
   cfg: OpenClawConfig;
-  store: AuthStore;
   env: NodeJS.ProcessEnv;
   agentDir?: string;
+  store?: AuthStore;
 };
+
+function resolveUsageAuthStore(state: UsageAuthState): AuthStore {
+  state.store ??= ensureAuthProfileStore(state.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  return state.store;
+}
 
 function resolveProviderApiKeyFromConfigAndStore(params: {
   state: UsageAuthState;
@@ -52,8 +59,10 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
     params.providerIds.map((providerId) => normalizeProviderId(providerId)).filter(Boolean),
   );
   const cred = [...normalizedProviderIds]
-    .flatMap((providerId) => listProfilesForProvider(params.state.store, providerId))
-    .map((id) => params.state.store.profiles[id])
+    .flatMap((providerId) =>
+      listProfilesForProvider(resolveUsageAuthStore(params.state), providerId),
+    )
+    .map((id) => resolveUsageAuthStore(params.state).profiles[id])
     .find(
       (
         profile,
@@ -85,7 +94,7 @@ async function resolveOAuthToken(params: {
 }): Promise<ProviderAuth | null> {
   const order = resolveAuthProfileOrder({
     cfg: params.state.cfg,
-    store: params.state.store,
+    store: resolveUsageAuthStore(params.state),
     provider: params.provider,
   });
   const deduped = dedupeProfileIds(order);
@@ -100,7 +109,7 @@ async function resolveOAuthToken(params: {
         // Reuse the already-resolved config snapshot for token/ref resolution so
         // usage snapshots don't trigger a second ambient loadConfig() call.
         cfg: params.state.cfg,
-        store: params.state.store,
+        store: resolveUsageAuthStore(params.state),
         profileId,
         agentDir: params.state.agentDir,
       });
@@ -205,9 +214,6 @@ export async function resolveProviderAuths(params: {
 
   const state: UsageAuthState = {
     cfg: params.config ?? loadConfig(),
-    store: ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
-    }),
     env: params.env ?? process.env,
     agentDir: params.agentDir,
   };

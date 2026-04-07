@@ -1,6 +1,6 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { applyMistralModelCompat, MISTRAL_MODEL_TRANSPORT_PATCH } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -18,7 +18,7 @@ const MISTRAL_MODEL_HINTS = [
 ] as const;
 
 function isMistralModelHint(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return MISTRAL_MODEL_HINTS.some(
     (hint) =>
       normalized === hint ||
