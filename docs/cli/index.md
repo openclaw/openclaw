@@ -35,6 +35,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`logs`](/cli/logs)
 - [`system`](/cli/system)
 - [`models`](/cli/models)
+- [`infer`](/cli/capability)
 - [`memory`](/cli/memory)
 - [`directory`](/cli/directory)
 - [`nodes`](/cli/nodes)
@@ -248,6 +249,16 @@ openclaw [--dev] [--profile <name>] <command>
     fallbacks list|add|remove|clear
     image-fallbacks list|add|remove|clear
     scan
+  infer (alias: capability)
+    list
+    inspect
+    model run|list|inspect|providers|auth login|logout|status
+    image generate|edit|describe|describe-many|providers
+    audio transcribe|providers
+    tts convert|voices|providers|status|enable|disable|set-provider
+    video generate|describe|providers
+    web search|fetch|providers
+    embedding create|providers
     auth add|login|login-github-copilot|setup-token|paste-token
     auth order get|set|clear
   sandbox

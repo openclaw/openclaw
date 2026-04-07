@@ -61,6 +61,16 @@ function hasEntryCredential(
   });
 }
 
+export function isWebFetchProviderConfigured(params: {
+  provider: Pick<
+    PluginWebFetchProviderEntry,
+    "envVars" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential"
+  >;
+  config?: OpenClawConfig;
+}): boolean {
+  return hasEntryCredential(params.provider, params.config, resolveFetchConfig(params.config));
+}
+
 export function listWebFetchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebFetchProviderEntry[] {
