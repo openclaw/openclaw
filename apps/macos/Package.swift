@@ -20,6 +20,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
         .package(url: "https://github.com/steipete/Peekaboo.git", branch: "main"),
+        .package(url: "https://github.com/Blaizzy/mlx-audio-swift", branch: "main"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../../Swabble"),
     ],
@@ -54,6 +55,9 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "PeekabooBridge", package: "Peekaboo"),
                 .product(name: "PeekabooAutomationKit", package: "Peekaboo"),
+                .product(name: "MLXAudio", package: "mlx-audio-swift"),
+                .product(name: "MLXAudioTTS", package: "mlx-audio-swift"),
+                .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
             ],
             exclude: [
                 "Resources/Info.plist",

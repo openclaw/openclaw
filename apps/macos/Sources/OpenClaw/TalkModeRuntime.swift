@@ -18,6 +18,7 @@ actor TalkModeRuntime {
     private static let defaultModelIdFallback = "eleven_v3"
     private static let defaultTalkProvider = "elevenlabs"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
+    private static let defaultUseLocalVoice = false
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -687,13 +688,35 @@ actor TalkModeRuntime {
         await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
         self.phase = .speaking
         await TalkSystemSpeechSynthesizer.shared.stop()
+        
+        if Self.defaultUseLocalVoice {
+            try await self.playLocalVoice(input: input)
+        } else {
         // Use app locale as fallback when no explicit language is set (e.g. system voice without ElevenLabs directive).
         let appLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
         let ttsLanguage = input.language ?? appLocale
         try await TalkSystemSpeechSynthesizer.shared.speak(
             text: input.cleanedText,
             language: ttsLanguage)
+        }
         self.ttsLogger.info("talk system voice done")
+    }
+
+    private func playLocalVoice(input: TalkPlaybackInput) async throws {
+        self.ttsLogger.info("talk local voice (MLX) start chars=\(input.cleanedText.count, privacy: .public)")
+        await self.stopMLX()
+        
+        // Extract voice preset from directive if available
+        let voicePreset = input.directive?.voiceId
+        let speed = input.directive?.speed
+        
+        try await self.playMLX(
+            text: input.cleanedText,
+            language: input.language,
+            speed: speed,
+            voicePreset: voicePreset
+        )
+        self.ttsLogger.info("talk local voice (MLX) done")
     }
 
     private func prepareForPlayback(generation: Int) async -> Bool {
@@ -753,6 +776,7 @@ actor TalkModeRuntime {
         let interruptedAt = usePCM ? await self.stopPCM() : await self.stopMP3()
         _ = usePCM ? await self.stopMP3() : await self.stopPCM()
         await TalkSystemSpeechSynthesizer.shared.stop()
+        await self.stopMLX()
         guard self.phase == .speaking else { return }
         if reason == .speech, let interruptedAt {
             self.lastInterruptedAtSeconds = interruptedAt
@@ -793,6 +817,26 @@ extension TalkModeRuntime {
     @MainActor
     private func stopMP3() -> Double? {
         StreamingAudioPlayer.shared.stop()
+    }
+
+    @MainActor
+    private func playMLX(
+        text: String,
+        language: String?,
+        speed: Double?,
+        voicePreset: String?) async throws
+    {
+        try await TalkMLXSpeechSynthesizer.shared.speak(
+            text: text,
+            language: language,
+            speed: speed,
+            voicePreset: voicePreset
+        )
+    }
+
+    @MainActor
+    private func stopMLX() {
+        TalkMLXSpeechSynthesizer.shared.stop()
     }
 
     // MARK: - Config
