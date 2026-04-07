@@ -9,6 +9,7 @@ export const BUILTIN_EXEC_DENY_PATTERNS = [
   "rm -rf /*",
   "mkfs.*",
   "dd * of=/dev/*",
+  "dd of=/dev/*",
 ] as const;
 
 const GLOB_REGEX_CACHE_LIMIT = 512;

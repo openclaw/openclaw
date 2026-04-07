@@ -1088,6 +1088,26 @@ export function evaluateShellAllowlist(
     segmentSatisfiedBy: [],
   });
 
+  // Run denylist checks before any early return so that denied commands
+  // (e.g. backslash-newline obfuscated "rm -rf /") are always caught.
+  const earlyDenylistEval = matchesExecDenylist({
+    analysis: { ok: false, segments: [] },
+    commandText: params.command,
+    denylist: allowlistContext.denylist,
+  });
+  if (earlyDenylistEval.denied) {
+    return {
+      analysisOk: false,
+      allowlistSatisfied: false,
+      denylistDenied: true,
+      denylistPattern: earlyDenylistEval.pattern,
+      allowlistMatches: [],
+      segments: [],
+      segmentAllowlistEntries: [],
+      segmentSatisfiedBy: [],
+    };
+  }
+
   // Keep allowlist analysis conservative: line-continuation semantics are shell-dependent
   // and can rewrite token boundaries at runtime.
   if (hasShellLineContinuation(params.command)) {
