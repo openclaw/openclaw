@@ -45,7 +45,12 @@ describe("Dockerfile", () => {
   it("prunes runtime dependencies after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("FROM build AS runtime-assets");
-    expect(dockerfile).toContain("CI=true pnpm prune --prod");
+    expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
+    expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
+    expect(dockerfile).toContain("pnpm-workspace.runtime.yaml");
+    expect(dockerfile).toContain("  - ui\\n");
+    expect(dockerfile).toContain("CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod");
+    expect(dockerfile).toContain("prune must not rediscover unrelated workspaces");
     expect(dockerfile).not.toContain(
       `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
     );

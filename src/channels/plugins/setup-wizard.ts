@@ -362,10 +362,6 @@ function applySetupInput(params: {
   };
 }
 
-function trimResolvedValue(value?: string): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function collectCredentialValues(params: {
   wizard: ChannelSetupWizard;
   cfg: OpenClawConfig;
@@ -373,7 +369,7 @@ function collectCredentialValues(params: {
 }): ChannelSetupWizardCredentialValues {
   const values: ChannelSetupWizardCredentialValues = {};
   for (const credential of params.wizard.credentials) {
-    const resolvedValue = trimResolvedValue(
+    const resolvedValue = normalizeOptionalString(
       credential.inspect({
         cfg: params.cfg,
         accountId: params.accountId,
@@ -519,7 +515,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         }
         for (const credential of wizard.credentials) {
           let credentialState = credential.inspect({ cfg: next, accountId });
-          let resolvedCredentialValue = trimResolvedValue(credentialState.resolvedValue);
+          let resolvedCredentialValue = normalizeOptionalString(credentialState.resolvedValue);
           const shouldPrompt = credential.shouldPrompt
             ? await credential.shouldPrompt({
                 cfg: next,
@@ -602,8 +598,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           next = credentialResult.cfg;
           credentialState = credential.inspect({ cfg: next, accountId });
           resolvedCredentialValue =
-            trimResolvedValue(credentialResult.resolvedValue) ||
-            trimResolvedValue(credentialState.resolvedValue);
+            normalizeOptionalString(credentialResult.resolvedValue) ||
+            normalizeOptionalString(credentialState.resolvedValue);
           if (resolvedCredentialValue) {
             credentialValues[credential.inputKey] = resolvedCredentialValue;
           } else {
@@ -614,13 +610,13 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
 
       const runTextInputSteps = async () => {
         for (const textInput of wizard.textInputs ?? []) {
-          let currentValue = trimResolvedValue(
+          let currentValue = normalizeOptionalString(
             typeof credentialValues[textInput.inputKey] === "string"
               ? credentialValues[textInput.inputKey]
               : undefined,
           );
           if (!currentValue && textInput.currentValue) {
-            currentValue = trimResolvedValue(
+            currentValue = normalizeOptionalString(
               await textInput.currentValue({
                 cfg: next,
                 accountId,
@@ -684,7 +680,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             }
           }
 
-          const initialValue = trimResolvedValue(
+          const initialValue = normalizeOptionalString(
             (await textInput.initialValue?.({
               cfg: next,
               accountId,
@@ -724,7 +720,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             delete credentialValues[textInput.inputKey];
             continue;
           }
-          const normalizedValue = trimResolvedValue(
+          const normalizedValue = normalizeOptionalString(
             textInput.normalizeValue?.({
               value: trimmedValue,
               cfg: next,
@@ -798,7 +794,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
 
       if (forceAllowFrom && wizard.allowFrom) {
         const allowFrom = wizard.allowFrom;
-        const allowFromCredentialValue = trimResolvedValue(
+        const allowFromCredentialValue = normalizeOptionalString(
           credentialValues[allowFrom.credentialInputKey ?? wizard.credentials[0]?.inputKey],
         );
         if (allowFrom.helpLines && allowFrom.helpLines.length > 0) {

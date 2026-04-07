@@ -12,10 +12,6 @@ export type OwnerDisplaySecretResolution = {
   generatedSecret?: string;
 };
 
-function trimToUndefined(value?: string): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 /**
  * Resolve owner display settings for prompt rendering.
  * Keep auth secrets decoupled from owner hash secrets.
@@ -27,7 +23,7 @@ export function resolveOwnerDisplaySetting(config?: OpenClawConfig): OwnerDispla
   }
   return {
     ownerDisplay: "hash",
-    ownerDisplaySecret: trimToUndefined(config?.commands?.ownerDisplaySecret),
+    ownerDisplaySecret: normalizeOptionalString(config?.commands?.ownerDisplaySecret),
   };
 }
 

@@ -8,14 +8,10 @@ import {
 import type { TaskRecord } from "./task-registry.types.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
-function normalizeOwnerKey(ownerKey?: string): string | undefined {
-  return normalizeOptionalString(ownerKey);
-}
-
 function canOwnerAccessTask(task: TaskRecord, callerOwnerKey: string): boolean {
   return (
     task.scopeKind === "session" &&
-    normalizeOwnerKey(task.ownerKey) === normalizeOwnerKey(callerOwnerKey)
+    normalizeOptionalString(task.ownerKey) === normalizeOptionalString(callerOwnerKey)
   );
 }
 

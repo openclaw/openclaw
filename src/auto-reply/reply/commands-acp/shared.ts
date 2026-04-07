@@ -8,7 +8,7 @@ import { normalizeAgentId } from "../../../routing/session-key.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
-export { resolveAcpInstallCommandHint, resolveConfiguredAcpBackendId } from "./install-hints.js";
+export { resolveAcpInstallCommandHint } from "./install-hints.js";
 
 export const COMMAND = "/acp";
 export const ACP_SPAWN_USAGE =

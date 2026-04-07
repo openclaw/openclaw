@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { MemoryCitationsMode } from "../../../config/types.memory.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../../context-engine/types.js";
 
 export type AttemptContextEngine = ContextEngine;
@@ -56,6 +57,8 @@ export async function assembleAttemptContextEngine(params: {
   sessionKey?: string;
   messages: AgentMessage[];
   tokenBudget?: number;
+  availableTools?: Set<string>;
+  citationsMode?: MemoryCitationsMode;
   modelId: string;
   prompt?: string;
 }) {
@@ -67,6 +70,8 @@ export async function assembleAttemptContextEngine(params: {
     sessionKey: params.sessionKey,
     messages: params.messages,
     tokenBudget: params.tokenBudget,
+    ...(params.availableTools ? { availableTools: params.availableTools } : {}),
+    ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
     model: params.modelId,
     ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
   });

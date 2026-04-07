@@ -756,6 +756,7 @@ export async function runEmbeddedAttempt(
         userTime,
         userTimeFormat,
         contextFiles,
+        includeMemorySection: !params.contextEngine || params.contextEngine.info.id === "legacy",
         memoryCitationsMode: params.config?.memory?.citations,
         promptContribution,
       });
@@ -1270,6 +1271,8 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
+              availableTools: new Set(effectiveTools.map((tool) => tool.name)),
+              citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
               ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
             });

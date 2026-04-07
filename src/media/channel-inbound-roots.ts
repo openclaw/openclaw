@@ -3,12 +3,8 @@ import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registr
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-function normalizeChannelId(value?: string | null): string | undefined {
-  return normalizeOptionalString(value)?.toLowerCase();
-}
-
 function findChannelMessagingAdapter(channelId?: string | null) {
-  const normalized = normalizeChannelId(channelId);
+  const normalized = normalizeOptionalString(channelId)?.toLowerCase();
   if (!normalized) {
     return undefined;
   }

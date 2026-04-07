@@ -18,9 +18,6 @@ const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });
 
-const normalizeProvider = (value?: string | null) =>
-  normalizeOptionalString(value)?.toLowerCase() || "";
-
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
@@ -44,7 +41,9 @@ function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
 }
 
 export function buildInboundDedupeKey(ctx: MsgContext): string | null {
-  const provider = normalizeProvider(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
+  const provider =
+    normalizeOptionalString(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface)?.toLowerCase() ||
+    "";
   const messageId = normalizeOptionalString(ctx.MessageSid);
   if (!provider || !messageId) {
     return null;

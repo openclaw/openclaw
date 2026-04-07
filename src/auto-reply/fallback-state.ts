@@ -10,10 +10,6 @@ export type FallbackNoticeState = Pick<
   "fallbackNoticeSelectedModel" | "fallbackNoticeActiveModel" | "fallbackNoticeReason"
 >;
 
-export function normalizeFallbackModelRef(value?: string): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MAX): string {
   const text = String(value ?? "")
     .replace(/\s+/g, " ")
@@ -80,7 +76,7 @@ export function buildFallbackClearedNotice(params: {
   previousActiveModel?: string;
 }): string {
   const selected = formatProviderModelRef(params.selectedProvider, params.selectedModel);
-  const previous = normalizeFallbackModelRef(params.previousActiveModel);
+  const previous = normalizeOptionalString(params.previousActiveModel);
   if (previous && previous !== selected) {
     return `↪️ Model Fallback cleared: ${selected} (was ${previous})`;
   }
@@ -92,9 +88,9 @@ export function resolveActiveFallbackState(params: {
   activeModelRef: string;
   state?: FallbackNoticeState;
 }): { active: boolean; reason?: string } {
-  const selected = normalizeFallbackModelRef(params.state?.fallbackNoticeSelectedModel);
-  const active = normalizeFallbackModelRef(params.state?.fallbackNoticeActiveModel);
-  const reason = normalizeFallbackModelRef(params.state?.fallbackNoticeReason);
+  const selected = normalizeOptionalString(params.state?.fallbackNoticeSelectedModel);
+  const active = normalizeOptionalString(params.state?.fallbackNoticeActiveModel);
+  const reason = normalizeOptionalString(params.state?.fallbackNoticeReason);
   const fallbackActive =
     params.selectedModelRef !== params.activeModelRef &&
     selected === params.selectedModelRef &&
@@ -137,9 +133,9 @@ export function resolveFallbackTransition(params: {
   const selectedModelRef = formatProviderModelRef(params.selectedProvider, params.selectedModel);
   const activeModelRef = formatProviderModelRef(params.activeProvider, params.activeModel);
   const previousState = {
-    selectedModel: normalizeFallbackModelRef(params.state?.fallbackNoticeSelectedModel),
-    activeModel: normalizeFallbackModelRef(params.state?.fallbackNoticeActiveModel),
-    reason: normalizeFallbackModelRef(params.state?.fallbackNoticeReason),
+    selectedModel: normalizeOptionalString(params.state?.fallbackNoticeSelectedModel),
+    activeModel: normalizeOptionalString(params.state?.fallbackNoticeActiveModel),
+    reason: normalizeOptionalString(params.state?.fallbackNoticeReason),
   };
   const fallbackActive = selectedModelRef !== activeModelRef;
   const fallbackTransitioned =

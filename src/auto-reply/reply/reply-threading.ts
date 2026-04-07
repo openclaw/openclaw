@@ -23,20 +23,13 @@ function normalizeReplyToModeChatType(
     : undefined;
 }
 
-function resolveReplyToModeChannelKey(channel?: OriginatingChannelType): string | undefined {
-  const normalized = normalizePluginChannelId(channel);
-  if (normalized) {
-    return normalized;
-  }
-  return normalizeOptionalString(channel)?.toLowerCase();
-}
-
 export function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
   channel?: OriginatingChannelType,
   chatType?: string | null,
 ): ReplyToMode {
-  const provider = resolveReplyToModeChannelKey(channel);
+  const provider =
+    normalizePluginChannelId(channel) ?? normalizeOptionalString(channel)?.toLowerCase();
   if (!provider) {
     return "all";
   }

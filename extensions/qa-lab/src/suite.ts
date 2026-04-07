@@ -14,6 +14,11 @@ import { startQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import type { QaLabLatestReport, QaLabScenarioOutcome } from "./lab-server.js";
 import { startQaMockOpenAiServer } from "./mock-openai-server.js";
+import {
+  defaultQaModelForMode,
+  isQaFastModeEnabled,
+  type QaProviderMode,
+} from "./model-selection.js";
 import { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./report.js";
 import { qaChannelPlugin, type QaBusMessage } from "./runtime-api.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
@@ -1752,22 +1757,18 @@ When the user asks for the drift skill marker exactly, reply with exactly: DRIFT
 
 export async function runQaSuite(params?: {
   outputDir?: string;
-  providerMode?: "mock-openai" | "live-openai";
+  providerMode?: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
-  fastMode?: boolean;
   scenarioIds?: string[];
   lab?: Awaited<ReturnType<typeof startQaLabServer>>;
 }) {
   const startedAt = new Date();
   const providerMode = params?.providerMode ?? "mock-openai";
-  const fastMode = params?.fastMode ?? providerMode === "live-openai";
-  const primaryModel =
-    params?.primaryModel ??
-    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4");
+  const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel =
-    params?.alternateModel ??
-    (providerMode === "live-openai" ? "openai/gpt-5.4" : "mock-openai/gpt-5.4-alt");
+    params?.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const fastMode = isQaFastModeEnabled({ primaryModel, alternateModel });
   const outputDir =
     params?.outputDir ??
     path.join(process.cwd(), ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`);
@@ -1795,7 +1796,6 @@ export async function runQaSuite(params?: {
     providerMode,
     primaryModel,
     alternateModel,
-    fastMode,
     controlUiEnabled: true,
   });
   lab.setControlUi({

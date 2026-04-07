@@ -92,10 +92,6 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   return Boolean((parsed?.rest ?? "").toLowerCase().startsWith("acp:"));
 }
 
-function normalizeSessionConversationChannel(value: string | undefined | null): string | undefined {
-  return normalizeOptionalString(value)?.toLowerCase();
-}
-
 export function parseThreadSessionSuffix(
   sessionKey: string | undefined | null,
 ): ParsedThreadSessionSuffix {
@@ -133,7 +129,7 @@ export function parseRawSessionConversationRef(
     return null;
   }
 
-  const channel = normalizeSessionConversationChannel(parts[0]);
+  const channel = normalizeOptionalString(parts[0])?.toLowerCase();
   const kind = normalizeOptionalString(parts[1])?.toLowerCase();
   if (!channel || (kind !== "group" && kind !== "channel")) {
     return null;

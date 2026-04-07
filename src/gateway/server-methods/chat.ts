@@ -25,6 +25,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -1007,18 +1008,13 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   };
 }
 
-function normalizeOptionalText(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
-}
-
 function normalizeExplicitChatSendOrigin(
   params: ChatSendExplicitOrigin,
 ): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
-  const originatingChannel = normalizeOptionalText(params.originatingChannel);
-  const originatingTo = normalizeOptionalText(params.originatingTo);
-  const accountId = normalizeOptionalText(params.accountId);
-  const messageThreadId = normalizeOptionalText(params.messageThreadId);
+  const originatingChannel = normalizeOptionalString(params.originatingChannel);
+  const originatingTo = normalizeOptionalString(params.originatingTo);
+  const accountId = normalizeOptionalString(params.accountId);
+  const messageThreadId = normalizeOptionalString(params.messageThreadId);
   const hasAnyExplicitOriginField = Boolean(
     originatingChannel || originatingTo || accountId || messageThreadId,
   );
@@ -1054,8 +1050,8 @@ function resolveChatAbortRequester(
 ): ChatAbortRequester {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return {
-    connId: normalizeOptionalText(client?.connId),
-    deviceId: normalizeOptionalText(client?.connect?.device?.id),
+    connId: normalizeOptionalString(client?.connId),
+    deviceId: normalizeOptionalString(client?.connect?.device?.id),
     isAdmin: scopes.includes(ADMIN_SCOPE),
   };
 }
@@ -1067,8 +1063,8 @@ function canRequesterAbortChatRun(
   if (requester.isAdmin) {
     return true;
   }
-  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
-  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
+  const ownerDeviceId = normalizeOptionalString(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalString(entry.ownerConnId);
   if (!ownerDeviceId && !ownerConnId) {
     return true;
   }
@@ -1594,8 +1590,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey: rawSessionKey,
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
-        ownerConnId: normalizeOptionalText(client?.connId),
-        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        ownerConnId: normalizeOptionalString(client?.connId),
+        ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
       });
       const ackPayload = {
         runId: clientRunId,

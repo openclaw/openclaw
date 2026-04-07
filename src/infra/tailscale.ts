@@ -435,10 +435,6 @@ export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
   });
 }
 
-function getString(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
@@ -447,20 +443,20 @@ function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIde
   const userProfile =
     readRecord(payload.UserProfile) ?? readRecord(payload.userProfile) ?? readRecord(payload.User);
   const login =
-    getString(userProfile?.LoginName) ??
-    getString(userProfile?.Login) ??
-    getString(userProfile?.login) ??
-    getString(payload.LoginName) ??
-    getString(payload.login);
+    normalizeOptionalString(userProfile?.LoginName) ??
+    normalizeOptionalString(userProfile?.Login) ??
+    normalizeOptionalString(userProfile?.login) ??
+    normalizeOptionalString(payload.LoginName) ??
+    normalizeOptionalString(payload.login);
   if (!login) {
     return null;
   }
   const name =
-    getString(userProfile?.DisplayName) ??
-    getString(userProfile?.Name) ??
-    getString(userProfile?.displayName) ??
-    getString(payload.DisplayName) ??
-    getString(payload.name);
+    normalizeOptionalString(userProfile?.DisplayName) ??
+    normalizeOptionalString(userProfile?.Name) ??
+    normalizeOptionalString(userProfile?.displayName) ??
+    normalizeOptionalString(payload.DisplayName) ??
+    normalizeOptionalString(payload.name);
   return { login, name };
 }
 

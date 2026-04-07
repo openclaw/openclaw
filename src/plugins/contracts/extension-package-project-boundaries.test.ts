@@ -96,6 +96,7 @@ describe("opt-in extension package boundaries", () => {
       "../../src/plugin-sdk/provider-onboard.ts",
       "../../src/plugin-sdk/provider-stream-shared.ts",
       "../../src/plugin-sdk/provider-tools.ts",
+      "../../src/plugin-sdk/provider-web-search-contract.ts",
       "../../src/plugin-sdk/provider-web-search.ts",
       "../../src/plugin-sdk/runtime-doctor.ts",
       "../../src/plugin-sdk/runtime-env.ts",
