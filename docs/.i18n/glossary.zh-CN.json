@@ -64,12 +64,12 @@
     "target": "Mattermost"
   },
   {
-    "source": "BytePlus (International)",
-    "target": "BytePlus（国际版）"
+    "source": "BytePlus(International)",
+    "target": "BytePlus(国际版）"
   },
   {
-    "source": "Anthropic (API + Claude CLI)",
-    "target": "Anthropic（API + Claude CLI）"
+    "source": "Anthropic(API + Claude CLI)",
+    "target": "Anthropic(API + Claude CLI)"
   },
   {
     "source": "Moonshot AI",
@@ -97,7 +97,7 @@
   },
   {
     "source": "Setup Wizard (CLI)",
-    "target": "设置向导（CLI）"
+    "target": "设置向导(CLI)"
   },
   {
     "source": "Docs directory",
@@ -176,8 +176,8 @@
     "target": "网络模型"
   },
   {
-    "source": "Bridge protocol (legacy nodes, historical)",
-    "target": "Bridge protocol（旧版节点，历史参考）"
+    "source": "Bridge protocol(legacy nodes, historical)",
+    "target": "Bridge protocol(旧版节点，历史参考)"
   },
   {
     "source": "Doctor",
@@ -355,9 +355,8 @@
     "source": "Testing",
     "target": "测试"
   },
-  { 
-    "source": "Exec Approval Limitations", 
-    "target": "执行审批限制" 
+  {
+    "source": "Exec Approval Limitations",
+    "target": "执行审批限制"
   }
 ]
-

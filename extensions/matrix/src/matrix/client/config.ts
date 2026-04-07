@@ -16,6 +16,7 @@ import {
   listNormalizedMatrixAccountIds,
 } from "../account-config.js";
 import { resolveMatrixConfigFieldPath } from "../config-paths.js";
+import type { MatrixStoredCredentials } from "../credentials-read.js";
 import {
   DEFAULT_ACCOUNT_ID,
   assertHttpUrlTargetsPrivateNetwork,
@@ -28,7 +29,6 @@ import {
 } from "./config-runtime-api.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
-import type { MatrixStoredCredentials } from "../credentials-read.js";
 
 type MatrixAuthClientDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;

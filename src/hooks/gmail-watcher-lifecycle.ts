@@ -24,12 +24,13 @@ export async function startGmailWatcherWithLogs(params: {
       params.log.info("gmail watcher started");
       return;
     }
-    if (
-      gmailResult.reason &&
-      gmailResult.reason !== "hooks not enabled" &&
-      gmailResult.reason !== "no gmail account configured"
-    ) {
-      params.log.warn(`gmail watcher not started: ${gmailResult.reason}`);
+    if (gmailResult.status === "skipped") {
+      const isExternalSetup = gmailResult.reason === "gmail topic required";
+      const suffix = isExternalSetup
+        ? ". Note: If using an external webhook (e.g. gog + Pub/Sub), this is expected."
+        : "";
+
+      params.log.warn(`gmail watcher not started: ${gmailResult.reason}${suffix}`);
     }
   } catch (err) {
     params.log.error(`gmail watcher failed to start: ${String(err)}`);

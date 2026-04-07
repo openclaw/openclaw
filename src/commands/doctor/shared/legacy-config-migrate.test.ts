@@ -3,10 +3,7 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
-import {
-  applyLegacyDoctorMigrations,
-  migrateLegacyConfig,
-} from "./legacy-config-migrate.js";
+import { applyLegacyDoctorMigrations, migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
