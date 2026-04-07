@@ -132,6 +132,12 @@ export function seedMissingDefaultAccountsFromSingleAccountBase(
     if (hasDefault) {
       continue;
     }
+    // Telegram named accounts inherit top-level config at runtime, so moving
+    // shared top-level values into accounts.default would strip them from the
+    // real account entries.
+    if (channelId === "telegram") {
+      continue;
+    }
 
     const keysToMove = Object.entries(rawChannel)
       .filter(([key, value]) => {
