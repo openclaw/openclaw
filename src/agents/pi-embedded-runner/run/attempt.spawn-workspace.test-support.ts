@@ -458,16 +458,32 @@ vi.mock("../cache-ttl.js", () => ({
     data: unknown,
   ) => sessionManager.appendCustomEntry?.("openclaw.cache-ttl", data),
   isCacheTtlEligibleProvider: (provider?: string) => provider === "anthropic",
-  readLastCacheTtlTimestamp: (sessionManager: {
-    appendCustomEntry?: { mock?: { calls?: unknown[][] } };
-  }) => {
+  readLastCacheTtlTimestamp: (
+    sessionManager: {
+      appendCustomEntry?: { mock?: { calls?: unknown[][] } };
+    },
+    context?: { provider?: string; modelId?: string },
+  ) => {
     const calls = sessionManager.appendCustomEntry?.mock?.calls ?? [];
     for (let index = calls.length - 1; index >= 0; index -= 1) {
       const [customType, data] = calls[index] ?? [];
       if (customType !== "openclaw.cache-ttl") {
         continue;
       }
-      const timestamp = (data as { timestamp?: unknown } | undefined)?.timestamp;
+      const entry = data as
+        | {
+            timestamp?: unknown;
+            provider?: string;
+            modelId?: string;
+          }
+        | undefined;
+      if (context?.provider && entry?.provider?.toLowerCase() !== context.provider.toLowerCase()) {
+        continue;
+      }
+      if (context?.modelId && entry?.modelId?.toLowerCase() !== context.modelId.toLowerCase()) {
+        continue;
+      }
+      const timestamp = entry?.timestamp;
       return typeof timestamp === "number" ? timestamp : null;
     }
     return null;

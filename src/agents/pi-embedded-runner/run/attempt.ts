@@ -2080,9 +2080,9 @@ export async function runEmbeddedAttempt(
               usage: attemptUsage,
             })
           : null;
-        const lastCallUsage =
-          normalizeUsage((currentAttemptAssistant as { usage?: UsageLike } | undefined)?.usage) ??
-          normalizeUsage(attemptUsage);
+        const lastCallUsage = normalizeUsage(
+          (currentAttemptAssistant as { usage?: UsageLike } | undefined)?.usage,
+        );
         const promptCacheObservation =
           cacheObservabilityEnabled &&
           (cacheBreak || promptCacheChangesForTurn || typeof attemptUsage?.cacheRead === "number")
@@ -2103,7 +2103,10 @@ export async function runEmbeddedAttempt(
           retention: effectivePromptCacheRetention,
           lastCallUsage,
           observation: promptCacheObservation,
-          lastCacheTouchAt: readLastCacheTtlTimestamp(sessionManager),
+          lastCacheTouchAt: readLastCacheTtlTimestamp(sessionManager, {
+            provider: params.provider,
+            modelId: params.modelId,
+          }),
         });
 
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
