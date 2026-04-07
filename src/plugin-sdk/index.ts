@@ -50,7 +50,9 @@ export type {
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,
+  ProviderPreparedRuntimeAuth,
   ProviderRuntimeModel,
+  ResolvedProviderRuntimeAuth,
   RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
 } from "../plugins/types.js";
