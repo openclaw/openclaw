@@ -830,6 +830,34 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("canonicalizes /hooks/message kind=event session keys before enqueueing", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      defaultSessionKey: "hook:ingress",
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/message", {
+        message: "event via alias",
+        requestId: "msg-event-canonical",
+        kind: "event",
+      });
+      const body = (await response.json()) as { status?: string; sessionKey?: string };
+      expect(response.status).toBe(200);
+      expect(body.status).toBe("event");
+      expect(body.sessionKey).toBe("agent:main:hook:ingress");
+
+      const entries = peekSystemEventEntries("agent:main:hook:ingress");
+      expect(entries.some((entry) => entry.text === "event via alias")).toBe(true);
+      drainSystemEvents("agent:main:hook:ingress");
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
   test("applies hook session policy defaults for /hooks/message when sessionKey is omitted", async () => {
     testState.hooksConfig = {
       enabled: true,
@@ -861,6 +889,58 @@ describe("gateway server hooks", () => {
           }
         | undefined;
       expect(firstCall?.ctx?.SessionKey).toBe("agent:main:hook:ingress");
+    });
+  });
+
+  test("scopes /hooks/message chat idempotency by replay identity", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:main:"],
+    };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const first = await postHook(port, "/hooks/message", {
+        message: "first",
+        requestId: "shared-request-id",
+        sessionKey: "agent:main:scope-a",
+      });
+      const firstBody = await first.text();
+      expect(first.status, firstBody).toBe(200);
+
+      const second = await postHook(port, "/hooks/message", {
+        message: "second",
+        requestId: "shared-request-id",
+        sessionKey: "agent:main:scope-b",
+      });
+      const secondBody = await second.text();
+      expect(second.status, secondBody).toBe(200);
+
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      });
+    });
+  });
+
+  test("returns /hooks/message INVALID_REQUEST failures as HTTP 400", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    testState.sessionConfig = { sendPolicy: { default: "deny" } };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/message", {
+        message: "blocked by policy",
+        requestId: "msg-send-policy-deny",
+      });
+      const rawBody = await response.text();
+      expect(response.status, rawBody).toBe(400);
+      const payload = JSON.parse(rawBody) as { error?: string };
+      expect(payload.error ?? "").toMatch(/send blocked by session policy/i);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     });
   });
 

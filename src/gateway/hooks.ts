@@ -233,6 +233,7 @@ export type HookMessagePayload = {
 
 export type HookMessageDispatchPayload = HookMessagePayload & {
   idempotencyKey: string;
+  chatIdempotencyKey?: string;
   allowedSessionKeyPrefixes?: string[];
 };
 

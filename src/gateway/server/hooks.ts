@@ -15,7 +15,7 @@ import {
   type HooksConfigResolved,
   isSessionKeyAllowedByPrefix,
 } from "../hooks.js";
-import type { RequestFrame } from "../protocol/index.js";
+import { ErrorCodes, type RequestFrame } from "../protocol/index.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
 import { agentHandlers } from "../server-methods/agent.js";
 import { chatHandlers } from "../server-methods/chat.js";
@@ -192,6 +192,28 @@ function resolveHookMethodError(error: unknown, fallback: string): string {
   return message ?? fallback;
 }
 
+function resolveHookMethodStatusCode(error: unknown): number | undefined {
+  const record = toRecord(error);
+  if (!record) {
+    return undefined;
+  }
+  const statusCode = record.statusCode;
+  if (typeof statusCode === "number" && Number.isFinite(statusCode)) {
+    return statusCode;
+  }
+  const code = toOptionalString(record.code);
+  if (!code) {
+    return undefined;
+  }
+  if (code === ErrorCodes.INVALID_REQUEST) {
+    return 400;
+  }
+  if (code === ErrorCodes.UNAVAILABLE) {
+    return 503;
+  }
+  return undefined;
+}
+
 async function monitorHookMessageReply(params: {
   logHooks: SubsystemLogger;
   context: GatewayRequestContext;
@@ -337,21 +359,6 @@ export function createGatewayHooksRequestHandler(params: {
     });
     logHookMessageLifecycle(logHooks, "hook.message.received", receivedFields);
 
-    if (value.kind === "event") {
-      enqueueSystemEvent(value.message, {
-        sessionKey: requestedSessionKey,
-        trusted: false,
-      });
-      logHookMessageLifecycle(logHooks, "hook.message.persisted", {
-        ...receivedFields,
-        status: "event",
-      });
-      return {
-        status: "event" as const,
-        sessionKey: requestedSessionKey,
-      };
-    }
-
     const context = getGatewayRequestContext?.();
     if (!context) {
       logHookMessageLifecycle(logHooks, "hook.message.failed", {
@@ -392,10 +399,26 @@ export function createGatewayHooksRequestHandler(params: {
       throw Object.assign(new Error(prefixError), { statusCode: 400 });
     }
 
+    if (value.kind === "event") {
+      enqueueSystemEvent(value.message, {
+        sessionKey: targetSessionKey,
+        trusted: false,
+      });
+      logHookMessageLifecycle(logHooks, "hook.message.persisted", {
+        ...receivedFields,
+        sessionKey: targetSessionKey,
+        status: "event",
+      });
+      return {
+        status: "event" as const,
+        sessionKey: targetSessionKey,
+      };
+    }
+
     const sendParams = {
       sessionKey: targetSessionKey,
       message: value.message,
-      idempotencyKey: value.idempotencyKey,
+      idempotencyKey: value.chatIdempotencyKey ?? value.idempotencyKey,
     };
     const sendResult = await callGatewayMethodHandler({
       handler: chatHandlers["chat.send"],
@@ -410,6 +433,10 @@ export function createGatewayHooksRequestHandler(params: {
         sessionKey: targetSessionKey,
         status: sendError,
       });
+      const sendStatusCode = resolveHookMethodStatusCode(sendResult.error);
+      if (sendStatusCode !== undefined) {
+        throw Object.assign(new Error(sendError), { statusCode: sendStatusCode });
+      }
       throw new Error(sendError);
     }
 

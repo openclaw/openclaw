@@ -669,6 +669,9 @@ export function createHooksRequestHandler(
           metadata: normalized.value.metadata ?? null,
         },
       });
+      const chatIdempotencyKey = replayKey
+        ? `hookmsg:${createHash("sha256").update(replayKey, "utf8").digest("hex")}`
+        : effectiveIdempotencyKey;
       const cachedReplay = resolveCachedHookReplayEntry(replayKey, now);
       if (cachedReplay) {
         sendJson(res, 200, {
@@ -692,6 +695,7 @@ export function createHooksRequestHandler(
           sessionKey: resolvedSessionKey.value,
           allowedSessionKeyPrefixes: hooksConfig.sessionPolicy.allowedSessionKeyPrefixes,
           idempotencyKey: effectiveIdempotencyKey,
+          chatIdempotencyKey,
         });
         rememberHookReplayEntry(
           replayKey,
