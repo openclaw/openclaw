@@ -349,7 +349,14 @@ export class OpenClawApp extends LitElement {
   @state() toolsEffectiveResultKey: string | null = null;
   @state() toolsEffectiveError: string | null = null;
   @state() toolsEffectiveResult: ToolsEffectiveResult | null = null;
-  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" = "files";
+  @state() agentsPanel:
+    | "overview"
+    | "files"
+    | "workspace"
+    | "tools"
+    | "skills"
+    | "channels"
+    | "cron" = "files";
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -357,6 +364,14 @@ export class OpenClawApp extends LitElement {
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
+  @state() workspaceLoading = false;
+  @state() workspaceError: string | null = null;
+  @state() workspacePath = "";
+  @state() workspaceEntries: import("./types.js").AgentsWorkspaceListResult["entries"] | null =
+    null;
+  @state() workspaceSelectedFile: string | null = null;
+  @state() workspaceFileContent: string | null = null;
+  @state() workspaceEditedContent: string | null = null;
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
   @state() agentIdentityById: Record<string, AgentIdentityResult> = {};

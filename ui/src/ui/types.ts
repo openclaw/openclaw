@@ -379,6 +379,62 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
+// Workspace types
+export type WorkspaceEntry = {
+  name: string;
+  path: string;
+  type: "file" | "directory" | "symlink";
+  size?: number;
+  updatedAtMs?: number;
+  createdAtMs?: number;
+};
+
+export type AgentsWorkspaceListResult = {
+  agentId: string;
+  workspace: string;
+  path: string;
+  entries: WorkspaceEntry[];
+};
+
+export type AgentsWorkspaceGetResult = {
+  agentId: string;
+  workspace: string;
+  path: string;
+  content: string;
+  encoding: "utf8" | "base64";
+  size: number;
+  updatedAtMs?: number;
+};
+
+export type AgentsWorkspaceSetResult = {
+  ok: true;
+  agentId: string;
+  path: string;
+  size: number;
+  updatedAtMs: number;
+};
+
+export type AgentsWorkspaceDeleteResult = {
+  ok: true;
+  agentId: string;
+  path: string;
+  deleted: boolean;
+};
+
+export type AgentsWorkspaceMkdirResult = {
+  ok: true;
+  agentId: string;
+  path: string;
+  created: boolean;
+};
+
+export type AgentsWorkspaceMoveResult = {
+  ok: true;
+  agentId: string;
+  from: string;
+  to: string;
+};
+
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 export type SubagentRunState = "active" | "interrupted" | "historical";
 

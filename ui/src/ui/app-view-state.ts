@@ -23,6 +23,7 @@ import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
+  AgentsWorkspaceListResult,
   AgentIdentityResult,
   AttentionItem,
   ChannelsStatusSnapshot,
@@ -234,7 +235,7 @@ export type AppViewState = {
   toolsEffectiveResultKey: string | null;
   toolsEffectiveError: string | null;
   toolsEffectiveResult: import("./types.js").ToolsEffectiveResult | null;
-  agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+  agentsPanel: "overview" | "files" | "workspace" | "tools" | "skills" | "channels" | "cron";
   agentFilesLoading: boolean;
   agentFilesError: string | null;
   agentFilesList: AgentsFilesListResult | null;
@@ -242,6 +243,13 @@ export type AppViewState = {
   agentFileDrafts: Record<string, string>;
   agentFileActive: string | null;
   agentFileSaving: boolean;
+  workspaceLoading: boolean;
+  workspaceError: string | null;
+  workspacePath: string;
+  workspaceEntries: AgentsWorkspaceListResult["entries"] | null;
+  workspaceSelectedFile: string | null;
+  workspaceFileContent: string | null;
+  workspaceEditedContent: string | null;
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
