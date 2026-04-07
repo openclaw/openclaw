@@ -39,6 +39,47 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     expect(dispatchAgentHook).not.toHaveBeenCalled();
   });
 
+  test("returns 413 for oversized /hooks/message payloads", async () => {
+    readJsonBodyMock.mockResolvedValue({ ok: false, error: "payload too large" });
+    const dispatchMessageHook = vi.fn();
+    const handler = createHooksHandler({ dispatchMessageHook });
+    const req = createHookRequest({ url: "/hooks/message" });
+    const { res, end } = createResponse();
+
+    const handled = await handler(req, res);
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(413);
+    expect(end).toHaveBeenCalledWith(JSON.stringify({ ok: false, error: "payload too large" }));
+    expect(dispatchMessageHook).not.toHaveBeenCalled();
+  });
+
+  test("dedupes /hooks/message retries by requestId when idempotency header is absent", async () => {
+    readJsonBodyMock.mockResolvedValue({
+      ok: true,
+      value: { message: "hello", requestId: "req-1" },
+    });
+    const dispatchMessageHook = vi.fn(async () => ({
+      status: "accepted" as const,
+      sessionKey: "main",
+    }));
+    const handler = createHooksHandler({ dispatchMessageHook });
+
+    const firstReq = createHookRequest({ url: "/hooks/message" });
+    const first = createResponse();
+    const firstHandled = await handler(firstReq, first.res);
+    expect(firstHandled).toBe(true);
+    expect(first.res.statusCode).toBe(200);
+
+    const secondReq = createHookRequest({ url: "/hooks/message" });
+    const second = createResponse();
+    const secondHandled = await handler(secondReq, second.res);
+    expect(secondHandled).toBe(true);
+    expect(second.res.statusCode).toBe(200);
+
+    expect(dispatchMessageHook).toHaveBeenCalledTimes(1);
+  });
+
   test("shares hook auth rate-limit bucket across ipv4 and ipv4-mapped ipv6 forms", async () => {
     const handler = createHooksHandler({ bindHost: "127.0.0.1" });
 

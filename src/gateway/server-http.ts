@@ -43,11 +43,14 @@ import {
   getHookChannelError,
   getHookSessionKeyPrefixError,
   type HookAgentDispatchPayload,
+  type HookMessageDispatchPayload,
+  type HookMessageDispatchResult,
   type HooksConfigResolved,
   isHookAgentAllowed,
   isSessionKeyAllowedByPrefix,
   normalizeAgentPayload,
   normalizeHookHeaders,
+  normalizeHookMessagePayload,
   resolveHookIdempotencyKey,
   normalizeWakePayload,
   readJsonBody,
@@ -91,6 +94,7 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
+  dispatchMessageHook?: (value: HookMessageDispatchPayload) => Promise<HookMessageDispatchResult>;
 };
 
 function resolveMappedHookExternalContentSource(params: {
@@ -369,7 +373,14 @@ export function createHooksRequestHandler(
     getClientIpConfig?: () => HookClientIpConfig;
   } & HookDispatchers,
 ): HooksRequestHandler {
-  const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
+  const {
+    getHooksConfig,
+    logHooks,
+    dispatchAgentHook,
+    dispatchWakeHook,
+    dispatchMessageHook,
+    getClientIpConfig,
+  } = opts;
   const hookReplayCache = new Map<string, HookReplayEntry>();
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
@@ -607,6 +618,77 @@ export function createHooksRequestHandler(
       rememberHookRunId(replayKey, runId, now);
       sendJson(res, 200, { ok: true, runId });
       return true;
+    }
+
+    if (subPath === "message") {
+      const normalized = normalizeHookMessagePayload(payload as Record<string, unknown>);
+      if (!normalized.ok) {
+        sendJson(res, 400, { ok: false, error: normalized.error });
+        return true;
+      }
+      const requestSessionKey = normalized.value.sessionKey;
+      if (requestSessionKey) {
+        const sessionKey = resolveHookSessionKey({
+          hooksConfig,
+          source: "request",
+          sessionKey: requestSessionKey,
+        });
+        if (!sessionKey.ok) {
+          sendJson(res, 400, { ok: false, error: sessionKey.error });
+          return true;
+        }
+      }
+
+      const effectiveIdempotencyKey = idempotencyKey ?? normalized.value.requestId;
+      const replayKey = buildHookReplayCacheKey({
+        pathKey: "message",
+        token,
+        idempotencyKey: effectiveIdempotencyKey,
+        dispatchScope: {
+          requestId: normalized.value.requestId,
+          message: normalized.value.message,
+          kind: normalized.value.kind,
+          sessionKey: requestSessionKey ?? null,
+          source: normalized.value.source ?? null,
+          sender: normalized.value.sender ?? null,
+          conversation: normalized.value.conversation ?? null,
+          metadata: normalized.value.metadata ?? null,
+        },
+      });
+      const cachedRunId = resolveCachedHookRunId(replayKey, now);
+      if (cachedRunId) {
+        sendJson(res, 200, {
+          ok: true,
+          requestId: normalized.value.requestId,
+          status: normalized.value.kind === "event" ? "event" : "accepted",
+          ...(requestSessionKey ? { sessionKey: requestSessionKey } : {}),
+          ...(normalized.value.kind === "message" ? { runId: cachedRunId } : {}),
+        });
+        return true;
+      }
+      if (!dispatchMessageHook) {
+        sendJson(res, 500, { ok: false, error: "hook message dispatch is unavailable" });
+        return true;
+      }
+      try {
+        const dispatched = await dispatchMessageHook({
+          ...normalized.value,
+          idempotencyKey: effectiveIdempotencyKey,
+        });
+        rememberHookRunId(replayKey, dispatched.runId ?? normalized.value.requestId, now);
+        sendJson(res, 200, {
+          ok: true,
+          requestId: normalized.value.requestId,
+          status: dispatched.status,
+          sessionKey: dispatched.sessionKey,
+          ...(dispatched.runId ? { runId: dispatched.runId } : {}),
+        });
+        return true;
+      } catch (err) {
+        logHooks.warn(`hook message dispatch failed: ${String(err)}`);
+        sendJson(res, 500, { ok: false, error: "hook message dispatch failed" });
+        return true;
+      }
     }
 
     if (hooksConfig.mappings.length > 0) {

@@ -8,10 +8,214 @@ import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
+import {
+  type HookAgentDispatchPayload,
+  type HookMessageDispatchPayload,
+  type HooksConfigResolved,
+} from "../hooks.js";
+import type { RequestFrame } from "../protocol/index.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
+import { agentHandlers } from "../server-methods/agent.js";
+import { chatHandlers } from "../server-methods/chat.js";
+import { sessionsHandlers } from "../server-methods/sessions.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+type HookMessageLifecycleFields = {
+  requestId: string;
+  sessionKey: string;
+  kind: "message" | "event";
+  source: string;
+  senderId: string;
+  conversationId: string;
+  groupId: string;
+  status: string;
+};
+
+type HookHandlerCallResult = {
+  ok: boolean;
+  payload?: unknown;
+  error?: unknown;
+};
+
+const HOOK_MESSAGE_WAIT_TIMEOUT_MS = 2_000;
+
+function toOptionalString(raw: unknown): string | undefined {
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof raw === "number" || typeof raw === "bigint") {
+    return String(raw);
+  }
+  return undefined;
+}
+
+function toRecord(raw: unknown): Record<string, unknown> | undefined {
+  return typeof raw === "object" && raw !== null && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
+}
+
+function readRecordString(
+  record: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = toOptionalString(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function resolveHookMessageLifecycleFields(params: {
+  value: HookMessageDispatchPayload;
+  sessionKey: string;
+  status: string;
+}): HookMessageLifecycleFields {
+  const senderId = readRecordString(params.value.sender, ["id", "senderId", "userId"]);
+  const conversationId = readRecordString(params.value.conversation, [
+    "id",
+    "conversationId",
+    "threadId",
+  ]);
+  const nestedGroup = toRecord(params.value.conversation?.group);
+  const groupId =
+    readRecordString(params.value.conversation, ["groupId"]) ??
+    readRecordString(nestedGroup, ["id", "groupId"]) ??
+    readRecordString(params.value.sender, ["groupId"]);
+
+  return {
+    requestId: params.value.requestId,
+    sessionKey: params.sessionKey,
+    kind: params.value.kind,
+    source: params.value.source ?? "-",
+    senderId: senderId ?? "-",
+    conversationId: conversationId ?? "-",
+    groupId: groupId ?? "-",
+    status: params.status,
+  };
+}
+
+function formatHookMessageLifecycleFields(fields: HookMessageLifecycleFields): string {
+  return [
+    `requestId=${fields.requestId}`,
+    `sessionKey=${fields.sessionKey}`,
+    `kind=${fields.kind}`,
+    `source=${fields.source}`,
+    `senderId=${fields.senderId}`,
+    `conversationId=${fields.conversationId}`,
+    `groupId=${fields.groupId}`,
+    `status=${fields.status}`,
+  ].join(" ");
+}
+
+function logHookMessageLifecycle(
+  logHooks: SubsystemLogger,
+  event: string,
+  fields: HookMessageLifecycleFields,
+): void {
+  logHooks.info(`${event} ${formatHookMessageLifecycleFields(fields)}`);
+}
+
+async function callGatewayMethodHandler(params: {
+  handler: (options: {
+    req: RequestFrame;
+    params: Record<string, unknown>;
+    respond: (
+      ok: boolean,
+      payload?: unknown,
+      error?: unknown,
+      meta?: Record<string, unknown>,
+    ) => void;
+    context: GatewayRequestContext;
+    client: null;
+    isWebchatConnect: () => false;
+  }) => Promise<void> | void;
+  req: RequestFrame;
+  requestParams: Record<string, unknown>;
+  context: GatewayRequestContext;
+}): Promise<HookHandlerCallResult> {
+  let result: HookHandlerCallResult = { ok: false };
+  await params.handler({
+    req: params.req,
+    params: params.requestParams,
+    respond: (ok, payload, error) => {
+      result = { ok, payload, error };
+    },
+    context: params.context,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return result;
+}
+
+function buildHookRequestFrame(
+  method: string,
+  requestId: string,
+  params: Record<string, unknown>,
+): RequestFrame {
+  return {
+    type: "req",
+    id: `hook-message:${method}:${requestId}`,
+    method,
+    params,
+  };
+}
+
+function resolveHookMethodError(error: unknown, fallback: string): string {
+  const message =
+    (toRecord(error) && toOptionalString((error as Record<string, unknown>).message)) ||
+    toOptionalString(error);
+  return message ?? fallback;
+}
+
+async function monitorHookMessageReply(params: {
+  logHooks: SubsystemLogger;
+  context: GatewayRequestContext;
+  fields: HookMessageLifecycleFields;
+  runId: string;
+}): Promise<void> {
+  const waitReq = buildHookRequestFrame("agent.wait", params.fields.requestId, {
+    runId: params.runId,
+    timeoutMs: HOOK_MESSAGE_WAIT_TIMEOUT_MS,
+  });
+  try {
+    const waitResult = await callGatewayMethodHandler({
+      handler: agentHandlers["agent.wait"],
+      req: waitReq,
+      requestParams: {
+        runId: params.runId,
+        timeoutMs: HOOK_MESSAGE_WAIT_TIMEOUT_MS,
+      },
+      context: params.context,
+    });
+    const waitPayload = toRecord(waitResult.payload);
+    const waitStatus = toOptionalString(waitPayload?.status) ?? (waitResult.ok ? "ok" : "failed");
+    if (waitResult.ok) {
+      logHookMessageLifecycle(params.logHooks, "hook.message.reply.completed", {
+        ...params.fields,
+        status: waitStatus,
+      });
+      return;
+    }
+    logHookMessageLifecycle(params.logHooks, "hook.message.failed", {
+      ...params.fields,
+      status: waitStatus,
+    });
+  } catch (err) {
+    logHookMessageLifecycle(params.logHooks, "hook.message.failed", {
+      ...params.fields,
+      status: resolveHookMethodError(err, "agent.wait failed"),
+    });
+  }
+}
 
 export function resolveHookClientIpConfig(cfg: OpenClawConfig): HookClientIpConfig {
   return {
@@ -24,11 +228,20 @@ export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
   getClientIpConfig: () => HookClientIpConfig;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   bindHost: string;
   port: number;
   logHooks: SubsystemLogger;
 }) {
-  const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
+  const {
+    deps,
+    getHooksConfig,
+    getClientIpConfig,
+    getGatewayRequestContext,
+    bindHost,
+    port,
+    logHooks,
+  } = params;
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
@@ -114,6 +327,105 @@ export function createGatewayHooksRequestHandler(params: {
     return runId;
   };
 
+  const dispatchMessageHook = async (value: HookMessageDispatchPayload) => {
+    const requestedSessionKey = value.sessionKey ?? resolveMainSessionKeyFromConfig();
+    const receivedFields = resolveHookMessageLifecycleFields({
+      value,
+      sessionKey: requestedSessionKey,
+      status: "received",
+    });
+    logHookMessageLifecycle(logHooks, "hook.message.received", receivedFields);
+
+    if (value.kind === "event") {
+      enqueueSystemEvent(value.message, {
+        sessionKey: requestedSessionKey,
+        trusted: false,
+      });
+      logHookMessageLifecycle(logHooks, "hook.message.persisted", {
+        ...receivedFields,
+        status: "event",
+      });
+      return {
+        status: "event" as const,
+        sessionKey: requestedSessionKey,
+      };
+    }
+
+    const context = getGatewayRequestContext?.();
+    if (!context) {
+      logHookMessageLifecycle(logHooks, "hook.message.failed", {
+        ...receivedFields,
+        status: "gateway context unavailable",
+      });
+      throw new Error("gateway request context unavailable");
+    }
+
+    let targetSessionKey = requestedSessionKey;
+    const createParams = { key: requestedSessionKey };
+    const createResult = await callGatewayMethodHandler({
+      handler: sessionsHandlers["sessions.create"],
+      req: buildHookRequestFrame("sessions.create", value.requestId, createParams),
+      requestParams: createParams,
+      context,
+    });
+    if (!createResult.ok) {
+      const createError = resolveHookMethodError(createResult.error, "sessions.create failed");
+      logHookMessageLifecycle(logHooks, "hook.message.failed", {
+        ...receivedFields,
+        status: createError,
+      });
+      throw new Error(createError);
+    }
+    const createdPayload = toRecord(createResult.payload);
+    const createdKey = toOptionalString(createdPayload?.key);
+    targetSessionKey = createdKey ?? targetSessionKey;
+
+    const sendParams = {
+      sessionKey: targetSessionKey,
+      message: value.message,
+      idempotencyKey: value.idempotencyKey,
+    };
+    const sendResult = await callGatewayMethodHandler({
+      handler: chatHandlers["chat.send"],
+      req: buildHookRequestFrame("chat.send", value.requestId, sendParams),
+      requestParams: sendParams,
+      context,
+    });
+    if (!sendResult.ok) {
+      const sendError = resolveHookMethodError(sendResult.error, "chat.send failed");
+      logHookMessageLifecycle(logHooks, "hook.message.failed", {
+        ...receivedFields,
+        sessionKey: targetSessionKey,
+        status: sendError,
+      });
+      throw new Error(sendError);
+    }
+
+    const sendPayload = toRecord(sendResult.payload);
+    const runId = toOptionalString(sendPayload?.runId) ?? value.idempotencyKey;
+    const sendStatus = toOptionalString(sendPayload?.status) ?? "started";
+    const lifecycleFields = resolveHookMessageLifecycleFields({
+      value,
+      sessionKey: targetSessionKey,
+      status: sendStatus,
+    });
+
+    logHookMessageLifecycle(logHooks, "hook.message.persisted", lifecycleFields);
+    logHookMessageLifecycle(logHooks, "hook.message.reply.started", lifecycleFields);
+    void monitorHookMessageReply({
+      logHooks,
+      context,
+      fields: lifecycleFields,
+      runId,
+    });
+
+    return {
+      status: "accepted" as const,
+      sessionKey: targetSessionKey,
+      runId,
+    };
+  };
+
   return createHooksRequestHandler({
     getHooksConfig,
     bindHost,
@@ -121,6 +433,7 @@ export function createGatewayHooksRequestHandler(params: {
     logHooks,
     getClientIpConfig,
     dispatchAgentHook,
+    dispatchMessageHook,
     dispatchWakeHook,
   });
 }

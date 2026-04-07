@@ -112,6 +112,7 @@ import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 import { createSecretsHandlers } from "./server-methods/secrets.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
@@ -757,6 +758,7 @@ export async function startGatewayServer(
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
+  let gatewayRequestContextRef: GatewayRequestContext | undefined;
   let canvasHostServer: CanvasHostServer | null = null;
   const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
@@ -816,6 +818,7 @@ export async function startGatewayServer(
     gatewayTls,
     hooksConfig: () => hooksConfig,
     getHookClientIpConfig: () => hookClientIpConfig,
+    getGatewayRequestContext: () => gatewayRequestContextRef,
     pluginRegistry,
     pinChannelRegistry: !minimalTestGateway,
     deps,
@@ -1337,7 +1340,7 @@ export async function startGatewayServer(
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
-    const gatewayRequestContext: import("./server-methods/types.js").GatewayRequestContext = {
+    const gatewayRequestContext: GatewayRequestContext = {
       deps,
       cron,
       cronStorePath,
@@ -1434,6 +1437,7 @@ export async function startGatewayServer(
       wizardRunner,
       broadcastVoiceWakeChanged,
     };
+    gatewayRequestContextRef = gatewayRequestContext;
 
     // Register a lazy fallback for plugin subagent dispatch in non-WS paths
     // (Telegram polling, WhatsApp, etc.) so later runtime swaps can expose the

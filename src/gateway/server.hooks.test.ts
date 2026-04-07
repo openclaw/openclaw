@@ -8,8 +8,11 @@ import {
 } from "../infra/system-events.js";
 import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {
+  connectWebchatClient,
   cronIsolatedRun,
+  dispatchInboundMessageMock,
   installGatewayTestHooks,
+  onceMessage,
   testState,
   withGatewayServer,
   waitForSystemEvent,
@@ -665,6 +668,160 @@ describe("gateway server hooks", () => {
       expect(allowed.status).toBe(200);
       await waitForSystemEvent();
       drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("enforces /hooks/message auth parity and blocks query token auth", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      const noAuth = await postHook(
+        port,
+        "/hooks/message",
+        { message: "inbound", requestId: "msg-auth-missing" },
+        { token: null },
+      );
+      expect(noAuth.status).toBe(401);
+
+      let throttled: Response | null = null;
+      for (let i = 0; i < 20; i++) {
+        throttled = await postHook(
+          port,
+          "/hooks/message",
+          { message: "inbound", requestId: `msg-auth-wrong-${i}` },
+          { token: "wrong" },
+        );
+      }
+      expect(throttled?.status).toBe(429);
+
+      const byBearer = await postHook(port, "/hooks/message", {
+        message: "inbound",
+        requestId: "msg-auth-bearer",
+      });
+      const byBearerBody = await byBearer.text();
+      expect(byBearer.status, byBearerBody).toBe(200);
+
+      const byHeader = await postHook(
+        port,
+        "/hooks/message",
+        { message: "inbound", requestId: "msg-auth-header" },
+        { token: null, headers: { "x-openclaw-token": HOOK_TOKEN } },
+      );
+      const byHeaderBody = await byHeader.text();
+      expect(byHeader.status, byHeaderBody).toBe(200);
+
+      const byQuery = await postHook(
+        port,
+        "/hooks/message?token=bad",
+        { message: "inbound", requestId: "msg-auth-query" },
+        { token: null },
+      );
+      expect(byQuery.status).toBe(400);
+    });
+  });
+
+  test("applies /hooks/message method guard and dedupes retries by requestId", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const getResponse = await fetch(`http://127.0.0.1:${port}/hooks/message`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${HOOK_TOKEN}` },
+      });
+      expect(getResponse.status).toBe(405);
+      expect(getResponse.headers.get("allow")).toBe("POST");
+
+      const first = await postHook(port, "/hooks/message", {
+        message: "dedupe me",
+        requestId: "msg-dedupe-1",
+      });
+      const firstBody = await first.text();
+      expect(first.status, firstBody).toBe(200);
+
+      const second = await postHook(port, "/hooks/message", {
+        message: "dedupe me",
+        requestId: "msg-dedupe-1",
+      });
+      expect(second.status).toBe(200);
+
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("routes /hooks/message kind=event without auto-reply dispatch", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/message", {
+        message: "operational event",
+        requestId: "msg-event-1",
+        kind: "event",
+      });
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as { status?: string };
+      expect(payload.status).toBe("event");
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  test("persists /hooks/message inbound text and emits chat final updates", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    dispatchInboundMessageMock.mockReset();
+    dispatchInboundMessageMock.mockImplementation(async () => undefined);
+
+    await withGatewayServer(async ({ port }) => {
+      const webchatWs = await connectWebchatClient({ port });
+      try {
+        const inboundText = "Inbound via webhook";
+        const requestId = "msg-ui-1";
+        const postResponse = await postHook(port, "/hooks/message", {
+          message: inboundText,
+          requestId,
+          kind: "message",
+        });
+        const rawPostPayload = await postResponse.text();
+        expect(postResponse.status, rawPostPayload).toBe(200);
+        const postPayload = JSON.parse(rawPostPayload) as { runId?: string; sessionKey?: string };
+        const runId = postPayload.runId ?? requestId;
+        const sessionKey = postPayload.sessionKey ?? "main";
+
+        const chatEvent = await onceMessage<{
+          type?: string;
+          event?: string;
+          payload?: Record<string, unknown>;
+        }>(
+          webchatWs,
+          (o) => {
+            if (o.type !== "event" || o.event !== "chat") {
+              return false;
+            }
+            const payload = o.payload;
+            return payload?.runId === runId && payload?.state === "final";
+          },
+          10_000,
+        );
+        expect(chatEvent.event).toBe("chat");
+        await vi.waitFor(() => {
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        });
+        const firstCall = dispatchInboundMessageMock.mock.calls[0]?.[0] as
+          | {
+              ctx?: {
+                SessionKey?: unknown;
+                Body?: unknown;
+                RawBody?: unknown;
+              };
+            }
+          | undefined;
+        expect(firstCall?.ctx?.SessionKey).toBe(sessionKey);
+        expect(firstCall?.ctx?.Body).toBe(inboundText);
+        expect(firstCall?.ctx?.RawBody).toBe(inboundText);
+      } finally {
+        webchatWs.close();
+      }
     });
   });
 });
