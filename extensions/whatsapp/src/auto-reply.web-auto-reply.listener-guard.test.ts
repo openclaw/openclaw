@@ -1,6 +1,5 @@
 import "./test-helpers.js";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
   createScriptedWebListenerFactory,
   createWebInboundDeliverySpies,
@@ -8,6 +7,7 @@ import {
   installWebAutoReplyUnitTestHooks,
   sendWebDirectInboundMessage,
 } from "./auto-reply.test-harness.js";
+import type { WebChannelStatus } from "./auto-reply/types.js";
 
 installWebAutoReplyTestHomeHooks();
 
@@ -70,7 +70,7 @@ describe("WA listener guard", () => {
 
       // The watchdog should have fired and immediately marked status as disconnected
       const disconnectUpdate = statusUpdates.find(
-        (s) => s.connected === false && s.lastError === "listener-null-watchdog-reconnect",
+        (s) => !s.connected && s.lastError === "listener-null-watchdog-reconnect",
       );
       expect(disconnectUpdate).toBeDefined();
       expect(disconnectUpdate?.healthState).toBe("reconnecting");
@@ -88,6 +88,30 @@ describe("WA listener guard", () => {
 
   it("fires safety timer warning after 90s stuck reconnect", async () => {
     vi.useFakeTimers();
+    const warnCalls: unknown[][] = [];
+    const warnSpy = vi.fn((...args: unknown[]) => {
+      warnCalls.push(args);
+    });
+    // Intercept getChildLogger to capture the reconnect logger's warn calls
+    const runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
+    const origGetChildLogger = runtimeEnv.getChildLogger;
+    const getChildLoggerSpy = vi
+      .spyOn(runtimeEnv, "getChildLogger")
+      .mockImplementation((bindings?: Record<string, unknown>, opts?: unknown) => {
+        const logger = origGetChildLogger(bindings, opts as never);
+        if (bindings && bindings["module"] === "web-reconnect") {
+          return new Proxy(logger, {
+            get(target, prop, receiver) {
+              if (prop === "warn") {
+                return warnSpy;
+              }
+              return Reflect.get(target, prop, receiver);
+            },
+          });
+        }
+        return logger;
+      });
+
     try {
       const sleep = vi.fn(async () => {});
       const scripted = createScriptedWebListenerFactory();
@@ -132,9 +156,15 @@ describe("WA listener guard", () => {
       await vi.advanceTimersByTimeAsync(200);
       await Promise.resolve();
 
-      // Advance 90s — safety timer should fire without crashing
+      // Advance 90s — safety timer should fire and emit a warning
       await vi.advanceTimersByTimeAsync(90_000);
       await Promise.resolve();
+
+      // Assert the reconnect logger's warn was called with the stuck-reconnect message
+      const stuckWarn = warnCalls.find((args) =>
+        args.some((a) => typeof a === "string" && a.includes("reconnect may be stuck")),
+      );
+      expect(stuckWarn).toBeDefined();
 
       controller.abort();
       for (let i = 0; i < scripted.getListenerCount(); i++) {
@@ -143,6 +173,7 @@ describe("WA listener guard", () => {
       await Promise.resolve();
       await run;
     } finally {
+      getChildLoggerSpy.mockRestore();
       vi.useRealTimers();
     }
   });

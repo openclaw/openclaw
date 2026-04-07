@@ -48,7 +48,6 @@ type ActiveConnectionRun = {
   startedAt: number;
   heartbeat: NodeJS.Timeout | null;
   watchdogTimer: NodeJS.Timeout | null;
-  reconnectSafetyTimer: NodeJS.Timeout | null;
   lastInboundAt: number | null;
   handledMessages: number;
   unregisterUnhandled: (() => void) | null;
@@ -61,7 +60,6 @@ function createActiveConnectionRun(): ActiveConnectionRun {
     startedAt: Date.now(),
     heartbeat: null,
     watchdogTimer: null,
-    reconnectSafetyTimer: null,
     lastInboundAt: null,
     handledMessages: 0,
     unregisterUnhandled: null,
@@ -179,6 +177,7 @@ export async function monitorWebChannel(
   process.once("SIGINT", handleSigint);
 
   let reconnectAttempts = 0;
+  let reconnectSafetyTimer: ReturnType<typeof setTimeout> | null = null;
   const socketRef: { current: WASocket | null } = { current: null };
   const disconnectRetryController = new AbortController();
   const stopDisconnectRetries = () => {
@@ -275,9 +274,9 @@ export async function monitorWebChannel(
 
     // Clear the reconnect safety timer from a previous iteration — listener
     // was successfully re-registered, so the reconnect is not stuck.
-    if (active.reconnectSafetyTimer) {
-      clearTimeout(active.reconnectSafetyTimer);
-      active.reconnectSafetyTimer = null;
+    if (reconnectSafetyTimer) {
+      clearTimeout(reconnectSafetyTimer);
+      reconnectSafetyTimer = null;
     }
 
     const normalizedAccountId = normalizeReconnectAccountId(account.accountId);
@@ -326,10 +325,11 @@ export async function monitorWebChannel(
       setActiveWebListener(account.accountId, null);
       // Start a safety timer to detect stuck reconnects. If the listener
       // isn't re-registered within 90s, something is likely stuck.
-      if (active.reconnectSafetyTimer) {
-        clearTimeout(active.reconnectSafetyTimer);
+      // Timer lives in outer scope so the next iteration can clear it.
+      if (reconnectSafetyTimer) {
+        clearTimeout(reconnectSafetyTimer);
       }
-      active.reconnectSafetyTimer = setTimeout(() => {
+      reconnectSafetyTimer = setTimeout(() => {
         reconnectLogger.warn(
           { connectionId: active.connectionId, accountId: account.accountId },
           "WA listener guard: 90s since closeListener, reconnect may be stuck",
@@ -574,6 +574,12 @@ export async function monitorWebChannel(
   }
 
   statusController.markStopped();
+
+  // Clear any dangling reconnect safety timer so it doesn't fire after exit.
+  if (reconnectSafetyTimer) {
+    clearTimeout(reconnectSafetyTimer);
+    reconnectSafetyTimer = null;
+  }
 
   process.removeListener("SIGINT", handleSigint);
 }
