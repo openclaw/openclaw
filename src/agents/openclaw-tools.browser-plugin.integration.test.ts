@@ -69,6 +69,28 @@ describe("createOpenClawTools browser plugin integration", () => {
   });
 
   it("forwards fsPolicy into plugin tool context", async () => {
+    let capturedContext: { fsPolicy?: { workspaceOnly: boolean } } | undefined;
+    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+      const resolvedParams = params as { context?: { fsPolicy?: { workspaceOnly: boolean } } };
+      capturedContext = resolvedParams.context;
+      return [
+        {
+          name: "browser",
+          description: "browser fixture tool",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+          async execute() {
+            return {
+              content: [{ type: "text", text: "ok" }],
+              details: { workspaceOnly: capturedContext?.fsPolicy?.workspaceOnly ?? null },
+            };
+          },
+        },
+      ];
+    });
+
     const tools = resolveOpenClawPluginToolsForOptions({
       options: {
         config: {
