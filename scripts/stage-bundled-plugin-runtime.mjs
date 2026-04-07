@@ -17,6 +17,13 @@ function ensureSymlink(targetValue, targetPath, type) {
     fs.symlinkSync(targetValue, targetPath, type);
     return;
   } catch (error) {
+    if (error?.code === "EPERM" && process.platform === "win32") {
+      // File symlinks on Windows require Developer Mode or admin privileges.
+      // Fall back to copying the file.
+      const resolvedSource = path.resolve(path.dirname(targetPath), targetValue);
+      fs.copyFileSync(resolvedSource, targetPath);
+      return;
+    }
     if (error?.code !== "EEXIST") {
       throw error;
     }
@@ -31,7 +38,16 @@ function ensureSymlink(targetValue, targetPath, type) {
   }
 
   removePathIfExists(targetPath);
-  fs.symlinkSync(targetValue, targetPath, type);
+  try {
+    fs.symlinkSync(targetValue, targetPath, type);
+  } catch (error) {
+    if (error?.code === "EPERM" && process.platform === "win32") {
+      const resolvedSource = path.resolve(path.dirname(targetPath), targetValue);
+      fs.copyFileSync(resolvedSource, targetPath);
+      return;
+    }
+    throw error;
+  }
 }
 
 function symlinkPath(sourcePath, targetPath, type) {

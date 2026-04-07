@@ -14,6 +14,7 @@ import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   shouldPreferNativeJiti,
+  toSafeImportPath,
 } from "./sdk-alias.js";
 import type {
   CliBackendPlugin,
@@ -292,7 +293,7 @@ export function resolvePluginSetupRegistry(params?: {
 
     let mod: OpenClawPluginModule;
     try {
-      mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+      mod = getJiti(setupSource)(toSafeImportPath(setupSource)) as OpenClawPluginModule;
     } catch {
       continue;
     }
@@ -415,7 +416,7 @@ export function resolvePluginSetupProvider(params: {
 
   let mod: OpenClawPluginModule;
   try {
-    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+    mod = getJiti(setupSource)(toSafeImportPath(setupSource)) as OpenClawPluginModule;
   } catch {
     setupProviderCache.set(cacheKey, null);
     return undefined;
@@ -515,7 +516,7 @@ export function resolvePluginSetupCliBackend(params: {
 
   let mod: OpenClawPluginModule;
   try {
-    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+    mod = getJiti(setupSource)(toSafeImportPath(setupSource)) as OpenClawPluginModule;
   } catch {
     return undefined;
   }

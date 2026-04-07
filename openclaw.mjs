@@ -5,6 +5,17 @@ import { access } from "node:fs/promises";
 import module from "node:module";
 import { fileURLToPath } from "node:url";
 
+// On Windows, jiti's native import path passes raw drive-letter paths (C:\...)
+// to import(), which Node's ESM loader rejects. Register a custom resolve hook
+// that converts these to file:// URLs.
+if (process.platform === "win32" && typeof module.register === "function") {
+  try {
+    module.register("./windows-esm-fix.mjs", import.meta.url);
+  } catch {
+    // Ignore if registration fails — non-critical on supported Node versions.
+  }
+}
+
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 12;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}`;

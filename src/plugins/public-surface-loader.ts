@@ -11,6 +11,7 @@ import {
   isBundledPluginExtensionPath,
   resolvePluginLoaderJitiConfig,
   resolveLoaderPackageRoot,
+  toSafeImportPath,
 } from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
@@ -156,7 +157,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
   const sentinel = {} as T;
   loadedPublicSurfaceModules.set(location.modulePath, sentinel);
   try {
-    const loaded = getJiti(location.modulePath)(location.modulePath) as T;
+    const loaded = getJiti(location.modulePath)(toSafeImportPath(location.modulePath)) as T;
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {

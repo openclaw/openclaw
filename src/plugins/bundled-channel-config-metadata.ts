@@ -12,7 +12,7 @@ import type {
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
-import { buildPluginLoaderJitiOptions, resolvePluginLoaderJitiConfig } from "./sdk-alias.js";
+import { buildPluginLoaderJitiOptions, resolvePluginLoaderJitiConfig, toSafeImportPath } from "./sdk-alias.js";
 import type { PluginConfigUiHint } from "./types.js";
 
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
@@ -109,7 +109,7 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
 
 function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
   try {
-    const imported = getJiti(modulePath)(modulePath) as Record<string, unknown>;
+    const imported = getJiti(modulePath)(toSafeImportPath(modulePath)) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;

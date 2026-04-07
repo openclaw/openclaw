@@ -3906,4 +3906,27 @@ export const runtimeValue = helperValue;`,
       platformSpy.mockRestore();
     }
   });
+
+  it("encodes special characters in Windows paths (# ? etc)", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const result = __testing.toSafeImportPath("C:\\Users\\foo#bar\\plugin.mjs");
+      expect(result).toContain("file:///");
+      expect(result).not.toContain("#bar");
+      expect(result).toContain("foo%23bar");
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("is a no-op on non-Windows platforms", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
+        "C:\\Users\\alice\\plugin\\index.mjs",
+      );
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 });

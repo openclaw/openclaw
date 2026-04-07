@@ -18,6 +18,7 @@ import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   shouldPreferNativeJiti,
+  toSafeImportPath,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 import type { OpenClawPluginDefinition, OpenClawPluginModule } from "./types.js";
@@ -284,7 +285,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      mod = getJiti(safeSource)(toSafeImportPath(safeSource)) as OpenClawPluginModule;
     } catch (error) {
       recordCapabilityLoadError(registry, record, String(error));
       continue;

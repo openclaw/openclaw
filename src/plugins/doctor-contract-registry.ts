@@ -12,6 +12,7 @@ import {
   buildPluginLoaderAliasMap,
   buildPluginLoaderJitiOptions,
   shouldPreferNativeJiti,
+  toSafeImportPath,
 } from "./sdk-alias.js";
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
@@ -207,7 +208,7 @@ function resolvePluginDoctorContracts(params?: {
     }
     let mod: PluginDoctorContractModule;
     try {
-      mod = getJiti(contractSource)(contractSource) as PluginDoctorContractModule;
+      mod = getJiti(contractSource)(toSafeImportPath(contractSource)) as PluginDoctorContractModule;
     } catch {
       continue;
     }
