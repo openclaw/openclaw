@@ -201,7 +201,19 @@ function runFeishuWSClientUntilDead(params: {
 
       // If the SDK is not currently scheduling a reconnect, assume the socket is
       // in a steady/healthy state. lastConnectTime will be stable here.
-      if (nextConnectTime === 0) {
+      //
+      // NOTE: @larksuiteoapi/node-sdk does not reliably clear nextConnectTime on
+      // successful reconnects, so we cannot treat `nextConnectTime > 0` as an
+      // active reconnect signal. Instead, treat it as active ONLY when it is a
+      // future reconnect time scheduled after the most recent connect attempt.
+      //
+      // Healthy socket after a recovered reconnect typically yields:
+      //   lastConnectTime = (recent)
+      //   nextConnectTime = (stale value in the past)
+      // In that case, `nextConnectTime <= lastConnectTime` and we must not
+      // restart the supervisor.
+      const isSchedulingReconnect = nextConnectTime > 0 && nextConnectTime > currentConnectTime;
+      if (!isSchedulingReconnect) {
         return;
       }
 
