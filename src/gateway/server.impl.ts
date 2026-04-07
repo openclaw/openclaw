@@ -842,12 +842,17 @@ export async function startGatewayServer(
     }
   };
   const enforceSharedGatewaySessionGenerationForConfigWrite = (nextConfig: OpenClawConfig) => {
-    if (resolveGatewayReloadSettings(nextConfig).mode !== "off") {
-      return;
-    }
+    const reloadMode = resolveGatewayReloadSettings(nextConfig).mode;
     const nextSharedGatewaySessionGeneration =
       resolveSharedGatewaySessionGenerationForRuntimeSnapshot();
-    requiredSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+    if (reloadMode === "off") {
+      currentSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+      requiredSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+      disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
+      return;
+    }
+    requiredSharedGatewaySessionGeneration = null;
+    setCurrentSharedGatewaySessionGeneration(nextSharedGatewaySessionGeneration);
     disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
   };
   let bonjourStop: (() => Promise<void>) | null = null;
