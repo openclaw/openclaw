@@ -56,10 +56,7 @@ const SESSIONS_LIST_RESULT_CACHE = createExpiringMapCache<string, CachedListPayl
 });
 
 function cloneCachedListPayload(payload: CachedListPayload): CachedListPayload {
-  if (typeof globalThis.structuredClone === "function") {
-    return globalThis.structuredClone(payload);
-  }
-  return JSON.parse(JSON.stringify(payload)) as CachedListPayload;
+  return globalThis.structuredClone(payload);
 }
 
 export function isSessionsListResultCacheEnabled(): boolean {

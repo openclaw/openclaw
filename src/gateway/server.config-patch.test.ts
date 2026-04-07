@@ -402,7 +402,7 @@ describe("gateway config methods", () => {
 
   it("does not noop config.patch when removing a persisted key that falls back from env", async () => {
     await withEnvAsync({ ELEVENLABS_API_KEY: "env-elevenlabs-key" }, async () => {
-      const { writeConfigFile } = await import("../config/config.js");
+      const { createConfigIO, writeConfigFile } = await import("../config/config.js");
       await writeConfigFile({
         talk: {
           provider: "elevenlabs",
@@ -440,6 +440,19 @@ describe("gateway config methods", () => {
       const after = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
       expect(after.ok).toBe(true);
       expect(after.payload?.hash).not.toBe(current.payload?.hash);
+
+      const persisted = JSON.parse(await fs.readFile(createConfigIO().configPath, "utf-8")) as {
+        talk?: {
+          apiKey?: unknown;
+          providers?: {
+            elevenlabs?: {
+              apiKey?: unknown;
+            };
+          };
+        };
+      };
+      expect(persisted.talk ?? {}).not.toHaveProperty("apiKey");
+      expect(persisted.talk?.providers?.elevenlabs ?? {}).not.toHaveProperty("apiKey");
     });
   });
 

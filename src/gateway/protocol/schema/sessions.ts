@@ -57,7 +57,7 @@ export const SessionsListParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
     /** When set to the hash from a prior `sessions.list` response, server may return `{ unchanged: true }` if the session rows are unchanged. */
-    lastHash: Type.Optional(Type.String()),
+    lastHash: Type.Optional(Type.String({ maxLength: 64 })),
   },
   { additionalProperties: false },
 );
