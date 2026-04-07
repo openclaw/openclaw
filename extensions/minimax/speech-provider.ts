@@ -84,10 +84,12 @@ function normalizeMinimaxProviderConfig(
 
 function readMinimaxProviderConfig(config: SpeechProviderConfig): MinimaxTtsProviderConfig {
   const normalized = normalizeMinimaxProviderConfig({});
+  const directApiKey =
+    typeof config.apiKey === "string"
+      ? resolveEnvStyleApiKey(config.apiKey, "messages.tts.providers.minimax.apiKey")
+      : undefined;
   return {
-    apiKey:
-      resolveEnvStyleApiKey(config.apiKey, "messages.tts.providers.minimax.apiKey") ??
-      normalized.apiKey,
+    apiKey: directApiKey ?? normalized.apiKey,
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
     model: trimToUndefined(config.model) ?? normalized.model,
     voiceId: trimToUndefined(config.voiceId) ?? normalized.voiceId,

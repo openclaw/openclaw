@@ -42,6 +42,18 @@ describe("buildMinimaxSpeechProvider", () => {
       process.env.MINIMAX_API_KEY = "sk-env";
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
+
+    it("does not throw for unresolved SecretRef-style apiKey objects in provider config", () => {
+      delete process.env.MINIMAX_API_KEY;
+      expect(
+        provider.isConfigured({
+          providerConfig: {
+            apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+          },
+          timeoutMs: 30000,
+        }),
+      ).toBe(false);
+    });
   });
 
   describe("resolveConfig", () => {
