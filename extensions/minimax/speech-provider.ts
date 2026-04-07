@@ -32,16 +32,32 @@ type MinimaxTtsProviderOverrides = {
   pitch?: number;
 };
 
+function resolveEnvStyleApiKey(raw: unknown, path: string): string | undefined {
+  const normalized = normalizeResolvedSecretInputString({
+    value: raw,
+    path,
+  });
+  const trimmed = trimToUndefined(normalized);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (!trimmed.startsWith("env:")) {
+    return trimmed;
+  }
+  const envVarName = trimToUndefined(trimmed.slice(4));
+  if (!envVarName) {
+    return undefined;
+  }
+  return trimToUndefined(process.env[envVarName]);
+}
+
 function normalizeMinimaxProviderConfig(
   rawConfig: Record<string, unknown>,
 ): MinimaxTtsProviderConfig {
   const providers = asObject(rawConfig.providers);
   const raw = asObject(providers?.minimax) ?? asObject(rawConfig.minimax);
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
-      path: "messages.tts.providers.minimax.apiKey",
-    }),
+    apiKey: resolveEnvStyleApiKey(raw?.apiKey, "messages.tts.providers.minimax.apiKey"),
     baseUrl: normalizeMinimaxTtsBaseUrl(
       trimToUndefined(raw?.baseUrl) ??
         trimToUndefined(process.env.MINIMAX_API_HOST) ??
@@ -64,7 +80,9 @@ function normalizeMinimaxProviderConfig(
 function readMinimaxProviderConfig(config: SpeechProviderConfig): MinimaxTtsProviderConfig {
   const normalized = normalizeMinimaxProviderConfig({});
   return {
-    apiKey: trimToUndefined(config.apiKey) ?? normalized.apiKey,
+    apiKey:
+      resolveEnvStyleApiKey(config.apiKey, "messages.tts.providers.minimax.apiKey") ??
+      normalized.apiKey,
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
     model: trimToUndefined(config.model) ?? normalized.model,
     voiceId: trimToUndefined(config.voiceId) ?? normalized.voiceId,
@@ -166,10 +184,10 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
         ...(talkProviderConfig.apiKey === undefined
           ? {}
           : {
-              apiKey: normalizeResolvedSecretInputString({
-                value: talkProviderConfig.apiKey,
-                path: "talk.providers.minimax.apiKey",
-              }),
+              apiKey: resolveEnvStyleApiKey(
+                talkProviderConfig.apiKey,
+                "talk.providers.minimax.apiKey",
+              ),
             }),
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
