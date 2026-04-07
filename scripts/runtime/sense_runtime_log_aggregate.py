@@ -247,6 +247,20 @@ def derive_digest_bucket_badge_short(digest_bucket_dominance_band: object) -> st
     }.get(band, 'UNK')
 
 
+def derive_digest_bucket_badge_order(digest_bucket_dominance_band: object) -> int:
+    band = (
+        digest_bucket_dominance_band
+        if isinstance(digest_bucket_dominance_band, str)
+        else 'unknown'
+    )
+    return {
+        'dominant': 4,
+        'major': 3,
+        'split': 2,
+        'minor': 1,
+    }.get(band, 0)
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -617,6 +631,9 @@ def main() -> int:
                     digest_bucket_dominance_band
                 ),
                 'digest_bucket_badge_short': derive_digest_bucket_badge_short(
+                    digest_bucket_dominance_band
+                ),
+                'digest_bucket_badge_order': derive_digest_bucket_badge_order(
                     digest_bucket_dominance_band
                 ),
                 'digest_bucket_rank': 0,
