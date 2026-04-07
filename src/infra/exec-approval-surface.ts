@@ -1,7 +1,6 @@
 import {
   getChannelPlugin,
   listChannelPlugins,
-  resolveChannelApprovalAdapter,
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
@@ -110,12 +109,5 @@ export function describeNativeExecApprovalClientSetup(params: {
       channelLabel,
       accountId,
     }) ?? null
-  );
-}
-
-export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  return listChannelPlugins().some(
-    (plugin) =>
-      resolveChannelApprovalAdapter(plugin)?.delivery?.hasConfiguredDmRoute?.({ cfg }) ?? false,
   );
 }

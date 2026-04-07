@@ -145,4 +145,32 @@ describe("telegram native approval adapter", () => {
       threadId: 928,
     });
   });
+
+  it("marks DM-only telegram approvals to notify the origin chat after delivery", () => {
+    const capabilities = telegramNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+      cfg: buildConfig(),
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        id: "req-dm-1",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:-1003841603622:topic:928",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: 928,
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    });
+
+    expect(capabilities).toEqual({
+      enabled: true,
+      preferredSurface: "approver-dm",
+      supportsOriginSurface: true,
+      supportsApproverDmSurface: true,
+      notifyOriginWhenDmOnly: true,
+    });
+  });
 });

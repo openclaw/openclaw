@@ -119,6 +119,7 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
     normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveTelegramOriginTarget,
   resolveApproverDmTargets: resolveTelegramApproverDmTargets,
+  notifyOriginWhenDmOnly: true,
   nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
     eventKinds: ["exec", "plugin"],
     isConfigured: ({ cfg, accountId }) =>
