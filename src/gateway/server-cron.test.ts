@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RunCronAgentTurnResult } from "../cron/isolated-agent.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
@@ -24,7 +25,9 @@ const {
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  runCronIsolatedAgentTurnMock: vi.fn(
+    async (): Promise<RunCronAgentTurnResult> => ({ status: "ok", summary: "ok" }),
+  ),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
   runCronChangedMock: vi.fn(async () => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
@@ -490,7 +493,7 @@ describe("buildGatewayCronService", () => {
         name: "failure-dest-webhook-allowed",
         enabled: true,
         schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "main",
+        sessionTarget: "session:failure-test",
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "hello" },
       });
