@@ -1379,6 +1379,8 @@
     }
   },
   "optionalDependencies": {
+    "@buape/carbon": "^0.14.0",
+    "@larksuiteoapi/node-sdk": "^1.60.0",
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "openshell": "0.1.0"
   },
