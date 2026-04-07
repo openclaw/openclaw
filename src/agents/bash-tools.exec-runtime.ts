@@ -580,26 +580,34 @@ export async function runExecProcess(opts: {
   };
   addSession(session);
 
+  let updateSuppressed = false;
   const emitUpdate = () => {
     if (!opts.onUpdate) {
       return;
     }
-    if (session.backgrounded || session.exited) {
+    if (session.backgrounded || session.exited || updateSuppressed) {
       return;
     }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
-    opts.onUpdate({
-      content: [{ type: "text", text: warningText + (tailText || "") }],
-      details: {
-        status: "running",
-        sessionId,
-        pid: session.pid ?? undefined,
-        startedAt,
-        cwd: session.cwd,
-        tail: session.tail,
-      },
-    });
+    try {
+      opts.onUpdate({
+        content: [{ type: "text", text: warningText + (tailText || "") }],
+        details: {
+          status: "running",
+          sessionId,
+          pid: session.pid ?? undefined,
+          startedAt,
+          cwd: session.cwd,
+          tail: session.tail,
+        },
+      });
+    } catch {
+      // The agent run may have ended while the exec process is still producing
+      // output (e.g. late stdout arriving after tool-call abort or turn timeout).
+      // Suppress further updates for this session to avoid repeated throws.
+      updateSuppressed = true;
+    }
   };
 
   const handleStdout = (data: string) => {

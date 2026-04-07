@@ -733,3 +733,36 @@ describe("exec backgrounded onUpdate suppression", () => {
     isWin ? 15_000 : 5_000,
   );
 });
+
+describe("exec onUpdate error resilience", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it(
+    "does not crash when onUpdate throws (agent run ended while exec still producing output)",
+    async () => {
+      let callCount = 0;
+      const throwingOnUpdate = () => {
+        callCount++;
+        if (callCount > 1) {
+          // Simulate pi-agent-core throwing when the agent run has already ended
+          throw new Error("Agent listener invoked outside active run");
+        }
+      };
+      const tool = createTestExecTool();
+      // Run a command that produces multiple lines of output to trigger multiple onUpdate calls
+      const command = joinCommands([
+        shellEcho("line1"),
+        shortDelayCmd,
+        shellEcho("line2"),
+        shortDelayCmd,
+        shellEcho("line3"),
+      ]);
+      // Should not throw — the error from onUpdate should be caught internally
+      const result = await tool.execute(nextCallId(), { command }, undefined, throwingOnUpdate);
+      expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_COMPLETED);
+      // onUpdate was called at least once before the throw, and the throw was swallowed
+      expect(callCount).toBeGreaterThanOrEqual(2);
+    },
+    isWin ? 15_000 : 5_000,
+  );
+});
