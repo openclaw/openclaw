@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Missed Call → SMS — Mission Control</title>
+    <style>
+      :root {
+        --bg: #02020e;
+        --panel: #0a0a1f;
+        --panel-2: #11112a;
+        --border: #1f1f3a;
+        --accent: #0a9efc;
+        --accent-2: #98d8f0;
+        --text: #e6edf6;
+        --muted: #8a92a8;
+        --good: #32d583;
+        --warn: #f5b042;
+        --bad: #ef4444;
+        --human: #c084fc;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, -apple-system, system-ui, sans-serif;
+        font-size: 14px;
+      }
+      header {
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: linear-gradient(180deg, #060617 0%, #02020e 100%);
+      }
+      header h1 {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0;
+        letter-spacing: 0.3px;
+      }
+      header .accent { color: var(--accent); }
+      header .meta { color: var(--muted); font-size: 12px; }
+      main {
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        height: calc(100vh - 60px);
+      }
+      .sidebar {
+        border-right: 1px solid var(--border);
+        background: var(--panel);
+        overflow-y: auto;
+      }
+      .sidebar .filters {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .filters button {
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 5px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .filters button:hover { color: var(--text); }
+      .filters button.active {
+        background: var(--accent);
+        color: #02020e;
+        border-color: var(--accent);
+      }
+      .convo-list { list-style: none; margin: 0; padding: 0; }
+      .convo-list li {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border);
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .convo-list li:hover { background: var(--panel-2); }
+      .convo-list li.selected { background: var(--panel-2); border-left: 3px solid var(--accent); padding-left: 13px; }
+      .convo-row-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+      }
+      .phone { font-weight: 600; color: var(--text); }
+      .timestamp { color: var(--muted); font-size: 11px; }
+      .preview { color: var(--muted); font-size: 12px; line-height: 1.4; max-height: 32px; overflow: hidden; }
+      .status-pill {
+        display: inline-block;
+        font-size: 10px;
+        padding: 2px 8px;
+        border-radius: 10px;
+        margin-right: 6px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .status-open { background: rgba(50, 213, 131, 0.15); color: var(--good); }
+      .status-awaiting-reply { background: rgba(10, 158, 252, 0.15); color: var(--accent); }
+      .status-escalated { background: rgba(245, 176, 66, 0.15); color: var(--warn); }
+      .status-human-takeover { background: rgba(192, 132, 252, 0.15); color: var(--human); }
+      .status-closed { background: rgba(138, 146, 168, 0.15); color: var(--muted); }
+
+      .detail {
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        overflow: hidden;
+      }
+      .detail-empty {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: var(--muted);
+      }
+      .detail-head {
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+      }
+      .detail-head h2 {
+        margin: 0 0 6px 0;
+        font-size: 17px;
+        font-weight: 600;
+      }
+      .detail-head .head-meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .detail-actions {
+        margin-top: 12px;
+        display: flex;
+        gap: 8px;
+      }
+      .detail-actions button {
+        background: var(--panel-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        padding: 6px 14px;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .detail-actions button:hover { border-color: var(--accent); color: var(--accent); }
+      .voicemail-block {
+        margin: 16px 24px;
+        padding: 12px 16px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      .voicemail-block h3 {
+        margin: 0 0 8px 0;
+        font-size: 11px;
+        text-transform: uppercase;
+        color: var(--muted);
+        letter-spacing: 0.5px;
+      }
+      .voicemail-block .transcript {
+        font-style: italic;
+        color: var(--text);
+        line-height: 1.5;
+      }
+      .voicemail-block .vm-meta {
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 8px;
+      }
+      .voicemail-block audio { display: block; margin-top: 8px; max-width: 100%; }
+      .messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 12px 24px 16px 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .msg {
+        max-width: 70%;
+        padding: 10px 14px;
+        border-radius: 12px;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .msg .meta {
+        font-size: 10px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .msg.caller {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        align-self: flex-start;
+      }
+      .msg.agent {
+        background: rgba(10, 158, 252, 0.1);
+        border: 1px solid rgba(10, 158, 252, 0.3);
+        align-self: flex-end;
+      }
+      .msg.human-owner {
+        background: rgba(192, 132, 252, 0.1);
+        border: 1px solid rgba(192, 132, 252, 0.3);
+        align-self: flex-end;
+      }
+      .msg.system {
+        align-self: center;
+        background: rgba(245, 176, 66, 0.1);
+        border: 1px solid rgba(245, 176, 66, 0.3);
+        color: var(--warn);
+        font-size: 11px;
+        font-style: italic;
+      }
+      .composer {
+        border-top: 1px solid var(--border);
+        padding: 12px 24px;
+        display: flex;
+        gap: 8px;
+        background: var(--panel);
+      }
+      .composer textarea {
+        flex: 1;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-family: inherit;
+        font-size: 13px;
+        resize: vertical;
+        min-height: 38px;
+      }
+      .composer button {
+        background: var(--accent);
+        color: #02020e;
+        border: none;
+        border-radius: 6px;
+        padding: 8px 18px;
+        font-weight: 600;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .composer button:disabled { opacity: 0.4; cursor: not-allowed; }
+      .toast {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: var(--panel-2);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--accent);
+        padding: 12px 16px;
+        border-radius: 6px;
+        font-size: 12px;
+        color: var(--text);
+        opacity: 0;
+        transition: opacity 0.2s;
+        pointer-events: none;
+      }
+      .toast.show { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1><span class="accent">Wired Wisdom AI</span> &middot; Missed Call → SMS</h1>
+      <div class="meta" id="meta">Loading…</div>
+    </header>
+    <main>
+      <aside class="sidebar">
+        <div class="filters">
+          <button data-status="open" class="active">Open</button>
+          <button data-status="awaiting-reply">Awaiting</button>
+          <button data-status="escalated">Escalated</button>
+          <button data-status="human-takeover">Taken Over</button>
+          <button data-status="closed">Closed</button>
+          <button data-status="all">All</button>
+        </div>
+        <ul class="convo-list" id="convo-list"></ul>
+      </aside>
+      <section class="detail" id="detail">
+        <div class="detail-empty">Select a conversation to view its history.</div>
+      </section>
+    </main>
+    <div class="toast" id="toast"></div>
+
+    <script>
+      // ---- Config ----
+      // The dashboard token is embedded at deploy time, OR prompted on first load.
+      // For v1: prompt + persist to localStorage. Production should pass via URL hash.
+      const TOKEN_KEY = "mcs.dashboardToken";
+      let token = localStorage.getItem(TOKEN_KEY) || "";
+      if (!token) {
+        token = prompt("Enter the Mission Control dashboard token (or leave blank for loopback dev):") || "";
+        if (token) localStorage.setItem(TOKEN_KEY, token);
+      }
+
+      // The base path is whatever path this HTML is served from.
+      // E.g. /mcs/ui → API base /mcs/api
+      const baseUrl = window.location.pathname.replace(/\/ui\/?$/, "");
+      const apiBase = `${baseUrl}/api`;
+
+      let currentStatus = "open";
+      let currentConvoId = null;
+      let cachedItems = [];
+
+      const headers = () => ({
+        "content-type": "application/json",
+        ...(token ? { "x-mcs-token": token } : {}),
+      });
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+        })[c]);
+      }
+
+      function fmtTime(iso) {
+        if (!iso) return "";
+        const d = new Date(iso);
+        const now = new Date();
+        const sameDay = d.toDateString() === now.toDateString();
+        return sameDay
+          ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+          : d.toLocaleDateString([], { month: "short", day: "numeric" });
+      }
+
+      function toast(msg) {
+        const el = document.getElementById("toast");
+        el.textContent = msg;
+        el.classList.add("show");
+        setTimeout(() => el.classList.remove("show"), 2200);
+      }
+
+      async function fetchConversations() {
+        try {
+          const r = await fetch(`${apiBase}/conversations?status=${currentStatus}&limit=100`, {
+            headers: headers(),
+          });
+          if (!r.ok) {
+            document.getElementById("meta").textContent = `Error ${r.status}`;
+            return;
+          }
+          const data = await r.json();
+          cachedItems = data.items || [];
+          renderList();
+          document.getElementById("meta").textContent =
+            `${cachedItems.length} ${currentStatus} conversation${cachedItems.length === 1 ? "" : "s"} · last sync ${new Date().toLocaleTimeString()}`;
+        } catch (e) {
+          document.getElementById("meta").textContent = `Error: ${e.message}`;
+        }
+      }
+
+      function renderList() {
+        const ul = document.getElementById("convo-list");
+        if (cachedItems.length === 0) {
+          ul.innerHTML = `<li style="color: var(--muted); font-size: 12px; cursor: default;">No conversations.</li>`;
+          return;
+        }
+        ul.innerHTML = cachedItems
+          .map((c) => {
+            const lastMsg = c.messages && c.messages.length > 0
+              ? c.messages[c.messages.length - 1]
+              : null;
+            const preview = lastMsg
+              ? `${lastMsg.role === "caller" ? "" : "→ "}${escapeHtml(lastMsg.content.slice(0, 100))}`
+              : c.voicemail && c.voicemail.transcript
+              ? `📞 ${escapeHtml(c.voicemail.transcript.slice(0, 100))}`
+              : "(no messages yet)";
+            return `
+              <li data-id="${c.id}" class="${c.id === currentConvoId ? "selected" : ""}">
+                <div class="convo-row-head">
+                  <span class="phone">${escapeHtml(c.callerPhone)}</span>
+                  <span class="timestamp">${fmtTime(c.updatedAt)}</span>
+                </div>
+                <div>
+                  <span class="status-pill status-${c.status}">${c.status.replace("-", " ")}</span>
+                </div>
+                <div class="preview">${preview}</div>
+              </li>
+            `;
+          })
+          .join("");
+        ul.querySelectorAll("li[data-id]").forEach((li) => {
+          li.addEventListener("click", () => selectConversation(li.dataset.id));
+        });
+      }
+
+      async function selectConversation(id) {
+        currentConvoId = id;
+        renderList();
+        try {
+          const r = await fetch(`${apiBase}/conversations/${id}`, { headers: headers() });
+          if (!r.ok) {
+            renderDetailEmpty(`Error ${r.status}`);
+            return;
+          }
+          const data = await r.json();
+          renderDetail(data.conversation);
+        } catch (e) {
+          renderDetailEmpty(`Error: ${e.message}`);
+        }
+      }
+
+      function renderDetailEmpty(msg) {
+        document.getElementById("detail").innerHTML =
+          `<div class="detail-empty">${escapeHtml(msg || "Select a conversation.")}</div>`;
+      }
+
+      function renderDetail(c) {
+        const detail = document.getElementById("detail");
+        const vmBlock = c.voicemail
+          ? `
+            <div class="voicemail-block">
+              <h3>Voicemail</h3>
+              <div class="transcript">${c.voicemail.transcript ? `"${escapeHtml(c.voicemail.transcript)}"` : "(no transcript)"}</div>
+              <div class="vm-meta">
+                Confidence ${((c.voicemail.transcriptConfidence || 0) * 100).toFixed(0)}%
+                ${c.voicemail.durationSeconds ? ` · ${c.voicemail.durationSeconds}s` : ""}
+                · ${fmtTime(c.voicemail.capturedAt)}
+              </div>
+              ${c.voicemail.recordingUrl ? `<audio controls src="${escapeHtml(c.voicemail.recordingUrl)}"></audio>` : ""}
+            </div>
+          `
+          : "";
+
+        const messagesHtml = (c.messages || [])
+          .map((m) => {
+            const cls = m.role;
+            const who = m.role === "caller" ? "Caller" : m.role === "agent" ? "AI Agent" : m.role === "human-owner" ? "You" : "System";
+            return `
+              <div class="msg ${cls}">
+                ${escapeHtml(m.content)}
+                <div class="meta">${who} · ${fmtTime(m.timestamp)}</div>
+              </div>
+            `;
+          })
+          .join("");
+
+        const isSilenced = c.status === "human-takeover" || c.status === "closed";
+
+        detail.innerHTML = `
+          <div class="detail-head">
+            <h2>${escapeHtml(c.callerPhone)} <span class="status-pill status-${c.status}" style="margin-left: 8px;">${c.status.replace("-", " ")}</span></h2>
+            <div class="head-meta">
+              Conversation ${c.id.slice(0, 8)}… · started ${fmtTime(c.createdAt)} · ${c.agentTurnCount} agent turn${c.agentTurnCount === 1 ? "" : "s"}
+            </div>
+            <div class="detail-actions">
+              <button id="btn-takeover">Take Over</button>
+              <button id="btn-close">Close</button>
+            </div>
+          </div>
+          ${vmBlock}
+          <div class="messages" id="messages">${messagesHtml}</div>
+          <div class="composer">
+            <textarea id="reply-text" placeholder="${isSilenced ? "Type a manual reply…" : "AI agent is active. Type to send a manual reply (does not stop the agent)."}"></textarea>
+            <button id="btn-send">Send</button>
+          </div>
+        `;
+
+        document.getElementById("btn-takeover").addEventListener("click", () => takeover(c.id));
+        document.getElementById("btn-close").addEventListener("click", () => closeConvo(c.id));
+        document.getElementById("btn-send").addEventListener("click", () => sendReply(c.id));
+        document.getElementById("messages").scrollTop = 999999;
+      }
+
+      async function sendReply(id) {
+        const ta = document.getElementById("reply-text");
+        const message = ta.value.trim();
+        if (!message) return;
+        const btn = document.getElementById("btn-send");
+        btn.disabled = true;
+        try {
+          const r = await fetch(`${apiBase}/conversations/${id}/reply`, {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({ message }),
+          });
+          if (!r.ok) {
+            const e = await r.json().catch(() => ({}));
+            toast(`Send failed: ${e.error || r.status}`);
+          } else {
+            ta.value = "";
+            toast("Reply sent");
+            await fetchConversations();
+            await selectConversation(id);
+          }
+        } catch (e) {
+          toast(`Error: ${e.message}`);
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      async function takeover(id) {
+        if (!confirm("Take over this conversation? The AI agent will stop responding.")) return;
+        await fetch(`${apiBase}/conversations/${id}/takeover`, { method: "POST", headers: headers() });
+        toast("Conversation taken over");
+        await fetchConversations();
+        await selectConversation(id);
+      }
+
+      async function closeConvo(id) {
+        if (!confirm("Close this conversation?")) return;
+        await fetch(`${apiBase}/conversations/${id}/close`, { method: "POST", headers: headers() });
+        toast("Conversation closed");
+        await fetchConversations();
+        currentConvoId = null;
+        renderDetailEmpty();
+      }
+
+      // ---- Init ----
+      document.querySelectorAll(".filters button").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".filters button").forEach((b) => b.classList.remove("active"));
+          btn.classList.add("active");
+          currentStatus = btn.dataset.status;
+          fetchConversations();
+        });
+      });
+
+      fetchConversations();
+      // Auto-refresh every 8s. SSE would be nicer but polling is dead simple
+      // and SMB conversation volume doesn't justify it.
+      setInterval(fetchConversations, 8000);
+    </script>
+  </body>
+</html>

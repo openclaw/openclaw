@@ -1,0 +1,186 @@
+{
+  "id": "missed-call-sms",
+  "uiHints": {
+    "enabled": { "label": "Enable Missed-Call-to-SMS" },
+    "business.name": { "label": "Business Name", "placeholder": "Mill Fudge Factory" },
+    "business.greeting": {
+      "label": "Voicemail Greeting",
+      "help": "Spoken to callers when they reach voicemail. Keep under 15 seconds.",
+      "placeholder": "Hi, you've reached Mill Fudge Factory. Sorry we missed your call — please leave a quick message and we'll text you right back."
+    },
+    "business.escalationPhone": {
+      "label": "Owner Phone (escalation alerts)",
+      "placeholder": "+15555550123"
+    },
+    "business.escalationEmail": {
+      "label": "Owner Email (optional)",
+      "advanced": true
+    },
+    "business.bookingUrl": {
+      "label": "Booking / Order URL",
+      "help": "The agent will share this URL with callers when relevant."
+    },
+    "business.faq": {
+      "label": "FAQ Pairs",
+      "help": "Question/answer pairs the agent uses to handle common questions.",
+      "advanced": true
+    },
+    "business.hoursText": {
+      "label": "Business Hours (free-form)",
+      "placeholder": "Mon-Fri 9am-5pm ET, closed weekends"
+    },
+    "telnyx.apiKey": { "label": "Telnyx API Key", "sensitive": true },
+    "telnyx.publicKey": { "label": "Telnyx Public Key", "sensitive": true },
+    "telnyx.connectionId": {
+      "label": "Telnyx Call Control App ID",
+      "help": "From the Telnyx Call Control app that handles inbound calls."
+    },
+    "telnyx.messagingProfileId": {
+      "label": "Telnyx Messaging Profile ID",
+      "help": "From the Telnyx Messaging profile that owns the SMS-capable number."
+    },
+    "telnyx.fromNumber": {
+      "label": "Business Phone Number (E.164)",
+      "placeholder": "+15084469140"
+    },
+    "deepgram.apiKey": { "label": "Deepgram API Key", "sensitive": true },
+    "deepgram.model": { "label": "Deepgram Model", "advanced": true },
+    "anthropic.apiKey": { "label": "Anthropic API Key", "sensitive": true },
+    "anthropic.model": {
+      "label": "Anthropic Model",
+      "help": "Default: claude-haiku-4-5-20251001 (fast + cheap for SMS turns)"
+    },
+    "voicemail.ringSeconds": {
+      "label": "Ring Seconds Before Voicemail",
+      "advanced": true
+    },
+    "voicemail.maxRecordSeconds": {
+      "label": "Max Voicemail Length (sec)",
+      "advanced": true
+    },
+    "sms.maxAgentTurns": {
+      "label": "Max Agent SMS Turns",
+      "help": "Safety cap to prevent runaway loops.",
+      "advanced": true
+    },
+    "sms.escalationKeywords": {
+      "label": "Escalation Keywords",
+      "help": "If a caller's SMS contains any of these, hand off to a human.",
+      "advanced": true
+    },
+    "store.path": { "label": "Session Store Path", "advanced": true },
+    "webhook.port": { "label": "Webhook Port", "advanced": true },
+    "webhook.bind": { "label": "Webhook Bind", "advanced": true },
+    "webhook.path": { "label": "Webhook Base Path", "advanced": true },
+    "publicUrl": {
+      "label": "Public Webhook URL",
+      "help": "External URL Telnyx can reach. Used to register the Call Control app webhook."
+    },
+    "skipSignatureVerification": {
+      "label": "Skip Signature Verification (dev only)",
+      "advanced": true
+    },
+    "dashboardToken": {
+      "label": "Dashboard API Token",
+      "help": "Shared secret used by the Mission Control panel to call /api/* endpoints.",
+      "sensitive": true,
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "business": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "greeting": { "type": "string" },
+          "escalationPhone": { "type": "string", "pattern": "^\\+[1-9]\\d{1,14}$" },
+          "escalationEmail": { "type": "string" },
+          "bookingUrl": { "type": "string" },
+          "hoursText": { "type": "string" },
+          "faq": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "q": { "type": "string" },
+                "a": { "type": "string" }
+              },
+              "required": ["q", "a"]
+            }
+          }
+        }
+      },
+      "telnyx": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": { "type": "string" },
+          "publicKey": { "type": "string" },
+          "connectionId": { "type": "string" },
+          "messagingProfileId": { "type": "string" },
+          "fromNumber": { "type": "string", "pattern": "^\\+[1-9]\\d{1,14}$" }
+        }
+      },
+      "deepgram": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": { "type": "string" },
+          "model": { "type": "string" }
+        }
+      },
+      "anthropic": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": { "type": "string" },
+          "model": { "type": "string" }
+        }
+      },
+      "voicemail": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ringSeconds": { "type": "integer", "minimum": 5, "maximum": 60 },
+          "maxRecordSeconds": { "type": "integer", "minimum": 10, "maximum": 300 }
+        }
+      },
+      "sms": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxAgentTurns": { "type": "integer", "minimum": 1, "maximum": 50 },
+          "escalationKeywords": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "store": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" }
+        }
+      },
+      "webhook": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "port": { "type": "integer", "minimum": 1 },
+          "bind": { "type": "string" },
+          "path": { "type": "string" }
+        }
+      },
+      "publicUrl": { "type": "string" },
+      "skipSignatureVerification": { "type": "boolean" },
+      "dashboardToken": { "type": "string", "minLength": 8 }
+    }
+  }
+}
