@@ -1,7 +1,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
 import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
-import { applyMistralModelCompat, MISTRAL_MODEL_COMPAT_PATCH } from "./api.js";
+import { applyMistralModelCompat, MISTRAL_MODEL_TRANSPORT_PATCH } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildMistralProvider } from "./provider-catalog.js";
@@ -94,7 +94,7 @@ export default defineSingleProviderPluginEntry({
       /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
     normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
     contributeResolvedModelCompat: ({ modelId, model }) =>
-      shouldContributeMistralCompat({ modelId, model }) ? MISTRAL_MODEL_COMPAT_PATCH : undefined,
+      shouldContributeMistralCompat({ modelId, model }) ? MISTRAL_MODEL_TRANSPORT_PATCH : undefined,
     buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {

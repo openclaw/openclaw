@@ -392,6 +392,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
 
 vi.mock("./auto-reply/monitor/group-gating.runtime.js", () => ({
   hasControlCommand: (body: string) => body.trim().startsWith("/"),
+  implicitMentionKindWhen: (kind: string, enabled: boolean) => (enabled ? [kind] : []),
   normalizeE164: (value: string) => {
     const digits = String(value).replace(/\D+/g, "");
     return digits ? `+${digits}` : null;

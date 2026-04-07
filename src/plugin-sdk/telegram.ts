@@ -24,3 +24,8 @@ export const collectTelegramSecurityAuditFindings: FacadeModule["collectTelegram
     loadFacadeModule().collectTelegramSecurityAuditFindings(
       ...args,
     )) as FacadeModule["collectTelegramSecurityAuditFindings"];
+
+export const mergeTelegramAccountConfig: FacadeModule["mergeTelegramAccountConfig"] = ((...args) =>
+  loadFacadeModule().mergeTelegramAccountConfig(
+    ...args,
+  )) as FacadeModule["mergeTelegramAccountConfig"];

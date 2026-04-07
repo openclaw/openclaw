@@ -183,6 +183,7 @@ export class GatewayClient {
   private tickTimer: NodeJS.Timeout | null = null;
   private readonly requestTimeoutMs: number;
   private pendingStop: PendingStop | null = null;
+  private socketOpened = false;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = {
@@ -262,8 +263,10 @@ export class GatewayClient {
     }
     const ws = new WebSocket(url, wsOptions as ClientOptions);
     this.ws = ws;
+    this.socketOpened = false;
 
     ws.on("open", () => {
+      this.socketOpened = true;
       if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
         const tlsError = this.validateTlsFingerprint();
         if (tlsError) {
@@ -282,6 +285,7 @@ export class GatewayClient {
       if (this.ws === ws) {
         this.ws = null;
       }
+      this.socketOpened = false;
       this.resolvePendingStop(ws);
       // Clear persisted device auth state only when device-token auth was active.
       // Shared token/password failures can return the same close reason but should
@@ -719,7 +723,9 @@ export class GatewayClient {
             return;
           }
           this.connectNonce = nonce.trim();
-          this.sendConnect();
+          if (this.socketOpened) {
+            this.sendConnect();
+          }
           return;
         }
         const seq = typeof evt.seq === "number" ? evt.seq : null;
@@ -769,8 +775,14 @@ export class GatewayClient {
   }
 
   private beginPreauthHandshake() {
-    this.connectNonce = null;
-    this.connectSent = false;
+    if (this.connectSent) {
+      return;
+    }
+    if (this.connectNonce && !this.connectSent) {
+      this.armConnectChallengeTimeout();
+      this.sendConnect();
+      return;
+    }
     this.armConnectChallengeTimeout();
   }
 

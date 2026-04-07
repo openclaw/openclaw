@@ -1,6 +1,7 @@
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -27,28 +28,31 @@ function loadBundledChannelPublicArtifact(
   channelId: string,
   artifactBasenames: readonly string[],
 ): BundledChannelContractApi | undefined {
-  const metadata = listBundledPluginMetadata({
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  }).find((entry) => entry.manifest.channels?.includes(channelId));
-  if (!metadata) {
+  const record = loadPluginManifestRegistry({})
+    .plugins.filter((entry) => entry.origin === "bundled")
+    .find((entry) => entry.channels.includes(channelId));
+  if (!record) {
     return undefined;
   }
+  const dirName = path.basename(record.rootDir);
 
   for (const artifactBasename of artifactBasenames) {
-    if (!metadata.publicSurfaceArtifacts?.includes(artifactBasename)) {
-      continue;
-    }
     try {
       return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
-        dirName: metadata.dirName,
+        dirName,
         artifactBasename,
       });
     } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Unable to resolve bundled plugin public surface ")
+      ) {
+        continue;
+      }
       if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
         const detail = formatErrorMessage(error);
         process.stderr.write(
-          `[channel-contract-api] failed to load ${channelId} via ${metadata.dirName}/${artifactBasename}: ${detail}\n`,
+          `[channel-contract-api] failed to load ${channelId} via ${dirName}/${artifactBasename}: ${detail}\n`,
         );
       }
     }

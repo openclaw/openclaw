@@ -8,6 +8,9 @@
     "@sinclair/typebox": "0.34.49",
     "ajv": "^8.18.0"
   },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
