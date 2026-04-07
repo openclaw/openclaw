@@ -133,4 +133,95 @@ describe("feishu directory (config-backed)", () => {
       listFeishuDirectoryGroupsLive({ cfg: makeConfiguredCfg(), fallbackToStatic: false }),
     ).rejects.toThrow("forbidden");
   });
+
+  it("resolves username without space to display name with space", async () => {
+    // Bug #62468: "jaydenli" should match "Jayden Li" (display name with space)
+    createFeishuClientMock.mockReturnValueOnce({
+      contact: {
+        user: {
+          list: vi.fn(async () => ({
+            code: 0,
+            data: {
+              items: [
+                {
+                  open_id: "ou_123",
+                  name: "Jayden Li",
+                  email: "jaydenli@company.com",
+                  enterprise_email: "jaydenli@company.com",
+                  nickname: "JD",
+                },
+              ],
+            },
+          })),
+        },
+      },
+    });
+
+    const peers = await listFeishuDirectoryPeersLive({
+      cfg: makeConfiguredCfg(),
+      query: "jaydenli",
+      fallbackToStatic: false,
+    });
+    // The query "jaydenli" should match "Jayden Li" via space-insensitive matching
+    expect(peers).toEqual([{ kind: "user", id: "ou_123", name: "Jayden Li" }]);
+  });
+
+  it("resolves username to user via email prefix match", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      contact: {
+        user: {
+          list: vi.fn(async () => ({
+            code: 0,
+            data: {
+              items: [
+                {
+                  open_id: "ou_456",
+                  name: "Alice Smith",
+                  email: "alice.smith@company.com",
+                  enterprise_email: "alice.smith@company.com",
+                },
+              ],
+            },
+          })),
+        },
+      },
+    });
+
+    const peers = await listFeishuDirectoryPeersLive({
+      cfg: makeConfiguredCfg(),
+      query: "alice.smith",
+      fallbackToStatic: false,
+    });
+    // The query "alice.smith" should match via email
+    expect(peers).toEqual([{ kind: "user", id: "ou_456", name: "Alice Smith" }]);
+  });
+
+  it("resolves username via nickname match", async () => {
+    createFeishuClientMock.mockReturnValueOnce({
+      contact: {
+        user: {
+          list: vi.fn(async () => ({
+            code: 0,
+            data: {
+              items: [
+                {
+                  open_id: "ou_789",
+                  name: "Robert Johnson",
+                  nickname: "Bobby",
+                },
+              ],
+            },
+          })),
+        },
+      },
+    });
+
+    const peers = await listFeishuDirectoryPeersLive({
+      cfg: makeConfiguredCfg(),
+      query: "bobby",
+      fallbackToStatic: false,
+    });
+    // The query "bobby" should match via nickname
+    expect(peers).toEqual([{ kind: "user", id: "ou_789", name: "Robert Johnson" }]);
+  });
 });

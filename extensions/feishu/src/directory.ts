@@ -11,6 +11,27 @@ import {
 
 export { listFeishuDirectoryGroups, listFeishuDirectoryPeers } from "./directory.static.js";
 
+/**
+ * Check if a query matches a user field (name, email, or open_id).
+ * Handles space-insensitive matching so "jaydenli" matches "Jayden Li".
+ */
+function matchesUserField(query: string, field: string): boolean {
+  if (!query || !field) {
+    return false;
+  }
+  const normalizedField = field.toLowerCase();
+  const normalizedQuery = query.toLowerCase();
+  // Direct substring match
+  if (normalizedField.includes(normalizedQuery)) {
+    return true;
+  }
+  // Space-insensitive match: remove spaces from both and compare
+  // e.g., "jaydenli" matches "Jayden Li" after normalization
+  const fieldNoSpaces = normalizedField.replace(/\s+/g, "");
+  const queryNoSpaces = normalizedQuery.replace(/\s+/g, "");
+  return fieldNoSpaces.includes(queryNoSpaces) || queryNoSpaces.includes(fieldNoSpaces);
+}
+
 export async function listFeishuDirectoryPeersLive(params: {
   cfg: ClawdbotConfig;
   query?: string;
@@ -42,7 +63,17 @@ export async function listFeishuDirectoryPeersLive(params: {
     for (const user of response.data?.items ?? []) {
       if (user.open_id) {
         const name = user.name || "";
-        if (!q || user.open_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
+        const email = user.email || "";
+        const enterpriseEmail = user.enterprise_email || "";
+        const nickname = user.nickname || "";
+        if (
+          !q ||
+          user.open_id.toLowerCase().includes(q) ||
+          matchesUserField(q, name) ||
+          matchesUserField(q, email) ||
+          matchesUserField(q, enterpriseEmail) ||
+          matchesUserField(q, nickname)
+        ) {
           peers.push({
             kind: "user",
             id: user.open_id,
