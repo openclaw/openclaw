@@ -326,6 +326,33 @@ def derive_digest_bucket_ui_hint_tokens(
     return [badge_short, percent, leader_label]
 
 
+def derive_digest_bucket_ui_layouts(
+    digest_bucket_ui_hint_compact: object,
+    digest_bucket_ui_hint_line2: object,
+    digest_bucket_ui_hint_tokens: object,
+) -> dict[str, object]:
+    compact = (
+        digest_bucket_ui_hint_compact
+        if isinstance(digest_bucket_ui_hint_compact, str)
+        else 'UNK 0.0%'
+    )
+    line2 = (
+        digest_bucket_ui_hint_line2
+        if isinstance(digest_bucket_ui_hint_line2, str)
+        else '0.0% • Follower'
+    )
+    tokens = (
+        list(digest_bucket_ui_hint_tokens)
+        if isinstance(digest_bucket_ui_hint_tokens, list)
+        else ['UNK', '0.0%', 'Follower']
+    )
+    return {
+        'compact': compact,
+        'line2': line2,
+        'tokens': tokens,
+    }
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -752,6 +779,11 @@ def main() -> int:
                 item.get('digest_bucket_badge_short'),
                 item.get('digest_bucket_percent'),
                 item.get('digest_bucket_leader'),
+            )
+            item['digest_bucket_ui_layouts'] = derive_digest_bucket_ui_layouts(
+                item.get('digest_bucket_ui_hint_compact'),
+                item.get('digest_bucket_ui_hint_line2'),
+                item.get('digest_bucket_ui_hint_tokens'),
             )
 
     notification_digest_summary.sort(key=derive_digest_order_key)
