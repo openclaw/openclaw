@@ -313,9 +313,21 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const response = shouldUseRuntimeFetch
-        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-        : await defaultFetch(parsedUrl.toString(), init);
+      let response: Response;
+      if (shouldUseRuntimeFetch) {
+        response = await fetchWithRuntimeDispatcher(parsedUrl.toString(), init);
+      } else {
+        // Custom fetchImpl callers (e.g. Slack/Telegram media fetchers) typically
+        // wrap native Node.js fetch(), which may bundle a different undici version
+        // than the external dispatcher was created with.  Passing the external
+        // dispatcher through causes 'invalid onRequestStart' errors on undici 8.x.
+        // Strip it — SSRF DNS-pinning has already been validated above.
+        const { dispatcher: _stripDispatcher, ...initWithoutDispatcher } = init;
+        response = await defaultFetch(
+          parsedUrl.toString(),
+          initWithoutDispatcher as RequestInit,
+        );
+      }
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
