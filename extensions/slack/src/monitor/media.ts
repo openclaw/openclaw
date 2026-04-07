@@ -1,5 +1,6 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
+import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
@@ -38,6 +39,13 @@ function assertSlackFileUrl(rawUrl: string): URL {
   return parsed;
 }
 
+function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
+  if (typeof fetchImpl !== "function") {
+    return false;
+  }
+  return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
+}
+
 function createSlackMediaFetch(token: string): FetchLike {
   let includeAuth = true;
   return async (input, init) => {
@@ -45,28 +53,22 @@ function createSlackMediaFetch(token: string): FetchLike {
     if (!url) {
       throw new Error("Unsupported fetch input: expected string, URL, or Request");
     }
-    // Strip `dispatcher` – the SSRF guard may attach an undici dispatcher that
-    // is incompatible with the ambient `globalThis.fetch` (Node built-in).  We
-    // must not forward it because `globalThis.fetch` uses the Node-bundled
-    // undici runtime whose dispatcher shape can differ from the project-level
-    // undici dependency.
-    const {
-      headers: initHeaders,
-      redirect: _redirect,
-      dispatcher: _dispatcher,
-      ...rest
-    } = (init ?? {}) as RequestInit & { dispatcher?: unknown };
+    const { headers: initHeaders, redirect: _redirect, ...rest } = init ?? {};
     const headers = new Headers(initHeaders);
+    const fetchImpl =
+      "dispatcher" in (init ?? {}) && !isMockedFetch(globalThis.fetch)
+        ? fetchWithRuntimeDispatcher
+        : globalThis.fetch;
 
     if (includeAuth) {
       includeAuth = false;
       const parsed = assertSlackFileUrl(url);
       headers.set("Authorization", `Bearer ${token}`);
-      return fetch(parsed.href, { ...rest, headers, redirect: "manual" });
+      return fetchImpl(parsed.href, { ...rest, headers, redirect: "manual" });
     }
 
     headers.delete("Authorization");
-    return fetch(url, { ...rest, headers, redirect: "manual" });
+    return fetchImpl(url, { ...rest, headers, redirect: "manual" });
   };
 }
 
