@@ -7,6 +7,7 @@ import { getAcpSessionManager } from "./control-plane/manager.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
 import {
   buildConfiguredAcpSessionKey,
+  normalizeText,
   type ConfiguredAcpBindingSpec,
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
