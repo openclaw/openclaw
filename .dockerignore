@@ -62,17 +62,10 @@ appcast.xml
 **/*.test.js
 **/*.spec.ts
 **/*.spec.js
-vitest*.config*
 **/__mocks__
 **/__fixtures__
 **/__snapshots__
-
-# e2e and smoke-test Docker scaffolds
-scripts/e2e/
-scripts/docker/cleanup-smoke/
-scripts/docker/install-sh-e2e/
-scripts/docker/install-sh-nonroot/
-scripts/docker/install-sh-smoke/
+test/
 
 # large app trees not needed for CLI build
 apps/
