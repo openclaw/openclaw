@@ -219,6 +219,20 @@ def derive_digest_bucket_palette_key(digest_bucket_dominance_band: object) -> st
     }.get(band, 'muted')
 
 
+def derive_digest_bucket_badge(digest_bucket_dominance_band: object) -> str:
+    band = (
+        digest_bucket_dominance_band
+        if isinstance(digest_bucket_dominance_band, str)
+        else 'unknown'
+    )
+    return {
+        'dominant': 'Dominant',
+        'major': 'Major',
+        'split': 'Split',
+        'minor': 'Minor',
+    }.get(band, 'Unknown')
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -583,6 +597,9 @@ def main() -> int:
                 'digest_bucket_percent': derive_digest_bucket_percent(digest_bucket_share),
                 'digest_bucket_dominance_band': digest_bucket_dominance_band,
                 'digest_bucket_palette_key': derive_digest_bucket_palette_key(
+                    digest_bucket_dominance_band
+                ),
+                'digest_bucket_badge': derive_digest_bucket_badge(
                     digest_bucket_dominance_band
                 ),
                 'digest_bucket_rank': 0,
