@@ -249,6 +249,7 @@ async function resolveSlackOutboundSessionRoute(params: {
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId,
+    sessionScope: params.cfg.session?.scope,
   });
   return {
     sessionKey: threadKeys.sessionKey,

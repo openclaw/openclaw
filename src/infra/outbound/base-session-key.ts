@@ -8,6 +8,10 @@ export function buildOutboundBaseSessionKey(params: {
   accountId?: string | null;
   peer: RoutePeer;
 }): string {
+  const sessionScope = params.cfg.session?.scope ?? "per-sender";
+  if (sessionScope === "global") {
+    return "global";
+  }
   return buildAgentSessionKey({
     agentId: params.agentId,
     channel: params.channel,

@@ -294,6 +294,7 @@ function resolveSlackRoutingContext(params: {
     baseSessionKey: route.sessionKey,
     threadId: canonicalThreadId,
     parentSessionKey: canonicalThreadId && ctx.threadInheritParent ? route.sessionKey : undefined,
+    sessionScope: ctx.cfg.session?.scope,
   });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =

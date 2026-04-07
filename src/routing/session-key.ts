@@ -237,9 +237,11 @@ export function resolveThreadSessionKeys(params: {
   parentSessionKey?: string;
   useSuffix?: boolean;
   normalizeThreadId?: (threadId: string) => string;
+  /** When "global", thread suffixes are suppressed so all threads share the base session. */
+  sessionScope?: "per-sender" | "global";
 }): { sessionKey: string; parentSessionKey?: string } {
   const threadId = (params.threadId ?? "").trim();
-  if (!threadId) {
+  if (!threadId || params.sessionScope === "global") {
     return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
   }
   const normalizedThreadId = (params.normalizeThreadId ?? ((value: string) => value.toLowerCase()))(
