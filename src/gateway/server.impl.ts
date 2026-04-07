@@ -1580,6 +1580,13 @@ export async function startGatewayServer(
               // observe the rotated secret before applyHotReload settles; advance current
               // generation now so fresh reconnects are not rejected during that window.
               currentSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+              const sharedGatewaySessionGenerationChanged =
+                previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration;
+              if (sharedGatewaySessionGenerationChanged) {
+                // Close stale shared-auth sockets before potentially long reload work so old
+                // sessions cannot continue receiving broadcasts while auth has rotated.
+                disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
+              }
               try {
                 await applyHotReload(plan, prepared.config);
               } catch (err) {
@@ -1592,9 +1599,6 @@ export async function startGatewayServer(
                 throw err;
               }
               setCurrentSharedGatewaySessionGeneration(nextSharedGatewaySessionGeneration);
-              if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
-                disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
-              }
             },
             onRestart: async (plan, nextConfig) => {
               const previousRequiredSharedGatewaySessionGeneration =
@@ -1614,7 +1618,11 @@ export async function startGatewayServer(
                   if (
                     previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration
                   ) {
-                    requiredSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
+                    // If restart is unavailable, activate the resolved secrets snapshot so
+                    // token/password auth accepts the rotated secret instead of lockout.
+                    activateSecretsRuntimeSnapshot(prepared);
+                    setCurrentSharedGatewaySessionGeneration(nextSharedGatewaySessionGeneration);
+                    requiredSharedGatewaySessionGeneration = null;
                     disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
                   } else {
                     requiredSharedGatewaySessionGeneration = null;
