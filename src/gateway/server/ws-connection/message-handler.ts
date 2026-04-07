@@ -1190,6 +1190,17 @@ export function attachGatewayWsMessageHandler(params: {
           authMethod === "token" || authMethod === "password"
             ? resolveSharedGatewaySessionGeneration(resolvedAuth)
             : undefined;
+        if (authMethod === "token" || authMethod === "password") {
+          const requiredSharedGatewaySessionGeneration =
+            getRequiredSharedGatewaySessionGeneration();
+          if (sharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration) {
+            setCloseCause("gateway-auth-rotated", {
+              authGenerationStale: true,
+            });
+            close(4001, "gateway auth changed");
+            return;
+          }
+        }
         const helloOk = {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,

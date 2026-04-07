@@ -430,10 +430,6 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!(await ensureResolvableSecretRefsOrRespond({ config: parsed.config, respond }))) {
       return;
     }
-    const refreshSharedGatewayAuthGeneration = didSharedGatewayAuthChange(
-      snapshot.config,
-      parsed.config,
-    );
     await writeConfigFile(parsed.config, writeOptions);
     respond(
       true,
@@ -444,11 +440,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    queueSharedGatewayAuthGenerationRefresh(
-      refreshSharedGatewayAuthGeneration,
-      parsed.config,
-      context,
-    );
+    queueSharedGatewayAuthGenerationRefresh(true, parsed.config, context);
   },
   "config.patch": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
