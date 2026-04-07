@@ -33,7 +33,11 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveStorePath,
+} from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
@@ -351,6 +355,37 @@ async function restoreHeartbeatUpdatedAt(params: {
     }
     nextStore[sessionKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
   });
+}
+
+/**
+ * Roll back the session transcript file after a heartbeat run that produced
+ * no meaningful output (HEARTBEAT_OK or empty).  This prevents heartbeat
+ * prompt + response entries from polluting the conversation history, which
+ * causes the model to repeat HEARTBEAT_OK indefinitely.
+ * See: https://github.com/openclaw/openclaw/issues/61952
+ */
+async function rollbackSessionTranscript(
+  transcriptPath: string | undefined,
+  transcriptBytesBefore: number | undefined,
+) {
+  if (!transcriptPath) {
+    return;
+  }
+  try {
+    if (typeof transcriptBytesBefore === "number") {
+      const stat = await fs.stat(transcriptPath);
+      if (stat.size > transcriptBytesBefore) {
+        await fs.truncate(transcriptPath, transcriptBytesBefore);
+      }
+    } else {
+      // File was created by the heartbeat run – remove it entirely.
+      await fs.unlink(transcriptPath).catch(() => {});
+    }
+  } catch (rollbackErr) {
+    log.warn("heartbeat: failed to roll back session transcript", {
+      error: formatErrorMessage(rollbackErr),
+    });
+  }
 }
 
 function stripLeadingHeartbeatResponsePrefix(
@@ -822,6 +857,27 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
+    // Save session transcript state before the heartbeat run so we can roll
+    // back when the response is a pure HEARTBEAT_OK.  Without this, the
+    // heartbeat prompt + HEARTBEAT_OK accumulate in the transcript and cause
+    // the model to repeat HEARTBEAT_OK indefinitely (issue #61952).
+    let transcriptBytesBefore: number | undefined;
+    let transcriptPath: string | undefined;
+    if (!useIsolatedSession) {
+      const pathOpts = resolveSessionFilePathOptions({ agentId, storePath });
+      transcriptPath = entry?.sessionId
+        ? resolveSessionFilePath(entry.sessionId, entry, pathOpts)
+        : undefined;
+      if (transcriptPath) {
+        try {
+          const stat = await fs.stat(transcriptPath);
+          transcriptBytesBefore = stat.size;
+        } catch {
+          // File doesn't exist yet – will clean up after run if needed.
+        }
+      }
+    }
+
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
@@ -844,6 +900,18 @@ export async function runHeartbeatOnce(opts: {
       : [];
 
     if (!replyPayload || !hasOutboundReplyContent(replyPayload)) {
+      // Discover transcript if it was created by this first-ever heartbeat run.
+      if (!useIsolatedSession && !transcriptPath) {
+        try {
+          const freshStore = loadSessionStore(storePath);
+          const freshEntry = freshStore[sessionKey];
+          if (freshEntry?.sessionId) {
+            const pathOpts = resolveSessionFilePathOptions({ agentId, storePath });
+            transcriptPath = resolveSessionFilePath(freshEntry.sessionId, freshEntry, pathOpts);
+          }
+        } catch { /* best-effort */ }
+      }
+      await rollbackSessionTranscript(transcriptPath, transcriptBytesBefore);
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -880,6 +948,21 @@ export async function runHeartbeatOnce(opts: {
     }
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
+      // Roll back session transcript – the heartbeat exchange (prompt +
+      // HEARTBEAT_OK) must not persist, otherwise the model sees accumulated
+      // HEARTBEAT_OK turns and keeps repeating them.
+      // Discover transcript if it was created by this first-ever heartbeat run.
+      if (!useIsolatedSession && !transcriptPath) {
+        try {
+          const freshStore = loadSessionStore(storePath);
+          const freshEntry = freshStore[sessionKey];
+          if (freshEntry?.sessionId) {
+            const pathOpts = resolveSessionFilePathOptions({ agentId, storePath });
+            transcriptPath = resolveSessionFilePath(freshEntry.sessionId, freshEntry, pathOpts);
+          }
+        } catch { /* best-effort */ }
+      }
+      await rollbackSessionTranscript(transcriptPath, transcriptBytesBefore);
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -917,6 +1000,7 @@ export async function runHeartbeatOnce(opts: {
       startedAt - prevHeartbeatAt < 24 * 60 * 60 * 1000;
 
     if (isDuplicateMain) {
+      await rollbackSessionTranscript(transcriptPath, transcriptBytesBefore);
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
