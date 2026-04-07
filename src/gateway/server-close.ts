@@ -60,6 +60,38 @@ async function closeWssWithTimeout(
   });
 }
 
+function normalizeGatewayDeliveryContext(
+  item: Record<string, unknown>,
+): { channel?: string; to?: string; accountId?: string } | undefined {
+  const deliveryContextRaw = item.deliveryContext;
+  const deliveryContextRecord =
+    deliveryContextRaw && typeof deliveryContextRaw === "object"
+      ? (deliveryContextRaw as Record<string, unknown>)
+      : null;
+  const deliveryContext = {
+    ...(normalizeNonEmptyString(deliveryContextRecord?.channel ?? item.channel)
+      ? { channel: normalizeNonEmptyString(deliveryContextRecord?.channel ?? item.channel)! }
+      : {}),
+    ...(normalizeNonEmptyString(deliveryContextRecord?.to ?? item.to)
+      ? { to: normalizeNonEmptyString(deliveryContextRecord?.to ?? item.to)! }
+      : {}),
+    ...(normalizeNonEmptyString(deliveryContextRecord?.accountId ?? item.accountId)
+      ? { accountId: normalizeNonEmptyString(deliveryContextRecord?.accountId ?? item.accountId)! }
+      : {}),
+  };
+  return Object.keys(deliveryContext).length > 0 ? deliveryContext : undefined;
+}
+
+function hasDeliverableGatewayOutboxTask(
+  outbox: RestartOutboxTask[],
+  fallbackSessionKey?: string,
+): boolean {
+  return outbox.some((task) => {
+    const sessionKey = normalizeNonEmptyString(task.sessionKey) ?? fallbackSessionKey;
+    return typeof sessionKey === "string" && sessionKey.length > 0;
+  });
+}
+
 function normalizeGatewayOutbox(outbox: unknown[]): RestartOutboxTask[] {
   const normalized: RestartOutboxTask[] = [];
   for (const raw of outbox) {
@@ -98,29 +130,7 @@ function normalizeGatewayOutbox(outbox: unknown[]): RestartOutboxTask[] {
       continue;
     }
 
-    const deliveryContextRaw = item.deliveryContext;
-    const deliveryContext =
-      deliveryContextRaw && typeof deliveryContextRaw === "object"
-        ? {
-            ...(normalizeNonEmptyString((deliveryContextRaw as Record<string, unknown>).channel)
-              ? {
-                  channel: normalizeNonEmptyString(
-                    (deliveryContextRaw as Record<string, unknown>).channel,
-                  )!,
-                }
-              : {}),
-            ...(normalizeNonEmptyString((deliveryContextRaw as Record<string, unknown>).to)
-              ? { to: normalizeNonEmptyString((deliveryContextRaw as Record<string, unknown>).to)! }
-              : {}),
-            ...(normalizeNonEmptyString((deliveryContextRaw as Record<string, unknown>).accountId)
-              ? {
-                  accountId: normalizeNonEmptyString(
-                    (deliveryContextRaw as Record<string, unknown>).accountId,
-                  )!,
-                }
-              : {}),
-          }
-        : undefined;
+    const deliveryContext = normalizeGatewayDeliveryContext(item);
 
     normalized.push({
       kind,
@@ -163,6 +173,13 @@ async function persistGatewayRestartOutbox(params: {
   const resolvedCorrelationId =
     params.correlationId ?? existingPayload?.correlationId ?? resolvedRestartId;
   const resolvedInitiator = params.initiator ?? existingPayload?.initiator;
+  const suppressPrimaryNotice =
+    typeof existingPayload?.suppressPrimaryNotice === "boolean"
+      ? existingPayload.suppressPrimaryNotice &&
+        hasDeliverableGatewayOutboxTask(mergedOutbox, existingPayload?.sessionKey)
+      : !existingPayload && hasDeliverableGatewayOutboxTask(mergedOutbox, existingPayload?.sessionKey)
+        ? true
+        : undefined;
   const stats = {
     ...existingPayload?.stats,
     reason: existingPayload?.stats?.reason ?? params.reason,
@@ -187,11 +204,7 @@ async function persistGatewayRestartOutbox(params: {
       ? { doctorHint: existingPayload.doctorHint }
       : { doctorHint: formatDoctorNonInteractiveHint() }),
     ...(Object.keys(stats).length > 0 ? { stats } : {}),
-    ...(typeof existingPayload?.suppressPrimaryNotice === "boolean"
-      ? { suppressPrimaryNotice: existingPayload.suppressPrimaryNotice }
-      : !existingPayload && mergedOutbox.length > 0
-        ? { suppressPrimaryNotice: true }
-        : {}),
+    ...(typeof suppressPrimaryNotice === "boolean" ? { suppressPrimaryNotice } : {}),
     ...(mergedOutbox.length > 0 ? { outbox: mergedOutbox } : {}),
   };
 

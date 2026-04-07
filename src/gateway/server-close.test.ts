@@ -234,4 +234,77 @@ describe("createGatewayCloseHandler", () => {
       harness.dispose();
     }
   });
+
+  it("preserves legacy top-level routing fields for normalized message outbox tasks", async () => {
+    triggerInternalHook.mockImplementation(
+      async (event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => {
+        if (event.type === "gateway" && event.action === "pre-restart") {
+          const outbox = event.context?.outbox as Array<Record<string, unknown>>;
+          outbox.push({
+            message: "Gateway is back after restart",
+            sessionKey: "agent:main:main",
+            channel: "telegram",
+            to: "119707338",
+            accountId: "default",
+          });
+        }
+      },
+    );
+
+    const harness = createCloseHarness();
+    try {
+      await harness.close({
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      });
+
+      const payload = writeRestartSentinel.mock.calls[0]?.[0];
+      expect(payload?.outbox).toEqual([
+        expect.objectContaining({
+          kind: "message",
+          message: "Gateway is back after restart",
+          sessionKey: "agent:main:main",
+          deliveryContext: {
+            channel: "telegram",
+            to: "119707338",
+            accountId: "default",
+          },
+        }),
+      ]);
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  it("does not suppress the primary notice when persisted outbox is not deliverable", async () => {
+    triggerInternalHook.mockImplementation(
+      async (event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => {
+        if (event.type === "gateway" && event.action === "pre-restart") {
+          const outbox = event.context?.outbox as Array<Record<string, unknown>>;
+          outbox.push({
+            message: "Gateway is back after restart",
+          });
+        }
+      },
+    );
+
+    const harness = createCloseHarness();
+    try {
+      await harness.close({
+        reason: "gateway restarting",
+        restartExpectedMs: 1500,
+      });
+
+      const payload = writeRestartSentinel.mock.calls[0]?.[0];
+      expect(payload?.outbox).toEqual([
+        expect.objectContaining({
+          kind: "message",
+          message: "Gateway is back after restart",
+        }),
+      ]);
+      expect(payload?.suppressPrimaryNotice).toBeUndefined();
+    } finally {
+      harness.dispose();
+    }
+  });
 });
