@@ -1,4 +1,5 @@
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { AcpRuntimeError } from "./errors.js";
 import type { AcpRuntime } from "./types.js";
 
@@ -26,7 +27,7 @@ function resolveAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
 const ACP_BACKENDS_BY_ID = resolveAcpRuntimeRegistryGlobalState().backendsById;
 
 function normalizeBackendId(id: string | undefined): string {
-  return id?.trim().toLowerCase() || "";
+  return normalizeOptionalString(id)?.toLowerCase() || "";
 }
 
 function isBackendHealthy(backend: AcpRuntimeBackend): boolean {

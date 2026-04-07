@@ -1,4 +1,5 @@
 import type { OpenClawConfig, HumanDelayConfig, IdentityConfig } from "../config/config.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
@@ -58,7 +59,7 @@ export function resolveIdentityNamePrefix(
 
 /** Returns just the identity name (without brackets) for template context. */
 export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): string | undefined {
-  return resolveAgentIdentity(cfg, agentId)?.name?.trim() || undefined;
+  return normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name);
 }
 
 export function resolveMessagePrefix(

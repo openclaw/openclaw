@@ -70,6 +70,36 @@ describe("pruneProcessedHistoryImages", () => {
     expect(content[1]).toMatchObject({ type: "image", data: "abc" });
   });
 
+  it("does not count multiple assistant messages from one tool loop as separate turns", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "user",
+        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      } as AgentMessage),
+      castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "bytes" }],
+      }),
+      assistantTurn(),
+      userText(),
+      assistantTurn(),
+      userText(),
+      assistantTurn(),
+    ];
+
+    const didMutate = pruneProcessedHistoryImages(messages);
+
+    expect(didMutate).toBe(false);
+    const content = expectArrayMessageContent(messages[0], "expected user array content");
+    expect(content[1]).toMatchObject({ type: "image", data: "abc" });
+  });
+
   it("does not prune latest user message when no assistant response exists yet", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({

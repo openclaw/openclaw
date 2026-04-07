@@ -1,11 +1,14 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicPayloadPolicyToParams,
+  composeProviderStreamWrappers,
   resolveAnthropicPayloadPolicy,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -80,7 +83,7 @@ function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | u
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalString(value)?.toLowerCase();
   if (normalized === "auto" || normalized === "standard_only") {
     return normalized;
   }
@@ -128,7 +131,7 @@ export function createAnthropicBetaHeadersWrapper(
         : betas;
     if (isOauth && requestedContext1m) {
       log.warn(
-        `ignoring context1m for Anthropic subscription (OAuth setup-token) auth on ${model.provider}/${model.id}; falling back to the standard context window because Anthropic rejects context-1m beta with OAuth auth`,
+        `ignoring context1m for Anthropic Claude CLI or legacy token auth on ${model.provider}/${model.id}; falling back to the standard context window because Anthropic rejects context-1m beta with non-API-key auth`,
       );
     }
 
@@ -150,10 +153,14 @@ export function createAnthropicFastModeWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   const serviceTier = resolveAnthropicFastServiceTier(enabled);
   return (model, context, options) => {
+    if (isAnthropicOAuthApiKey(options?.apiKey)) {
+      return underlying(model, context, options);
+    }
+
     const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       serviceTier,
     });
     if (!payloadPolicy.allowsServiceTier) {
@@ -172,10 +179,14 @@ export function createAnthropicServiceTierWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    if (isAnthropicOAuthApiKey(options?.apiKey)) {
+      return underlying(model, context, options);
+    }
+
     const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       serviceTier,
     });
     if (!payloadPolicy.allowsServiceTier) {
@@ -206,6 +217,26 @@ export function resolveAnthropicServiceTier(
     log.warn(`ignoring invalid Anthropic service tier param: ${rawSummary}`);
   }
   return normalized;
+}
+
+export function wrapAnthropicProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
+  const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
+  const fastMode = resolveAnthropicFastMode(ctx.extraParams);
+  return composeProviderStreamWrappers(
+    ctx.streamFn,
+    anthropicBetas?.length
+      ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
+      : undefined,
+    serviceTier
+      ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
+      : undefined,
+    fastMode !== undefined
+      ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
+      : undefined,
+  );
 }
 
 export const __testing = { log };

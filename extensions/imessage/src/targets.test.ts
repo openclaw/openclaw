@@ -150,7 +150,6 @@ describe("imessage group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:family" })).toBe(false);
@@ -213,7 +212,7 @@ describe("parseIMessageAllowFromEntries", () => {
     });
   });
 
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
+  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
     const next = imessageDmPolicy.setPolicy(
       {
         channels: {

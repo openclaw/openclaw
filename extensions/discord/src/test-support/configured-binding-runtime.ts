@@ -14,9 +14,9 @@ export async function createConfiguredBindingConversationRuntimeModuleMock<
       ...args: Parameters<TModule["resolveConfiguredBindingRoute"]>
     ) => ReturnType<TModule["resolveConfiguredBindingRoute"]>;
   },
-  importOriginal: () => Promise<TModule>,
+  loadActual: () => Promise<TModule>,
 ) {
-  const actual = await importOriginal();
+  const actual = await loadActual();
   return {
     ...actual,
     ensureConfiguredBindingRouteReady: (

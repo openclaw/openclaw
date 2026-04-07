@@ -1,4 +1,5 @@
 import { logVerbose } from "../globals.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -17,7 +18,6 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * output chunk, so any module-level const/let would be uninitialized when
  * first accessed during plugin registration.
  */
-// eslint-disable-next-line no-var -- var avoids TDZ when bundler reorders module bodies in a chunk
 var reservedCommands: Set<string> | undefined;
 
 export type CommandRegistrationResult = {
@@ -126,7 +126,7 @@ export function validatePluginCommandDefinition(
 export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
   const keys = new Set<string>();
   const push = (value: string | undefined) => {
-    const normalized = value?.trim().toLowerCase();
+    const normalized = normalizeOptionalString(value)?.toLowerCase();
     if (!normalized) {
       return;
     }

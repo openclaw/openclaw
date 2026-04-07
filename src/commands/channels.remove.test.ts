@@ -18,16 +18,20 @@ const catalogMocks = vi.hoisted(() => ({
   listChannelPluginCatalogEntries: vi.fn((): ChannelPluginCatalogEntry[] => []),
 }));
 
-vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/plugins/catalog.js")>();
+vi.mock("../channels/plugins/catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
+    "../channels/plugins/catalog.js",
+  );
   return {
     ...actual,
     listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   };
 });
 
-vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./channel-setup/plugin-install.js")>();
+vi.mock("./channel-setup/plugin-install.js", async () => {
+  const actual = await vi.importActual<typeof import("./channel-setup/plugin-install.js")>(
+    "./channel-setup/plugin-install.js",
+  );
   const { createMockChannelSetupPluginInstallModule } =
     await import("./channels.plugin-install.test-helpers.js");
   return createMockChannelSetupPluginInstallModule(actual);
@@ -39,6 +43,11 @@ describe("channelsRemoveCommand", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockClear();
     configMocks.writeConfigFile.mockClear();
+    configMocks.replaceConfigFile
+      .mockReset()
+      .mockImplementation(async (params: { nextConfig: unknown }) => {
+        await configMocks.writeConfigFile(params.nextConfig);
+      });
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -93,17 +102,8 @@ describe("channelsRemoveCommand", () => {
       { hasFlags: true },
     );
 
-    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: catalogEntry,
-      }),
-    );
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "msteams",
-        pluginId: "@openclaw/msteams-plugin",
-      }),
-    );
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.not.objectContaining({
         channels: expect.objectContaining({

@@ -5,8 +5,8 @@ const { existsSyncMock, readFileSyncMock } = vi.hoisted(() => ({
   readFileSyncMock: vi.fn(),
 }));
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   existsSyncMock.mockImplementation((pathname) => actual.existsSync(pathname));
   readFileSyncMock.mockImplementation((pathname, options) =>
     String(pathname) === "/tmp/vertex-adc.json"

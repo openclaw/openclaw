@@ -1,8 +1,9 @@
 import { defineProject } from "vitest/config";
-import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
+import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import {
+  isBundledPluginDependentUnitTestFile,
   unitTestAdditionalExcludePatterns,
   unitTestIncludePatterns,
 } from "./vitest.unit-paths.mjs";
@@ -27,27 +28,42 @@ export function createUnitVitestConfigWithOptions(
   options: {
     includePatterns?: string[];
     extraExcludePatterns?: string[];
+    name?: string;
+    argv?: string[];
   } = {},
 ) {
+  const isolate = resolveVitestIsolation(env);
+  const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
+  const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, options.argv);
+  const protectedIncludeFiles = new Set(
+    defaultIncludePatterns.filter((pattern) => isBundledPluginDependentUnitTestFile(pattern)),
+  );
+  const baseExcludePatterns = unitTestAdditionalExcludePatterns.filter((pattern) => {
+    if (protectedIncludeFiles.size === 0) {
+      return true;
+    }
+    return ![...protectedIncludeFiles].some((file) => pattern === file || pattern.endsWith("/**"));
+  });
   return defineProject({
     ...sharedVitestConfig,
     test: {
       ...sharedTest,
-      name: "unit",
-      isolate: resolveVitestIsolation(env),
-      runner: "./test/non-isolated-runner.ts",
+      name: options.name ?? "unit",
+      isolate,
+      ...(isolate ? { runner: undefined } : { runner: "./test/non-isolated-runner.ts" }),
       setupFiles: [
         ...new Set([...(sharedTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"]),
       ],
-      include:
-        loadIncludePatternsFromEnv(env) ?? options.includePatterns ?? unitTestIncludePatterns,
+      include: loadIncludePatternsFromEnv(env) ?? cliIncludePatterns ?? defaultIncludePatterns,
       exclude: [
         ...new Set([
           ...exclude,
-          ...(options.extraExcludePatterns ?? unitTestAdditionalExcludePatterns),
+          ...baseExcludePatterns,
+          ...(options.extraExcludePatterns ?? []),
           ...loadExtraExcludePatternsFromEnv(env),
         ]),
       ],
+      ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
     },
   });
 }

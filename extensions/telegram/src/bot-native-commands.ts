@@ -1,4 +1,5 @@
 import type { Bot, Context } from "grammy";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
   resolveCommandAuthorization,
   resolveCommandAuthorizedFromAuthorizers,
@@ -211,6 +212,13 @@ export function parseTelegramNativeCommandCallbackData(data?: string | null): st
   }
   const commandText = trimmed.slice(TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX.length).trim();
   return commandText.startsWith("/") ? commandText : null;
+}
+
+export function resolveTelegramNativeCommandDisableBlockStreaming(
+  telegramCfg: TelegramAccountConfig,
+): boolean | undefined {
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(telegramCfg);
+  return typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined;
 }
 
 export type RegisterTelegramNativeCommandsParams = {
@@ -560,15 +568,32 @@ export const registerTelegramNativeCommands = ({
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];
-  const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
-    buildCappedTelegramMenuCommands({
-      allCommands: allCommandsFull,
-    });
+  const {
+    commandsToRegister,
+    totalCommands,
+    maxCommands,
+    overflowCount,
+    maxTotalChars,
+    descriptionTrimmed,
+    textBudgetDropCount,
+  } = buildCappedTelegramMenuCommands({
+    allCommands: allCommandsFull,
+  });
   if (overflowCount > 0) {
     runtime.log?.(
       `Telegram limits bots to ${maxCommands} commands. ` +
         `${totalCommands} configured; registering first ${maxCommands}. ` +
         `Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
+    );
+  }
+  if (descriptionTrimmed) {
+    runtime.log?.(
+      `Telegram menu text exceeded the conservative ${maxTotalChars}-character payload budget; shortening descriptions to keep ${commandsToRegister.length} commands visible.`,
+    );
+  }
+  if (textBudgetDropCount > 0) {
+    runtime.log?.(
+      `Telegram menu text still exceeded the conservative ${maxTotalChars}-character payload budget after shortening descriptions; registering first ${commandsToRegister.length} commands.`,
     );
   }
   const syncTelegramMenuCommands =
@@ -883,9 +908,7 @@ export const registerTelegramNativeCommands = ({
         });
 
         const disableBlockStreaming =
-          typeof runtimeTelegramCfg.blockStreaming === "boolean"
-            ? !runtimeTelegramCfg.blockStreaming
-            : undefined;
+          resolveTelegramNativeCommandDisableBlockStreaming(runtimeTelegramCfg);
         const deliveryState = {
           delivered: false,
           skippedNonSilent: 0,

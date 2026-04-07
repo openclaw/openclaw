@@ -1,16 +1,14 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function formatConversationTimestamp(
@@ -45,12 +43,18 @@ function resolveInboundFormattingHints(ctx: TemplateContext):
     return undefined;
   }
   const normalizedChannel = normalizeChannelId(channelValue) ?? channelValue;
-  return getChannelPlugin(normalizedChannel)?.agentPrompt?.inboundFormattingHints?.({
+  const agentPrompt =
+    getLoadedChannelPlugin(normalizedChannel)?.agentPrompt ??
+    getBundledChannelPlugin(normalizedChannel)?.agentPrompt;
+  return agentPrompt?.inboundFormattingHints?.({
     accountId: safeTrim(ctx.AccountId) ?? undefined,
   });
 }
 
-export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
+export function buildInboundMetaSystemPrompt(
+  ctx: TemplateContext,
+  options?: { includeFormattingHints?: boolean },
+): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
@@ -73,7 +77,8 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
-    response_format: resolveInboundFormattingHints(ctx),
+    response_format:
+      options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
   };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.

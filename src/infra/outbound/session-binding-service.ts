@@ -1,5 +1,6 @@
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   __testing as genericCurrentConversationBindingTesting,
   bindGenericCurrentConversation,
@@ -108,7 +109,7 @@ function normalizeConversationRef(ref: ConversationRef): ConversationRef {
     channel: ref.channel.trim().toLowerCase(),
     accountId: normalizeAccountId(ref.accountId),
     conversationId: ref.conversationId.trim(),
-    parentConversationId: ref.parentConversationId?.trim() || undefined,
+    parentConversationId: normalizeOptionalString(ref.parentConversationId),
   };
 }
 

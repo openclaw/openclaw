@@ -232,6 +232,10 @@ describe("provider attribution", () => {
       endpointClass: "xai-native",
       hostname: "api.x.ai",
     });
+    expect(resolveProviderEndpoint("https://api.grok.x.ai/v1")).toMatchObject({
+      endpointClass: "xai-native",
+      hostname: "api.grok.x.ai",
+    });
     expect(resolveProviderEndpoint("https://api.z.ai/api/coding/paas/v4")).toMatchObject({
       endpointClass: "zai-native",
       hostname: "api.z.ai",
@@ -561,9 +565,22 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestCapabilities({
-        provider: "modelstudio",
+        provider: "qwen",
         api: "openai-completions",
         baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "modelstudio-native",
+      supportsNativeStreamingUsageCompat: true,
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "generic",
+        api: "openai-completions",
+        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
         capability: "llm",
         transport: "stream",
       }),
@@ -732,9 +749,9 @@ describe("provider attribution", () => {
         },
       },
       {
-        name: "native ModelStudio completions",
+        name: "native Qwen completions",
         input: {
-          provider: "modelstudio",
+          provider: "qwen",
           api: "openai-completions",
           baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
           capability: "llm" as const,
@@ -742,6 +759,28 @@ describe("provider attribution", () => {
         },
         expected: {
           knownProviderFamily: "modelstudio",
+          endpointClass: "modelstudio-native",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: true,
+        },
+      },
+      {
+        name: "generic provider on native DashScope completions",
+        input: {
+          provider: "generic",
+          api: "openai-completions",
+          baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "generic",
           endpointClass: "modelstudio-native",
           isKnownNativeEndpoint: true,
           allowsOpenAIServiceTier: false,

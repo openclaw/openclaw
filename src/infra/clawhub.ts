@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -12,7 +12,13 @@ const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
-export type ClawHubPackageCompatibility = ExternalPluginCompatibility;
+// Keep aligned with @openclaw/plugin-package-contract ExternalPluginCompatibility.
+export type ClawHubPackageCompatibility = {
+  pluginApiRange?: string;
+  builtWithOpenClawVersion?: string;
+  pluginSdkVersion?: string;
+  minGatewayVersion?: string;
+};
 export type ClawHubPackageListItem = {
   name: string;
   displayName: string;
@@ -202,7 +208,7 @@ function normalizeBaseUrl(baseUrl?: string): string {
 }
 
 function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(value);
 }
 
 function extractTokenFromClawHubConfig(value: unknown): string | undefined {

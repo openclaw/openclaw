@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
   coerceFiniteScheduleNumber,
   computeNextRunAtMs,
   computePreviousRunAtMs,
 } from "../schedule.js";
+import { assertSafeCronSessionTargetId } from "../session-target.js";
 import {
   normalizeCronStaggerMs,
   resolveCronStaggerMs,
@@ -136,6 +138,9 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
     job.sessionTarget === "isolated" ||
     job.sessionTarget === "current" ||
     job.sessionTarget.startsWith("session:");
+  if (job.sessionTarget.startsWith("session:")) {
+    assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
+  }
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
@@ -713,8 +718,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
 }
 
 function normalizeOptionalTrimmedString(value: unknown): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 function normalizeOptionalThreadId(value: unknown): string | number | undefined {

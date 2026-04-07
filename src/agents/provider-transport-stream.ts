@@ -11,6 +11,7 @@ import { getModelProviderRequestTransport } from "./provider-request-config.js";
 
 const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-responses",
+  "openai-codex-responses",
   "openai-completions",
   "azure-openai-responses",
   "anthropic-messages",
@@ -19,11 +20,30 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-responses": "openclaw-openai-responses-transport",
+  "openai-codex-responses": "openclaw-openai-responses-transport",
   "openai-completions": "openclaw-openai-completions-transport",
   "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
   "google-generative-ai": "openclaw-google-generative-ai-transport",
 };
+
+function createSupportedTransportStreamFn(api: Api): StreamFn | undefined {
+  switch (api) {
+    case "openai-responses":
+    case "openai-codex-responses":
+      return createOpenAIResponsesTransportStreamFn();
+    case "openai-completions":
+      return createOpenAICompletionsTransportStreamFn();
+    case "azure-openai-responses":
+      return createAzureOpenAIResponsesTransportStreamFn();
+    case "anthropic-messages":
+      return createAnthropicMessagesTransportStreamFn();
+    case "google-generative-ai":
+      return createGoogleGenerativeAiTransportStreamFn();
+    default:
+      return undefined;
+  }
+}
 
 function hasTransportOverrides(model: Model<Api>): boolean {
   const request = getModelProviderRequestTransport(model);
@@ -47,20 +67,14 @@ export function createTransportAwareStreamFnForModel(model: Model<Api>): StreamF
       `Model-provider request.proxy/request.tls is not yet supported for api "${model.api}"`,
     );
   }
-  switch (model.api) {
-    case "openai-responses":
-      return createOpenAIResponsesTransportStreamFn();
-    case "openai-completions":
-      return createOpenAICompletionsTransportStreamFn();
-    case "azure-openai-responses":
-      return createAzureOpenAIResponsesTransportStreamFn();
-    case "anthropic-messages":
-      return createAnthropicMessagesTransportStreamFn();
-    case "google-generative-ai":
-      return createGoogleGenerativeAiTransportStreamFn();
-    default:
-      return undefined;
+  return createSupportedTransportStreamFn(model.api);
+}
+
+export function createBoundaryAwareStreamFnForModel(model: Model<Api>): StreamFn | undefined {
+  if (!isTransportAwareApiSupported(model.api)) {
+    return undefined;
   }
+  return createSupportedTransportStreamFn(model.api);
 }
 
 export function prepareTransportAwareSimpleModel<TApi extends Api>(model: Model<TApi>): Model<Api> {

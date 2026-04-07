@@ -3,6 +3,7 @@ import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -61,7 +62,7 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
   return normalized;
 };
 
-export function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
+export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> | null): string[] {
   const next = (allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
   if (!next.includes("*")) {
     next.push("*");
@@ -897,8 +898,14 @@ function patchConfigForScopedAccount(params: {
   ensureEnabled: boolean;
 }): OpenClawConfig {
   const { cfg, channel, accountId, patch, ensureEnabled } = params;
+  const channelConfig = cfg.channels?.[channel] as
+    | { accounts?: Record<string, unknown> }
+    | undefined;
+  const hasExistingAccounts = Boolean(
+    channelConfig?.accounts && Object.keys(channelConfig.accounts).length > 0,
+  );
   const seededCfg =
-    accountId === DEFAULT_ACCOUNT_ID
+    accountId === DEFAULT_ACCOUNT_ID || hasExistingAccounts
       ? cfg
       : moveSingleAccountChannelSectionToDefaultAccount({
           cfg,
@@ -1075,7 +1082,7 @@ export async function runSingleChannelSecretStep(params: {
     return {
       cfg: params.applyUseEnv ? await params.applyUseEnv(params.cfg) : params.cfg,
       action: result.action,
-      resolvedValue: params.envValue?.trim() || undefined,
+      resolvedValue: normalizeOptionalString(params.envValue),
     };
   }
 

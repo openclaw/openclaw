@@ -36,6 +36,10 @@ import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-di
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../../channels/mention-gating.js";
+import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
   setChannelConversationBindingMaxAgeBySessionKey,
 } from "../../channels/plugins/conversation-bindings.js";
@@ -128,6 +132,8 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildMentionRegexes,
       matchesMentionPatterns,
       matchesMentionWithExplicit,
+      implicitMentionKindWhen,
+      resolveInboundMentionDecision,
     },
     reactions: {
       shouldAckReaction,

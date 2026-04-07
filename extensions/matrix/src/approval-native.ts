@@ -1,11 +1,14 @@
 import {
   createChannelApprovalCapability,
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-runtime";
+} from "openclaw/plugin-sdk/approval-delivery-runtime";
+import {
+  createChannelApproverDmTargetResolver,
+  createChannelNativeOriginTargetResolver,
+} from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { getMatrixApprovalAuthApprovers, matrixApprovalAuth } from "./approval-auth.js";
 import {
   getMatrixExecApprovalApprovers,
@@ -121,6 +124,13 @@ const resolveMatrixApproverDmTargets = createChannelApproverDmTargetResolver({
 const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "matrix",
   channelLabel: "Matrix",
+  describeExecApprovalSetup: ({ accountId }) => {
+    const prefix =
+      accountId && accountId !== "default"
+        ? `channels.matrix.accounts.${accountId}`
+        : "channels.matrix";
+    return `Approve it from the Web UI or terminal UI for now. Matrix supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`${prefix}.dm.allowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+  },
   listAccountIds: listMatrixAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
     getMatrixExecApprovalApprovers({ cfg, accountId }).length > 0,
@@ -132,7 +142,8 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
     resolveMatrixExecApprovalTarget({ cfg, accountId }),
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId: ({ target, request }) =>
-    target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
+    normalizeOptionalString(target.accountId) ??
+    normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveMatrixOriginTarget,
   resolveApproverDmTargets: resolveMatrixApproverDmTargets,
 });
@@ -201,6 +212,7 @@ export const matrixApprovalCapability = createChannelApprovalCapability({
       ? ({ kind: "enabled" } as const)
       : (matrixNativeApprovalCapability.getActionAvailabilityState?.(params) ??
         ({ kind: "disabled" } as const)),
+  describeExecApprovalSetup: matrixNativeApprovalCapability.describeExecApprovalSetup,
   approvals: {
     delivery: matrixDeliveryAdapter,
     native: matrixExecOnlyNativeApprovalAdapter,

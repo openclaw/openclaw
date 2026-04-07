@@ -252,6 +252,27 @@ describe("OpenAIWebSocketManager", () => {
       await connectPromise;
     });
 
+    it("merges native session headers into the websocket handshake", async () => {
+      const manager = buildManager({
+        headers: {
+          "x-client-request-id": "session-123",
+          "x-openclaw-session-id": "session-123",
+        },
+      });
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          "x-client-request-id": "session-123",
+          "x-openclaw-session-id": "session-123",
+        }),
+      });
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
     it("does not add hidden attribution headers on custom websocket endpoints", async () => {
       const manager = buildManager({
         url: "wss://proxy.example.com/v1/responses",
@@ -290,8 +311,10 @@ describe("OpenAIWebSocketManager", () => {
     it("resolves when the connection opens", async () => {
       const manager = buildManager();
       const connectPromise = manager.connect("sk-test");
+      expect(manager.connectionState).toBe("connecting");
       lastSocket().simulateOpen();
       await expect(connectPromise).resolves.toBeUndefined();
+      expect(manager.connectionState).toBe("open");
     });
 
     it("rejects when the initial connection fails (maxRetries=0)", async () => {
@@ -332,7 +355,7 @@ describe("OpenAIWebSocketManager", () => {
 
       const event: ResponseCreateEvent = {
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         input: [{ type: "message", role: "user", content: "Hello" }],
       };
       manager.send(event);
@@ -345,7 +368,7 @@ describe("OpenAIWebSocketManager", () => {
       const manager = buildManager();
       const event: ClientEvent = {
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
       };
       expect(() => manager.send(event)).toThrow(/cannot send/);
     });
@@ -355,7 +378,7 @@ describe("OpenAIWebSocketManager", () => {
 
       const event: ResponseCreateEvent = {
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         previous_response_id: "resp_abc123",
         input: [{ type: "function_call_output", call_id: "call_1", output: "result" }],
       };
@@ -516,6 +539,7 @@ describe("OpenAIWebSocketManager", () => {
     it("is safe to call before connect()", () => {
       const manager = buildManager();
       expect(() => manager.close()).not.toThrow();
+      expect(manager.connectionState).toBe("closed");
     });
   });
 
@@ -533,6 +557,12 @@ describe("OpenAIWebSocketManager", () => {
 
       // Simulate a network drop
       sock1.simulateClose(1006, "Network error");
+      expect(manager.connectionState).toBe("reconnecting");
+      expect(manager.lastCloseInfo).toEqual({
+        code: 1006,
+        reason: "Network error",
+        retryable: true,
+      });
 
       // Advance time to trigger first retry (10ms delay)
       await vi.advanceTimersByTimeAsync(15);
@@ -540,6 +570,27 @@ describe("OpenAIWebSocketManager", () => {
       // A new socket should have been created
       expect(MockWebSocket.instances.length).toBeGreaterThan(instancesBefore);
       expect(lastSocket()).not.toBe(sock1);
+    });
+
+    it("does not reconnect on non-retryable close codes", async () => {
+      const manager = buildManager({ backoffDelaysMs: [10, 20] });
+      const p = manager.connect("sk-test");
+      lastSocket().simulateOpen();
+      await p;
+
+      const sock = lastSocket();
+      const instancesBefore = MockWebSocket.instances.length;
+      sock.simulateClose(1008, "policy violation");
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(MockWebSocket.instances.length).toBe(instancesBefore);
+      expect(manager.connectionState).toBe("closed");
+      expect(manager.lastCloseInfo).toEqual({
+        code: 1008,
+        reason: "policy violation",
+        retryable: false,
+      });
     });
 
     it("stops retrying after maxRetries", async () => {
@@ -635,13 +686,14 @@ describe("OpenAIWebSocketManager", () => {
     it("sends a response.create event with generate: false", async () => {
       const { manager, sock } = await createConnectedManager();
 
-      manager.warmUp({ model: "gpt-5.2", instructions: "You are helpful." });
+      manager.warmUp({ model: "gpt-5.4", instructions: "You are helpful." });
 
       expect(sock.sentMessages).toHaveLength(1);
       const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
       expect(sent["type"]).toBe("response.create");
       expect(sent["generate"]).toBe(false);
-      expect(sent["model"]).toBe("gpt-5.2");
+      expect(sent["model"]).toBe("gpt-5.4");
+      expect(sent["input"]).toEqual([]);
       expect(sent["instructions"]).toBe("You are helpful.");
     });
 
@@ -649,7 +701,7 @@ describe("OpenAIWebSocketManager", () => {
       const { manager, sock } = await createConnectedManager();
 
       manager.warmUp({
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         tools: [{ type: "function", name: "exec", description: "Run a command" }],
       });
 
@@ -743,7 +795,7 @@ describe("OpenAIWebSocketManager", () => {
       manager.onMessage((e) => received.push(e));
 
       // Send initial turn
-      manager.send({ type: "response.create", model: "gpt-5.2", input: "Hello" });
+      manager.send({ type: "response.create", model: "gpt-5.4", input: "Hello" });
 
       // Simulate streaming events from server
       sock.simulateMessage({ type: "response.created", response: makeResponse("resp_1") });
@@ -765,7 +817,7 @@ describe("OpenAIWebSocketManager", () => {
       // Send continuation turn using the tracked previous_response_id
       manager.send({
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         previous_response_id: manager.previousResponseId!,
         input: [{ type: "function_call_output", call_id: "call_99", output: "tool result" }],
       });
@@ -792,7 +844,7 @@ function makeResponse(
     object: "response",
     created_at: Date.now(),
     status,
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     output: [],
     usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
   };

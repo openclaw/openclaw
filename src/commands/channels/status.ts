@@ -8,8 +8,8 @@ import {
   buildReadOnlySourceChannelAccountSnapshot,
 } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { withProgress } from "../../cli/progress.js";
 import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config.js";
@@ -311,15 +311,13 @@ export async function channelsStatusCommand(
     if (!cfg) {
       return;
     }
-    const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    const { resolvedConfig } = await resolveCommandConfigWithSecrets({
       config: cfg,
       commandName: "channels status",
       targetIds: getChannelsCommandSecretTargetIds(),
       mode: "read_only_status",
+      runtime,
     });
-    for (const entry of diagnostics) {
-      runtime.log(`[secrets] ${entry}`);
-    }
     const snapshot = await readConfigFileSnapshot();
     const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
     runtime.log(

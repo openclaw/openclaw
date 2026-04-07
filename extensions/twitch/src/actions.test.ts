@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { twitchMessageActions } from "./actions.js";
-import { twitchOutbound } from "./outbound.js";
 import { resolveTwitchAccountContext } from "./config.js";
+import { twitchOutbound } from "./outbound.js";
 
 vi.mock("./config.js", () => ({
   DEFAULT_ACCOUNT_ID: "default",
@@ -47,7 +47,11 @@ describe("twitchMessageActions", () => {
         configured: true,
         availableAccountIds: ["default", "secondary"],
       }));
-    vi.mocked(twitchOutbound.sendText!).mockResolvedValue({
+    const sendText = twitchOutbound.sendText;
+    if (!sendText) {
+      throw new Error("twitchOutbound.sendText is unavailable");
+    }
+    vi.mocked(sendText).mockResolvedValue({
       channel: "twitch",
       messageId: "msg-1",
       timestamp: 1,
