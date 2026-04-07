@@ -9,7 +9,7 @@ import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 
 describe("googlechat secret contract", () => {
   it("resolves account serviceAccount SecretRefs for enabled accounts", async () => {
-    const sourceConfig = {
+    const sourceConfig: OpenClawConfig = {
       channels: {
         googlechat: {
           enabled: true,
@@ -25,8 +25,8 @@ describe("googlechat secret contract", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
-    const resolvedConfig: OpenClawConfig = structuredClone(sourceConfig);
+    } as unknown as OpenClawConfig;
+    const resolvedConfig = structuredClone(sourceConfig);
     const context = createResolverContext({
       sourceConfig,
       env: {
@@ -54,7 +54,7 @@ describe("googlechat secret contract", () => {
     });
 
     const workAccount = resolvedConfig.channels?.googlechat?.accounts?.work;
-    expect(workAccount?.serviceAccount).toBe('{"client_email":"bot@example.com"}');
+    expect((workAccount as any)?.serviceAccount).toBe('{"client_email":"bot@example.com"}');
     expect(context.warnings).toEqual([]);
   });
 });
