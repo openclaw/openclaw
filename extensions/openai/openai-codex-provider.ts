@@ -2,7 +2,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ensureAuthProfileStore,
@@ -87,7 +86,7 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
 ] as const;
 const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks("openai-responses-defaults");
 
-function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
+function normalizeCodexTransport<T extends { api?: string; baseUrl?: string }>(model: T): T {
   const useCodexTransport =
     !model.baseUrl || isOpenAIApiBaseUrl(model.baseUrl) || isOpenAICodexBaseUrl(model.baseUrl);
   const api =
@@ -106,14 +105,20 @@ function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeMo
   };
 }
 
-function resolveCodexForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
+function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   const trimmedModelId = ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
 
   let templateIds: readonly string[];
-  let patch: Partial<ProviderRuntimeModel> | undefined;
+  let patch:
+    | {
+        templateModel?: string;
+        contextWindow?: number;
+        contextTokens?: number;
+        maxTokens?: number;
+        cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+      }
+    | undefined;
   if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     patch = {
@@ -167,7 +172,7 @@ function resolveCodexForwardCompatModel(
       contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
       contextTokens: patch?.contextTokens,
       maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-    } as ProviderRuntimeModel)
+    })
   );
 }
 
@@ -284,6 +289,9 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     supportsXHighThinking: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
+    preferRuntimeResolvedModel: (ctx) =>
+      normalizeProviderId(ctx.provider) === PROVIDER_ID &&
+      ctx.modelId.trim().toLowerCase() === OPENAI_CODEX_GPT_54_MODEL_ID,
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => {
       const transport = ctx.extraParams?.transport;

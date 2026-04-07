@@ -10,6 +10,7 @@ import {
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
+  shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -51,6 +52,9 @@ type ProviderRuntimeHooks = {
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
   runProviderDynamicModel: (params: Parameters<typeof runProviderDynamicModel>[0]) => unknown;
+  shouldPreferProviderRuntimeResolvedModel?: (
+    params: Parameters<typeof shouldPreferProviderRuntimeResolvedModel>[0],
+  ) => boolean;
   normalizeProviderResolvedModelWithPlugin: (
     params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
   ) => unknown;
@@ -66,6 +70,7 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
+  shouldPreferProviderRuntimeResolvedModel,
   normalizeProviderResolvedModelWithPlugin,
   normalizeProviderTransportWithPlugin,
 };
@@ -526,14 +531,30 @@ function resolveConfiguredFallbackModel(params: {
   });
 }
 
-function shouldCompareOpenAICodexRuntimeResolvedModel(params: {
+function shouldCompareProviderRuntimeResolvedModel(params: {
   provider: string;
   modelId: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  runtimeHooks: ProviderRuntimeHooks;
 }): boolean {
-  return params.provider === "openai-codex" && params.modelId === "gpt-5.4";
+  return (
+    params.runtimeHooks.shouldPreferProviderRuntimeResolvedModel?.({
+      provider: params.provider,
+      config: params.cfg,
+      workspaceDir: params.agentDir,
+      context: {
+        provider: params.provider,
+        modelId: params.modelId,
+        config: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.agentDir,
+      },
+    }) ?? false
+  );
 }
 
-function preferOpenAICodexRuntimeResolvedModel(params: {
+function preferProviderRuntimeResolvedModel(params: {
   explicitModel: Model<Api>;
   runtimeResolvedModel?: Model<Api>;
 }): Model<Api> {
@@ -567,16 +588,25 @@ export function resolveModelWithRegistry(params: {
   if (explicitModel?.kind === "suppressed") {
     return undefined;
   }
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(normalizedParams);
   if (explicitModel?.kind === "resolved") {
-    if (!shouldCompareOpenAICodexRuntimeResolvedModel(normalizedParams)) {
+    if (
+      !shouldCompareProviderRuntimeResolvedModel({
+        provider: normalizedParams.provider,
+        modelId: normalizedParams.modelId,
+        cfg: normalizedParams.cfg,
+        agentDir: normalizedParams.agentDir,
+        runtimeHooks,
+      })
+    ) {
       return explicitModel.model;
     }
-    return preferOpenAICodexRuntimeResolvedModel({
+    const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(normalizedParams);
+    return preferProviderRuntimeResolvedModel({
       explicitModel: explicitModel.model,
       runtimeResolvedModel: pluginDynamicModel,
     });
   }
+  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(normalizedParams);
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
@@ -709,9 +739,12 @@ export async function resolveModelAsync(
   };
   let model =
     explicitModel?.kind === "resolved" &&
-    !shouldCompareOpenAICodexRuntimeResolvedModel({
+    !shouldCompareProviderRuntimeResolvedModel({
       provider: normalizedRef.provider,
       modelId: normalizedRef.model,
+      cfg,
+      agentDir: resolvedAgentDir,
+      runtimeHooks,
     })
       ? explicitModel.model
       : await resolveDynamicAttempt();
