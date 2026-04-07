@@ -2,6 +2,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildNoCapabilityModelConfiguredMessage,
@@ -182,7 +183,7 @@ export async function generateVideo(
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
-        error: described?.message ?? (err instanceof Error ? err.message : String(err)),
+        error: described?.message ?? formatErrorMessage(err),
         reason: described?.reason,
         status: described?.status,
         code: described?.code,

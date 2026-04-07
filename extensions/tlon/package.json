@@ -10,6 +10,7 @@
     "@urbit/aura": "^3.0.0"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

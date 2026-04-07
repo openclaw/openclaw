@@ -1,11 +1,12 @@
 import type { SkillCommandSpec } from "../agents/skills.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { getChatCommands } from "./commands-registry.data.js";
 
 export function listReservedChatSlashCommandNames(extraNames: string[] = []): Set<string> {
   const reserved = new Set<string>();
   for (const command of getChatCommands()) {
     if (command.nativeName) {
-      reserved.add(command.nativeName.toLowerCase());
+      reserved.add(normalizeOptionalLowercaseString(command.nativeName) ?? "");
     }
     for (const alias of command.textAliases) {
       const trimmed = alias.trim();
@@ -16,7 +17,7 @@ export function listReservedChatSlashCommandNames(extraNames: string[] = []): Se
     }
   }
   for (const name of extraNames) {
-    const trimmed = name.trim().toLowerCase();
+    const trimmed = normalizeOptionalLowercaseString(name);
     if (trimmed) {
       reserved.add(trimmed);
     }
@@ -25,10 +26,7 @@ export function listReservedChatSlashCommandNames(extraNames: string[] = []): Se
 }
 
 function normalizeSkillCommandLookup(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-");
+  return (normalizeOptionalLowercaseString(value) ?? "").replace(/[\s_]+/g, "-");
 }
 
 function findSkillCommand(
@@ -39,13 +37,13 @@ function findSkillCommand(
   if (!trimmed) {
     return undefined;
   }
-  const lowered = trimmed.toLowerCase();
+  const lowered = normalizeOptionalLowercaseString(trimmed) ?? "";
   const normalized = normalizeSkillCommandLookup(trimmed);
   return skillCommands.find((entry) => {
-    if (entry.name.toLowerCase() === lowered) {
+    if (normalizeOptionalLowercaseString(entry.name) === lowered) {
       return true;
     }
-    if (entry.skillName.toLowerCase() === lowered) {
+    if (normalizeOptionalLowercaseString(entry.skillName) === lowered) {
       return true;
     }
     return (
@@ -67,7 +65,7 @@ export function resolveSkillCommandInvocation(params: {
   if (!match) {
     return null;
   }
-  const commandName = match[1]?.trim().toLowerCase();
+  const commandName = normalizeOptionalLowercaseString(match[1]);
   if (!commandName) {
     return null;
   }
@@ -87,7 +85,9 @@ export function resolveSkillCommandInvocation(params: {
     const args = skillMatch[2]?.trim();
     return { command: skillCommand, args: args || undefined };
   }
-  const command = params.skillCommands.find((entry) => entry.name.toLowerCase() === commandName);
+  const command = params.skillCommands.find(
+    (entry) => normalizeOptionalLowercaseString(entry.name) === commandName,
+  );
   if (!command) {
     return null;
   }

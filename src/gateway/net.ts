@@ -13,6 +13,7 @@ import {
   isPrivateOrLoopbackIpAddress,
   normalizeIpAddress,
 } from "../shared/net/ip.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
@@ -26,7 +27,7 @@ export function pickPrimaryLanIPv4(): string | undefined {
 }
 
 export function normalizeHostHeader(hostHeader?: string): string {
-  return (hostHeader ?? "").trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(hostHeader);
 }
 
 export function resolveHostName(hostHeader?: string): string {
@@ -217,7 +218,7 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
     return true;
   }
   const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
+  if (tailnetIPv6 && normalizeLowercaseStringOrEmpty(ip) === tailnetIPv6.toLowerCase()) {
     return true;
   }
   return false;
@@ -483,7 +484,7 @@ function parseHostForAddressChecks(
   if (!host) {
     return null;
   }
-  const normalizedHost = host.trim().toLowerCase();
+  const normalizedHost = normalizeLowercaseStringOrEmpty(host);
   const canonicalHost = normalizedHost.replace(/\.+$/, "");
   if (canonicalHost === "localhost") {
     return { isLocalhost: true, unbracketedHost: canonicalHost };

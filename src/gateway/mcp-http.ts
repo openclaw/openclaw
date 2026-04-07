@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import { loadConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
@@ -72,9 +73,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(payload);
       } catch (error) {
-        logWarn(
-          `mcp loopback: request handling failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        logWarn(`mcp loopback: request handling failed: ${formatErrorMessage(error)}`);
         if (!res.headersSent) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));

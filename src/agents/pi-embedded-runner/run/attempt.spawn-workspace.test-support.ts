@@ -12,6 +12,8 @@ import type {
   IngestBatchResult,
   IngestResult,
 } from "../../../context-engine/types.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
@@ -390,7 +392,7 @@ vi.mock("../../../image-generation/runtime.js", () => ({
 }));
 
 vi.mock("../../model-selection.js", () => ({
-  normalizeProviderId: (providerId?: string) => providerId?.trim().toLowerCase() ?? "",
+  normalizeProviderId: (providerId?: string) => normalizeLowercaseStringOrEmpty(providerId),
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
 
@@ -511,8 +513,7 @@ vi.mock("../tool-split.js", () => ({
 }));
 
 vi.mock("../utils.js", () => ({
-  describeUnknownError: (error: unknown) =>
-    error instanceof Error ? error.message : String(error),
+  describeUnknownError: (error: unknown) => formatErrorMessage(error),
   mapThinkingLevel: () => undefined,
 }));
 

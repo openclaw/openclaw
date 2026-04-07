@@ -33,6 +33,7 @@ import {
 import type { OpenClawConfig } from "../../../config/config.js";
 import { updateSessionStore } from "../../../config/sessions.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   getSessionBindingService,
   type ConversationRef,
@@ -40,6 +41,7 @@ import {
   type SessionBindingRecord,
   type SessionBindingService,
 } from "../../../infra/outbound/session-binding-service.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpCommandAccountId,
@@ -171,7 +173,7 @@ async function bindSpawnedAcpSession(params: {
       binding,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     return {
       ok: false,
       error: message || params.bindError,
@@ -239,7 +241,7 @@ async function bindSpawnedAcpSessionToCurrentConversation(params: {
     };
   }
 
-  const currentConversationId = bindingContext.conversationId?.trim() || "";
+  const currentConversationId = normalizeOptionalString(bindingContext.conversationId) ?? "";
   if (!currentConversationId) {
     return {
       ok: false,
@@ -247,8 +249,8 @@ async function bindSpawnedAcpSessionToCurrentConversation(params: {
     };
   }
 
-  const senderId = params.commandParams.command.senderId?.trim() || "";
-  const parentConversationId = bindingContext.parentConversationId?.trim() || undefined;
+  const senderId = normalizeOptionalString(params.commandParams.command.senderId) ?? "";
+  const parentConversationId = normalizeOptionalString(bindingContext.parentConversationId);
   const conversationRef = {
     channel: bindingPolicy.channel,
     accountId: bindingPolicy.accountId,
@@ -258,10 +260,7 @@ async function bindSpawnedAcpSessionToCurrentConversation(params: {
       : {}),
   };
   const existingBinding = bindingService.resolveByConversation(conversationRef);
-  const boundBy =
-    typeof existingBinding?.metadata?.boundBy === "string"
-      ? existingBinding.metadata.boundBy.trim()
-      : "";
+  const boundBy = normalizeOptionalString(existingBinding?.metadata?.boundBy) ?? "";
   if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
     const currentLabel = resolveAcpBindingLabelNoun({
       placement: "current",
@@ -363,7 +362,7 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const currentThreadId = bindingContext.threadId ?? "";
-  const currentConversationId = bindingContext.conversationId?.trim() || "";
+  const currentConversationId = normalizeOptionalString(bindingContext.conversationId) ?? "";
   const requiresThreadIdForHere = requiresNativeThreadContextForThreadHere(channel);
   if (
     threadMode === "here" &&
@@ -393,8 +392,8 @@ async function bindSpawnedAcpSessionToThread(params: {
     };
   }
 
-  const senderId = commandParams.command.senderId?.trim() || "";
-  const parentConversationId = bindingContext.parentConversationId?.trim() || undefined;
+  const senderId = normalizeOptionalString(commandParams.command.senderId) ?? "";
+  const parentConversationId = normalizeOptionalString(bindingContext.parentConversationId);
   const conversationRef = {
     channel: spawnPolicy.channel,
     accountId: spawnPolicy.accountId,
@@ -405,10 +404,7 @@ async function bindSpawnedAcpSessionToThread(params: {
   };
   if (placement === "current") {
     const existingBinding = bindingService.resolveByConversation(conversationRef);
-    const boundBy =
-      typeof existingBinding?.metadata?.boundBy === "string"
-        ? existingBinding.metadata.boundBy.trim()
-        : "";
+    const boundBy = normalizeOptionalString(existingBinding?.metadata?.boundBy) ?? "";
     if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
       const currentLabel = resolveAcpBindingLabelNoun({
         placement,
@@ -459,7 +455,7 @@ async function persistSpawnedSessionLabel(params: {
   sessionKey: string;
   label?: string;
 }): Promise<void> {
-  const label = params.label?.trim();
+  const label = normalizeOptionalString(params.label);
   if (!label) {
     return;
   }
@@ -607,7 +603,7 @@ export async function handleAcpSpawnAction(
       shouldDeleteSession: true,
       initializedRuntime,
     });
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     return stopWithText(`⚠️ ACP spawn failed: ${message}`);
   }
 
@@ -615,7 +611,8 @@ export async function handleAcpSpawnAction(
     `✅ Spawned ACP session ${sessionKey} (${spawn.mode}, backend ${initializedBackend}).`,
   ];
   if (binding) {
-    const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
+    const currentConversationId =
+      normalizeOptionalString(resolveAcpCommandConversationId(params)) ?? "";
     const boundConversationId = binding.conversation.conversationId.trim();
     const bindingPlacement =
       currentConversationId && boundConversationId === currentConversationId ? "current" : "child";
@@ -682,7 +679,7 @@ async function resolveAcpTokenTargetSessionKeyOrStop(params: {
   commandParams: HandleCommandsParams;
   restTokens: string[];
 }): Promise<string | CommandHandlerResult> {
-  const token = params.restTokens.join(" ").trim() || undefined;
+  const token = normalizeOptionalString(params.restTokens.join(" "));
   const target = await resolveAcpTargetSessionKey({
     commandParams: params.commandParams,
     token,

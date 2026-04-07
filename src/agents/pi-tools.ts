@@ -6,6 +6,10 @@ import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runt
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -61,7 +65,7 @@ import {
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
-  const normalized = provider?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(provider);
   return normalized === "openai" || normalized === "openai-codex";
 }
 
@@ -74,8 +78,7 @@ const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 function normalizeMessageProvider(messageProvider?: string): string | undefined {
-  const normalized = messageProvider?.trim().toLowerCase();
-  return normalized && normalized.length > 0 ? normalized : undefined;
+  return normalizeOptionalLowercaseString(messageProvider);
 }
 
 function applyMessageProviderToolPolicy(
@@ -159,14 +162,14 @@ function isApplyPatchAllowedForModel(params: {
   if (!modelId) {
     return false;
   }
-  const normalizedModelId = modelId.toLowerCase();
-  const provider = params.modelProvider?.trim().toLowerCase();
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
+  const provider = normalizeOptionalLowercaseString(params.modelProvider);
   const normalizedFull =
     provider && !normalizedModelId.includes("/")
       ? `${provider}/${normalizedModelId}`
       : normalizedModelId;
   return allowModels.some((entry) => {
-    const normalized = entry.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(entry);
     if (!normalized) {
       return false;
     }

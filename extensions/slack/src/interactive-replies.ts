@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 
 const SLACK_BUTTON_MAX_ITEMS = 5;
@@ -154,7 +155,7 @@ function resolveInteractiveRepliesFromCapabilities(capabilities: unknown): boole
   }
   if (Array.isArray(capabilities)) {
     return capabilities.some(
-      (entry) => String(entry).trim().toLowerCase() === "interactivereplies",
+      (entry) => normalizeLowercaseStringOrEmpty(String(entry)) === "interactivereplies",
     );
   }
   if (typeof capabilities === "object") {

@@ -7,6 +7,9 @@
   "dependencies": {
     "@aws-sdk/client-bedrock": "3.1024.0"
   },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "bundle": {
       "stageRuntimeDependencies": true

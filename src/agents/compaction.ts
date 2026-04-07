@@ -5,6 +5,7 @@ import {
   generateSummary as piGenerateSummary,
 } from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
@@ -397,11 +398,7 @@ export async function summarizeWithFallback(params: {
   try {
     return await summarizeChunks(params);
   } catch (fullError) {
-    log.warn(
-      `Full summarization failed: ${
-        fullError instanceof Error ? fullError.message : String(fullError)
-      }`,
-    );
+    log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
   }
 
   // Fallback 1: Summarize only small messages, note oversized ones
@@ -431,11 +428,7 @@ export async function summarizeWithFallback(params: {
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
     } catch (partialError) {
-      log.warn(
-        `Partial summarization also failed: ${
-          partialError instanceof Error ? partialError.message : String(partialError)
-        }`,
-      );
+      log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
     }
   }
 

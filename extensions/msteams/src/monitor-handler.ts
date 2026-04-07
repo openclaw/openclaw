@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { type OpenClawConfig, type RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
@@ -263,7 +264,7 @@ async function handleFeedbackInvoke(
 
   // Route feedback using the same chat-type logic as normal messages
   // so session keys, agent IDs, and transcript paths match.
-  const convType = activity.conversation?.conversationType?.toLowerCase();
+  const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
   const isChannel = convType === "channel";
 
@@ -443,7 +444,8 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       if (member.id === botId) {
         // Bot was added to a conversation — send welcome card if configured.
         const conversationType =
-          ctx.activity?.conversation?.conversationType?.toLowerCase() ?? "personal";
+          normalizeOptionalLowercaseString(ctx.activity?.conversation?.conversationType) ??
+          "personal";
         const isPersonal = conversationType === "personal";
 
         if (isPersonal && msteamsCfg?.welcomeCard !== false) {

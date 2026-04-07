@@ -13,6 +13,7 @@ import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   checkZcaAuthenticated,
   listZalouserAccountIds,
@@ -36,6 +37,7 @@ import {
   normalizeAccountId,
   sendPayloadWithChunkedTextAndMedia,
 } from "./channel-api.js";
+import { listZalouserDirectoryGroupMembers } from "./directory.js";
 import { buildZalouserGroupCandidates, findZalouserGroupEntry } from "./group-policy.js";
 import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import type { ZalouserProbeResult } from "./probe.js";
@@ -43,7 +45,6 @@ import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { getZalouserRuntime } from "./runtime.js";
 import {
   normalizeZalouserTarget,
-  parseZalouserDirectoryGroupId,
   parseZalouserOutboundTarget,
   resolveZalouserOutboundSessionRoute,
 } from "./session-route.js";
@@ -318,18 +319,10 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
         },
         listGroupMembers: async ({ cfg, accountId, groupId, limit }) => {
           const { listZaloGroupMembers } = await loadZalouserChannelRuntime();
-          const account = resolveZalouserAccountSync({ cfg: cfg, accountId });
-          const normalizedGroupId = parseZalouserDirectoryGroupId(groupId);
-          const members = await listZaloGroupMembers(account.profile, normalizedGroupId);
-          const rows = members.map((member) =>
-            mapUser({
-              id: member.userId,
-              name: member.displayName,
-              avatarUrl: member.avatar ?? null,
-              raw: member,
-            }),
+          return await listZalouserDirectoryGroupMembers(
+            { cfg, accountId, groupId, limit },
+            { listZaloGroupMembers },
           );
-          return typeof limit === "number" && limit > 0 ? rows.slice(0, limit) : rows;
         },
       },
       resolver: {
@@ -367,8 +360,11 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
               } else {
                 const groups = await runtimeModule.listZaloGroupsMatching(account.profile, trimmed);
                 const best =
-                  groups.find((group) => group.name.toLowerCase() === trimmed.toLowerCase()) ??
-                  groups[0];
+                  groups.find(
+                    (group) =>
+                      normalizeLowercaseStringOrEmpty(group.name) ===
+                      normalizeLowercaseStringOrEmpty(trimmed),
+                  ) ?? groups[0];
                 results.push({
                   input,
                   resolved: Boolean(best?.groupId),

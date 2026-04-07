@@ -6,12 +6,14 @@ import {
   type ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   BedrockDiscoveryConfig,
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("bedrock-discovery");
 
@@ -49,7 +51,9 @@ function normalizeProviderFilter(filter?: string[]): string[] {
     return [];
   }
   const normalized = new Set(
-    filter.map((entry) => entry.trim().toLowerCase()).filter((entry) => entry.length > 0),
+    filter
+      .map((entry) => normalizeOptionalLowercaseString(entry))
+      .filter((entry): entry is string => Boolean(entry)),
   );
   return Array.from(normalized).toSorted();
 }
@@ -117,7 +121,7 @@ function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): 
   const providerName =
     summary.providerName ??
     (typeof summary.modelId === "string" ? summary.modelId.split(".")[0] : undefined);
-  const normalized = providerName?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(providerName);
   if (!normalized) {
     return false;
   }
@@ -214,7 +218,7 @@ async function fetchInferenceProfileSummaries(
     return profiles;
   } catch (error) {
     log.debug?.("Skipping inference profile discovery", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return [];
   }
@@ -406,7 +410,7 @@ export async function discoverBedrockModels(params: {
     if (!hasLoggedBedrockError) {
       hasLoggedBedrockError = true;
       log.warn("Failed to discover Bedrock models", {
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       });
     }
     return [];

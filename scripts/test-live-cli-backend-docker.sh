@@ -9,14 +9,29 @@ CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
-DEFAULT_MODEL="claude-cli/claude-sonnet-4-6"
-CLI_MODEL="${OPENCLAW_LIVE_CLI_BACKEND_MODEL:-$DEFAULT_MODEL}"
+DEFAULT_PROVIDER="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
+CLI_MODEL="${OPENCLAW_LIVE_CLI_BACKEND_MODEL:-}"
 CLI_PROVIDER="${CLI_MODEL%%/*}"
 CLI_DISABLE_MCP_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG:-}"
 
 if [[ -z "$CLI_PROVIDER" || "$CLI_PROVIDER" == "$CLI_MODEL" ]]; then
-  CLI_PROVIDER="claude-cli"
+  CLI_PROVIDER="$DEFAULT_PROVIDER"
 fi
+
+CLI_METADATA_JSON="$(node --import tsx "$ROOT_DIR/scripts/print-cli-backend-live-metadata.ts" "$CLI_PROVIDER")"
+read_metadata_field() {
+  local field="$1"
+  node -e 'const data = JSON.parse(process.argv[1]); const field = process.argv[2]; const value = data?.[field]; if (value == null) process.exit(1); process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));' \
+    "$CLI_METADATA_JSON" \
+    "$field"
+}
+
+DEFAULT_MODEL="$(read_metadata_field defaultModelRef 2>/dev/null || printf '%s' 'claude-cli/claude-sonnet-4-6')"
+CLI_MODEL="${CLI_MODEL:-$DEFAULT_MODEL}"
+CLI_DEFAULT_COMMAND="$(read_metadata_field command 2>/dev/null || true)"
+CLI_DOCKER_NPM_PACKAGE="$(read_metadata_field dockerNpmPackage 2>/dev/null || true)"
+CLI_DOCKER_BINARY_NAME="$(read_metadata_field dockerBinaryName 2>/dev/null || true)"
+
 if [[ "$CLI_PROVIDER" == "claude-cli" && -z "$CLI_DISABLE_MCP_CONFIG" ]]; then
   CLI_DISABLE_MCP_CONFIG="0"
 fi
@@ -103,13 +118,19 @@ if ((${#auth_files[@]} > 0)); then
   done
 fi
 provider="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
+default_command="${OPENCLAW_DOCKER_CLI_BACKEND_COMMAND_DEFAULT:-}"
+docker_package="${OPENCLAW_DOCKER_CLI_BACKEND_NPM_PACKAGE:-}"
+binary_name="${OPENCLAW_DOCKER_CLI_BACKEND_BINARY_NAME:-}"
+if [ -z "$binary_name" ] && [ -n "$default_command" ]; then
+  binary_name="$(basename "$default_command")"
+fi
+if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ -n "$binary_name" ]; then
+  export OPENCLAW_LIVE_CLI_BACKEND_COMMAND="$HOME/.npm-global/bin/$binary_name"
+fi
+if [ -n "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ ! -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ] && [ -n "$docker_package" ]; then
+  npm_config_prefix="$HOME/.npm-global" npm install -g "$docker_package"
+fi
 if [ "$provider" = "claude-cli" ]; then
-  if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ]; then
-    export OPENCLAW_LIVE_CLI_BACKEND_COMMAND="$HOME/.npm-global/bin/claude"
-  fi
-  if [ ! -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ]; then
-    npm_config_prefix="$HOME/.npm-global" npm install -g @anthropic-ai/claude-code
-  fi
   real_claude="$HOME/.npm-global/bin/claude-real"
   if [ ! -x "$real_claude" ] && [ -x "$HOME/.npm-global/bin/claude" ]; then
     mv "$HOME/.npm-global/bin/claude" "$real_claude"
@@ -177,6 +198,9 @@ docker run --rm -t \
   -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
   -e OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER="$CLI_PROVIDER" \
+  -e OPENCLAW_DOCKER_CLI_BACKEND_COMMAND_DEFAULT="$CLI_DEFAULT_COMMAND" \
+  -e OPENCLAW_DOCKER_CLI_BACKEND_NPM_PACKAGE="$CLI_DOCKER_NPM_PACKAGE" \
+  -e OPENCLAW_DOCKER_CLI_BACKEND_BINARY_NAME="$CLI_DOCKER_BINARY_NAME" \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_CLI_BACKEND=1 \
   -e OPENCLAW_LIVE_CLI_BACKEND_MODEL="$CLI_MODEL" \

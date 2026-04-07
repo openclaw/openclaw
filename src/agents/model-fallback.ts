@@ -3,6 +3,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
@@ -814,7 +815,7 @@ export async function runWithModelFallback<T>(params: {
       // compaction/retry logic, not by model fallback.  If one escapes as a
       // throw, rethrow it immediately rather than trying a different model
       // that may have a smaller context window and fail worse.
-      const errMessage = err instanceof Error ? err.message : String(err);
+      const errMessage = formatErrorMessage(err);
       if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
@@ -937,7 +938,7 @@ export async function runWithImageModelFallback<T>(params: {
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
       });
       await params.onError?.({
         provider: candidate.provider,

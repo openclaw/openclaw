@@ -4,6 +4,10 @@ import {
   removeAckReactionAfterReply,
   shouldAckReaction,
 } from "../../../src/channels/ack-reactions.js";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../../../src/channels/mention-gating.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 
 type DeepPartial<T> = {
@@ -298,6 +302,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
               ? true
               : params.mentionRegexes.some((regex) => regex.test(params.text)),
         ) as unknown as PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"],
+        implicitMentionKindWhen,
+        resolveInboundMentionDecision,
       },
       reactions: {
         shouldAckReaction,

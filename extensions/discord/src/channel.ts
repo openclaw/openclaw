@@ -16,6 +16,7 @@ import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -24,6 +25,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
@@ -343,7 +345,7 @@ function resolveDiscordConversationIdFromTargets(
 }
 
 function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
-  const sessionKey = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  const sessionKey = normalizeLowercaseStringOrEmpty(raw);
   if (!sessionKey) {
     return undefined;
   }
@@ -676,7 +678,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
               ],
             };
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = formatErrorMessage(err);
             details.permissions = { channelId: parsedTarget.id, error: message };
             return {
               details,

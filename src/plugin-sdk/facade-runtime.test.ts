@@ -274,10 +274,7 @@ describe("plugin-sdk facade runtime", () => {
   });
 
   it("resolves a globally-installed plugin whose rootDir basename matches the dirName", () => {
-    const emptyBundled = createTempDirSync("openclaw-facade-empty-bundled-");
-
-    const stateDir = createTempDirSync("openclaw-facade-state-");
-    const lineDir = path.join(stateDir, "extensions", "line");
+    const lineDir = createTempDirSync("openclaw-facade-global-line-");
     fs.mkdirSync(lineDir, { recursive: true });
     fs.writeFileSync(
       path.join(lineDir, "runtime-api.js"),
@@ -306,34 +303,26 @@ describe("plugin-sdk facade runtime", () => {
       "utf8",
     );
 
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = emptyBundled;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-
-    clearPluginDiscoveryCache();
-    clearPluginManifestRegistryCache();
-    resetFacadeRuntimeStateForTest();
-
-    setRuntimeConfigSnapshot({
-      channels: {
-        line: {
-          enabled: true,
-        },
-      },
-    });
-
     expect(
-      canLoadActivatedBundledPluginPublicSurface({
+      __testing.resolveRegistryPluginModuleLocationFromRegistry({
+        registry: [
+          {
+            id: "line",
+            rootDir: lineDir,
+            channels: ["line"],
+          },
+        ],
         dirName: "line",
         artifactBasename: "runtime-api.js",
       }),
-    ).toBe(true);
+    ).toEqual({
+      modulePath: path.join(lineDir, "runtime-api.js"),
+      boundaryRoot: lineDir,
+    });
   });
 
   it("resolves a globally-installed plugin with an encoded scoped rootDir basename", () => {
-    const emptyBundled = createTempDirSync("openclaw-facade-empty-bundled-");
-
-    const stateDir = createTempDirSync("openclaw-facade-state-");
-    const encodedDir = path.join(stateDir, "extensions", "@openclaw+line");
+    const encodedDir = createTempDirSync("openclaw-facade-encoded-line-");
     fs.mkdirSync(encodedDir, { recursive: true });
     fs.writeFileSync(
       path.join(encodedDir, "runtime-api.js"),
@@ -362,27 +351,22 @@ describe("plugin-sdk facade runtime", () => {
       "utf8",
     );
 
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = emptyBundled;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-
-    clearPluginDiscoveryCache();
-    clearPluginManifestRegistryCache();
-    resetFacadeRuntimeStateForTest();
-
-    setRuntimeConfigSnapshot({
-      channels: {
-        line: {
-          enabled: true,
-        },
-      },
-    });
-
     expect(
-      canLoadActivatedBundledPluginPublicSurface({
+      __testing.resolveRegistryPluginModuleLocationFromRegistry({
+        registry: [
+          {
+            id: "line",
+            rootDir: encodedDir,
+            channels: ["line"],
+          },
+        ],
         dirName: "line",
         artifactBasename: "runtime-api.js",
       }),
-    ).toBe(true);
+    ).toEqual({
+      modulePath: path.join(encodedDir, "runtime-api.js"),
+      boundaryRoot: encodedDir,
+    });
   });
 
   it("keeps shared runtime-core facades available without plugin activation", () => {

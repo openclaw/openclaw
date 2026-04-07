@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as imageGenerationRuntime from "../../image-generation/runtime.js";
-import * as imageOps from "../../media/image-ops.js";
-import * as mediaStore from "../../media/store.js";
-import * as webMedia from "../../media/web-media.js";
-import {
-  createImageGenerateTool,
-  resolveImageGenerationModelConfigForTool,
-} from "./image-generate-tool.js";
+
+let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
+let imageOps: typeof import("../../media/image-ops.js");
+let mediaStore: typeof import("../../media/store.js");
+let webMedia: typeof import("../../media/web-media.js");
+let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
+let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
 
 function stubImageGenerationProviders() {
   vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
@@ -172,7 +171,16 @@ function createFalEditProvider(params?: {
 }
 
 describe("createImageGenerateTool", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doUnmock("../../secrets/provider-env-vars.js");
+    imageGenerationRuntime = await import("../../image-generation/runtime.js");
+    imageOps = await import("../../media/image-ops.js");
+    mediaStore = await import("../../media/store.js");
+    webMedia = await import("../../media/web-media.js");
+    ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
+      await import("./image-generate-tool.js"));
+
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEYS", "");
     vi.stubEnv("GEMINI_API_KEY", "");

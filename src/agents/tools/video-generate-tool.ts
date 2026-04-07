@@ -1,10 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
@@ -162,7 +164,7 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" | "st
   if (!raw) {
     return "generate";
   }
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "generate" || normalized === "list" || normalized === "status") {
     return normalized;
   }
@@ -204,7 +206,7 @@ function readBooleanParam(params: Record<string, unknown>, key: string): boolean
     return raw;
   }
   if (typeof raw === "string") {
-    const normalized = raw.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(raw);
     if (normalized === "true") {
       return true;
     }
@@ -848,7 +850,7 @@ export function createVideoGenerateTool(options?: {
               handle: taskHandle,
               status: "error",
               statusLabel: "failed",
-              result: error instanceof Error ? error.message : String(error),
+              result: formatErrorMessage(error),
             });
             return;
           }

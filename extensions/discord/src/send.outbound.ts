@@ -13,7 +13,7 @@ import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import { resolveDiscordClientAccountContext } from "./client.js";
@@ -391,8 +391,8 @@ export async function sendWebhookMessageDiscord(
       },
       body: JSON.stringify({
         content: rewrittenText,
-        username: opts.username?.trim() || undefined,
-        avatar_url: opts.avatarUrl?.trim() || undefined,
+        username: normalizeOptionalString(opts.username),
+        avatar_url: normalizeOptionalString(opts.avatarUrl),
         ...(messageReference ? { message_reference: messageReference } : {}),
       }),
     },

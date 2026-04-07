@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
@@ -36,7 +37,7 @@ export async function resolveSlackChannelType(params: {
   const channelKeys = Object.keys(account.channels ?? {});
   if (
     channelKeys.some((key) => {
-      const normalized = key.trim().toLowerCase();
+      const normalized = normalizeLowercaseStringOrEmpty(key);
       return (
         normalized === channelIdLower ||
         normalized === `channel:${channelIdLower}` ||

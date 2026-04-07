@@ -84,6 +84,11 @@ export type {
 } from "./plugin-entry.js";
 export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
 export type {
+  MemoryPluginCapability,
+  MemoryPluginPublicArtifact,
+  MemoryPluginPublicArtifactsProvider,
+} from "../plugins/memory-state.js";
+export type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -146,7 +151,10 @@ export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/con
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
-export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
+export {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export {
   buildChannelConfigSchema,

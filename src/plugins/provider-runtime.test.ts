@@ -229,6 +229,9 @@ async function expectResolvedAsyncValues(
 describe("provider-runtime", () => {
   beforeAll(async () => {
     vi.resetModules();
+    vi.doMock("./provider-public-artifacts.js", () => ({
+      resolveBundledProviderPolicySurface: () => null,
+    }));
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
         resolveCatalogHookProviderPluginIdsMock(params as never),

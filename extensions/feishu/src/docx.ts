@@ -4,6 +4,8 @@ import { isAbsolute, resolve } from "node:path";
 import { basename } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Type } from "@sinclair/typebox";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
@@ -916,7 +918,7 @@ async function createDoc(
         });
         requesterPermissionAdded = true;
       } catch (err) {
-        requesterPermissionError = err instanceof Error ? err.message : String(err);
+        requesterPermissionError = formatErrorMessage(err);
       }
     }
   }
@@ -1392,7 +1394,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
       (ctx) => {
         const defaultAccountId = ctx.agentAccountId;
         const trustedRequesterOpenId =
-          ctx.messageChannel === "feishu" ? ctx.requesterSenderId?.trim() || undefined : undefined;
+          ctx.messageChannel === "feishu"
+            ? normalizeOptionalString(ctx.requesterSenderId)
+            : undefined;
         return {
           name: "feishu_doc",
           label: "Feishu Doc",
@@ -1549,7 +1553,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                   return json({ error: "Unknown action" });
               }
             } catch (err) {
-              return json({ error: err instanceof Error ? err.message : String(err) });
+              return json({ error: formatErrorMessage(err) });
             }
           },
         };
@@ -1573,7 +1577,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
             const result = await listAppScopes(getClient(undefined, ctx.agentAccountId));
             return json(result);
           } catch (err) {
-            return json({ error: err instanceof Error ? err.message : String(err) });
+            return json({ error: formatErrorMessage(err) });
           }
         },
       }),

@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { asRecord, readString } from "../config-record-shared.js";
 import { debugLog, debugError, debugWarn } from "./debug-log.js";
 import { detectFfmpeg, isWindows } from "./platform.js";
@@ -15,7 +17,7 @@ function loadSilkWasm(): Promise<SilkWasm | null> {
   }
   _silkWasmPromise = import("silk-wasm").catch((err) => {
     debugWarn(
-      `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${err instanceof Error ? err.message : String(err)})`,
+      `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${formatErrorMessage(err)})`,
     );
     return null;
   });
@@ -561,9 +563,7 @@ export async function audioFileToSilkBase64(
       debugLog(`[audio-convert] ffmpeg: ${ext} → SILK done (${silkBuffer.length} bytes)`);
       return silkBuffer.toString("base64");
     } catch (err) {
-      debugError(
-        `[audio-convert] ffmpeg conversion failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      debugError(`[audio-convert] ffmpeg conversion failed: ${formatErrorMessage(err)}`);
     }
   }
 
@@ -798,9 +798,7 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 
     return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
   } catch (err) {
-    debugError(
-      `[audio-convert] WASM MP3 decode failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    debugError(`[audio-convert] WASM MP3 decode failed: ${formatErrorMessage(err)}`);
     if (err instanceof Error && err.stack) {
       debugError(`[audio-convert] stack: ${err.stack}`);
     }
@@ -811,7 +809,7 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 /** Normalize file extensions to lowercased dotted form. */
 function normalizeFormats(formats: string[]): string[] {
   return formats.map((f) => {
-    const lower = f.toLowerCase().trim();
+    const lower = normalizeLowercaseStringOrEmpty(f);
     return lower.startsWith(".") ? lower : `.${lower}`;
   });
 }

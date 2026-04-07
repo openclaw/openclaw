@@ -1,3 +1,11 @@
+import {
+  asOptionalRecord,
+  hasNonEmptyString as sharedHasNonEmptyString,
+  isRecord as sharedIsRecord,
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/text-runtime";
+
 export function encodeQuery(params: Record<string, string | undefined>): string {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -10,28 +18,15 @@ export function encodeQuery(params: Record<string, string | undefined>): string 
   return queryString ? `?${queryString}` : "";
 }
 
-export function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
+export const readString = readStringValue;
 
-export function normalizeString(value: unknown): string | undefined {
-  return readString(value)?.trim() || undefined;
-}
+export const normalizeString = normalizeOptionalString;
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+export const isRecord = sharedIsRecord;
 
-export function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
+export const asRecord = asOptionalRecord;
 
-export function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
+export const hasNonEmptyString = sharedHasNonEmptyString;
 
 export function extractCommentElementText(element: unknown): string | undefined {
   if (!isRecord(element)) {

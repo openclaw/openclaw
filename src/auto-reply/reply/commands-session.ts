@@ -12,6 +12,10 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
@@ -33,7 +37,7 @@ function resolveSessionCommandUsage() {
 }
 
 function parseSessionDurationMs(raw: string): number {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     throw new Error("missing duration");
   }
@@ -526,7 +530,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const senderId = params.command.senderId?.trim() || "";
+  const senderId = normalizeOptionalString(params.command.senderId) ?? "";
   const boundBy = resolveSessionBindingBoundBy(activeBinding);
   if (boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
     return {

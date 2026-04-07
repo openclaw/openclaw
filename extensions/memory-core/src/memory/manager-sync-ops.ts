@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildCaseInsensitiveExtensionGlob,
   classifyMemoryMultimodalPath,
@@ -36,6 +37,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -90,7 +92,9 @@ const log = createSubsystemLogger("memory");
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
-  const parts = normalized.split(path.sep).map((segment) => segment.trim().toLowerCase());
+  const parts = normalized
+    .split(path.sep)
+    .map((segment) => normalizeLowercaseStringOrEmpty(segment));
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
 }
 
@@ -184,7 +188,7 @@ export abstract class MemoryManagerSyncOps {
     try {
       ready = (await this.vectorReady) || false;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       this.vector.available = false;
       this.vector.loadError = message;
       this.vectorReady = null;
@@ -217,7 +221,7 @@ export abstract class MemoryManagerSyncOps {
       this.vector.available = true;
       return true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       this.vector.available = false;
       this.vector.loadError = message;
       log.warn(`sqlite-vec unavailable: ${message}`);
@@ -245,7 +249,7 @@ export abstract class MemoryManagerSyncOps {
     try {
       this.db.exec(`DROP TABLE IF EXISTS ${VECTOR_TABLE}`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       log.debug(`Failed to drop ${VECTOR_TABLE}: ${message}`);
     }
   }
@@ -1002,7 +1006,7 @@ export abstract class MemoryManagerSyncOps {
         this.sessionsDirty = false;
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       const activated =
         this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
       if (activated) {

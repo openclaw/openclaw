@@ -55,6 +55,7 @@ describe("short-term promotion", () => {
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
+    expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
     expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/network.md")).toBe(false);

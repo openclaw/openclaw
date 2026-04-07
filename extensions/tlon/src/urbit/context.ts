@@ -3,7 +3,7 @@ export {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   ssrfPolicyFromAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { validateUrbitBaseUrl } from "./base-url.js";
+import { normalizeUrbitHostname, validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
 export type UrbitContext = {
@@ -13,7 +13,7 @@ export type UrbitContext = {
 };
 
 export function resolveShipFromHostname(hostname: string): string {
-  const trimmed = hostname.trim().toLowerCase().replace(/\.$/, "");
+  const trimmed = normalizeUrbitHostname(hostname);
   if (!trimmed) {
     return "";
   }

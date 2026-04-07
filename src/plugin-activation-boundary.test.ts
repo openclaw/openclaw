@@ -20,13 +20,13 @@ describe("plugin activation boundary", () => {
   let ambientImportsPromise: Promise<void> | undefined;
   let configHelpersPromise:
     | Promise<{
-        isChannelConfigured: typeof import("./config/channel-configured.js").isChannelConfigured;
+        isStaticallyChannelConfigured: typeof import("./config/channel-configured-shared.js").isStaticallyChannelConfigured;
         resolveEnvApiKey: typeof import("./agents/model-auth-env.js").resolveEnvApiKey;
       }>
     | undefined;
   let modelSelectionPromise:
     | Promise<{
-        normalizeModelRef: typeof import("./agents/model-selection.js").normalizeModelRef;
+        normalizeModelRef: typeof import("./agents/model-selection-normalize.js").normalizeModelRef;
       }>
     | undefined;
   let browserHelpersPromise:
@@ -58,17 +58,17 @@ describe("plugin activation boundary", () => {
 
   function importConfigHelpers() {
     configHelpersPromise ??= Promise.all([
-      import("./config/channel-configured.js"),
+      import("./config/channel-configured-shared.js"),
       import("./agents/model-auth-env.js"),
     ]).then(([channelConfigured, modelAuthEnv]) => ({
-      isChannelConfigured: channelConfigured.isChannelConfigured,
+      isStaticallyChannelConfigured: channelConfigured.isStaticallyChannelConfigured,
       resolveEnvApiKey: modelAuthEnv.resolveEnvApiKey,
     }));
     return configHelpersPromise;
   }
 
   function importModelSelection() {
-    modelSelectionPromise ??= import("./agents/model-selection.js").then((module) => ({
+    modelSelectionPromise ??= import("./agents/model-selection-normalize.js").then((module) => ({
       normalizeModelRef: module.normalizeModelRef,
     }));
     return modelSelectionPromise;
@@ -116,15 +116,20 @@ describe("plugin activation boundary", () => {
   });
 
   it("does not load bundled plugins for config and env detection helpers", async () => {
-    const { isChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
+    const { isStaticallyChannelConfigured, resolveEnvApiKey } = await importConfigHelpers();
 
-    expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
-    expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
-    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
+    expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
+      true,
+    );
+    expect(isStaticallyChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
+    expect(isStaticallyChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
     expect(
-      isChannelConfigured({}, "irc", { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" }),
+      isStaticallyChannelConfigured({}, "irc", {
+        IRC_HOST: "irc.example.com",
+        IRC_NICK: "openclaw",
+      }),
     ).toBe(true);
-    expect(isChannelConfigured({}, "whatsapp", {})).toBe(false);
+    expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
     expect(
       resolveEnvApiKey("anthropic-vertex", {
         ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",

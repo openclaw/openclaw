@@ -21,12 +21,12 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { googlechatMessageActions } from "./actions.js";
 import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
   buildChannelConfigSchema,
   chunkTextForOutbound,
-  createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   fetchRemoteMedia,
   GoogleChatConfigSchema,
@@ -41,13 +41,13 @@ import {
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatAccount,
   resolveGoogleChatOutboundSpace,
-  runPassiveAccountLifecycle,
   type ChannelMessageActionAdapter,
   type ChannelStatusIssue,
   type OpenClawConfig,
   type ResolvedGoogleChatAccount,
 } from "./channel.deps.runtime.js";
 import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
+import { startGoogleChatGatewayAccount } from "./gateway.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { googlechatSetupAdapter } from "./setup-core.js";
@@ -73,12 +73,13 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 );
 
 const formatAllowFromEntry = (entry: string) =>
-  entry
-    .trim()
-    .replace(/^(googlechat|google-chat|gchat):/i, "")
-    .replace(/^user:/i, "")
-    .replace(/^users\//i, "")
-    .toLowerCase();
+  normalizeLowercaseStringOrEmpty(
+    entry
+      .trim()
+      .replace(/^(googlechat|google-chat|gchat):/i, "")
+      .replace(/^user:/i, "")
+      .replace(/^users\//i, ""),
+  );
 
 const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleChatAccount>({
   sectionKey: "googlechat",
@@ -291,45 +292,7 @@ export const googlechatPlugin = createChatChannelPlugin({
       }),
     }),
     gateway: {
-      startAccount: async (ctx) => {
-        const account = ctx.account;
-        const statusSink = createAccountStatusSink({
-          accountId: account.accountId,
-          setStatus: ctx.setStatus,
-        });
-        ctx.log?.info(`[${account.accountId}] starting Google Chat webhook`);
-        const { resolveGoogleChatWebhookPath, startGoogleChatMonitor } =
-          await loadGoogleChatChannelRuntime();
-        statusSink({
-          running: true,
-          lastStartAt: Date.now(),
-          webhookPath: resolveGoogleChatWebhookPath({ account }),
-          audienceType: account.config.audienceType,
-          audience: account.config.audience,
-        });
-        await runPassiveAccountLifecycle({
-          abortSignal: ctx.abortSignal,
-          start: async () =>
-            await startGoogleChatMonitor({
-              account,
-              config: ctx.cfg,
-              runtime: ctx.runtime,
-              abortSignal: ctx.abortSignal,
-              webhookPath: account.config.webhookPath,
-              webhookUrl: account.config.webhookUrl,
-              statusSink,
-            }),
-          stop: async (unregister) => {
-            unregister?.();
-          },
-          onStop: async () => {
-            statusSink({
-              running: false,
-              lastStopAt: Date.now(),
-            });
-          },
-        });
-      },
+      startAccount: startGoogleChatGatewayAccount,
     },
   },
   pairing: {

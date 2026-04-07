@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
@@ -322,7 +323,7 @@ async function runProviderCatalogWithTimeout(
       }),
     ]);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     if (message.includes("provider catalog timed out after")) {
       log.warn(`${message}; skipping provider discovery`);
       return undefined;

@@ -1,6 +1,10 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import {
   describeNativeExecApprovalClientSetup,
   listNativeExecApprovalClientLabels,
   supportsNativeExecApprovalClient,
@@ -262,8 +266,8 @@ export function getExecApprovalReplyMetadata(
     return null;
   }
   const record = execApproval as Record<string, unknown>;
-  const approvalId = typeof record.approvalId === "string" ? record.approvalId.trim() : "";
-  const approvalSlug = typeof record.approvalSlug === "string" ? record.approvalSlug.trim() : "";
+  const approvalId = normalizeOptionalString(record.approvalId) ?? "";
+  const approvalSlug = normalizeOptionalString(record.approvalSlug) ?? "";
   if (!approvalId || !approvalSlug) {
     return null;
   }
@@ -274,10 +278,8 @@ export function getExecApprovalReplyMetadata(
           value === "allow-once" || value === "allow-always" || value === "deny",
       )
     : undefined;
-  const agentId =
-    typeof record.agentId === "string" ? record.agentId.trim() || undefined : undefined;
-  const sessionKey =
-    typeof record.sessionKey === "string" ? record.sessionKey.trim() || undefined : undefined;
+  const agentId = normalizeOptionalString(record.agentId);
+  const sessionKey = normalizeOptionalString(record.sessionKey);
   return {
     approvalId,
     approvalSlug,
@@ -348,9 +350,9 @@ export function buildExecApprovalPendingReplyPayload(
         approvalId: params.approvalId,
         approvalSlug: params.approvalSlug,
         approvalKind: "exec",
-        agentId: params.agentId?.trim() || undefined,
+        agentId: normalizeOptionalString(params.agentId),
         allowedDecisions,
-        sessionKey: params.sessionKey?.trim() || undefined,
+        sessionKey: normalizeOptionalString(params.sessionKey),
       },
     },
   };
@@ -376,7 +378,7 @@ export function buildExecApprovalUnavailableReplyPayload(
     lines.push(
       `Exec approval is required, but native chat exec approvals are not configured on ${params.channelLabel ?? "this platform"}.`,
     );
-    const channel = params.channel?.trim().toLowerCase();
+    const channel = normalizeOptionalLowercaseString(params.channel);
     const setupText =
       channel && params.channelLabel && supportsNativeExecApprovalClient(channel)
         ? describeNativeExecApprovalClientSetup({

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { listSpeechProviders } from "./provider-registry.js";
 import type {
   SpeechModelOverridePolicy,
@@ -78,7 +79,7 @@ export function parseTtsDirectives(
       const key = rawKey.toLowerCase();
       if (key === "provider") {
         if (policy.allowProvider) {
-          const providerId = rawValue.trim().toLowerCase();
+          const providerId = normalizeLowercaseStringOrEmpty(rawValue);
           if (providerId) {
             overrides.provider = providerId;
           } else {

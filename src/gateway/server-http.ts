@@ -16,6 +16,7 @@ import { loadConfig } from "../config/config.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
@@ -97,8 +98,7 @@ function resolveMappedHookExternalContentSource(params: {
   payload: Record<string, unknown>;
   sessionKey: string;
 }) {
-  const payloadSource =
-    typeof params.payload.source === "string" ? params.payload.source.trim().toLowerCase() : "";
+  const payloadSource = normalizeLowercaseStringOrEmpty(params.payload.source);
   if (params.subPath === "gmail" || payloadSource === "gmail") {
     return "gmail" as const;
   }

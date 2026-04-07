@@ -24,8 +24,10 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   formatPermissionDetail,
   formatPermissionRemediation,
@@ -238,7 +240,11 @@ function resolveToolPolicies(params: {
 }
 
 function normalizePluginIdSet(entries: string[]): Set<string> {
-  return new Set(entries.map((entry) => entry.trim().toLowerCase()).filter(Boolean));
+  return new Set(
+    entries
+      .map((entry) => normalizeOptionalLowercaseString(entry))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
 }
 
 function resolveEnabledExtensionPluginIds(params: {
@@ -254,12 +260,16 @@ function resolveEnabledExtensionPluginIds(params: {
   const denySet = normalizePluginIdSet(normalized.deny);
   const entryById = new Map<string, { enabled?: boolean }>();
   for (const [id, entry] of Object.entries(normalized.entries)) {
-    entryById.set(id.trim().toLowerCase(), entry);
+    const normalizedId = normalizeOptionalLowercaseString(id);
+    if (!normalizedId) {
+      continue;
+    }
+    entryById.set(normalizedId, entry);
   }
 
   const enabled: string[] = [];
   for (const id of params.pluginDirs) {
-    const normalizedId = id.trim().toLowerCase();
+    const normalizedId = normalizeOptionalLowercaseString(id);
     if (!normalizedId) {
       continue;
     }
@@ -285,7 +295,9 @@ function collectAllowEntries(config?: { allow?: string[]; alsoAllow?: string[] }
   if (Array.isArray(config?.alsoAllow)) {
     out.push(...config.alsoAllow);
   }
-  return out.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  return out
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 function hasExplicitPluginAllow(params: {
@@ -328,16 +340,6 @@ function isPinnedRegistrySpec(spec: string): boolean {
   }
   const version = value.slice(at + 1).trim();
   return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
-}
-
-async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  try {
-    const raw = await fs.readFile(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function buildCodeSafetySummaryCacheKey(params: {
@@ -505,7 +507,7 @@ function parsePublishedHostFromDockerPortLine(line: string): string | null {
 }
 
 function isLoopbackPublishHost(host: string): boolean {
-  const normalized = host.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(host);
   return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
 }
 
