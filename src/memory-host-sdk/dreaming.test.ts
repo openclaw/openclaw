@@ -207,4 +207,39 @@ describe("memory dreaming host helpers", () => {
       },
     });
   });
+
+  it('falls back to memory-core when memory slot is "none" or blank', () => {
+    expect(
+      resolveMemoryDreamingPluginId({
+        plugins: {
+          slots: {
+            memory: "none",
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe("memory-core");
+
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "   ",
+          },
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+      },
+    });
+  });
 });

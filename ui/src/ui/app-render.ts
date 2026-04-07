@@ -68,6 +68,7 @@ import {
 import {
   loadDreamDiary,
   loadDreamingStatus,
+  resolveConfiguredDreaming,
   updateDreamingEnabled,
 } from "./controllers/dreaming.ts";
 import {
@@ -157,24 +158,6 @@ const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
 const lazyDreamingView = createLazy(() => import("./views/dreaming.ts"));
-
-function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
-  enabled: boolean;
-} {
-  if (!configValue) {
-    return {
-      enabled: false,
-    };
-  }
-  const plugins = configValue.plugins as Record<string, unknown> | undefined;
-  const entries = plugins?.entries as Record<string, unknown> | undefined;
-  const memoryCore = entries?.["memory-core"] as Record<string, unknown> | undefined;
-  const config = memoryCore?.config as Record<string, unknown> | undefined;
-  const dreaming = config?.dreaming as Record<string, unknown> | undefined;
-  return {
-    enabled: typeof dreaming?.enabled === "boolean" ? dreaming.enabled : false,
-  };
-}
 
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {

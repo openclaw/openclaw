@@ -29,6 +29,13 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
   return { state, request };
 }
 
+function getConfigPatchRawPayload(request: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const patchCall = request.mock.calls.find((entry) => entry[0] === "config.patch");
+  expect(patchCall).toBeDefined();
+  const requestPayload = patchCall?.[1] as { raw?: string };
+  return JSON.parse(String(requestPayload.raw)) as Record<string, unknown>;
+}
+
 describe("dreaming controller", () => {
   it("loads and normalizes dreaming status from doctor.memory.status", async () => {
     const { state, request } = createState();
@@ -137,8 +144,7 @@ describe("dreaming controller", () => {
         sessionKey: "main",
       }),
     );
-    const requestPayload = request.mock.calls[0]?.[1] as { raw?: string };
-    expect(JSON.parse(String(requestPayload.raw))).toEqual({
+    expect(getConfigPatchRawPayload(request)).toEqual({
       plugins: {
         entries: {
           "memos-local-openclaw-plugin": {
@@ -153,6 +159,38 @@ describe("dreaming controller", () => {
     });
     expect(state.dreamingModeSaving).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
+  });
+
+  it("falls back to memory-core when selected memory slot is blank", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          slots: {
+            memory: "   ",
+          },
+        },
+      },
+    };
+    request.mockResolvedValue({ ok: true });
+
+    const ok = await updateDreamingEnabled(state, true);
+
+    expect(ok).toBe(true);
+    expect(getConfigPatchRawPayload(request)).toEqual({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    });
   });
 
   it("reads dreaming enabled state from the selected memory slot plugin", () => {
@@ -182,6 +220,30 @@ describe("dreaming controller", () => {
       }),
     ).toEqual({
       pluginId: "memos-local-openclaw-plugin",
+      enabled: true,
+    });
+  });
+
+  it('falls back to memory-core when selected memory slot is "none"', () => {
+    expect(
+      resolveConfiguredDreaming({
+        plugins: {
+          slots: {
+            memory: "none",
+          },
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      pluginId: "memory-core",
       enabled: true,
     });
   });
