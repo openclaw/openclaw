@@ -42,5 +42,8 @@ describe("attachment support", () => {
       resolveSupportedChatAttachmentMimeType({ name: "photo.png", type: "video/mp4" }),
     ).toBeNull();
     expect(resolveSupportedChatAttachmentMimeType({ name: "clip.mp4", type: "" })).toBeNull();
+    expect(
+      resolveSupportedChatAttachmentMimeType({ name: "photo.png", type: " video/mp4 " }),
+    ).toBeNull();
   });
 });

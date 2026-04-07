@@ -25,9 +25,11 @@ export function resolveSupportedChatAttachmentMimeType(file: {
   name?: string | null;
   type?: string | null;
 }): string | null {
-  const explicitType = file.type;
-  if (typeof explicitType === "string" && explicitType.length > 0) {
-    return isSupportedChatAttachmentMimeType(explicitType) ? explicitType : null;
+  if (typeof file.type === "string") {
+    const mimeType = file.type.trim();
+    if (mimeType.length > 0) {
+      return isSupportedChatAttachmentMimeType(mimeType) ? mimeType : null;
+    }
   }
   const fileName = typeof file.name === "string" ? file.name.trim().toLowerCase() : "";
   if (fileName) {
@@ -37,7 +39,7 @@ export function resolveSupportedChatAttachmentMimeType(file: {
       }
     }
   }
-  return isSupportedChatAttachmentFile({ name: fileName, type: explicitType ?? "" })
+  return isSupportedChatAttachmentFile({ name: fileName, type: "" })
     ? "application/octet-stream"
     : null;
 }
