@@ -3,7 +3,7 @@ import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
 describe("telegramApprovalNativeRuntime", () => {
   it("renders only the allowed pending buttons", async () => {
-    const payload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {} as never,
       accountId: "default",
       context: {
@@ -38,11 +38,14 @@ describe("telegramApprovalNativeRuntime", () => {
           },
         ],
       } as never,
-    });
+    })) as { text: string; buttons?: Array<Array<{ text: string }>> };
 
     expect(payload.text).toContain("/approve req-1 allow-once");
     expect(payload.text).not.toContain("allow-always");
-    expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
+    expect(payload.buttons?.[0]?.map((button: { text: string }) => button.text)).toEqual([
+      "Allow Once",
+      "Deny",
+    ]);
   });
 
   it("passes topic thread ids to typing and message delivery", async () => {
