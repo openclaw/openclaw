@@ -164,7 +164,7 @@ async function persistGatewayRestartOutbox(params: {
   const existing = await readRestartSentinel().catch(() => null);
   const existingPayload = existing?.payload;
   const existingOutbox = Array.isArray(existingPayload?.outbox) ? existingPayload.outbox : [];
-  const mergedOutbox = [...existingOutbox, ...normalizedOutbox];
+  const mergedOutbox: RestartOutboxTask[] = [...existingOutbox, ...normalizedOutbox];
 
   if (!existingPayload && mergedOutbox.length === 0) {
     return;
@@ -178,7 +178,8 @@ async function persistGatewayRestartOutbox(params: {
     typeof existingPayload?.suppressPrimaryNotice === "boolean"
       ? existingPayload.suppressPrimaryNotice &&
         hasDeliverableGatewayOutboxTask(mergedOutbox, existingPayload?.sessionKey)
-      : !existingPayload && hasDeliverableGatewayOutboxTask(mergedOutbox, existingPayload?.sessionKey)
+      : !existingPayload &&
+          hasDeliverableGatewayOutboxTask(mergedOutbox, existingPayload?.sessionKey)
         ? true
         : undefined;
   const stats = {
@@ -307,10 +308,9 @@ export function createGatewayCloseHandler(params: {
         });
         const outcome = await Promise.race([hookPromise, timeoutPromise]);
         if (outcome === "timeout") {
-          (params.logger ?? logger).warn?.("gateway lifecycle hook timed out", {
-            hookLabel,
-            timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
-          });
+          params.logger?.warn?.(
+            `[gateway] ${hookLabel} hook timed out after ${GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS}ms, continuing shutdown`,
+          );
         }
       };
 

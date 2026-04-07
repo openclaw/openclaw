@@ -191,6 +191,36 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
+  it("continues shutdown when a lifecycle hook stalls", async () => {
+    vi.useFakeTimers();
+    triggerInternalHook
+      .mockImplementationOnce(async () => await new Promise<void>(() => {}))
+      .mockResolvedValue(undefined);
+
+    const harness = createCloseHarness();
+    try {
+      let settled = false;
+      const closePromise = harness
+        .close({ reason: "gateway restarting", restartExpectedMs: 123 })
+        .then(() => {
+          settled = true;
+        });
+
+      await vi.advanceTimersByTimeAsync(1_600);
+      await Promise.resolve();
+
+      expect(settled).toBe(true);
+      expect(triggerInternalHook).toHaveBeenCalledTimes(2);
+      expect(harness.loggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining("shutdown hook timed out after 1500ms"),
+      );
+
+      await closePromise;
+    } finally {
+      harness.dispose();
+    }
+  });
+
   it("persists hook outbox tasks into restart sentinel", async () => {
     triggerInternalHook.mockImplementation(
       async (event: TestGatewayHookEvent, _opts?: { perHandlerTimeoutMs?: number }) => {
