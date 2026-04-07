@@ -4,7 +4,7 @@
     "dockerfile": "Dockerfile"
   },
   "workspaceFolder": "/workspaces/openclaw",
-  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/openclaw,type=bind,consistency=cached",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/openclaw,type=bind",
 
   "postCreateCommand": "bash .devcontainer/on-create.sh",
 
