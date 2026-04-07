@@ -193,6 +193,7 @@ function isRelevantCompileInput(filePath) {
 
 function collectNewestMtime(entryPath, params = {}) {
   const includeFile = params.includeFile ?? (() => true);
+  const skipDistDirectories = params.skipDistDirectories ?? true;
   let newestMtimeMs = 0;
 
   function visit(currentPath) {
@@ -202,7 +203,7 @@ function collectNewestMtime(entryPath, params = {}) {
     const stats = statSync(currentPath);
     if (stats.isDirectory()) {
       const basename = path.basename(currentPath);
-      if (basename === "dist" || basename === "node_modules") {
+      if ((skipDistDirectories && basename === "dist") || basename === "node_modules") {
         return;
       }
       for (const child of readdirSync(currentPath)) {
@@ -242,8 +243,12 @@ export function isBoundaryCompileFresh(extensionId, params = {}) {
   const sharedNewestInputMtimeMs =
     params.sharedNewestInputMtimeMs ??
     Math.max(
-      collectNewestMtime(resolve(rootDir, "dist/plugin-sdk")),
-      collectNewestMtime(resolve(rootDir, "packages/plugin-sdk/dist")),
+      collectNewestMtime(resolve(rootDir, "dist/plugin-sdk"), {
+        skipDistDirectories: false,
+      }),
+      collectNewestMtime(resolve(rootDir, "packages/plugin-sdk/dist"), {
+        skipDistDirectories: false,
+      }),
     );
   const newestInputMtimeMs = Math.max(extensionNewestInputMtimeMs, sharedNewestInputMtimeMs);
   const oldestOutputMtimeMs = collectOldestMtime([
@@ -558,8 +563,12 @@ async function runCompileCheck(extensionIds) {
   const concurrency = resolveCompileConcurrency();
   const verboseFreshLogs = process.env.OPENCLAW_EXTENSION_BOUNDARY_VERBOSE_FRESH === "1";
   const sharedNewestInputMtimeMs = Math.max(
-    collectNewestMtime(resolve(repoRoot, "dist/plugin-sdk")),
-    collectNewestMtime(resolve(repoRoot, "packages/plugin-sdk/dist")),
+    collectNewestMtime(resolve(repoRoot, "dist/plugin-sdk"), {
+      skipDistDirectories: false,
+    }),
+    collectNewestMtime(resolve(repoRoot, "packages/plugin-sdk/dist"), {
+      skipDistDirectories: false,
+    }),
   );
   process.stdout.write(`compile concurrency ${concurrency}\n`);
   const compileStartedAt = Date.now();

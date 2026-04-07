@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createPrefixedOutputWriter,
   isArtifactSetFresh,
+  parseMode,
   runNodeStepsInParallel,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
 
@@ -84,5 +85,11 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         outputPaths: ["dist/demo.tsbuildinfo"],
       }),
     ).toBe(false);
+  });
+
+  it("parses prep mode and rejects unknown values", () => {
+    expect(parseMode([])).toBe("all");
+    expect(parseMode(["--mode=package-boundary"])).toBe("package-boundary");
+    expect(() => parseMode(["--mode=nope"])).toThrow("Unknown mode: nope");
   });
 });

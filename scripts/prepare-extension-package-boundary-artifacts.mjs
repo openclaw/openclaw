@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
 const tscBin = require.resolve("typescript/bin/tsc");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
+const VALID_MODES = new Set(["all", "package-boundary"]);
 
 const ROOT_DTS_INPUTS = [
   "tsconfig.json",
@@ -34,6 +35,15 @@ function isRelevantTypeInput(filePath) {
     return false;
   }
   return TYPE_INPUT_EXTENSIONS.has(path.extname(filePath));
+}
+
+export function parseMode(argv = process.argv.slice(2)) {
+  const modeArg = argv.find((arg) => arg.startsWith("--mode="));
+  const mode = modeArg?.slice("--mode=".length) ?? "all";
+  if (!VALID_MODES.has(mode)) {
+    throw new Error(`Unknown mode: ${mode}`);
+  }
+  return mode;
 }
 
 function collectNewestMtime(paths, params = {}) {
@@ -199,8 +209,9 @@ export async function runNodeStepsInParallel(steps) {
   }
 }
 
-export async function main() {
+export async function main(argv = process.argv.slice(2)) {
   try {
+    const mode = parseMode(argv);
     const rootDtsFresh = isArtifactSetFresh({
       inputPaths: ROOT_DTS_INPUTS,
       outputPaths: ["dist/plugin-sdk/.tsbuildinfo"],
@@ -221,14 +232,16 @@ export async function main() {
     });
 
     const pendingSteps = [];
-    if (!rootDtsFresh) {
-      pendingSteps.push({
-        label: "plugin-sdk boundary dts",
-        args: [tscBin, "-p", "tsconfig.plugin-sdk.dts.json"],
-        timeoutMs: 300_000,
-      });
-    } else {
-      process.stdout.write("[plugin-sdk boundary dts] fresh; skipping\n");
+    if (mode === "all") {
+      if (!rootDtsFresh) {
+        pendingSteps.push({
+          label: "plugin-sdk boundary dts",
+          args: [tscBin, "-p", "tsconfig.plugin-sdk.dts.json"],
+          timeoutMs: 300_000,
+        });
+      } else {
+        process.stdout.write("[plugin-sdk boundary dts] fresh; skipping\n");
+      }
     }
     if (!packageDtsFresh) {
       pendingSteps.push({
@@ -244,13 +257,13 @@ export async function main() {
       await runNodeStepsInParallel(pendingSteps);
     }
 
-    if (!entryShimsFresh || pendingSteps.length > 0) {
+    if (mode === "all" && (!entryShimsFresh || pendingSteps.length > 0)) {
       await runNodeStep(
         "plugin-sdk boundary root shims",
         ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
         120_000,
       );
-    } else {
+    } else if (mode === "all") {
       process.stdout.write("[plugin-sdk boundary root shims] fresh; skipping\n");
     }
   } catch (error) {

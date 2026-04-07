@@ -121,6 +121,43 @@ describe("runCapability auto audio entries", () => {
     expect(seenModel).toBe("whisper-1");
   });
 
+  it("lets per-request transcription hints override configured model-entry hints", async () => {
+    let seenLanguage: string | undefined;
+    let seenPrompt: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        seenLanguage = req.language;
+        seenPrompt = req.prompt;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      cfgExtra: {
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              prompt: "configured prompt",
+              language: "fr",
+              _requestPromptOverride: "Focus on names",
+              _requestLanguageOverride: "en",
+              models: [
+                {
+                  provider: "openai",
+                  model: "whisper-1",
+                  prompt: "entry prompt",
+                  language: "de",
+                },
+              ],
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>,
+    });
+
+    expect(result.outputs[0]?.text).toBe("ok");
+    expect(seenLanguage).toBe("en");
+    expect(seenPrompt).toBe("Focus on names");
+  });
+
   it("uses mistral when only mistral key is configured", async () => {
     const isolatedAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audio-agent-"));
     let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
