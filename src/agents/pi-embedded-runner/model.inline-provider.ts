@@ -5,6 +5,7 @@ import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js"
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import {
   attachModelProviderRequestTransport,
+  attachModelProviderRetryConfig,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
@@ -23,6 +24,7 @@ export type InlineProviderConfig = {
   headers?: unknown;
   authHeader?: boolean;
   request?: ModelProviderConfig["request"];
+  retry?: ModelProviderConfig["retry"];
 };
 
 export function normalizeResolvedTransportApi(
@@ -150,21 +152,24 @@ export function buildInlineProviderModels(
         capability: "llm",
         transport: "stream",
       });
-      return attachModelProviderRequestTransport(
-        {
-          ...model,
-          input: resolveProviderModelInput({
+      return attachModelProviderRetryConfig(
+        attachModelProviderRequestTransport(
+          {
+            ...model,
+            input: resolveProviderModelInput({
+              provider: trimmed,
+              modelId: model.id,
+              modelName: model.name,
+              input: model.input,
+            }),
             provider: trimmed,
-            modelId: model.id,
-            modelName: model.name,
-            input: model.input,
-          }),
-          provider: trimmed,
-          baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
-          api: requestConfig.api ?? model.api,
-          headers: requestConfig.headers,
-        },
-        providerRequest,
+            baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+            api: requestConfig.api ?? model.api,
+            headers: requestConfig.headers,
+          },
+          providerRequest,
+        ),
+        entry?.retry,
       );
     });
   });

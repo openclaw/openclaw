@@ -72,6 +72,14 @@ export type ModelDefinitionConfig = {
   compat?: ModelCompatConfig;
 };
 
+export type ModelProviderRetryConfig = {
+  attempts?: number;
+  minDelayMs?: number;
+  maxDelayMs?: number;
+  backoffFactor?: number;
+  retryOnStatus?: number[];
+};
+
 export type ModelProviderConfig = {
   baseUrl: string;
   apiKey?: SecretInput;
@@ -81,6 +89,7 @@ export type ModelProviderConfig = {
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;
+  retry?: ModelProviderRetryConfig;
   models: ModelDefinitionConfig[];
 };
 
