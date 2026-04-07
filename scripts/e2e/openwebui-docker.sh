@@ -63,41 +63,31 @@ docker run -d \
     [ -f "$entry" ] || entry=dist/index.js
 
     openai_api_key="${OPENAI_API_KEY:?OPENAI_API_KEY required}"
-    node - <<'"'"'NODE'"'"' "$openai_api_key"
+    batch_file="$(mktemp /tmp/openclaw-openwebui-config.XXXXXX.json)"
+    OPENCLAW_CONFIG_BATCH_PATH="$batch_file" node - <<'"'"'NODE'"'"' "$openai_api_key"
 const fs = require("node:fs");
-const path = require("node:path");
 
 const openaiApiKey = process.argv[2];
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = fs.existsSync(configPath)
-  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
-  : {};
-const existingOpenAI = config.models?.providers?.openai ?? {};
-config.models = {
-  ...(config.models || {}),
-  providers: {
-    ...(config.models?.providers || {}),
-    openai: {
-      ...existingOpenAI,
-      baseUrl:
-        typeof existingOpenAI.baseUrl === "string" && existingOpenAI.baseUrl.trim()
-          ? existingOpenAI.baseUrl
-          : process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
-      apiKey: openaiApiKey,
-      models: Array.isArray(existingOpenAI.models) ? existingOpenAI.models : [],
-    },
+const batchPath = process.env.OPENCLAW_CONFIG_BATCH_PATH;
+const entries = [
+  { path: "models.providers.openai.apiKey", value: openaiApiKey },
+  {
+    path: "models.providers.openai.baseUrl",
+    value: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim(),
   },
-};
-fs.mkdirSync(path.dirname(configPath), { recursive: true });
-fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  { path: "models.providers.openai.models", value: [] },
+  { path: "gateway.controlUi.enabled", value: false },
+  { path: "gateway.mode", value: "local" },
+  { path: "gateway.bind", value: "lan" },
+  { path: "gateway.auth.mode", value: "token" },
+  { path: "gateway.auth.token", value: process.env.OPENCLAW_GATEWAY_TOKEN },
+  { path: "gateway.http.endpoints.chatCompletions.enabled", value: true },
+  { path: "agents.defaults.model.primary", value: process.env.OPENCLAW_OPENWEBUI_MODEL },
+];
+fs.writeFileSync(batchPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
 NODE
-    node "$entry" config set gateway.controlUi.enabled false >/dev/null
-    node "$entry" config set gateway.mode local >/dev/null
-    node "$entry" config set gateway.bind lan >/dev/null
-    node "$entry" config set gateway.auth.mode token >/dev/null
-    node "$entry" config set gateway.auth.token "$OPENCLAW_GATEWAY_TOKEN" >/dev/null
-    node "$entry" config set gateway.http.endpoints.chatCompletions.enabled true --strict-json >/dev/null
-    node "$entry" config set agents.defaults.model.primary "$OPENCLAW_OPENWEBUI_MODEL" >/dev/null
+    node "$entry" config set --batch-file "$batch_file" >/dev/null
+    rm -f "$batch_file"
 
     exec node "$entry" gateway --port '"$PORT"' --bind lan --allow-unconfigured > /tmp/openwebui-gateway.log 2>&1
   '

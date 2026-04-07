@@ -254,6 +254,105 @@ describe("handleMessageUpdate", () => {
     expect(ctx.state.blockBuffer).toBe("");
   });
 
+  it("suppresses commentary partials even when they contain visible text", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onAgentEvent,
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        reasoningStreamOpen: false,
+        streamReasoning: false,
+        deltaBuffer: "",
+        blockBuffer: "",
+        partialBlockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        lastStreamedAssistant: undefined,
+        lastStreamedAssistantCleaned: undefined,
+        emittedAssistantUpdate: false,
+        shouldEmitPartialReplies: false,
+        blockReplyBreak: "text_end",
+      },
+      log: { debug: vi.fn() },
+      noteLastAssistant: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      consumePartialReplyDirectives: vi.fn(() => null),
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    handleMessageUpdate(ctx, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Working...",
+        partial: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Working...",
+              textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+            },
+          ],
+          phase: "commentary",
+          stopReason: "stop",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.state.blockBuffer).toBe("");
+
+    handleMessageUpdate(ctx, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Done.",
+        partial: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Done.",
+              textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+            },
+          ],
+          phase: "final_answer",
+          stopReason: "stop",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
+      stream: "assistant",
+      data: {
+        text: "Done.",
+        delta: "Done.",
+      },
+    });
+  });
+
   it("contains synchronous text_end flush failures", async () => {
     const debug = vi.fn();
     const ctx = {
@@ -416,5 +515,204 @@ describe("handleMessageEnd", () => {
     expect(onAgentEvent).not.toHaveBeenCalled();
     expect(emitBlockReply).not.toHaveBeenCalled();
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate block reply for text_end channels when text was already delivered", () => {
+    const onBlockReply = vi.fn();
+    const emitBlockReply = vi.fn();
+    // In real usage, the directive accumulator returns null for empty/consumed
+    // input. The non-empty call shouldn't happen for text_end channels (that's
+    // the safety send we're guarding against).
+    const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onBlockReply,
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        messagingToolSentTexts: [],
+        messagingToolSentTextsNormalized: [],
+        includeReasoning: false,
+        streamReasoning: false,
+        emittedAssistantUpdate: true,
+        lastStreamedAssistantCleaned: "Hello world",
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        blockReplyBreak: "text_end",
+        // Simulate text_end already delivered this text through emitBlockChunk
+        lastBlockReplyText: "Hello world",
+        lastReasoningSent: undefined,
+        reasoningStreamOpen: false,
+        deltaBuffer: "",
+        blockBuffer: "",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+      },
+      log: { debug: vi.fn() },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      finalizeAssistantTexts: vi.fn(),
+      emitBlockReply,
+      consumeReplyDirectives,
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello world" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    // The block reply should NOT fire again since text_end already delivered it.
+    // consumeReplyDirectives is called once with "" (the final flush for
+    // text_end channels) but returns null, so emitBlockReply is never called.
+    expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate block reply for text_end channels even when stripping differs", () => {
+    const onBlockReply = vi.fn();
+    const emitBlockReply = vi.fn();
+    // Same pattern: directive accumulator returns null for empty final flush
+    const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onBlockReply,
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        messagingToolSentTexts: [],
+        messagingToolSentTextsNormalized: [],
+        includeReasoning: false,
+        streamReasoning: false,
+        emittedAssistantUpdate: true,
+        lastStreamedAssistantCleaned: "Hello world",
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        blockReplyBreak: "text_end",
+        // text_end delivered via emitBlockChunk which uses different stripping
+        lastBlockReplyText: "Hello world.",
+        lastReasoningSent: undefined,
+        reasoningStreamOpen: false,
+        deltaBuffer: "",
+        blockBuffer: "",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+      },
+      log: { debug: vi.fn() },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      finalizeAssistantTexts: vi.fn(),
+      emitBlockReply,
+      consumeReplyDirectives,
+      emitReasoningStream: vi.fn(),
+      flushBlockReplyBuffer: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        // The raw text differs slightly from lastBlockReplyText due to stripping
+        content: [{ type: "text", text: "Hello world" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    // Even though text !== lastBlockReplyText (different stripping), the safety
+    // send should NOT fire for text_end channels. The only consumeReplyDirectives
+    // call is the final empty flush which returns null.
+    expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("emits a replacement final assistant event when final_answer appears only at message_end", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = {
+      params: {
+        runId: "run-1",
+        session: { id: "session-1" },
+        onAgentEvent,
+      },
+      state: {
+        deterministicApprovalPromptSent: false,
+        messagingToolSentTexts: [],
+        messagingToolSentTextsNormalized: [],
+        includeReasoning: false,
+        streamReasoning: false,
+        emittedAssistantUpdate: true,
+        lastStreamedAssistantCleaned: "Working...",
+        assistantTexts: [],
+        assistantTextBaseline: 0,
+        blockReplyBreak: "text_end",
+        lastReasoningSent: undefined,
+        reasoningStreamOpen: false,
+        deltaBuffer: "",
+        blockBuffer: "",
+        blockState: {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+      },
+      log: { debug: vi.fn() },
+      noteLastAssistant: vi.fn(),
+      recordAssistantUsage: vi.fn(),
+      stripBlockTags: (text: string) => text,
+      finalizeAssistantTexts: vi.fn(),
+      emitReasoningStream: vi.fn(),
+      blockChunker: null,
+    } as unknown as EmbeddedPiSubscribeContext;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Working...",
+            textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+          },
+        ],
+        stopReason: "stop",
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.2",
+        usage: {},
+        timestamp: 0,
+      },
+    } as never);
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
+      stream: "assistant",
+      data: {
+        text: "Done.",
+        delta: "",
+        replace: true,
+      },
+    });
   });
 });

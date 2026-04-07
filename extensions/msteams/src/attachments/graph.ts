@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
@@ -46,7 +47,7 @@ function readNestedString(value: unknown, keys: Array<string | number>): string 
     }
     current = current[key as keyof typeof current];
   }
-  return typeof current === "string" && current.trim() ? current.trim() : undefined;
+  return normalizeOptionalString(current);
 }
 
 export function buildMSTeamsGraphMessageUrls(params: {

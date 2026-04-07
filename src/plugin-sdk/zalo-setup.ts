@@ -1,5 +1,5 @@
 // Manual facade. Keep loader boundary explicit.
-type FacadeModule = typeof import("@openclaw/zalo/api.js");
+type FacadeModule = typeof import("@openclaw/zalo/setup-api.js");
 import {
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -8,7 +8,7 @@ import {
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({
     dirName: "zalo",
-    artifactBasename: "api.js",
+    artifactBasename: "setup-api.js",
   });
 }
 export const evaluateZaloGroupAccess: FacadeModule["evaluateZaloGroupAccess"] = ((...args) =>

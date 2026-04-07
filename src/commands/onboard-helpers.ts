@@ -8,9 +8,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
 import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
+import { probeGateway } from "../gateway/probe.js";
 import {
   detectBrowserOpenSupport,
   openUrl,
@@ -22,7 +22,6 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { CONFIG_DIR, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 
@@ -228,16 +227,16 @@ export async function probeGatewayReachable(params: {
   const url = params.url.trim();
   const timeoutMs = params.timeoutMs ?? 1500;
   try {
-    await callGateway({
+    const probe = await probeGateway({
       url,
-      token: params.token,
-      password: params.password,
-      method: "health",
       timeoutMs,
-      clientName: GATEWAY_CLIENT_NAMES.PROBE,
-      mode: GATEWAY_CLIENT_MODES.PROBE,
+      auth: {
+        token: params.token,
+        password: params.password,
+      },
+      detailLevel: "none",
     });
-    return { ok: true };
+    return probe.ok ? { ok: true } : { ok: false, detail: probe.error ?? undefined };
   } catch (err) {
     return { ok: false, detail: summarizeError(err) };
   }

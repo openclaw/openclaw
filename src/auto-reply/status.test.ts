@@ -1082,6 +1082,69 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("uses the same transcript usage fallback as sessions.list when a delivery mirror is last", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-cache-delivery-mirror";
+        const logPath = path.join(
+          dir,
+          ".openclaw",
+          "agents",
+          "main",
+          "sessions",
+          `${sessionId}.jsonl`,
+        );
+        fs.mkdirSync(path.dirname(logPath), { recursive: true });
+        fs.writeFileSync(
+          logPath,
+          [
+            JSON.stringify({ type: "session", version: 1, id: sessionId }),
+            JSON.stringify({
+              type: "message",
+              message: {
+                role: "assistant",
+                provider: "anthropic",
+                model: "claude-opus-4-6",
+                usage: {
+                  input: 1,
+                  output: 2,
+                  cacheRead: 1000,
+                  cacheWrite: 0,
+                  totalTokens: 1003,
+                },
+              },
+            }),
+            JSON.stringify({
+              type: "message",
+              message: {
+                role: "assistant",
+                provider: "openclaw",
+                model: "delivery-mirror",
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 0,
+                },
+              },
+            }),
+          ].join("\n"),
+          "utf-8",
+        );
+
+        const text = buildTranscriptStatusText({
+          sessionId,
+          sessionKey: "agent:main:main",
+        });
+
+        expect(normalizeTestText(text)).toContain("Cache: 100% hit · 1.0k cached, 0 new");
+        expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
   it("preserves existing nonzero cache usage over transcript fallback values", async () => {
     await withTempHome(
       async (dir) => {
@@ -1446,7 +1509,7 @@ describe("buildCommandsMessagePaginated", () => {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
       undefined,
-      { surface: "telegram", page: 1 },
+      { surface: "telegram", page: 1, forcePaginatedList: true },
     );
     expect(result.text).toContain("ℹ️ Commands (1/");
     expect(result.text).toContain("Session");
@@ -1466,7 +1529,7 @@ describe("buildCommandsMessagePaginated", () => {
         commands: { config: false, debug: false },
       } as unknown as OpenClawConfig,
       undefined,
-      { surface: "telegram", page: 1 },
+      { surface: "telegram", page: 1, forcePaginatedList: true },
     );
     const pages = Array.from({ length: firstPage.totalPages }, (_, index) =>
       buildPaginatedCommands(
@@ -1474,7 +1537,7 @@ describe("buildCommandsMessagePaginated", () => {
           commands: { config: false, debug: false },
         } as unknown as OpenClawConfig,
         undefined,
-        { surface: "telegram", page: index + 1 },
+        { surface: "telegram", page: index + 1, forcePaginatedList: true },
       ),
     );
     const pluginPage = pages.find((page) => page.text.includes("/plugin_cmd (demo-plugin)"));

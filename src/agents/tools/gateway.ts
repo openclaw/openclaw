@@ -5,6 +5,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { readStringParam } from "./common.js";
 
@@ -32,7 +33,7 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
   try {
     url = new URL(input);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     throw new Error(`invalid gatewayUrl: ${input} (${message})`, { cause: error });
   }
 

@@ -1,7 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
@@ -16,7 +15,6 @@ import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
-import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
@@ -29,22 +27,14 @@ import {
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-request-config.js";
+import {
+  buildInlineProviderModels,
+  type InlineProviderConfig,
+  normalizeResolvedTransportApi,
+  resolveProviderModelInput,
+  sanitizeModelHeaders,
+} from "./model.inline-provider.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
-
-type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
-  api?: Api;
-  provider: string;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-};
-type InlineProviderConfig = {
-  baseUrl?: string;
-  api?: ModelDefinitionConfig["api"];
-  models?: ModelDefinitionConfig[];
-  headers?: unknown;
-  authHeader?: boolean;
-  request?: ModelProviderConfig["request"];
-};
 
 type ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins?: (
@@ -101,43 +91,6 @@ function resolveRuntimeHooks(params?: {
   return params?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
 }
 
-function normalizeResolvedTransportApi(api: unknown): ModelDefinitionConfig["api"] | undefined {
-  switch (api) {
-    case "anthropic-messages":
-    case "bedrock-converse-stream":
-    case "github-copilot":
-    case "google-generative-ai":
-    case "ollama":
-    case "openai-codex-responses":
-    case "openai-completions":
-    case "openai-responses":
-    case "azure-openai-responses":
-      return api;
-    default:
-      return undefined;
-  }
-}
-
-function sanitizeModelHeaders(
-  headers: unknown,
-  opts?: { stripSecretRefMarkers?: boolean },
-): Record<string, string> | undefined {
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
-    return undefined;
-  }
-  const next: Record<string, string> = {};
-  for (const [headerName, headerValue] of Object.entries(headers)) {
-    if (typeof headerValue !== "string") {
-      continue;
-    }
-    if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
-      continue;
-    }
-    next[headerName] = headerValue;
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
-}
-
 function applyResolvedTransportFallback(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -175,13 +128,15 @@ function normalizeResolvedModel(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> {
-  const normalizedInputModel =
-    Array.isArray(params.model.input) && params.model.input.length > 0
-      ? params.model
-      : ({
-          ...params.model,
-          input: ["text"],
-        } as Model<Api>);
+  const normalizedInputModel = {
+    ...params.model,
+    input: resolveProviderModelInput({
+      provider: params.provider,
+      modelId: params.model.id,
+      modelName: params.model.name,
+      input: params.model.input,
+    }),
+  } as Model<Api>;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
@@ -278,6 +233,7 @@ function findInlineModelMatch(params: {
 }
 
 export { buildModelAliasLines };
+export { buildInlineProviderModels };
 
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -333,11 +289,13 @@ function applyConfiguredProviderOverrides(params: {
       headers: discoveredHeaders,
     };
   }
-  const resolvedInput = configuredModel?.input ?? discoveredModel.input;
-  const normalizedInput =
-    Array.isArray(resolvedInput) && resolvedInput.length > 0
-      ? resolvedInput.filter((item) => item === "text" || item === "image")
-      : (["text"] as Array<"text" | "image">);
+  const normalizedInput = resolveProviderModelInput({
+    provider: params.provider,
+    modelId,
+    modelName: configuredModel?.name ?? discoveredModel.name,
+    input: configuredModel?.input,
+    fallbackInput: discoveredModel.input,
+  });
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
@@ -377,52 +335,6 @@ function applyConfiguredProviderOverrides(params: {
     },
     providerRequest,
   );
-}
-
-export function buildInlineProviderModels(
-  providers: Record<string, InlineProviderConfig>,
-): InlineModelEntry[] {
-  return Object.entries(providers).flatMap(([providerId, entry]) => {
-    const trimmed = providerId.trim();
-    if (!trimmed) {
-      return [];
-    }
-    const providerHeaders = sanitizeModelHeaders(entry?.headers, {
-      stripSecretRefMarkers: true,
-    });
-    const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
-    return (entry?.models ?? []).map((model) => {
-      const transport = resolveProviderTransport({
-        provider: trimmed,
-        api: model.api ?? entry?.api,
-        baseUrl: entry?.baseUrl,
-      });
-      const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
-        stripSecretRefMarkers: true,
-      });
-      const requestConfig = resolveProviderRequestConfig({
-        provider: trimmed,
-        api: transport.api ?? model.api,
-        baseUrl: transport.baseUrl,
-        providerHeaders,
-        modelHeaders,
-        authHeader: entry?.authHeader,
-        request: providerRequest,
-        capability: "llm",
-        transport: "stream",
-      });
-      return attachModelProviderRequestTransport(
-        {
-          ...model,
-          provider: trimmed,
-          baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
-          api: requestConfig.api ?? model.api,
-          headers: requestConfig.headers,
-        },
-        providerRequest,
-      );
-    });
-  });
 }
 
 function resolveExplicitModelWithRegistry(params: {
@@ -592,7 +504,12 @@ function resolveConfiguredFallbackModel(params: {
         provider,
         baseUrl: requestConfig.baseUrl,
         reasoning: configuredModel?.reasoning ?? false,
-        input: ["text"],
+        input: resolveProviderModelInput({
+          provider,
+          modelId,
+          modelName: configuredModel?.name ?? modelId,
+          input: configuredModel?.input,
+        }),
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow:
           configuredModel?.contextWindow ??

@@ -8,6 +8,10 @@ type BlueBubblesConfigPatch = {
 };
 
 type AccountEnabledMode = boolean | "preserve-or-true";
+type BlueBubblesAccountEntry = {
+  enabled?: boolean;
+  [key: string]: unknown;
+};
 
 function normalizePatch(
   patch: BlueBubblesConfigPatch,
@@ -51,7 +55,9 @@ export function applyBlueBubblesConnectionConfig(params: {
     };
   }
 
-  const currentAccount = params.cfg.channels?.bluebubbles?.accounts?.[params.accountId];
+  const currentAccount = params.cfg.channels?.bluebubbles?.accounts?.[params.accountId] as
+    | BlueBubblesAccountEntry
+    | undefined;
   const enabled =
     params.accountEnabled === "preserve-or-true"
       ? (currentAccount?.enabled ?? true)

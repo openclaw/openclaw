@@ -8,6 +8,10 @@ import {
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import {
+  collectRelevantDoctorPluginIds,
+  listPluginDoctorLegacyConfigRules,
+} from "../plugins/doctor-contract-registry.js";
+import {
   loadPluginManifestRegistry,
   resolveManifestContractPluginIds,
 } from "../plugins/manifest-registry.js";
@@ -27,7 +31,7 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
-import { applyLegacyMigrations, findLegacyConfigIssues } from "./legacy.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
@@ -454,7 +458,11 @@ export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
-  const legacyIssues = findLegacyConfigIssues(raw);
+  const legacyIssues = findLegacyConfigIssues(
+    raw,
+    raw,
+    listPluginDoctorLegacyConfigRules({ pluginIds: collectRelevantDoctorPluginIds(raw) }),
+  );
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -545,13 +553,7 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
 ): ValidateConfigWithPluginsResult {
-  // Config edit flows often start from raw parsed files that may still contain legacy keys.
-  // Accept known legacy inputs here by normalizing them before schema/plugin validation.
-  const migrated = applyLegacyMigrations(raw);
-  const normalizedRaw = migrated.next ?? raw;
-  const base = opts.applyDefaults
-    ? validateConfigObject(normalizedRaw)
-    : validateConfigObjectRaw(normalizedRaw);
+  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
@@ -573,6 +575,7 @@ function validateConfigObjectWithPluginsBase(
   type RegistryInfo = {
     registry: ReturnType<typeof loadPluginManifestRegistry>;
     knownIds?: Set<string>;
+    overriddenPluginIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
     channelSchemas?: Map<
       string,
@@ -598,6 +601,16 @@ function validateConfigObjectWithPluginsBase(
       return compatPluginIds;
     }
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const overriddenBundledPluginIds = new Set(
+      loadPluginManifestRegistry({
+        config,
+        workspaceDir: workspaceDir ?? undefined,
+        env: opts.env,
+      })
+        .diagnostics.filter((diag) => diag.message.includes("duplicate plugin id detected"))
+        .map((diag) => diag.pluginId)
+        .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
+    );
     compatPluginIds = new Set(
       resolveManifestContractPluginIds({
         contract: "webSearchProviders",
@@ -605,7 +618,7 @@ function validateConfigObjectWithPluginsBase(
         config,
         workspaceDir: workspaceDir ?? undefined,
         env: opts.env,
-      }),
+      }).filter((pluginId) => !overriddenBundledPluginIds.has(pluginId)),
     );
     return compatPluginIds;
   };
@@ -670,6 +683,21 @@ function validateConfigObjectWithPluginsBase(
     return info.knownIds;
   };
 
+  const ensureOverriddenPluginIds = (): Set<string> => {
+    const info = ensureRegistry();
+    if (!info.overriddenPluginIds) {
+      info.overriddenPluginIds = new Set(
+        info.registry.diagnostics
+          .filter((diag) => diag.message.includes("duplicate plugin id detected"))
+          .map((diag) => diag.pluginId)
+          .filter(
+            (pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== "",
+          ),
+      );
+    }
+    return info.overriddenPluginIds;
+  };
+
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
     const info = ensureRegistry();
     if (!info.normalizedPlugins) {
@@ -687,10 +715,20 @@ function validateConfigObjectWithPluginsBase(
     const info = ensureRegistry();
     if (!info.channelSchemas) {
       info.channelSchemas = new Map(
-        collectChannelSchemaMetadata(info.registry).map(
-          (entry) => [entry.id, { schema: entry.configSchema }] as const,
+        GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
+          (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
+      for (const entry of collectChannelSchemaMetadata(info.registry)) {
+        const current = info.channelSchemas.get(entry.id);
+        if (entry.configSchema) {
+          info.channelSchemas.set(entry.id, { schema: entry.configSchema });
+          continue;
+        }
+        if (!current) {
+          info.channelSchemas.set(entry.id, {});
+        }
+      }
     }
     return info.channelSchemas;
   };
@@ -771,7 +809,8 @@ function validateConfigObjectWithPluginsBase(
         schema: channelSchema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
-        applyDefaults: opts.applyDefaults,
+        applyDefaults: true, // Always apply defaults for AJV schema validation;
+        // writeConfigFile persists persistCandidate, not validated.config (#61841)
       });
       if (!result.ok) {
         for (const error of result.errors) {
@@ -928,7 +967,11 @@ function validateConfigObjectWithPluginsBase(
     }
     seenPlugins.add(pluginId);
     const entry = normalizedPlugins.entries[pluginId];
+    const entryExists = entry !== undefined;
     const entryHasConfig = Boolean(entry?.config);
+    const shouldReplacePluginConfig = opts.applyDefaults
+      ? entryExists || entryHasConfig
+      : entryHasConfig;
 
     const activationState = resolveEffectivePluginActivationState({
       id: pluginId,
@@ -955,14 +998,15 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    const shouldValidate = enabled || entryHasConfig;
+    const shouldValidate = enabled || entryExists || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
         const res = validateJsonSchemaValue({
           schema: record.configSchema,
           cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
           value: entry?.config ?? {},
-          applyDefaults: opts.applyDefaults,
+          applyDefaults: true, // Always apply defaults for AJV schema validation;
+          // writeConfigFile persists persistCandidate, not validated.config (#61841)
         });
         if (!res.ok) {
           for (const error of res.errors) {
@@ -973,7 +1017,7 @@ function validateConfigObjectWithPluginsBase(
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
-        } else if (entry || entryHasConfig) {
+        } else if (shouldReplacePluginConfig) {
           replacePluginEntryConfig(pluginId, res.value as Record<string, unknown>);
         }
       } else if (record.format === "bundle") {
@@ -987,7 +1031,9 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    if (!enabled && entryHasConfig && !ensureCompatPluginIds().has(pluginId)) {
+    const suppressDisabledConfigWarning =
+      ensureCompatPluginIds().has(pluginId) && !ensureOverriddenPluginIds().has(pluginId);
+    if (!enabled && entryHasConfig && !suppressDisabledConfigWarning) {
       warnings.push({
         path: `plugins.entries.${pluginId}`,
         message: `plugin disabled (${reason ?? "disabled"}) but config is present`,

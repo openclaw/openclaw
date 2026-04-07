@@ -1,6 +1,8 @@
 export {
   discoverMantleModels,
+  generateBearerTokenFromIam,
   mergeImplicitMantleProvider,
+  resetIamTokenCacheForTest,
   resetMantleDiscoveryCacheForTest,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,

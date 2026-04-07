@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
+import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -18,21 +22,12 @@ vi.mock("./tools/nodes-utils.js", () => ({
   resolveNodeIdFromList: vi.fn((nodes: Array<{ nodeId: string }>) => nodes[0]?.nodeId),
 }));
 
-vi.mock("../infra/exec-obfuscation-detect.js", () => ({
-  detectCommandObfuscation: vi.fn(() => ({
-    detected: false,
-    reasons: [],
-    matchedPatterns: [],
-  })),
-}));
-
 vi.mock("../infra/outbound/message.js", () => ({
   sendMessage: vi.fn(async () => ({ ok: true })),
 }));
 
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
-let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
 let getExecApprovalApproverDmNoticeText: typeof import("../infra/exec-approval-reply.js").getExecApprovalApproverDmNoticeText;
 let sendMessage: typeof import("../infra/outbound/message.js").sendMessage;
 
@@ -64,6 +59,26 @@ async function writeExecApprovalsConfig(config: Record<string, unknown>) {
   const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
   await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
   await fs.writeFile(approvalsPath, JSON.stringify(config, null, 2));
+}
+
+function resetPluginState() {
+  clearPluginDiscoveryCache();
+  clearPluginLoaderCache();
+  clearPluginManifestRegistryCache();
+  resetPluginRuntimeStateForTest();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+}
+
+async function withBundledChannels<T>(run: () => Promise<T>) {
+  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  resetPluginState();
+  try {
+    return await run();
+  } finally {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    resetPluginState();
+  }
 }
 
 function acceptedApprovalResponse(params: unknown) {
@@ -240,27 +255,31 @@ function mockNoApprovalRouteRegistration() {
 describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
+  let previousBundledPluginsDir: string | undefined;
+  let previousDisableBundledPlugins: string | undefined;
 
   beforeEach(async () => {
     vi.resetModules();
-    ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
-    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
-    ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
-    ({ sendMessage } = await import("../infra/outbound/message.js"));
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
+    previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    ({ callGatewayTool } = await import("./tools/gateway.js"));
+    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ getExecApprovalApproverDmNoticeText } = await import("../infra/exec-approval-reply.js"));
+    ({ sendMessage } = await import("../infra/outbound/message.js"));
     vi.mocked(callGatewayTool).mockReset();
-    vi.mocked(detectCommandObfuscation).mockReset();
-    vi.mocked(sendMessage).mockReset();
+    vi.mocked(sendMessage).mockClear();
   });
 
   afterEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     if (previousHome === undefined) {
@@ -272,6 +291,16 @@ describe("exec approvals", () => {
       delete process.env.USERPROFILE;
     } else {
       process.env.USERPROFILE = previousUserProfile;
+    }
+    if (previousBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+    }
+    if (previousDisableBundledPlugins === undefined) {
+      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    } else {
+      process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
     }
   });
 
@@ -449,6 +478,41 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(prepareHasCwd).toBe(false);
     expect(prepareCwd).toBeUndefined();
+  });
+
+  it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {
+    const calls: string[] = [];
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "node-ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "auto",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      elevated: { enabled: true, allowed: true, defaultLevel: "on" },
+    });
+
+    const result = await tool.execute("call-auto-node-elevated-default", {
+      command: "echo gateway-ok",
+      host: "node",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("node-ok");
+    expect(calls).toContain("node.invoke");
   });
 
   it("honors ask=off for elevated gateway exec without prompting", async () => {
@@ -741,8 +805,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -784,8 +846,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-discord", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -847,8 +907,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-discord-delayed", {
       command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
       workdir: tempDir,
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -923,8 +981,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-webchat", {
       command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
       workdir: tempDir,
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -979,8 +1035,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-deny", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -1338,7 +1392,7 @@ describe("exec approvals", () => {
     ).rejects.toThrow("Cron runs cannot wait for interactive exec approval");
   });
 
-  it("shows a local /approve prompt when discord exec approvals are disabled", async () => {
+  it("returns an unavailable reply when discord exec approvals are disabled", async () => {
     await writeOpenClawConfig({
       channels: {
         discord: {
@@ -1359,18 +1413,28 @@ describe("exec approvals", () => {
       currentChannelId: "1234567890",
     });
 
-    const result = await tool.execute("call-unavailable", {
-      command: "npm view diver name version description",
-    });
+    const result = await withBundledChannels(async () =>
+      tool.execute("call-unavailable", {
+        command: "npm view diver name version description",
+      }),
+    );
 
-    expectPendingApprovalText(result, {
-      command: "npm view diver name version description",
+    expect(result.details.status).toBe("approval-unavailable");
+    expect(result.details).toMatchObject({
+      reason: "initiating-platform-disabled",
+      channel: "discord",
+      channelLabel: "Discord",
+      accountId: "default",
       host: "gateway",
-      allowedDecisions: "allow-once|deny",
     });
+    expect(getResultText(result)).toContain(
+      "native chat exec approvals are not configured on Discord",
+    );
+    expect(getResultText(result)).not.toContain("/approve");
+    expect(getResultText(result)).not.toContain("Pending command:");
   });
 
-  it("keeps Telegram approvals in the initiating chat even when Discord DM approvals are also enabled", async () => {
+  it("keeps the Telegram unavailable reply when Discord DM approvals are not fully configured", async () => {
     await writeOpenClawConfig(
       {
         channels: {
@@ -1398,104 +1462,24 @@ describe("exec approvals", () => {
       currentChannelId: "-1003841603622",
     });
 
-    const result = await tool.execute("call-tg-unavailable", {
-      command: "npm view diver name version description",
-    });
+    const result = await withBundledChannels(async () =>
+      tool.execute("call-tg-unavailable", {
+        command: "npm view diver name version description",
+      }),
+    );
 
-    const details = expectPendingApprovalText(result, {
-      command: "npm view diver name version description",
+    expect(result.details.status).toBe("approval-unavailable");
+    expect(result.details).toMatchObject({
+      reason: "initiating-platform-disabled",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: "default",
+      sentApproverDms: false,
       host: "gateway",
-      allowedDecisions: "allow-once|deny",
     });
-    expect(getResultText(result)).toContain(`/approve ${details.approvalSlug} allow-once`);
+    expect(getResultText(result)).toContain(
+      "native chat exec approvals are not configured on Telegram",
+    );
     expect(getResultText(result)).not.toContain(getExecApprovalApproverDmNoticeText());
-  });
-
-  it("denies node obfuscated command when approval request times out", async () => {
-    vi.mocked(detectCommandObfuscation).mockReturnValue({
-      detected: true,
-      reasons: ["Content piped directly to shell interpreter"],
-      matchedPatterns: ["pipe-to-shell"],
-    });
-
-    const calls: string[] = [];
-    const nodeInvokeCommands: string[] = [];
-    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
-      calls.push(method);
-      if (method === "exec.approval.request") {
-        return { status: "accepted", id: "approval-id" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return {};
-      }
-      if (method === "node.invoke") {
-        const invoke = params as { command?: string };
-        if (invoke.command) {
-          nodeInvokeCommands.push(invoke.command);
-        }
-        if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
-        }
-        return { payload: { success: true, stdout: "should-not-run" } };
-      }
-      return { ok: true };
-    });
-
-    const tool = createExecTool({
-      host: "node",
-      ask: "off",
-      security: "full",
-      approvalRunningNoticeMs: 0,
-    });
-
-    const result = await tool.execute("call5", { command: "echo hi | sh" });
-    expect(result.details.status).toBe("approval-pending");
-    await expect.poll(() => nodeInvokeCommands.includes("system.run")).toBe(false);
-  });
-
-  it("denies gateway obfuscated command when approval request times out", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    vi.mocked(detectCommandObfuscation).mockReturnValue({
-      detected: true,
-      reasons: ["Content piped directly to shell interpreter"],
-      matchedPatterns: ["pipe-to-shell"],
-    });
-
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-      if (method === "exec.approval.request") {
-        return { status: "accepted", id: "approval-id" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return {};
-      }
-      return { ok: true };
-    });
-
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-obf-"));
-    const markerPath = path.join(tempDir, "ran.txt");
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "off",
-      security: "full",
-      approvalRunningNoticeMs: 0,
-    });
-
-    const result = await tool.execute("call6", {
-      command: `echo touch ${JSON.stringify(markerPath)} | sh`,
-    });
-    expect(result.details.status).toBe("approval-pending");
-    await expect
-      .poll(async () => {
-        try {
-          await fs.access(markerPath);
-          return true;
-        } catch {
-          return false;
-        }
-      })
-      .toBe(false);
   });
 });

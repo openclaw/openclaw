@@ -5,7 +5,7 @@ import {
   MINIMAX_DEFAULT_MODEL_ID,
   MINIMAX_DEFAULT_MODEL_REF,
   MINIMAX_TEXT_MODEL_REFS,
-} from "../../extensions/minimax/api.js";
+} from "../plugin-sdk/minimax.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const testingDoc = fs.readFileSync(path.join(repoRoot, "docs/help/testing.md"), "utf8");

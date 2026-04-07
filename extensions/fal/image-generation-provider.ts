@@ -2,6 +2,7 @@ import type {
   GeneratedImageAsset,
   ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -294,6 +295,11 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
     label: "fal",
     defaultModel: DEFAULT_FAL_IMAGE_MODEL,
     models: [DEFAULT_FAL_IMAGE_MODEL, `${DEFAULT_FAL_IMAGE_MODEL}/${DEFAULT_FAL_EDIT_SUBPATH}`],
+    isConfigured: ({ agentDir }) =>
+      isProviderApiKeyConfigured({
+        provider: "fal",
+        agentDir,
+      }),
     capabilities: {
       generate: {
         maxCount: 4,

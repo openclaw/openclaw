@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 import type { FeishuProbeResult } from "./types.js";
@@ -151,7 +152,7 @@ export async function probeFeishu(
       {
         ok: false,
         appId: creds.appId,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
       },
       PROBE_ERROR_TTL_MS,
     );

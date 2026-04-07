@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startBrowserControlServerFromConfig, stopBrowserControlServer } from "./server.js";
+import { startBrowserControlServerFromConfig, stopBrowserControlServer } from "../server.js";
 import { getFreePort } from "./test-port.js";
 
 const mocks = vi.hoisted(() => ({

@@ -40,6 +40,12 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
   Object.assign(executeDeps, overrides);
 }
 
+function createCliAbortError(): Error {
+  const error = new Error("CLI run aborted");
+  error.name = "AbortError";
+  return error;
+}
+
 function buildCliLogArgs(params: {
   args: string[];
   systemPromptArg?: string;
@@ -88,6 +94,9 @@ export async function executePreparedCliRun(
   cliSessionIdToUse?: string,
 ): Promise<CliOutput> {
   const params = context.params;
+  if (params.abortSignal?.aborted) {
+    throw createCliAbortError();
+  }
   const backend = context.preparedBackend.backend;
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
@@ -115,7 +124,9 @@ export async function executePreparedCliRun(
     const imagePayload = await writeCliImages(resolvedImages);
     imagePaths = imagePayload.paths;
     cleanupImages = imagePayload.cleanup;
-    if (!backend.imageArg) {
+    // Some stdin-driven CLIs still need the hydrated file paths mentioned in the
+    // prompt even when we also pass explicit image args.
+    if (!backend.imageArg || backend.input === "stdin") {
       prompt = appendImagePathsToPrompt(prompt, imagePaths);
     }
   }
@@ -232,8 +243,38 @@ export async function executePreparedCliRun(
         input: stdinPayload,
         onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
       });
-      const result = await managedRun.wait();
+      const replyBackendHandle = params.replyOperation
+        ? {
+            kind: "cli" as const,
+            cancel: () => {
+              managedRun.cancel("manual-cancel");
+            },
+            isStreaming: () => false,
+          }
+        : undefined;
+      if (replyBackendHandle) {
+        params.replyOperation?.attachBackend(replyBackendHandle);
+      }
+      const abortManagedRun = () => {
+        managedRun.cancel("manual-cancel");
+      };
+      params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
+      if (params.abortSignal?.aborted) {
+        abortManagedRun();
+      }
+      let result: Awaited<ReturnType<typeof managedRun.wait>>;
+      try {
+        result = await managedRun.wait();
+      } finally {
+        if (replyBackendHandle) {
+          params.replyOperation?.detachBackend(replyBackendHandle);
+        }
+        params.abortSignal?.removeEventListener("abort", abortManagedRun);
+      }
       streamingParser?.finish();
+      if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
+        throw createCliAbortError();
+      }
 
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();

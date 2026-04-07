@@ -3,6 +3,7 @@ import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
   applyExistingCronSchedulePatch,
@@ -169,12 +170,8 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
-          const model =
-            typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
-          const thinking =
-            typeof opts.thinking === "string" && opts.thinking.trim()
-              ? opts.thinking.trim()
-              : undefined;
+          const model = normalizeOptionalString(opts.model);
+          const thinking = normalizeOptionalString(opts.thinking);
           const timeoutSeconds = opts.timeoutSeconds
             ? Number.parseInt(String(opts.timeoutSeconds), 10)
             : undefined;

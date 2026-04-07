@@ -36,14 +36,10 @@ import {
   type AssistantUsageSnapshot,
   type UsageLike,
 } from "../usage.js";
-import { log } from "./logger.js";
 import { dropThinkingBlocks } from "./thinking.js";
 
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
-
-type AssistantHistoryMessage = Extract<AgentMessage, { role: "assistant" }>;
-type RawAssistantHistoryMessage = Omit<AssistantHistoryMessage, "content"> & { content?: unknown };
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 type ModelSnapshotEntry = {
   timestamp: number;
@@ -129,61 +125,6 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
     } as AgentMessage);
   }
   return touched ? out : messages;
-}
-
-function describeAssistantContentKind(content: unknown): string {
-  if (Array.isArray(content)) {
-    return "array";
-  }
-  if (content === null) {
-    return "null";
-  }
-  return typeof content;
-}
-
-function canonicalizeAssistantHistoryMessages(params: {
-  messages: AgentMessage[];
-  sessionId: string;
-}): AgentMessage[] {
-  let touched = false;
-  let repairedCount = 0;
-  const repairedKinds = new Set<string>();
-  const out: AgentMessage[] = [];
-
-  for (const msg of params.messages) {
-    if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
-      out.push(msg);
-      continue;
-    }
-
-    const assistant = msg as RawAssistantHistoryMessage;
-    if (Array.isArray(assistant.content)) {
-      out.push(msg);
-      continue;
-    }
-
-    // Session transcripts and custom stream boundaries have historically leaked
-    // malformed assistant payloads. Repair them here so Pi replay only sees the
-    // canonical array-based assistant content contract.
-    const repairedText = typeof assistant.content === "string" ? assistant.content : "";
-    out.push({
-      ...(assistant as unknown as Record<string, unknown>),
-      content: [{ type: "text", text: repairedText }],
-    } as AgentMessage);
-    touched = true;
-    repairedCount += 1;
-    repairedKinds.add(describeAssistantContentKind(assistant.content));
-  }
-
-  if (!touched) {
-    return params.messages;
-  }
-
-  log.warn(
-    `sanitizeSessionHistory: canonicalized ${repairedCount} malformed assistant message(s) before replay ` +
-      `session=${params.sessionId} contentKinds=${Array.from(repairedKinds).join(",")}`,
-  );
-  return out;
 }
 
 function parseMessageTimestamp(value: unknown): number | null {
@@ -459,12 +400,8 @@ export async function sanitizeSessionHistory(params: {
       model: params.model,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
-  const canonicalizedAssistantHistory = canonicalizeAssistantHistoryMessages({
-    messages: withInterSessionMarkers,
-    sessionId: params.sessionId,
-  });
   const sanitizedImages = await sanitizeSessionMessagesImages(
-    canonicalizedAssistantHistory,
+    withInterSessionMarkers,
     "session:history",
     {
       sanitizeMode: policy.sanitizeMode,

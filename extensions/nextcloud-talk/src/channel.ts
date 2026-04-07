@@ -5,13 +5,13 @@ import {
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildWebhookChannelStatusSummary,
@@ -240,7 +240,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
               changed = true;
             }
             const accountCleanup = clearAccountEntryFields({
-              accounts: nextSection.accounts,
+              accounts: nextSection.accounts as Record<string, object> | undefined,
               accountId,
               fields: ["botSecret"],
             });
@@ -250,7 +250,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
                 cleared = true;
               }
               if (accountCleanup.nextAccounts) {
-                nextSection.accounts = accountCleanup.nextAccounts;
+                nextSection.accounts = accountCleanup.nextAccounts as Record<string, unknown>;
               } else {
                 delete nextSection.accounts;
               }

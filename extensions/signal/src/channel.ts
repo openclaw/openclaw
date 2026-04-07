@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   attachChannelToResult,
@@ -7,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
@@ -18,7 +18,6 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { signalApprovalAuth } from "./approval-auth.js";
 import { markdownToSignalTextChunks } from "./format.js";
@@ -28,8 +27,8 @@ import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {
-  signalConfigAdapter,
   createSignalPluginBase,
+  signalConfigAdapter,
   signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";
@@ -294,9 +293,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           return await probeSignal(baseUrl, timeoutMs);
         },
         formatCapabilitiesProbe: ({ probe }) =>
-          (probe as SignalProbe | undefined)?.version
-            ? [{ text: `Signal daemon: ${(probe as SignalProbe).version}` }]
-            : [],
+          probe?.version ? [{ text: `Signal daemon: ${probe.version}` }] : [],
         resolveAccountSnapshot: ({ account }) => ({
           accountId: account.accountId,
           name: account.name,

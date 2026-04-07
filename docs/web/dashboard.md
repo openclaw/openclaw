@@ -91,3 +91,5 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
   - No shared secret configured: `openclaw doctor --generate-gateway-token`
 - In the dashboard settings, paste the token or password into the auth field,
   then connect.
+- The UI language picker is in **Overview -> Gateway Access -> Language**.
+  It is part of the access card, not the Appearance section.

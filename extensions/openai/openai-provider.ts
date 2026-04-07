@@ -13,6 +13,7 @@ import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-str
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
+  buildOpenAISyntheticCatalogEntry,
   cloneFirstTemplateModel,
   findCatalogTemplate,
   isOpenAIApiBaseUrl,
@@ -179,28 +180,6 @@ function resolveOpenAIGpt54ForwardCompatModel(
   );
 }
 
-function buildSyntheticCatalogEntry(
-  template: ReturnType<typeof findCatalogTemplate>,
-  entry: {
-    id: string;
-    reasoning: boolean;
-    input: readonly ("text" | "image")[];
-    contextWindow: number;
-  },
-) {
-  if (!template) {
-    return undefined;
-  }
-  return {
-    ...template,
-    id: entry.id,
-    name: entry.id,
-    reasoning: entry.reasoning,
-    input: [...entry.input],
-    contextWindow: entry.contextWindow,
-  };
-}
-
 export function buildOpenAIProvider(): ProviderPlugin {
   return {
     id: PROVIDER_ID,
@@ -304,25 +283,25 @@ export function buildOpenAIProvider(): ProviderPlugin {
         templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
       });
       return [
-        buildSyntheticCatalogEntry(openAiGpt54Template, {
+        buildOpenAISyntheticCatalogEntry(openAiGpt54Template, {
           id: OPENAI_GPT_54_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS,
         }),
-        buildSyntheticCatalogEntry(openAiGpt54ProTemplate, {
+        buildOpenAISyntheticCatalogEntry(openAiGpt54ProTemplate, {
           id: OPENAI_GPT_54_PRO_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS,
         }),
-        buildSyntheticCatalogEntry(openAiGpt54MiniTemplate, {
+        buildOpenAISyntheticCatalogEntry(openAiGpt54MiniTemplate, {
           id: OPENAI_GPT_54_MINI_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
           contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS,
         }),
-        buildSyntheticCatalogEntry(openAiGpt54NanoTemplate, {
+        buildOpenAISyntheticCatalogEntry(openAiGpt54NanoTemplate, {
           id: OPENAI_GPT_54_NANO_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],

@@ -7,6 +7,7 @@ import { loadJsonFile } from "../../infra/json-file.js";
 import { writeJsonFileAtomically } from "../../plugin-sdk/json-store.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-state.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type {
   ConversationRef,
   SessionBindingBindInput,
@@ -32,7 +33,7 @@ function normalizeConversationRef(ref: ConversationRef): ConversationRef {
     channel: ref.channel.trim().toLowerCase(),
     accountId: normalizeAccountId(ref.accountId),
     conversationId: ref.conversationId.trim(),
-    parentConversationId: ref.parentConversationId?.trim() || undefined,
+    parentConversationId: normalizeOptionalString(ref.parentConversationId),
   };
 }
 

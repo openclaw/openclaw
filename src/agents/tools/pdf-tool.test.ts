@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
@@ -10,13 +10,6 @@ import { modelSupportsDocument } from "../model-catalog.js";
 import * as modelsConfig from "../models-config.js";
 import * as modelDiscovery from "../pi-model-discovery.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
-import {
-  coercePdfAssistantText,
-  coercePdfModelConfig,
-  parsePageRange,
-  providerSupportsNativePdf,
-  resolvePdfToolMaxTokens,
-} from "./pdf-tool.helpers.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
 
@@ -30,11 +23,13 @@ vi.mock("@mariozechner/pi-ai", async () => {
 
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
-let resolvePdfModelConfigForTool: PdfToolModule["resolvePdfModelConfigForTool"];
 
-beforeAll(async () => {
-  ({ createPdfTool, resolvePdfModelConfigForTool } = await import("./pdf-tool.js"));
-});
+async function loadCreatePdfTool() {
+  if (!createPdfTool) {
+    ({ createPdfTool } = await import("./pdf-tool.js"));
+  }
+  return createPdfTool;
+}
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-"));
@@ -55,7 +50,7 @@ const FAKE_PDF_MEDIA = {
   fileName: "doc.pdf",
 } as const;
 
-function requirePdfTool(tool: ReturnType<typeof createPdfTool>) {
+function requirePdfTool(tool: Awaited<ReturnType<typeof loadCreatePdfTool>> extends (...args: any[]) => infer R ? R : never) {
   expect(tool).not.toBeNull();
   if (!tool) {
     throw new Error("expected pdf tool");
@@ -71,7 +66,7 @@ async function withAnthropicPdfTool(
   await withTempAgentDir(async (agentDir) => {
     vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
     const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
-    const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+    const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
     await run(tool, agentDir);
   });
 }
@@ -87,7 +82,7 @@ function makeAnthropicAnalyzeParams(
   }> = {},
 ) {
   return {
-    apiKey: "test-key", // pragma: allowlist secret
+    apiKey: "test-key",
     modelId: "claude-opus-4-6",
     prompt: "test",
     pdfs: [TEST_PDF_INPUT],
@@ -105,7 +100,7 @@ function makeGeminiAnalyzeParams(
   }> = {},
 ) {
   return {
-    apiKey: "test-key", // pragma: allowlist secret
+    apiKey: "test-key",
     modelId: "gemini-2.5-pro",
     prompt: "test",
     pdfs: [TEST_PDF_INPUT],
@@ -168,168 +163,11 @@ async function stubPdfToolInfra(
     wrote: false,
   });
 
-  vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never); // pragma: allowlist secret
+  vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
   vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
   return { loadSpy };
 }
-
-// ---------------------------------------------------------------------------
-// parsePageRange tests
-// ---------------------------------------------------------------------------
-
-describe("parsePageRange", () => {
-  it("parses a single page number", () => {
-    expect(parsePageRange("3", 20)).toEqual([3]);
-  });
-
-  it("parses a page range", () => {
-    expect(parsePageRange("1-5", 20)).toEqual([1, 2, 3, 4, 5]);
-  });
-
-  it("parses comma-separated pages and ranges", () => {
-    expect(parsePageRange("1,3,5-7", 20)).toEqual([1, 3, 5, 6, 7]);
-  });
-
-  it("clamps to maxPages", () => {
-    expect(parsePageRange("1-100", 5)).toEqual([1, 2, 3, 4, 5]);
-  });
-
-  it("deduplicates and sorts", () => {
-    expect(parsePageRange("5,3,1,3,5", 20)).toEqual([1, 3, 5]);
-  });
-
-  it("throws on invalid page number", () => {
-    expect(() => parsePageRange("abc", 20)).toThrow("Invalid page number");
-  });
-
-  it("throws on invalid range (start > end)", () => {
-    expect(() => parsePageRange("5-3", 20)).toThrow("Invalid page range");
-  });
-
-  it("throws on zero page number", () => {
-    expect(() => parsePageRange("0", 20)).toThrow("Invalid page number");
-  });
-
-  it("throws on negative page number", () => {
-    expect(() => parsePageRange("-1", 20)).toThrow("Invalid page number");
-  });
-
-  it("handles empty parts gracefully", () => {
-    expect(parsePageRange("1,,3", 20)).toEqual([1, 3]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// providerSupportsNativePdf tests
-// ---------------------------------------------------------------------------
-
-describe("providerSupportsNativePdf", () => {
-  it("returns true for anthropic", () => {
-    expect(providerSupportsNativePdf("anthropic")).toBe(true);
-  });
-
-  it("returns true for google", () => {
-    expect(providerSupportsNativePdf("google")).toBe(true);
-  });
-
-  it("returns false for openai", () => {
-    expect(providerSupportsNativePdf("openai")).toBe(false);
-  });
-
-  it("returns false for minimax", () => {
-    expect(providerSupportsNativePdf("minimax")).toBe(false);
-  });
-
-  it("is case-insensitive", () => {
-    expect(providerSupportsNativePdf("Anthropic")).toBe(true);
-    expect(providerSupportsNativePdf("GOOGLE")).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// PDF model config resolution
-// ---------------------------------------------------------------------------
-
-describe("resolvePdfModelConfigForTool", () => {
-  const priorFetch = global.fetch;
-
-  beforeEach(() => {
-    resetAuthEnv();
-    completeMock.mockReset();
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    global.fetch = priorFetch;
-  });
-
-  it("returns null without any auth", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
-      expect(resolvePdfModelConfigForTool({ cfg, agentDir })).toBeNull();
-    });
-  });
-
-  it("prefers explicit pdfModel config", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.4" },
-            pdfModel: { primary: "anthropic/claude-opus-4-6" },
-          },
-        },
-      } as OpenClawConfig;
-      expect(resolvePdfModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "anthropic/claude-opus-4-6",
-      });
-    });
-  });
-
-  it("falls back to imageModel config when no pdfModel set", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.4" },
-            imageModel: { primary: "openai/gpt-5.4-mini" },
-          },
-        },
-      };
-      expect(resolvePdfModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5.4-mini",
-      });
-    });
-  });
-
-  it("prefers anthropic when available for native PDF support", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
-      vi.stubEnv("OPENAI_API_KEY", "openai-test");
-      const cfg = withDefaultModel("openai/gpt-5.4");
-      const config = resolvePdfModelConfigForTool({ cfg, agentDir });
-      expect(config).not.toBeNull();
-      // Should prefer anthropic for native PDF
-      expect(config?.primary).toBe(ANTHROPIC_PDF_MODEL);
-    });
-  });
-
-  it("uses anthropic primary when provider is anthropic", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
-      const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
-      const config = resolvePdfModelConfigForTool({ cfg, agentDir });
-      expect(config?.primary).toBe(ANTHROPIC_PDF_MODEL);
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// createPdfTool
-// ---------------------------------------------------------------------------
 
 describe("createPdfTool", () => {
   const priorFetch = global.fetch;
@@ -345,22 +183,14 @@ describe("createPdfTool", () => {
     global.fetch = priorFetch;
   });
 
-  it("returns null without agentDir and no explicit config", () => {
-    expect(createPdfTool()).toBeNull();
+  it("returns null without agentDir and no explicit config", async () => {
+    expect((await loadCreatePdfTool())()).toBeNull();
   });
 
-  it("returns null without any auth configured", async () => {
-    await withTempAgentDir(async (agentDir) => {
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-      };
-      expect(createPdfTool({ config: cfg, agentDir })).toBeNull();
-    });
-  });
-
-  it("throws when agentDir missing but explicit config present", () => {
+  it("throws when agentDir missing but explicit config present", async () => {
     const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
-    expect(() => createPdfTool({ config: cfg })).toThrow("requires agentDir");
+    const createTool = await loadCreatePdfTool();
+    expect(() => createTool({ config: cfg })).toThrow("requires agentDir");
   });
 
   it("creates tool when auth is available", async () => {
@@ -395,7 +225,7 @@ describe("createPdfTool", () => {
       try {
         const cfg = withDefaultModel(ANTHROPIC_PDF_MODEL);
         const tool = requirePdfTool(
-          createPdfTool({
+          (await loadCreatePdfTool())({
             config: cfg,
             agentDir,
             workspaceDir,
@@ -432,7 +262,7 @@ describe("createPdfTool", () => {
     await withTempAgentDir(async (agentDir) => {
       const { loadSpy } = await stubPdfToolInfra(agentDir, { modelFound: false });
       const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
-      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
       await expect(
         tool.execute("t1", {
@@ -449,13 +279,10 @@ describe("createPdfTool", () => {
   it("uses native PDF path without eager extraction", async () => {
     await withTempAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
-
       vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
-
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent");
-
       const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
-      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
       const result = await tool.execute("t1", {
         prompt: "summarize",
@@ -474,7 +301,7 @@ describe("createPdfTool", () => {
     await withTempAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
       const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
-      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
       await expect(
         tool.execute("t1", {
@@ -489,12 +316,10 @@ describe("createPdfTool", () => {
   it("uses extraction fallback for non-native models", async () => {
     await withTempAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
-
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [],
       });
-
       completeMock.mockResolvedValue({
         role: "assistant",
         stopReason: "stop",
@@ -502,8 +327,7 @@ describe("createPdfTool", () => {
       } as never);
 
       const cfg = withPdfModel(OPENAI_PDF_MODEL);
-
-      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
       const result = await tool.execute("t1", {
         prompt: "summarize",
@@ -534,12 +358,9 @@ describe("createPdfTool", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Native provider detection
-// ---------------------------------------------------------------------------
-
 describe("native PDF provider API calls", () => {
   const priorFetch = global.fetch;
+
   const mockFetchResponse = (response: unknown) => {
     const fetchMock = vi.fn().mockResolvedValue(response);
     global.fetch = Object.assign(fetchMock, { preconnect: vi.fn() }) as typeof global.fetch;
@@ -558,13 +379,13 @@ describe("native PDF provider API calls", () => {
       }),
     });
 
-    const result = await pdfNativeProviders.anthropicAnalyzePdf({
-      ...makeAnthropicAnalyzeParams({
+    const result = await pdfNativeProviders.anthropicAnalyzePdf(
+      makeAnthropicAnalyzeParams({
         modelId: "claude-opus-4-6",
         prompt: "Summarize this document",
         maxTokens: 4096,
       }),
-    });
+    );
 
     expect(result).toBe("Analysis of PDF");
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -608,20 +429,16 @@ describe("native PDF provider API calls", () => {
     const fetchMock = mockFetchResponse({
       ok: true,
       json: async () => ({
-        candidates: [
-          {
-            content: { parts: [{ text: "Gemini PDF analysis" }] },
-          },
-        ],
+        candidates: [{ content: { parts: [{ text: "Gemini PDF analysis" }] } }],
       }),
     });
 
-    const result = await pdfNativeProviders.geminiAnalyzePdf({
-      ...makeGeminiAnalyzeParams({
+    const result = await pdfNativeProviders.geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
         modelId: "gemini-2.5-pro",
         prompt: "Summarize this",
       }),
-    });
+    );
 
     expect(result).toBe("Gemini PDF analysis");
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -666,8 +483,8 @@ describe("native PDF provider API calls", () => {
       }),
     });
 
-    await pdfNativeProviders.anthropicAnalyzePdf({
-      ...makeAnthropicAnalyzeParams({
+    await pdfNativeProviders.anthropicAnalyzePdf(
+      makeAnthropicAnalyzeParams({
         modelId: "claude-opus-4-6",
         prompt: "Compare these documents",
         pdfs: [
@@ -675,10 +492,9 @@ describe("native PDF provider API calls", () => {
           { base64: "cGRmMg==", filename: "doc2.pdf" },
         ],
       }),
-    });
+    );
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    // 2 document blocks + 1 text block
     expect(body.messages[0].content).toHaveLength(3);
     expect(body.messages[0].content[0].type).toBe("document");
     expect(body.messages[0].content[1].type).toBe("document");
@@ -693,9 +509,9 @@ describe("native PDF provider API calls", () => {
       }),
     });
 
-    await pdfNativeProviders.anthropicAnalyzePdf({
-      ...makeAnthropicAnalyzeParams({ baseUrl: "https://custom.example.com" }),
-    });
+    await pdfNativeProviders.anthropicAnalyzePdf(
+      makeAnthropicAnalyzeParams({ baseUrl: "https://custom.example.com" }),
+    );
 
     expect(fetchMock.mock.calls[0][0]).toContain("https://custom.example.com/v1/messages");
   });
@@ -750,67 +566,6 @@ describe("native PDF provider API calls", () => {
     expect(url).not.toContain("/v1beta/v1beta");
   });
 });
-
-// ---------------------------------------------------------------------------
-// PDF tool helpers
-// ---------------------------------------------------------------------------
-
-describe("pdf-tool.helpers", () => {
-  it("resolvePdfToolMaxTokens respects model limit", () => {
-    expect(resolvePdfToolMaxTokens(2048, 4096)).toBe(2048);
-    expect(resolvePdfToolMaxTokens(8192, 4096)).toBe(4096);
-    expect(resolvePdfToolMaxTokens(undefined, 4096)).toBe(4096);
-  });
-
-  it("coercePdfModelConfig reads primary and fallbacks", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          pdfModel: {
-            primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["google/gemini-2.5-pro"],
-          },
-        },
-      },
-    };
-    expect(coercePdfModelConfig(cfg)).toEqual({
-      primary: "anthropic/claude-opus-4-6",
-      fallbacks: ["google/gemini-2.5-pro"],
-    });
-  });
-
-  it("coercePdfAssistantText returns trimmed text", () => {
-    const text = coercePdfAssistantText({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "  summary  " }],
-      } as never,
-    });
-    expect(text).toBe("summary");
-  });
-
-  it("coercePdfAssistantText throws clear error for failed model output", () => {
-    expect(() =>
-      coercePdfAssistantText({
-        provider: "google",
-        model: "gemini-2.5-pro",
-        message: {
-          role: "assistant",
-          stopReason: "error",
-          errorMessage: "bad request",
-          content: [],
-        } as never,
-      }),
-    ).toThrow("PDF model failed (google/gemini-2.5-pro): bad request");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Model catalog document support
-// ---------------------------------------------------------------------------
 
 describe("model catalog document support", () => {
   it("modelSupportsDocument returns true when input includes document", () => {

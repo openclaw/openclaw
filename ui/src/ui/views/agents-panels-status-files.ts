@@ -3,6 +3,7 @@ import DOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import {
@@ -175,7 +176,7 @@ export function renderAgentChannels(params: {
             <div class="card-sub">Gateway-wide channel status snapshot.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? "Refreshing…" : "Refresh"}
+            ${params.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
         <div class="muted" style="margin-top: 8px;">Last refresh: ${lastSuccessLabel}</div>
@@ -270,19 +271,23 @@ export function renderAgentCron(params: {
             <div class="card-sub">Gateway cron status.</div>
           </div>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? "Refreshing…" : "Refresh"}
+            ${params.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
         <div class="stat-grid" style="margin-top: 16px;">
           <div class="stat">
-            <div class="stat-label">Enabled</div>
+            <div class="stat-label">${t("common.enabled")}</div>
             <div class="stat-value">
-              ${params.status ? (params.status.enabled ? "Yes" : "No") : "n/a"}
+              ${params.status
+                ? params.status.enabled
+                  ? t("common.yes")
+                  : t("common.no")
+                : t("common.na")}
             </div>
           </div>
           <div class="stat">
             <div class="stat-label">Jobs</div>
-            <div class="stat-value">${params.status?.jobs ?? "n/a"}</div>
+            <div class="stat-value">${params.status?.jobs ?? t("common.na")}</div>
           </div>
           <div class="stat">
             <div class="stat-label">Next wake</div>
@@ -373,7 +378,7 @@ export function renderAgentFiles(params: {
           ?disabled=${params.agentFilesLoading}
           @click=${() => params.onLoadFiles(params.agentId)}
         >
-          ${params.agentFilesLoading ? "Loading…" : "Refresh"}
+          ${params.agentFilesLoading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
       ${list

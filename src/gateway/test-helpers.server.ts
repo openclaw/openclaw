@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
+import "./test-helpers.mocks.js";
 import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import {
   clearSessionStoreCacheForTest,
@@ -32,13 +33,13 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
+import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
   cronIsolatedRun,
   embeddedRunMock,
   getReplyFromConfig,
   piSdkMock,
-  resetTestPluginRegistry,
   sendWhatsAppMock,
   sessionStoreSaveDelayMs,
   setTestConfigRoot,
@@ -46,7 +47,7 @@ import {
   testTailscaleWhois,
   testState,
   testTailnetIPv4,
-} from "./test-helpers.mocks.js";
+} from "./test-helpers.runtime-state.js";
 
 // Import lazily after test env/home setup so config/session paths resolve to test dirs.
 // Keep one cached module per worker for speed.
@@ -331,6 +332,17 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
+  embeddedRunMock.compactEmbeddedPiSession.mockReset();
+  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValue({
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  });
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
@@ -410,6 +422,17 @@ async function resetGatewayTestRuntimeOnly() {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
+  embeddedRunMock.compactEmbeddedPiSession.mockReset();
+  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValue({
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  });
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {

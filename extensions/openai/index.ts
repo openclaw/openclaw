@@ -14,6 +14,7 @@ import {
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
+import { buildOpenAIVideoGenerationProvider } from "./video-generation-provider.js";
 
 export default definePluginEntry({
   id: "openai",
@@ -21,11 +22,7 @@ export default definePluginEntry({
   description: "Bundled OpenAI provider plugins",
   register(api) {
     const promptOverlayMode = resolveOpenAIPromptOverlayMode(api.pluginConfig);
-    const buildProviderWithPromptContribution = <
-      T extends
-        | ReturnType<typeof buildOpenAIProvider>
-        | ReturnType<typeof buildOpenAICodexProviderPlugin>,
-    >(
+    const buildProviderWithPromptContribution = <T extends ReturnType<typeof buildOpenAIProvider>>(
       provider: T,
     ): T => ({
       ...provider,
@@ -45,5 +42,6 @@ export default definePluginEntry({
     api.registerSpeechProvider(buildOpenAISpeechProvider());
     api.registerMediaUnderstandingProvider(openaiMediaUnderstandingProvider);
     api.registerMediaUnderstandingProvider(openaiCodexMediaUnderstandingProvider);
+    api.registerVideoGenerationProvider(buildOpenAIVideoGenerationProvider());
   },
 });

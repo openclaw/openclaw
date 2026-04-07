@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
+import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
 import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -79,11 +79,14 @@ type LegacySessionSurface = {
 };
 
 function getLegacySessionSurfaces(): LegacySessionSurface[] {
-  return listBootstrapChannelPlugins()
-    .map((plugin) => plugin.messaging)
-    .filter(
-      (surface): surface is LegacySessionSurface => Boolean(surface) && typeof surface === "object",
-    );
+  const surfaces: LegacySessionSurface[] = [];
+  for (const plugin of iterateBootstrapChannelPlugins()) {
+    const surface = plugin.messaging;
+    if (surface && typeof surface === "object") {
+      surfaces.push(surface);
+    }
+  }
+  return surfaces;
 }
 
 function isSurfaceGroupKey(key: string): boolean {
@@ -632,7 +635,6 @@ export async function autoMigrateLegacyStateDir(params: {
     } catch (fallbackErr) {
       try {
         if (!legacyDir) {
-          // oxlint-disable-next-line preserve-caught-error
           throw new Error("Legacy state dir not found", { cause: fallbackErr });
         }
         fs.renameSync(targetDir, legacyDir);

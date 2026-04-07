@@ -27,7 +27,11 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import {
+  normalizeOpenAIStrictToolParameters,
+  resolveOpenAIStrictToolFlagForInventory,
+  resolveOpenAIStrictToolSetting,
+} from "./openai-tool-schema.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -332,7 +336,7 @@ function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = resolveStrictToolFlagForInventory(tools, options?.strict);
+  const strict = resolveOpenAIStrictToolFlagForInventory(tools, options?.strict);
   if (strict === undefined) {
     return tools.map((tool) => ({
       type: "function",
@@ -345,43 +349,9 @@ function convertResponsesTools(
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: tool.parameters,
+    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict),
     strict,
   }));
-}
-
-function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  if (Array.isArray(schema)) {
-    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatible(entry));
-  }
-  if (!schema || typeof schema !== "object") {
-    return true;
-  }
-
-  const record = schema as Record<string, unknown>;
-  if ("anyOf" in record || "oneOf" in record || "allOf" in record) {
-    return false;
-  }
-  if (Array.isArray(record.type)) {
-    return false;
-  }
-  if (record.type === "object" && record.additionalProperties !== false) {
-    return false;
-  }
-
-  return Object.values(record).every((entry) => isStrictOpenAIJsonSchemaCompatible(entry));
-}
-
-function resolveStrictToolFlagForInventory(
-  tools: NonNullable<Context["tools"]>,
-  strict: boolean | null | undefined,
-): boolean | undefined {
-  if (strict !== true) {
-    return strict === false ? false : undefined;
-  }
-  return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters))
-    ? true
-    : undefined;
 }
 
 async function processResponsesStream(
@@ -793,7 +763,9 @@ export function buildOpenAIResponsesParams(
   }
   if (context.tools) {
     params.tools = convertResponsesTools(context.tools, {
-      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel),
+      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+        transport: "stream",
+      }),
     });
   }
   if (model.reasoning) {
@@ -1254,58 +1226,24 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
   return reasoningEffortMap[effort] ?? effort;
 }
 
-function resolvesToNativeOpenAIStrictTools(model: OpenAIModeModel): boolean {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    modelId: model.id,
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
-  if (!capabilities.usesKnownNativeOpenAIRoute) {
-    return false;
-  }
-  return (
-    capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
-    capabilities.provider === "azure-openai" ||
-    capabilities.provider === "azure-openai-responses"
-  );
-}
-
-function resolveOpenAIStrictToolSetting(
-  model: OpenAIModeModel,
-  compat?: ReturnType<typeof getCompat>,
-): boolean | undefined {
-  if (resolvesToNativeOpenAIStrictTools(model)) {
-    return true;
-  }
-  if (compat?.supportsStrictMode) {
-    return false;
-  }
-  return undefined;
-}
-
 function convertTools(
   tools: NonNullable<Context["tools"]>,
   compat: ReturnType<typeof getCompat>,
   model: OpenAIModeModel,
 ) {
-  const strict = resolveStrictToolFlagForInventory(
+  const strict = resolveOpenAIStrictToolFlagForInventory(
     tools,
-    resolveOpenAIStrictToolSetting(model, compat),
+    resolveOpenAIStrictToolSetting(model, {
+      transport: "stream",
+      supportsStrictMode: compat?.supportsStrictMode,
+    }),
   );
   return tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
+      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true),
       ...(strict === undefined ? {} : { strict }),
     },
   }));

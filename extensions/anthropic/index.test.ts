@@ -1,3 +1,4 @@
+import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 
@@ -18,6 +19,22 @@ vi.mock("./cli-auth-seam.js", () => {
 import anthropicPlugin from "./index.js";
 
 describe("anthropic provider replay hooks", () => {
+  it("registers the claude-cli backend", async () => {
+    const captured = capturePluginRegistration({ register: anthropicPlugin.register });
+
+    expect(captured.cliBackends).toContainEqual(
+      expect.objectContaining({
+        id: "claude-cli",
+        bundleMcp: true,
+        config: expect.objectContaining({
+          command: "claude",
+          modelArg: "--model",
+          sessionArg: "--session-id",
+        }),
+      }),
+    );
+  });
+
   it("owns native reasoning output mode for Claude transports", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -48,7 +65,6 @@ describe("anthropic provider replay hooks", () => {
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
       allowSyntheticToolResults: true,
-      dropThinkingBlocks: true,
     });
   });
 

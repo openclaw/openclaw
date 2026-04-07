@@ -41,6 +41,7 @@ const NODE_ROLE_METHODS = new Set([
 
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [
+    "exec.approval.get",
     "exec.approval.request",
     "exec.approval.waitDecision",
     "exec.approval.resolve",
@@ -65,6 +66,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [READ_SCOPE]: [
     "health",
     "doctor.memory.status",
+    "doctor.memory.dreamDiary",
     "logs.tail",
     "channels.status",
     "status",
@@ -85,6 +87,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.get",
     "sessions.preview",
     "sessions.resolve",
+    "sessions.compaction.list",
+    "sessions.compaction.get",
     "sessions.subscribe",
     "sessions.unsubscribe",
     "sessions.messages.subscribe",
@@ -127,6 +131,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.send",
     "sessions.steer",
     "sessions.abort",
+    "sessions.compaction.branch",
     "push.test",
     "node.pending.enqueue",
   ],
@@ -147,6 +152,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.reset",
     "sessions.delete",
     "sessions.compact",
+    "sessions.compaction.restore",
     "connect",
     "chat.inject",
     "web.login.start",

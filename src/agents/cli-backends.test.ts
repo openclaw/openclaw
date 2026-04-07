@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { normalizeClaudeBackendConfig, resolveCliBackendConfig } from "./cli-backends.js";
+
+let createEmptyPluginRegistry: typeof import("../plugins/registry.js").createEmptyPluginRegistry;
+let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
+let normalizeClaudeBackendConfig: typeof import("./cli-backends.js").normalizeClaudeBackendConfig;
+let resolveCliBackendConfig: typeof import("./cli-backends.js").resolveCliBackendConfig;
 
 function createBackendEntry(params: {
   pluginId: string;
@@ -24,7 +26,13 @@ function createBackendEntry(params: {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.doUnmock("../plugins/setup-registry.js");
+  vi.doUnmock("../plugins/cli-backends.runtime.js");
+  vi.resetModules();
+  ({ createEmptyPluginRegistry } = await import("../plugins/registry.js"));
+  ({ setActivePluginRegistry } = await import("../plugins/runtime.js"));
+  ({ normalizeClaudeBackendConfig, resolveCliBackendConfig } = await import("./cli-backends.js"));
   const registry = createEmptyPluginRegistry();
   registry.cliBackends = [
     createBackendEntry({

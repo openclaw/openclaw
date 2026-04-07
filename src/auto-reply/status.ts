@@ -14,7 +14,6 @@ import type { SkillCommandSpec } from "../agents/skills.js";
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
@@ -26,6 +25,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
@@ -269,65 +269,36 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    // Read the tail only; we only need the most recent usage entries.
-    const TAIL_BYTES = 8192;
-    const stat = fs.statSync(logPath);
-    const offset = Math.max(0, stat.size - TAIL_BYTES);
-    const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size));
-    const fd = fs.openSync(logPath, "r");
-    try {
-      fs.readSync(fd, buf, 0, buf.length, offset);
-    } finally {
-      fs.closeSync(fd);
-    }
-    const tail = buf.toString("utf-8");
-    const lines = (offset > 0 ? tail.slice(tail.indexOf("\n") + 1) : tail).split(/\n+/);
-
-    let input = 0;
-    let output = 0;
-    let promptTokens = 0;
-    let model: string | undefined;
-    let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
-
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line) as {
-          message?: {
-            usage?: UsageLike;
-            model?: string;
-          };
-          usage?: UsageLike;
-          model?: string;
-        };
-        const usageRaw = parsed.message?.usage ?? parsed.usage;
-        const usage = normalizeUsage(usageRaw);
-        if (usage) {
-          lastUsage = usage;
-        }
-        model = parsed.message?.model ?? parsed.model ?? model;
-      } catch {
-        // ignore bad lines (including a truncated first tail line)
-      }
-    }
-
-    if (!lastUsage) {
+    const snapshot = readLatestSessionUsageFromTranscript(
+      sessionId,
+      storePath,
+      sessionEntry?.sessionFile,
+      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+    );
+    if (!snapshot) {
       return undefined;
     }
-    input = lastUsage.input ?? 0;
-    output = lastUsage.output ?? 0;
-    promptTokens = derivePromptTokens(lastUsage) ?? lastUsage.total ?? input + output;
-    const total = lastUsage.total ?? promptTokens + output;
+
+    const input = snapshot.inputTokens ?? 0;
+    const output = snapshot.outputTokens ?? 0;
+    const cacheRead = snapshot.cacheRead ?? 0;
+    const cacheWrite = snapshot.cacheWrite ?? 0;
+    const promptTokens = snapshot.totalTokens ?? input + cacheRead + cacheWrite;
+    const total = promptTokens + output;
     if (promptTokens === 0 && total === 0) {
       return undefined;
     }
+    const model = snapshot.modelProvider
+      ? snapshot.model
+        ? `${snapshot.modelProvider}/${snapshot.model}`
+        : snapshot.modelProvider
+      : snapshot.model;
+
     return {
       input,
       output,
-      cacheRead: lastUsage.cacheRead ?? 0,
-      cacheWrite: lastUsage.cacheWrite ?? 0,
+      cacheRead,
+      cacheWrite,
       promptTokens,
       total,
       model,

@@ -18,6 +18,7 @@
     }
   ],
   "contracts": {
+    "memoryEmbeddingProviders": ["ollama"],
     "webSearchProviders": ["ollama"]
   },
   "configSchema": {

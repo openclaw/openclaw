@@ -6,6 +6,25 @@ export type ModelRef = {
   id?: string | null;
 };
 
+const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
+  "anthropic/claude-opus-4-6",
+  "google/gemini-3.1-pro-preview",
+  "google/gemini-2.5-flash",
+  "minimax/minimax-m2.7",
+  "openai/gpt-5.2",
+  "openai-codex/gpt-5.2",
+  "opencode-go/glm-5",
+  "openrouter/ai21/jamba-large-1.7",
+  "xai/grok-3",
+  "zai/glm-4.7",
+  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+  "minimax-portal/minimax-m2.7",
+] as const;
+
+const HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
+  HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
+);
+
 function isHighSignalClaudeModelId(id: string): boolean {
   const normalized = id.replace(/[_.]/g, "-");
   if (!/\bclaude\b/i.test(normalized)) {
@@ -58,4 +77,99 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
     return false;
   }
   return isHighSignalClaudeModelId(id);
+}
+
+function toCanonicalHighSignalLiveModelKey(ref: ModelRef): string | null {
+  const provider = normalizeProviderId(ref.provider ?? "");
+  const rawId = ref.id?.trim().toLowerCase() ?? "";
+  if (!provider || !rawId) {
+    return null;
+  }
+  return `${provider}/${rawId}`;
+}
+
+function capByProviderSpread<T>(
+  items: T[],
+  maxItems: number,
+  providerOf: (item: T) => string,
+): T[] {
+  if (maxItems <= 0 || items.length <= maxItems) {
+    return items;
+  }
+  const providerOrder: string[] = [];
+  const grouped = new Map<string, T[]>();
+  for (const item of items) {
+    const provider = providerOf(item);
+    const bucket = grouped.get(provider);
+    if (bucket) {
+      bucket.push(item);
+      continue;
+    }
+    providerOrder.push(provider);
+    grouped.set(provider, [item]);
+  }
+
+  const selected: T[] = [];
+  while (selected.length < maxItems && grouped.size > 0) {
+    for (const provider of providerOrder) {
+      const bucket = grouped.get(provider);
+      if (!bucket || bucket.length === 0) {
+        continue;
+      }
+      const item = bucket.shift();
+      if (item) {
+        selected.push(item);
+      }
+      if (bucket.length === 0) {
+        grouped.delete(provider);
+      }
+      if (selected.length >= maxItems) {
+        break;
+      }
+    }
+  }
+  return selected;
+}
+
+export function selectHighSignalLiveItems<T>(
+  items: T[],
+  maxItems: number,
+  refOf: (item: T) => ModelRef,
+  providerOf: (item: T) => string,
+): T[] {
+  if (maxItems <= 0 || items.length <= maxItems) {
+    return items;
+  }
+
+  const remaining = [...items];
+  const selected: T[] = [];
+  for (const preferredKey of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
+    if (selected.length >= maxItems) {
+      break;
+    }
+    const preferredIndex = remaining.findIndex(
+      (item) => toCanonicalHighSignalLiveModelKey(refOf(item)) === preferredKey,
+    );
+    if (preferredIndex < 0) {
+      continue;
+    }
+    const [preferred] = remaining.splice(preferredIndex, 1);
+    if (preferred) {
+      selected.push(preferred);
+    }
+  }
+
+  if (selected.length >= maxItems || remaining.length === 0) {
+    return selected.slice(0, maxItems);
+  }
+
+  return [...selected, ...capByProviderSpread(remaining, maxItems - selected.length, providerOf)];
+}
+
+export function getHighSignalLiveModelPriorityIndex(ref: ModelRef): number | null {
+  const key = toCanonicalHighSignalLiveModelKey(ref);
+  if (!key) {
+    return null;
+  }
+  return HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX.get(key) ?? null;
 }

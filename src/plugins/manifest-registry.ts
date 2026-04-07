@@ -12,6 +12,7 @@ import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import {
   loadPluginManifest,
   type OpenClawPackageManifest,
+  type PluginManifestConfigContracts,
   type PluginManifest,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
@@ -29,7 +30,17 @@ import type {
   PluginOrigin,
 } from "./types.js";
 
-type PluginManifestContractListKey = "webFetchProviders" | "webSearchProviders";
+type PluginManifestContractListKey =
+  | "speechProviders"
+  | "mediaUnderstandingProviders"
+  | "realtimeVoiceProviders"
+  | "realtimeTranscriptionProviders"
+  | "imageGenerationProviders"
+  | "videoGenerationProviders"
+  | "musicGenerationProviders"
+  | "memoryEmbeddingProviders"
+  | "webFetchProviders"
+  | "webSearchProviders";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -62,6 +73,7 @@ export type PluginManifestRecord = {
   modelSupport?: PluginManifestModelSupport;
   cliBackends: string[];
   providerAuthEnvVars?: Record<string, string[]>;
+  channelEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   skills: string[];
   settingsFiles?: string[];
@@ -77,6 +89,7 @@ export type PluginManifestRecord = {
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
   contracts?: PluginManifestContracts;
+  configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
     id: string;
@@ -280,6 +293,7 @@ function buildRecord(params: {
     modelSupport: params.manifest.modelSupport,
     cliBackends: params.manifest.cliBackends ?? [],
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
+    channelEnvVars: params.manifest.channelEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
@@ -297,6 +311,7 @@ function buildRecord(params: {
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
     contracts: params.manifest.contracts,
+    configContracts: params.manifest.configContracts,
     channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id
       ? {
@@ -353,6 +368,7 @@ function buildBundleRecord(params: {
     schemaCacheKey: undefined,
     configSchema: undefined,
     configUiHints: undefined,
+    configContracts: undefined,
     channelConfigs: undefined,
   };
 }

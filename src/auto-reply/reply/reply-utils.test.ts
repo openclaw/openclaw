@@ -4,7 +4,7 @@ import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
-import { createReplyReferencePlanner } from "./reply-reference.js";
+import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
   hasTemplateVariables,
@@ -888,6 +888,13 @@ describe("createReplyReferencePlanner", () => {
     });
     expect(existingIdPlanner.use()).toBe("thread-1");
     expect(existingIdPlanner.use()).toBeUndefined();
+
+    const batchedPlanner = createReplyReferencePlanner({
+      replyToMode: "batched",
+      startId: "parent",
+    });
+    expect(batchedPlanner.use()).toBe("parent");
+    expect(batchedPlanner.use()).toBeUndefined();
   });
 
   it("honors allowReference=false", () => {
@@ -900,6 +907,15 @@ describe("createReplyReferencePlanner", () => {
     expect(planner.hasReplied()).toBe(false);
     planner.markSent();
     expect(planner.hasReplied()).toBe(true);
+  });
+});
+
+describe("isSingleUseReplyToMode", () => {
+  it("treats first and batched as single-use reply modes", () => {
+    expect(isSingleUseReplyToMode("off")).toBe(false);
+    expect(isSingleUseReplyToMode("all")).toBe(false);
+    expect(isSingleUseReplyToMode("first")).toBe(true);
+    expect(isSingleUseReplyToMode("batched")).toBe(true);
   });
 });
 

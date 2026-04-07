@@ -18,7 +18,7 @@ import {
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
-import { agentCommand } from "./test-helpers.mocks.js";
+import { agentCommand } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -540,6 +540,29 @@ describe("gateway server chat", () => {
     // because entry.text takes precedence over entry.content for the silent check.
     // The user message with NO_REPLY text is preserved (only assistant filtered).
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
+  });
+
+  test("chat.history hides commentary-only assistant entries", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        phase: "commentary",
+        content: [{ type: "text", text: "thinking like caveman" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
   });
 
   test("routes chat.send slash commands without agent runs", async () => {
