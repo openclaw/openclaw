@@ -64,7 +64,7 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
-const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const FINAL_TAG_RE = /<\s*\/?\s*(?:final|s)\s*>/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
@@ -307,10 +307,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
   const info = parseApiErrorInfo(trimmed);
   if (info?.message) {
-    const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
-    const type = info.type ? ` ${info.type}` : "";
-    const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
-    return `${prefix}${type}: ${info.message}${requestId}`;
+    return info.message;
   }
 
   return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
@@ -375,7 +372,7 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
-  if (isOverloadedErrorMessage(raw)) {
+  if (isOverloadedErrorMessage(raw) || isRateLimitErrorMessage(raw)) {
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
 
@@ -383,15 +380,29 @@ export function formatAssistantErrorText(
     return BILLING_ERROR_USER_MESSAGE;
   }
 
+  if (isAuthErrorMessage(raw)) {
+    return "Authentication expired. Please re-authenticate and try again.";
+  }
+
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
 
-  // Never return raw unhandled errors - log for debugging but return safe message
-  if (raw.length > 600) {
-    console.warn("[formatAssistantErrorText] Long error truncated:", raw.slice(0, 200));
+  if (isTimeoutErrorMessage(raw)) {
+    return "LLM request timed out.";
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+
+  // Never return raw unhandled errors - return the parsed message if available,
+  // otherwise a safe generic message.
+  const parsedInfo = parseApiErrorInfo(raw);
+  if (parsedInfo?.message) {
+    return parsedInfo.message;
+  }
+  if (raw.length > 200) {
+    console.warn("[formatAssistantErrorText] Long unhandled error:", raw.slice(0, 200));
+    return "The AI service returned an error. Please try again.";
+  }
+  return raw;
 }
 
 export function sanitizeUserFacingText(text: string): string {
@@ -406,15 +417,15 @@ export function sanitizeUserFacingText(text: string): string {
 
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return (
-      "Message ordering conflict - please try again. " +
-      "If this persists, use /new to start a fresh session."
+      "*Message ordering conflict, please try again. " +
+      "If this persists, use /new to start a fresh session.*"
     );
   }
 
   if (isContextOverflowError(trimmed)) {
     return (
-      "Context overflow: prompt too large for the model. " +
-      "Try again with less input or a larger-context model."
+      "*Context overflow: prompt too large for the model. " +
+      "Try again with less input or a larger-context model.*"
     );
   }
 
@@ -426,22 +437,23 @@ export function sanitizeUserFacingText(text: string): string {
   // that "API Error: 529 {overloaded JSON}" gets a user-friendly
   // message instead of the technical parsed-JSON form.
   if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-    return "The AI service is temporarily overloaded. Please try again in a moment.";
+    return "*The AI service is temporarily overloaded. Please try again in a moment.*";
   }
 
   if (isAuthErrorMessage(trimmed)) {
-    return "Authentication expired. Please re-authenticate and try again.";
+    return "*Authentication expired. Please re-authenticate and try again.*";
+  }
+
+  if (isTimeoutErrorMessage(trimmed)) {
+    return "*LLM request timed out.*";
   }
 
   if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
-    return formatRawAssistantErrorForUi(trimmed);
+    return `*${formatRawAssistantErrorForUi(trimmed)}*`;
   }
 
   if (ERROR_PREFIX_RE.test(trimmed)) {
-    if (isTimeoutErrorMessage(trimmed)) {
-      return "LLM request timed out.";
-    }
-    return formatRawAssistantErrorForUi(trimmed);
+    return `*${formatRawAssistantErrorForUi(trimmed)}*`;
   }
 
   return collapseConsecutiveDuplicateBlocks(stripped);

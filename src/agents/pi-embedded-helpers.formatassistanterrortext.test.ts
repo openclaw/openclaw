@@ -43,6 +43,20 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("returns a friendly message for auth/expired token errors", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."},"request_id":"req_abc"}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication expired. Please re-authenticate and try again.",
+    );
+  });
+  it("returns a generic message for long unclassified errors", () => {
+    const msg = makeAssistantError("x".repeat(300));
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned an error. Please try again.",
+    );
+  });
   it("returns a recovery hint when tool call input is missing", () => {
     const msg = makeAssistantError("tool_use.input: Field required");
     const result = formatAssistantErrorText(msg);
@@ -55,11 +69,11 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Message ordering conflict");
     expect(result).not.toContain("400");
   });
-  it("suppresses raw error JSON payloads that are not otherwise classified", () => {
+  it("extracts message from raw error JSON payloads that are not otherwise classified", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
-    expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+    expect(formatAssistantErrorText(msg)).toBe("Something exploded");
   });
   it("returns a friendly billing message for credit balance errors", () => {
     const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");

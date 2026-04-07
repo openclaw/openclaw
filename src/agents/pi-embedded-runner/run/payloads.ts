@@ -125,12 +125,21 @@ export function buildEmbeddedRunPayloads(params: {
     if (!trimmed) {
       return false;
     }
+    // Strip italic markers that sanitizeUserFacingText may have added
+    const bare = /^\*(.+)\*$/s.test(trimmed) ? trimmed.slice(1, -1) : trimmed;
     if (errorText) {
       const normalized = normalizeTextForComparison(trimmed);
       if (normalized && normalizedErrorText && normalized === normalizedErrorText) {
         return true;
       }
-      if (trimmed === genericErrorText) {
+      // Also match if the text is the error wrapped in italic markers
+      if (bare !== trimmed) {
+        const normalizedBare = normalizeTextForComparison(bare);
+        if (normalizedBare && normalizedErrorText && normalizedBare === normalizedErrorText) {
+          return true;
+        }
+      }
+      if (trimmed === genericErrorText || bare === genericErrorText) {
         return true;
       }
     }

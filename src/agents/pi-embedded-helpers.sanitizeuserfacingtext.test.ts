@@ -12,27 +12,41 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("400 days left")).toBe("400 days left");
   });
 
-  it("sanitizes role ordering errors", () => {
-    const result = sanitizeUserFacingText("400 Incorrect role information");
-    expect(result).toContain("Message ordering conflict");
+  it("strips model artifact tags like </s>", () => {
+    expect(sanitizeUserFacingText("Hello</s>")).toBe("Hello");
+    expect(sanitizeUserFacingText("Hello <s>world</s>")).toBe("Hello world");
   });
 
-  it("sanitizes HTTP status errors with error hints", () => {
+  it("sanitizes role ordering errors with italics", () => {
+    const result = sanitizeUserFacingText("400 Incorrect role information");
+    expect(result).toContain("*Message ordering conflict");
+    expect(result[result.length - 1]).toBe("*");
+  });
+
+  it("sanitizes HTTP status errors with error hints and italics", () => {
     expect(sanitizeUserFacingText("500 Internal Server Error")).toBe(
-      "HTTP 500: Internal Server Error",
+      "*HTTP 500: Internal Server Error*",
     );
   });
 
-  it("sanitizes raw API error payloads", () => {
+  it("sanitizes raw API error payloads with italics", () => {
     const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
-    expect(sanitizeUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
+    expect(sanitizeUserFacingText(raw)).toBe("*Something exploded*");
   });
 
-  it("sanitizes HTTP 529 overloaded error with API Error prefix", () => {
+  it("sanitizes HTTP 529 overloaded error with italic friendly message", () => {
     const raw =
       'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CYeULdpxKGKgj9p4nJkyS"}';
     expect(sanitizeUserFacingText(raw)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
+      "*The AI service is temporarily overloaded. Please try again in a moment.*",
+    );
+  });
+
+  it("sanitizes auth errors with italic friendly message", () => {
+    const raw =
+      'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired."}}';
+    expect(sanitizeUserFacingText(raw)).toBe(
+      "*Authentication expired. Please re-authenticate and try again.*",
     );
   });
 
