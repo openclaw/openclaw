@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/databricks-provider",
+  "version": "2026.4.7",
+  "private": true,
+  "description": "OpenClaw Databricks provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
