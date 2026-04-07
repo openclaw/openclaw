@@ -637,6 +637,9 @@ describe("gateway agent handler", () => {
       new Set(["conn-1"]),
       { dropIfSlow: true },
     );
+    expect(mocks.loadGatewaySessionRow).toHaveBeenCalledWith("agent:main:main", {
+      includeTranscriptUsage: true,
+    });
   });
 
   it("injects a timestamp into the message passed to agentCommand", async () => {

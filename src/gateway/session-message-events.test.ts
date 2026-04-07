@@ -146,6 +146,92 @@ describe("session.message websocket events", () => {
     }
   });
 
+  test("includes live usage metadata on lifecycle sessions.changed events", async () => {
+    const previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    try {
+      const storePath = await createSessionStoreFile();
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            modelProvider: "openai",
+            model: "gpt-5.4",
+            contextTokens: 123_456,
+            totalTokens: 0,
+            totalTokensFresh: false,
+          },
+        },
+        storePath,
+      });
+      const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+          JSON.stringify({
+            id: "msg-usage",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "usage snapshot" }],
+              provider: "openai",
+              model: "gpt-5.4",
+              usage: {
+                input: 2_000,
+                output: 400,
+                cacheRead: 300,
+                cacheWrite: 100,
+                cost: { total: 0.0042 },
+              },
+              timestamp: Date.now(),
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const harness = await createGatewaySuiteHarness();
+      try {
+        await withOperatorSessionSubscriber(harness, async (ws) => {
+          const changedEvent = onceMessage(
+            ws,
+            (message) =>
+              message.type === "event" &&
+              message.event === "sessions.changed" &&
+              (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+                "agent:main:main",
+          );
+
+          emitSessionLifecycleEvent({
+            sessionKey: "agent:main:main",
+            reason: "reactivated",
+          });
+
+          const event = await changedEvent;
+          expect(event.payload).toMatchObject({
+            sessionKey: "agent:main:main",
+            reason: "reactivated",
+            totalTokens: 2_400,
+            totalTokensFresh: true,
+            contextTokens: 123_456,
+            estimatedCostUsd: 0.0042,
+            modelProvider: "openai",
+            model: "gpt-5.4",
+          });
+        });
+      } finally {
+        await harness.close();
+      }
+    } finally {
+      if (previousMinimalGateway === undefined) {
+        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+      } else {
+        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
+      }
+    }
+  });
+
   test("only sends transcript events to subscribed operator clients", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
