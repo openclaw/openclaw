@@ -6,11 +6,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.take
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -116,7 +113,12 @@ class PhoneProxyClientTest {
     val scope = TestScope(StandardTestDispatcher(testScheduler))
     val messageTransport = FakeProxyMessageTransport()
     val client = connectedProxyClient(scope, messageTransport)
-    val events = mutableListOf<GatewayEvent>()
+    val startupEvent = scope.async { client.events.first() }
+    scope.runCurrent()
+    assertEquals(GatewayEvent("proxy.connected", null), startupEvent.await())
+
+    val eventDeferred = scope.async { client.events.first() }
+    scope.runCurrent()
 
     messageTransport.emit(
       ProxyMessageEvent(
@@ -125,13 +127,8 @@ class PhoneProxyClientTest {
         data = """{"event":"chat","payload":{"state":"ignored"}}""".toByteArray(Charsets.UTF_8),
       ),
     )
-    scope.advanceUntilIdle()
-
-    val collectJob =
-      scope.launch {
-        client.events.take(1).collect { events += it }
-      }
-    scope.advanceUntilIdle()
+    scope.runCurrent()
+    assertFalse(eventDeferred.isCompleted)
 
     messageTransport.emit(
       ProxyMessageEvent(
@@ -140,10 +137,9 @@ class PhoneProxyClientTest {
         data = """{"event":"chat","payload":{"state":"accepted"}}""".toByteArray(Charsets.UTF_8),
       ),
     )
-    scope.advanceUntilIdle()
+    scope.runCurrent()
 
-    assertEquals(listOf(GatewayEvent("chat", """{"state":"accepted"}""")), events)
-    collectJob.cancel()
+    assertEquals(GatewayEvent("chat", """{"state":"accepted"}"""), eventDeferred.await())
     scope.cancel()
   }
 
