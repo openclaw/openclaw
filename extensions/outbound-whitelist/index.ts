@@ -15,7 +15,9 @@ export default definePluginEntry({
 
   register(api) {
     const config = api.pluginConfig as OutboundWhitelistConfig | undefined;
-    const whitelist = Object.freeze(config?.allowedRecipients ?? []);
+    const whitelist = Object.freeze(
+      (config?.allowedRecipients ?? []).map((s) => s.trim()).filter((s) => s.length > 0),
+    );
     const isAllRecipientsAllowed = whitelist.length === 0 || whitelist.includes("*");
 
     if (isAllRecipientsAllowed) {
@@ -39,7 +41,7 @@ export default definePluginEntry({
  * (phone numbers, group JIDs, Discord IDs) that accidental substring collisions should not be a practical concern.
  */
 function isRecipientAllowed(to: string, whitelist: readonly string[]): boolean {
-  return whitelist.some((pattern) => to.includes(pattern.trim()));
+  return whitelist.some((pattern) => to.includes(pattern));
 }
 
 /**
