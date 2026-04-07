@@ -193,7 +193,7 @@ async function loadBrowserServerModule(): Promise<BrowserServerModule> {
   }
   // Keep the browser server module warm across cases so the agent-contract
   // suites do not pay the full import/reset cost in every beforeEach.
-  browserServerModule = await import("./server.js");
+  browserServerModule = await import("../server.js");
   return browserServerModule;
 }
 

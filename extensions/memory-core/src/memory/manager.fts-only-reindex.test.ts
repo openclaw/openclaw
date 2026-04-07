@@ -23,9 +23,15 @@ describe("memory manager FTS-only reindex", () => {
   let workspaceDir = "";
   let indexPath = "";
   let manager: MemoryIndexManager | null = null;
+  let getMemorySearchManagerForTest: typeof getMemorySearchManager = getMemorySearchManager;
+  let closeAllMemorySearchManagersForTest: typeof closeAllMemorySearchManagers =
+    closeAllMemorySearchManagers;
   beforeAll(async () => {
     vi.resetModules();
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+    ({
+      getMemorySearchManager: getMemorySearchManagerForTest,
+      closeAllMemorySearchManagers: closeAllMemorySearchManagersForTest,
+    } = await import("./index.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fts-only-"));
   });
 
@@ -41,7 +47,7 @@ describe("memory manager FTS-only reindex", () => {
       await manager.close();
       manager = null;
     }
-    await closeAllMemorySearchManagers();
+    await closeAllMemorySearchManagersForTest();
   });
 
   afterAll(async () => {
@@ -72,7 +78,7 @@ describe("memory manager FTS-only reindex", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManagerForTest({ cfg, agentId: "main" });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }

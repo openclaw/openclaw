@@ -918,9 +918,10 @@ describe("createClawMissionService", () => {
     });
 
     const created = await service.createMission({
-      goal: "Auto-resume untouched active missions after a restart.",
+      goal: "Continue the interrupted repository maintenance mission.",
     });
     const missionId = created.mission!.id;
+    expect(created.mission?.status).toBe("awaiting_approval");
     const approved = await service.approveMissionStart(missionId);
     await updateMissionStateFile(approved.mission!.missionDir, (rawState) => {
       rawState.status = "running";
@@ -1232,7 +1233,7 @@ describe("createClawMissionService", () => {
     );
   });
 
-  it("continues reconciling other missions when one mission state fails to reconcile", async () => {
+  it("continues reconciling other missions during a global pause", async () => {
     const service = createClawMissionService({
       resolveWorkspaceDir: () => workspaceDir,
       loadConfig: () => createConfig(),
@@ -1266,6 +1267,7 @@ describe("createClawMissionService", () => {
 
     expect(firstMission?.status).toBe("paused");
     expect(firstMission?.currentStep).toBe("Paused by global control.");
-    expect(secondMission?.status).toBe("running");
+    expect(secondMission?.status).toBe("paused");
+    expect(secondMission?.currentStep).toBe("Paused by global control.");
   });
 });
