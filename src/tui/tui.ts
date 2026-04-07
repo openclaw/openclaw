@@ -158,6 +158,24 @@ export function stopTuiSafely(stop: () => void): void {
   }
 }
 
+type DrainableTui = {
+  stop: () => void;
+  terminal?: {
+    drainInput?: (maxMs?: number, idleMs?: number) => Promise<void>;
+  };
+};
+
+export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
+  if (typeof tui.terminal?.drainInput === "function") {
+    try {
+      await tui.terminal.drainInput();
+    } catch {
+      // Best-effort only. A failed drain should not skip terminal shutdown.
+    }
+  }
+  stopTuiSafely(() => tui.stop());
+}
+
 type CtrlCAction = "clear" | "warn" | "exit";
 
 export function resolveCtrlCAction(params: {
@@ -734,8 +752,9 @@ export async function runTui(opts: TuiOptions) {
     }
     exitRequested = true;
     client.stop();
-    stopTuiSafely(() => tui.stop());
-    process.exit(0);
+    void drainAndStopTuiSafely(tui).then(() => {
+      process.exit(0);
+    });
   };
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =

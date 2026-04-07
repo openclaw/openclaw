@@ -3,7 +3,7 @@ import {
   pluginRegistrationContractRegistry,
   resolveWebFetchProviderContractEntriesForPluginId,
 } from "../../../src/plugins/contracts/registry.js";
-import { installWebFetchProviderContractSuite } from "../../../src/plugins/contracts/suites.js";
+import { installWebFetchProviderContractSuite } from "./provider-contract-suites.js";
 
 export function describeWebFetchProviderContracts(pluginId: string) {
   const providerIds =

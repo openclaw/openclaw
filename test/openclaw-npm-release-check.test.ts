@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
+  collectForbiddenPackedPathErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
@@ -291,6 +292,21 @@ describe("collectControlUiPackErrors", () => {
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("collectForbiddenPackedPathErrors", () => {
+  it("rejects generated docs artifacts in npm pack output", () => {
+    expect(
+      collectForbiddenPackedPathErrors([
+        "dist/index.js",
+        "docs/.generated/config-baseline.json",
+        "docs/.generated/config-baseline.plugin.json",
+      ]),
+    ).toEqual([
+      'npm package must not include generated docs artifact "docs/.generated/config-baseline.json".',
+      'npm package must not include generated docs artifact "docs/.generated/config-baseline.plugin.json".',
+    ]);
   });
 });
 

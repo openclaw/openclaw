@@ -5,8 +5,9 @@ import {
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
-} from "../../runtime-api.js";
-import type { SsrFPolicy } from "../../runtime-api.js";
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/ssrf-policy";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -75,9 +76,17 @@ export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 ] as const;
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
+export { isRecord };
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+export function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
+  let current: unknown = value;
+  for (const key of keys) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[key as keyof typeof current];
+  }
+  return normalizeOptionalString(current);
 }
 
 export function resolveRequestUrl(input: RequestInfo | URL): string {
@@ -90,7 +99,11 @@ export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
     return input.url;
   }
-  return String(input);
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return "";
+  }
 }
 
 export function normalizeContentType(value: unknown): string | undefined {

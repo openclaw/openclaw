@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/plugin-sdk/discord.js";
 
 export type NativeCommandSpecMock = {
   name: string;
@@ -274,8 +274,8 @@ export const baseConfig = (): OpenClawConfig =>
     },
   }) as OpenClawConfig;
 
-vi.mock("@buape/carbon", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@buape/carbon")>();
+vi.mock("@buape/carbon", async () => {
+  const actual = await vi.importActual<typeof import("@buape/carbon")>("@buape/carbon");
   class RateLimitError extends Error {
     status = 429;
     discordCode?: number;

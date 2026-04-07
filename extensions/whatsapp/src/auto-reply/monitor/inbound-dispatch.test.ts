@@ -5,7 +5,7 @@ let capturedDispatchParams: unknown;
 const { dispatchReplyWithBufferedBlockDispatcherMock } = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: { ctx: unknown }) => {
     capturedDispatchParams = params;
-    return { queuedFinal: false };
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   }),
 }));
 
@@ -84,6 +84,19 @@ function makeMsg(overrides: Partial<TestMsg> = {}): TestMsg {
     sendMedia: async () => {},
     ...overrides,
   };
+}
+
+function getCapturedDeliver() {
+  return (
+    capturedDispatchParams as {
+      dispatcherOptions?: {
+        deliver?: (
+          payload: { text?: string; isReasoning?: boolean; isCompactionNotice?: boolean },
+          info: { kind: "tool" | "block" | "final" },
+        ) => Promise<void>;
+      };
+    }
+  )?.dispatcherOptions?.deliver;
 }
 
 describe("whatsapp inbound dispatch", () => {
@@ -214,7 +227,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
   });
 
-  it("suppresses non-final WhatsApp payload delivery", async () => {
+  it("delivers block and final WhatsApp payloads, but suppresses tool payloads", async () => {
     const deliverReply = vi.fn(async () => undefined);
     const rememberSentText = vi.fn();
 
@@ -241,30 +254,59 @@ describe("whatsapp inbound dispatch", () => {
       shouldClearGroupHistory: false,
     });
 
-    const deliver = (
-      capturedDispatchParams as {
-        dispatcherOptions?: {
-          deliver?: (
-            payload: { text?: string },
-            info: { kind: "tool" | "block" | "final" },
-          ) => Promise<void>;
-        };
-      }
-    )?.dispatcherOptions?.deliver;
-
+    const deliver = getCapturedDeliver();
     expect(deliver).toBeTypeOf("function");
 
     await deliver?.({ text: "tool payload" }, { kind: "tool" });
-    await deliver?.({ text: "block payload" }, { kind: "block" });
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
 
+    await deliver?.({ text: "block payload" }, { kind: "block" });
     await deliver?.({ text: "final payload" }, { kind: "final" });
-    expect(deliverReply).toHaveBeenCalledTimes(1);
-    expect(rememberSentText).toHaveBeenCalledTimes(1);
+    expect(deliverReply).toHaveBeenCalledTimes(2);
+    expect(rememberSentText).toHaveBeenCalledTimes(2);
   });
 
-  it("forces disableBlockStreaming for WhatsApp dispatch", async () => {
+  it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchWhatsAppBufferedReply({
+      cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
+      connectionId: "conn",
+      context: { Body: "hi" },
+      conversationId: "+1000",
+      deliverReply,
+      groupHistories: new Map(),
+      groupHistoryKey: "+1000",
+      maxMediaBytes: 1,
+      msg: makeMsg(),
+      rememberSentText,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      } as never,
+      replyPipeline: {},
+      replyResolver: (async () => undefined) as never,
+      route: makeRoute(),
+      shouldClearGroupHistory: false,
+    });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "Reasoning:\n_hidden_", isReasoning: true }, { kind: "block" });
+    await deliver?.(
+      { text: "🧹 Compacting context...", isCompactionNotice: true },
+      { kind: "block" },
+    );
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("maps WhatsApp blockStreaming=true to disableBlockStreaming=false", async () => {
     await dispatchWhatsAppBufferedReply({
       cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
       connectionId: "conn",
@@ -294,7 +336,121 @@ describe("whatsapp inbound dispatch", () => {
           replyOptions?: { disableBlockStreaming?: boolean };
         }
       )?.replyOptions?.disableBlockStreaming,
+    ).toBe(false);
+  });
+
+  it("maps WhatsApp blockStreaming=false to disableBlockStreaming=true", async () => {
+    await dispatchWhatsAppBufferedReply({
+      cfg: { channels: { whatsapp: { blockStreaming: false } } } as never,
+      connectionId: "conn",
+      context: { Body: "hi" },
+      conversationId: "+1000",
+      deliverReply: async () => {},
+      groupHistories: new Map(),
+      groupHistoryKey: "+1000",
+      maxMediaBytes: 1,
+      msg: makeMsg(),
+      rememberSentText: () => {},
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      } as never,
+      replyPipeline: {},
+      replyResolver: (async () => undefined) as never,
+      route: makeRoute(),
+      shouldClearGroupHistory: false,
+    });
+
+    expect(
+      (
+        capturedDispatchParams as {
+          replyOptions?: { disableBlockStreaming?: boolean };
+        }
+      )?.replyOptions?.disableBlockStreaming,
     ).toBe(true);
+  });
+
+  it("leaves disableBlockStreaming undefined when WhatsApp blockStreaming is unset", async () => {
+    await dispatchWhatsAppBufferedReply({
+      cfg: { channels: { whatsapp: {} } } as never,
+      connectionId: "conn",
+      context: { Body: "hi" },
+      conversationId: "+1000",
+      deliverReply: async () => {},
+      groupHistories: new Map(),
+      groupHistoryKey: "+1000",
+      maxMediaBytes: 1,
+      msg: makeMsg(),
+      rememberSentText: () => {},
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      } as never,
+      replyPipeline: {},
+      replyResolver: (async () => undefined) as never,
+      route: makeRoute(),
+      shouldClearGroupHistory: false,
+    });
+
+    expect(
+      (
+        capturedDispatchParams as {
+          replyOptions?: { disableBlockStreaming?: boolean };
+        }
+      )?.replyOptions?.disableBlockStreaming,
+    ).toBeUndefined();
+  });
+
+  it("treats block-only turns as visible replies instead of silent turns", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: {
+        ctx: unknown;
+        dispatcherOptions?: {
+          deliver?: (
+            payload: { text?: string },
+            info: { kind: "tool" | "block" | "final" },
+          ) => Promise<void>;
+        };
+      }) => {
+        capturedDispatchParams = params;
+        await params.dispatcherOptions?.deliver?.({ text: "partial block" }, { kind: "block" });
+        return { queuedFinal: false, counts: { tool: 0, block: 1, final: 0 } };
+      },
+    );
+
+    await expect(
+      dispatchWhatsAppBufferedReply({
+        cfg: { channels: { whatsapp: { blockStreaming: true } } } as never,
+        connectionId: "conn",
+        context: { Body: "hi" },
+        conversationId: "+1000",
+        deliverReply,
+        groupHistories: new Map(),
+        groupHistoryKey: "+1000",
+        maxMediaBytes: 1,
+        msg: makeMsg(),
+        rememberSentText,
+        replyLogger: {
+          info: () => {},
+          warn: () => {},
+          error: () => {},
+          debug: () => {},
+        } as never,
+        replyPipeline: {},
+        replyResolver: (async () => undefined) as never,
+        route: makeRoute(),
+        shouldClearGroupHistory: false,
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(rememberSentText).toHaveBeenCalledTimes(1);
   });
 
   it("passes sendComposing through as the reply typing callback", async () => {

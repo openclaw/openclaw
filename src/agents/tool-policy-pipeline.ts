@@ -33,15 +33,16 @@ export type ToolPolicyPipelineStep = {
   label: string;
   stripPluginOnlyAllowlist?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
+  suppressUnavailableCoreToolWarningAllowlist?: string[];
 };
 
 export function buildDefaultToolPolicyPipelineSteps(params: {
   profilePolicy?: ToolPolicyLike;
   profile?: string;
-  profileAlsoAllow?: string[];
+  profileUnavailableCoreWarningAllowlist?: string[];
   providerProfilePolicy?: ToolPolicyLike;
   providerProfile?: string;
-  providerProfileAlsoAllow?: string[];
+  providerProfileUnavailableCoreWarningAllowlist?: string[];
   globalPolicy?: ToolPolicyLike;
   globalProviderPolicy?: ToolPolicyLike;
   agentPolicy?: ToolPolicyLike;
@@ -57,8 +58,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
       policy: params.profilePolicy,
       label: profile ? `tools.profile (${profile})` : "tools.profile",
       stripPluginOnlyAllowlist: true,
-      suppressUnavailableCoreToolWarning:
-        !Array.isArray(params.profileAlsoAllow) || params.profileAlsoAllow.length === 0,
+      suppressUnavailableCoreToolWarningAllowlist: params.profileUnavailableCoreWarningAllowlist,
     },
     {
       policy: params.providerProfilePolicy,
@@ -66,9 +66,8 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
         ? `tools.byProvider.profile (${providerProfile})`
         : "tools.byProvider.profile",
       stripPluginOnlyAllowlist: true,
-      suppressUnavailableCoreToolWarning:
-        !Array.isArray(params.providerProfileAlsoAllow) ||
-        params.providerProfileAlsoAllow.length === 0,
+      suppressUnavailableCoreToolWarningAllowlist:
+        params.providerProfileUnavailableCoreWarningAllowlist,
     },
     { policy: params.globalPolicy, label: "tools.allow", stripPluginOnlyAllowlist: true },
     {
@@ -118,21 +117,29 @@ export function applyToolPolicyPipeline(params: {
     if (step.stripPluginOnlyAllowlist) {
       const resolved = analyzeAllowlistByToolType(policy, pluginGroups, coreToolNames);
       if (resolved.unknownAllowlist.length > 0) {
-        const entries = resolved.unknownAllowlist.join(", ");
+        const unavailableCoreWarningAllowlist = new Set(
+          (step.suppressUnavailableCoreToolWarningAllowlist ?? []).map((entry) =>
+            normalizeToolName(entry),
+          ),
+        );
         const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
           isKnownCoreToolId(entry),
         );
+        const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
+          ? []
+          : gatedCoreEntries.filter((entry) => !unavailableCoreWarningAllowlist.has(entry));
         const otherEntries = resolved.unknownAllowlist.filter((entry) => !isKnownCoreToolId(entry));
+        const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
         if (
           shouldWarnAboutUnknownAllowlist({
-            suppressUnavailableCoreToolWarning: step.suppressUnavailableCoreToolWarning ?? false,
-            hasGatedCoreEntries: gatedCoreEntries.length > 0,
+            hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
             hasOtherEntries: otherEntries.length > 0,
           })
         ) {
+          const entries = warningEntries.join(", ");
           const suffix = describeUnknownAllowlistSuffix({
             pluginOnlyAllowlist: resolved.pluginOnlyAllowlist,
-            hasGatedCoreEntries: gatedCoreEntries.length > 0,
+            hasGatedCoreEntries: warnableGatedCoreEntries.length > 0,
             hasOtherEntries: otherEntries.length > 0,
           });
           const warning = `tools: ${step.label} allowlist contains unknown entries (${entries}). ${suffix}`;
@@ -151,18 +158,10 @@ export function applyToolPolicyPipeline(params: {
 }
 
 function shouldWarnAboutUnknownAllowlist(params: {
-  suppressUnavailableCoreToolWarning: boolean;
   hasGatedCoreEntries: boolean;
   hasOtherEntries: boolean;
 }): boolean {
-  if (
-    !params.suppressUnavailableCoreToolWarning ||
-    !params.hasGatedCoreEntries ||
-    params.hasOtherEntries
-  ) {
-    return true;
-  }
-  return false;
+  return params.hasGatedCoreEntries || params.hasOtherEntries;
 }
 
 function describeUnknownAllowlistSuffix(params: {

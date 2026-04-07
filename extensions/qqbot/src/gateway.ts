@@ -2,63 +2,59 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import WebSocket from "ws";
 import {
+  clearTokenCache,
   getAccessToken,
   getGatewayUrl,
+  initApiConfig,
+  onMessageSent,
+  PLUGIN_USER_AGENT,
+  sendC2CInputNotify,
   sendC2CMessage,
   sendChannelMessage,
   sendDmMessage,
   sendGroupMessage,
-  clearTokenCache,
-  initApiConfig,
   startBackgroundTokenRefresh,
   stopBackgroundTokenRefresh,
-  sendC2CInputNotify,
-  onMessageSent,
-  PLUGIN_USER_AGENT,
 } from "./api.js";
 import { qqbotPlugin } from "./channel.js";
-import { processAttachments, formatVoiceText } from "./inbound-attachments.js";
-import { recordKnownUser, flushKnownUsers } from "./known-users.js";
+import { formatVoiceText, processAttachments } from "./inbound-attachments.js";
+import { flushKnownUsers, recordKnownUser } from "./known-users.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import {
   parseAndSendMediaTags,
   sendPlainReply,
-  type DeliverEventContext,
   type DeliverAccountContext,
+  type DeliverEventContext,
 } from "./outbound-deliver.js";
 import { sendDocument, sendMedia as sendMediaAuto, type MediaTargetContext } from "./outbound.js";
 import {
-  setRefIndex,
-  getRefIndex,
-  formatRefEntryForAgent,
   flushRefIndex,
+  formatRefEntryForAgent,
+  getRefIndex,
+  setRefIndex,
   type RefAttachmentSummary,
 } from "./ref-index-store.js";
 import {
-  sendWithTokenRetry,
-  sendErrorToTarget,
   handleStructuredPayload,
-  type ReplyContext,
+  sendErrorToTarget,
+  sendWithTokenRetry,
   type MessageTarget,
+  type ReplyContext,
 } from "./reply-dispatcher.js";
 import { getQQBotRuntime } from "./runtime.js";
-import { loadSession, saveSession, clearSession } from "./session-store.js";
-import {
-  matchSlashCommand,
-  type SlashCommandContext,
-  type SlashCommandFileResult,
-} from "./slash-commands.js";
+import { clearSession, loadSession, saveSession } from "./session-store.js";
+import { matchSlashCommand, type SlashCommandContext } from "./slash-commands.js";
 import type {
+  C2CMessageEvent,
+  GroupMessageEvent,
+  GuildMessageEvent,
   ResolvedQQBotAccount,
   WSPayload,
-  C2CMessageEvent,
-  GuildMessageEvent,
-  GroupMessageEvent,
 } from "./types.js";
-import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
+import { TYPING_INPUT_SECOND, TypingKeepAlive } from "./typing-keepalive.js";
 import { isGlobalTTSAvailable, resolveTTSConfig } from "./utils/audio-convert.js";
 import { runDiagnostics } from "./utils/platform.js";
-import { parseFaceTags, parseRefIndices, buildAttachmentSummaries } from "./utils/text-parsing.js";
+import { buildAttachmentSummaries, parseFaceTags, parseRefIndices } from "./utils/text-parsing.js";
 
 // QQ Bot intents grouped by permission level.
 const INTENTS = {
@@ -79,6 +75,34 @@ const RATE_LIMIT_DELAY = 60000;
 const MAX_RECONNECT_ATTEMPTS = 100;
 const MAX_QUICK_DISCONNECT_COUNT = 3;
 const QUICK_DISCONNECT_THRESHOLD = 5000;
+
+function decodeGatewayMessageData(data: unknown): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data) && data.every((chunk) => Buffer.isBuffer(chunk))) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString("utf8");
+  }
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  }
+  return "";
+}
+
+function readOptionalMessageSceneExt(
+  event: GuildMessageEvent | C2CMessageEvent | GroupMessageEvent,
+): string[] | undefined {
+  if (!("message_scene" in event)) {
+    return undefined;
+  }
+  return event.message_scene?.ext;
+}
 
 export interface GatewayContext {
   account: ResolvedQQBotAccount;
@@ -115,9 +139,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   initApiConfig(account.appId, {
     markdownSupport: account.markdownSupport,
   });
-  log?.info(
-    `[qqbot:${account.accountId}] API config: markdownSupport=${account.markdownSupport === true}`,
-  );
+  log?.info(`[qqbot:${account.accountId}] API config: markdownSupport=${account.markdownSupport}`);
 
   // Cache outbound refIdx values from QQ delivery responses for future quoting.
   onMessageSent(account.appId, (refIdx, meta) => {
@@ -170,8 +192,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     log?.info(
       `[qqbot:${account.accountId}] TTS apiKey: ${maskedKey}${ttsCfg.queryParams ? `, queryParams=${JSON.stringify(ttsCfg.queryParams)}` : ""}${ttsCfg.speed !== undefined ? `, speed=${ttsCfg.speed}` : ""}`,
     );
-  } else if (isGlobalTTSAvailable(cfg as OpenClawConfig)) {
-    const globalProvider = (cfg as OpenClawConfig).messages?.tts?.provider ?? "auto";
+  } else if (isGlobalTTSAvailable(cfg)) {
+    const globalProvider = cfg.messages?.tts?.provider ?? "auto";
     log?.info(
       `[qqbot:${account.accountId}] TTS configured (global fallback): provider=${globalProvider}`,
     );
@@ -282,8 +304,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       // path below is retained for forward-compatibility if a future requireAuth:false
       // command returns a SlashCommandFileResult.
       const isFileResult = typeof reply === "object" && reply !== null && "filePath" in reply;
-      const replyText = isFileResult ? (reply as SlashCommandFileResult).text : (reply as string);
-      const replyFile = isFileResult ? (reply as SlashCommandFileResult).filePath : null;
+      const replyText = isFileResult ? reply.text : reply;
+      const replyFile = isFileResult ? reply.filePath : null;
 
       // Send the text portion first.
       if (msg.type === "c2c") {
@@ -325,11 +347,13 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           await sendDocument(mediaCtx, replyFile);
           log?.info(`[qqbot:${account.accountId}] Slash command file sent: ${replyFile}`);
         } catch (fileErr) {
-          log?.error(`[qqbot:${account.accountId}] Failed to send slash command file: ${fileErr}`);
+          log?.error(
+            `[qqbot:${account.accountId}] Failed to send slash command file: ${String(fileErr)}`,
+          );
         }
       }
     } catch (err) {
-      log?.error(`[qqbot:${account.accountId}] Slash command error: ${err}`);
+      log?.error(`[qqbot:${account.accountId}] Slash command error: ${String(err)}`);
       // Fall back to the normal queue path if the slash command handler fails.
       msgQueue.enqueue(msg);
     }
@@ -387,7 +411,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       if (!isAborted) {
-        connect();
+        void connect();
       }
     }, delay);
   };
@@ -462,7 +486,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const typing: { keepAlive: TypingKeepAlive | null } = { keepAlive: null };
 
         const inputNotifyPromise: Promise<string | undefined> = (async () => {
-          if (!isC2C) return undefined;
+          if (!isC2C) {
+            return undefined;
+          }
           try {
             let token = await getAccessToken(account.appId, account.clientSecret);
             try {
@@ -512,7 +538,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               }
             }
           } catch (err) {
-            log?.error(`[qqbot:${account.accountId}] sendC2CInputNotify error: ${err}`);
+            log?.error(
+              `[qqbot:${account.accountId}] sendC2CInputNotify error: ${
+                err instanceof Error ? err.message : JSON.stringify(err)
+              }`,
+            );
             return undefined;
           }
         })();
@@ -670,8 +700,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
             : `qqbot:c2c:${event.senderId}`;
 
         const hasTTS =
-          !!resolveTTSConfig(cfg as Record<string, unknown>) ||
-          isGlobalTTSAvailable(cfg as OpenClawConfig);
+          !!resolveTTSConfig(cfg as Record<string, unknown>) || isGlobalTTSAvailable(cfg);
 
         let quotePart = "";
         if (replyToIsQuote) {
@@ -683,7 +712,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         }
 
         const staticParts: string[] = [`[QQBot] to=${qualifiedTarget}`];
-        if (hasTTS) staticParts.push("voice synthesis enabled");
+        if (hasTTS) {
+          staticParts.push("voice synthesis enabled");
+        }
         const staticInstruction = staticParts.join(" | ");
         systemPrompts.unshift(staticInstruction);
 
@@ -717,7 +748,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const rawAllowFrom = account.config?.allowFrom ?? [];
         const normalizedAllowFrom = qqbotPlugin.config?.formatAllowFrom
           ? qqbotPlugin.config.formatAllowFrom({
-              cfg: cfg as OpenClawConfig,
+              cfg: cfg,
               accountId: account.accountId,
               allowFrom: rawAllowFrom,
             })
@@ -875,7 +906,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                     );
                   }
                 } catch (err) {
-                  log?.error(`[qqbot:${account.accountId}] Tool fallback sendMedia failed: ${err}`);
+                  log?.error(
+                    `[qqbot:${account.accountId}] Tool fallback sendMedia failed: ${
+                      err instanceof Error ? err.message : JSON.stringify(err)
+                    }`,
+                  );
                 }
               }
               return;
@@ -960,7 +995,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                           }
                         } catch (err) {
                           log?.error(
-                            `[qqbot:${account.accountId}] Tool media immediate forward failed: ${err}`,
+                            `[qqbot:${account.accountId}] Tool media immediate forward failed: ${
+                              err instanceof Error ? err.message : JSON.stringify(err)
+                            }`,
                           );
                         }
                       }
@@ -995,7 +1032,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                           await sendToolFallback();
                         } catch (sendErr) {
                           log?.error(
-                            `[qqbot:${account.accountId}] Failed to send tool-only fallback: ${sendErr}`,
+                            `[qqbot:${account.accountId}] Failed to send tool-only fallback: ${
+                              sendErr instanceof Error ? sendErr.message : JSON.stringify(sendErr)
+                            }`,
                           );
                         }
                       }
@@ -1069,7 +1108,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                     replyText,
                     recordOutboundActivity,
                   );
-                  if (handled) return;
+                  if (handled) {
+                    return;
+                  }
 
                   await sendPlainReply(
                     payload,
@@ -1088,14 +1129,18 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                   });
                 },
                 onError: async (err: unknown) => {
-                  log?.error(`[qqbot:${account.accountId}] Dispatch error: ${err}`);
+                  const errMsg =
+                    err instanceof Error
+                      ? err.message
+                      : typeof err === "string"
+                        ? err
+                        : JSON.stringify(err);
+                  log?.error(`[qqbot:${account.accountId}] Dispatch error: ${errMsg}`);
                   hasResponse = true;
                   if (timeoutId) {
                     clearTimeout(timeoutId);
                     timeoutId = null;
                   }
-
-                  const errMsg = String(err);
                   if (errMsg.includes("401") || errMsg.includes("key") || errMsg.includes("auth")) {
                     log?.error(`[qqbot:${account.accountId}] AI auth error: ${errMsg}`);
                   } else {
@@ -1110,7 +1155,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
           try {
             await Promise.race([dispatchPromise, timeoutPromise]);
-          } catch (err) {
+          } catch {
             if (timeoutId) {
               clearTimeout(timeoutId);
             }
@@ -1131,7 +1176,13 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
             }
           }
         } catch (err) {
-          log?.error(`[qqbot:${account.accountId}] Message processing failed: ${err}`);
+          const errMsg =
+            err instanceof Error
+              ? err.message
+              : typeof err === "string"
+                ? err
+                : JSON.stringify(err);
+          log?.error(`[qqbot:${account.accountId}] Message processing failed: ${errMsg}`);
         } finally {
           typing.keepAlive?.stop();
         }
@@ -1154,7 +1205,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
       ws.on("message", async (data) => {
         try {
-          const rawData = data.toString();
+          const rawData = decodeGatewayMessageData(data);
           const payload = JSON.parse(rawData) as WSPayload;
           const { op, d, s, t } = payload;
 
@@ -1208,7 +1259,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               }
 
               const interval = (d as { heartbeat_interval: number }).heartbeat_interval;
-              if (heartbeatInterval) clearInterval(heartbeatInterval);
+              if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+              }
               heartbeatInterval = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) {
                   ws.send(JSON.stringify({ op: 1, d: lastSeq }));
@@ -1259,7 +1312,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                   accountId: account.accountId,
                 });
                 const c2cRefs = parseRefIndices(event.message_scene?.ext);
-                trySlashCommandOrEnqueue({
+                void trySlashCommandOrEnqueue({
                   type: "c2c",
                   senderId: event.author.user_openid,
                   content: event.content,
@@ -1272,8 +1325,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               } else if (t === "AT_MESSAGE_CREATE") {
                 const event = d as GuildMessageEvent;
                 // Guild users cannot receive proactive C2C messages — skip known-user recording.
-                const guildRefs = parseRefIndices((event as any).message_scene?.ext);
-                trySlashCommandOrEnqueue({
+                const guildRefs = parseRefIndices(readOptionalMessageSceneExt(event));
+                void trySlashCommandOrEnqueue({
                   type: "guild",
                   senderId: event.author.id,
                   senderName: event.author.username,
@@ -1289,8 +1342,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               } else if (t === "DIRECT_MESSAGE_CREATE") {
                 const event = d as GuildMessageEvent;
                 // DM author.id is a guild-scoped ID, not a C2C openid — skip known-user recording.
-                const dmRefs = parseRefIndices((event as any).message_scene?.ext);
-                trySlashCommandOrEnqueue({
+                const dmRefs = parseRefIndices(readOptionalMessageSceneExt(event));
+                void trySlashCommandOrEnqueue({
                   type: "dm",
                   senderId: event.author.id,
                   senderName: event.author.username,
@@ -1311,7 +1364,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                   accountId: account.accountId,
                 });
                 const groupRefs = parseRefIndices(event.message_scene?.ext);
-                trySlashCommandOrEnqueue({
+                void trySlashCommandOrEnqueue({
                   type: "group",
                   senderId: event.author.member_openid,
                   content: event.content,
@@ -1355,7 +1408,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               break;
           }
         } catch (err) {
-          log?.error(`[qqbot:${account.accountId}] Message parse error: ${err}`);
+          log?.error(
+            `[qqbot:${account.accountId}] Message parse error: ${
+              err instanceof Error ? err.message : JSON.stringify(err)
+            }`,
+          );
         }
       });
 
@@ -1453,9 +1510,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       });
     } catch (err) {
       isConnecting = false;
-      const errMsg = String(err);
-      log?.error(`[qqbot:${account.accountId}] Connection failed: ${err}`);
-
+      const errMsg = err instanceof Error ? err.message : (JSON.stringify(err) ?? "Unknown error");
+      log?.error(`[qqbot:${account.accountId}] Connection failed: ${errMsg}`);
       // Back off more aggressively after rate-limit failures.
       if (errMsg.includes("Too many requests") || errMsg.includes("100001")) {
         log?.info(

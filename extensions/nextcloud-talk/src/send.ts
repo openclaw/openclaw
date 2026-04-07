@@ -1,10 +1,13 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { fetchWithSsrFGuard } from "../runtime-api.js";
-import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
-import { getNextcloudTalkRuntime } from "./runtime.js";
-import { generateNextcloudTalkSignature } from "./signature.js";
+import {
+  convertMarkdownTables,
+  fetchWithSsrFGuard,
+  generateNextcloudTalkSignature,
+  getNextcloudTalkRuntime,
+  resolveMarkdownTableMode,
+  resolveNextcloudTalkAccount,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "./send.runtime.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 type NextcloudTalkSendOpts = {
@@ -128,7 +131,7 @@ export async function sendMessageNextcloudTalk(
       body: bodyStr,
     },
     auditContext: "nextcloud-talk-send",
-    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
   });
 
   try {
@@ -216,7 +219,7 @@ export async function sendReactionNextcloudTalk(
       body,
     },
     auditContext: "nextcloud-talk-reaction",
-    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+    policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
   });
 
   try {
