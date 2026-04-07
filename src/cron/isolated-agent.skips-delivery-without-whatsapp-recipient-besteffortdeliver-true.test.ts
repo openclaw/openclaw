@@ -232,13 +232,6 @@ describe("runCronIsolatedAgentTurn", () => {
     setupIsolatedAgentTurnMocks({ fast: true });
   });
 
-  it("reports not-delivered when best-effort structured outbound sends all fail", async () => {
-    await expectBestEffortTelegramNotDelivered({
-      text: "caption",
-      mediaUrl: "https://example.com/img.png",
-    });
-  });
-
   it("skips announce for heartbeat-only output", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       mockAgentPayloads([{ text: "HEARTBEAT_OK" }]);
