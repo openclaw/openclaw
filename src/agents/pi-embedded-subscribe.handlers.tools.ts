@@ -546,7 +546,8 @@ export function handleToolExecutionStart(
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
     recordPendingToolResultReplayMetadata({
-      sessionKey: ctx.params.sessionKey ?? ctx.params.sessionId,
+      sessionKey: ctx.params.sessionKey,
+      sessionId: ctx.params.sessionId,
       toolCallId,
       toolName,
       args,
