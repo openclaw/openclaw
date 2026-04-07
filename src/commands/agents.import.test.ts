@@ -81,34 +81,15 @@ describe("agents import command", () => {
 
   it("errors when agent.json is missing from archive", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-    fileExistsMock.mockResolvedValue(true);
-    // extractArchive extracts but no agent.json in the archive
-    // The error comes from readJsonFile failing to parse (file not found)
+    // Return true for input file, false for agent.json path
+    fileExistsMock.mockImplementation((p: string) => Promise.resolve(!p.endsWith("agent.json")));
 
     await agentsImportCommand({ file: "/path/to/agent.tar.gz" }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to parse agent.json"),
+      expect.stringContaining("Archive missing required file"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
-  });
-
-  it("errors when agent.json is invalid JSON", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-    fileExistsMock.mockResolvedValue(true);
-    // The test would need to mock fs.readFile to return invalid JSON for agent.json
-    // This is complex to set up, so we skip this edge case for now
-
-    expect(true).toBe(true);
-  });
-
-  it("errors when agent.json is missing id field", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-    fileExistsMock.mockResolvedValue(true);
-    // agent.json with no id would cause the error during parse
-    // This requires more complex fs mocking
-
-    expect(true).toBe(true);
   });
 });

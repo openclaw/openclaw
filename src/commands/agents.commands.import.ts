@@ -71,8 +71,8 @@ export async function agentsImportCommand(
     return;
   }
 
-  // 3. Extract to temp dir and read agent.json
-  const agentConfig = await withTempDir(async (tmpDir) => {
+  // 3. Extract to temp dir, read agent.json, and copy workspace in a single pass
+  const extractResult = await withTempDir(async (tmpDir) => {
     await extractArchive({
       archivePath: filePath,
       destDir: tmpDir,
@@ -103,14 +103,30 @@ export async function agentsImportCommand(
       return null;
     }
 
-    return parsed;
+    // Determine target paths (workspace path is needed for copying)
+    const resolvedAgentId = normalizeAgentId(parsed.id);
+    const targetAgentDir = resolveAgentDir(cfg, resolvedAgentId);
+    const targetWorkspace = parsed.workspace
+      ? resolveUserPath(parsed.workspace)
+      : resolveAgentWorkspaceDir(cfg, resolvedAgentId);
+
+    // Copy workspace in the same temp dir before returning
+    const sourceWorkspace = path.join(tmpDir, "workspace");
+    const workspaceExists = await fileExists(sourceWorkspace);
+    if (workspaceExists) {
+      await fs.cp(sourceWorkspace, targetWorkspace, { recursive: true });
+    }
+
+    return { parsed, resolvedAgentId, targetAgentDir, targetWorkspace };
   });
 
-  if (!agentConfig) {
+  if (!extractResult) {
     return;
   }
 
-  const agentId = normalizeAgentId(agentConfig.id);
+  const { parsed: agentConfig, resolvedAgentId, targetAgentDir, targetWorkspace } = extractResult;
+  const agentId = resolvedAgentId;
+
   if (agentId !== agentConfig.id) {
     runtime.log(`Normalized agent id to "${agentId}".`);
   }
@@ -144,29 +160,7 @@ export async function agentsImportCommand(
     }
   }
 
-  // 6. Determine target paths
-  const targetAgentDir = resolveAgentDir(cfg, agentId);
-  const targetWorkspace = agentConfig.workspace
-    ? resolveUserPath(agentConfig.workspace)
-    : resolveAgentWorkspaceDir(cfg, agentId);
-
-  // 7. Extract workspace files
-  await withTempDir(async (tmpDir) => {
-    await extractArchive({
-      archivePath: filePath,
-      destDir: tmpDir,
-      timeoutMs: 60_000,
-    });
-
-    const sourceWorkspace = path.join(tmpDir, "workspace");
-    const workspaceExists = await fileExists(sourceWorkspace);
-
-    if (workspaceExists) {
-      await fs.cp(sourceWorkspace, targetWorkspace, { recursive: true });
-    }
-  });
-
-  // 8. Apply config
+  // 6. Apply config
   const nextConfig = applyAgentConfig(cfg, {
     agentId,
     name: agentConfig.name,
