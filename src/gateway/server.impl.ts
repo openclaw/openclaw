@@ -1617,8 +1617,7 @@ export async function startGatewayServer(
                   requiredSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
                   disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
                 } else {
-                  requiredSharedGatewaySessionGeneration =
-                    previousRequiredSharedGatewaySessionGeneration;
+                  requiredSharedGatewaySessionGeneration = null;
                 }
               } catch (error) {
                 requiredSharedGatewaySessionGeneration =
