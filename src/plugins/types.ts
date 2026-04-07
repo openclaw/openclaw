@@ -15,6 +15,7 @@ import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.js";
+import type { ToolFsPolicy } from "../agents/tool-fs-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
@@ -22,7 +23,11 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import type {
+  CliBackendConfig,
+  ModelProviderAuthMode,
+  ModelProviderConfig,
+} from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
@@ -137,6 +142,8 @@ export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   /** Active runtime-resolved config snapshot when one is available. */
   runtimeConfig?: OpenClawConfig;
+  /** Effective filesystem policy for the active tool run. */
+  fsPolicy?: ToolFsPolicy;
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
@@ -1040,6 +1047,23 @@ export type ProviderSyntheticAuthResult = {
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
 };
 
+export type ProviderResolveExternalOAuthProfilesContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  store: AuthProfileStore;
+};
+export type ProviderResolveExternalAuthProfilesContext =
+  ProviderResolveExternalOAuthProfilesContext;
+
+export type ProviderExternalOAuthProfile = {
+  profileId: string;
+  credential: OAuthCredential;
+  persistence?: "runtime-only" | "persisted";
+};
+export type ProviderExternalAuthProfile = ProviderExternalOAuthProfile;
+
 export type ProviderDeferSyntheticProfileAuthContext = {
   config?: OpenClawConfig;
   provider: string;
@@ -1518,6 +1542,32 @@ export type ProviderPlugin = {
     ctx: ProviderResolveSyntheticAuthContext,
   ) => ProviderSyntheticAuthResult | null | undefined;
   /**
+   * Provider-owned external auth profile discovery.
+   *
+   * Use this when credentials are managed by an external tool and should be visible
+   * to runtime auth resolution without being written back into `auth-profiles.json`
+   * by core.
+   */
+  resolveExternalAuthProfiles?: (
+    ctx: ProviderResolveExternalAuthProfilesContext,
+  ) =>
+    | Array<ProviderExternalAuthProfile>
+    | ReadonlyArray<ProviderExternalAuthProfile>
+    | null
+    | undefined;
+  /**
+   * @deprecated Use `resolveExternalAuthProfiles`.
+   *
+   * Kept for compatibility with existing provider plugins.
+   */
+  resolveExternalOAuthProfiles?: (
+    ctx: ProviderResolveExternalOAuthProfilesContext,
+  ) =>
+    | Array<ProviderExternalOAuthProfile>
+    | ReadonlyArray<ProviderExternalOAuthProfile>
+    | null
+    | undefined;
+  /**
    * Provider-owned precedence rule for stored synthetic auth profiles.
    *
    * Return true when a stored profile API key is only a provider-owned
@@ -1970,6 +2020,57 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
+export type CliBundleMcpMode =
+  | "claude-config-file"
+  | "codex-config-overrides"
+  | "gemini-system-settings";
+
+/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
+export type CliBackendPlugin = {
+  /** Provider id used in model refs, for example `claude-cli/opus`. */
+  id: string;
+  /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
+  config: CliBackendConfig;
+  /**
+   * Optional live-smoke metadata owned by the backend plugin.
+   *
+   * Keep provider-specific test wiring here instead of scattering it across
+   * Docker wrappers, docs, and gateway live tests.
+   */
+  liveTest?: {
+    defaultModelRef?: string;
+    defaultImageProbe?: boolean;
+    defaultMcpProbe?: boolean;
+    docker?: {
+      npmPackage?: string;
+      binaryName?: string;
+    };
+  };
+  /**
+   * Whether OpenClaw should inject bundle MCP config for this backend.
+   *
+   * Keep this opt-in. Only backends that explicitly consume OpenClaw's bundle
+   * MCP bridge should enable it.
+   */
+  bundleMcp?: boolean;
+  /**
+   * Provider-owned bundle MCP integration strategy.
+   *
+   * Different CLIs wire MCP through different surfaces:
+   * - Claude: `--strict-mcp-config --mcp-config`
+   * - Codex: `-c mcp_servers=...`
+   * - Gemini: system-level `settings.json`
+   */
+  bundleMcpMode?: CliBundleMcpMode;
+  /**
+   * Optional config normalizer applied after user overrides merge.
+   *
+   * Use this for backend-specific compatibility rewrites when old config
+   * shapes need to stay working.
+   */
+  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+};
+
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };
@@ -2074,6 +2175,8 @@ export type OpenClawPluginApi = {
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a text-only CLI backend used by the local CLI runner. */
+  registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register a lightweight config migration that can run before plugin runtime loads. */
   registerConfigMigration: (migrate: PluginConfigMigration) => void;
   /** Register a lightweight config probe that can auto-enable this plugin generically. */
@@ -2113,7 +2216,18 @@ export type OpenClawPluginApi = {
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
-  /** Register the system prompt section builder for this memory plugin (exclusive slot). */
+  /** Register a compaction provider (pluggable summarization backend). */
+  registerCompactionProvider: (
+    provider: import("./compaction-provider.js").CompactionProvider,
+  ) => void;
+  /** Register the active memory capability for this memory plugin (exclusive slot). */
+  registerMemoryCapability: (
+    capability: import("./memory-state.js").MemoryPluginCapability,
+  ) => void;
+  /**
+   * Register the system prompt section builder for this memory plugin (exclusive slot).
+   * @deprecated Use registerMemoryCapability({ promptBuilder }) instead.
+   */
   registerMemoryPromptSection: (
     builder: import("./memory-state.js").MemoryPromptSectionBuilder,
   ) => void;
@@ -2125,9 +2239,15 @@ export type OpenClawPluginApi = {
   registerMemoryCorpusSupplement: (
     supplement: import("./memory-state.js").MemoryCorpusSupplement,
   ) => void;
-  /** Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot). */
+  /**
+   * Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot).
+   * @deprecated Use registerMemoryCapability({ flushPlanResolver }) instead.
+   */
   registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;
-  /** Register the active memory runtime adapter for this memory plugin (exclusive slot). */
+  /**
+   * Register the active memory runtime adapter for this memory plugin (exclusive slot).
+   * @deprecated Use registerMemoryCapability({ runtime }) instead.
+   */
   registerMemoryRuntime: (runtime: import("./memory-state.js").MemoryPluginRuntime) => void;
   /** Register a memory embedding provider adapter. Multiple adapters may coexist. */
   registerMemoryEmbeddingProvider: (

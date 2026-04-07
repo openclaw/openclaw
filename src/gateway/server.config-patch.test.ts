@@ -15,6 +15,8 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
+const CONFIG_SECRETREF_RPC_TIMEOUT_MS = 20_000;
+
 let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
 let sharedTempRoot: string;
 
@@ -90,6 +92,7 @@ describe("gateway config methods", () => {
         raw: JSON.stringify(nextConfig, null, 2),
         baseHash: current.payload?.hash,
       },
+      CONFIG_SECRETREF_RPC_TIMEOUT_MS,
     );
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
@@ -311,6 +314,7 @@ describe("gateway config methods", () => {
         }),
         baseHash: beforeHash,
       },
+      CONFIG_SECRETREF_RPC_TIMEOUT_MS,
     );
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");

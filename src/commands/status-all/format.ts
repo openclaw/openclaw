@@ -1,4 +1,5 @@
 import { resolveGatewayPort } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import {
@@ -6,6 +7,7 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { formatGitInstallLabel, type UpdateCheckResult } from "../../infra/update-check.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.update.js";
 
 export { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
@@ -16,18 +18,49 @@ export type StatusOverviewRow = {
   Value: string;
 };
 
-type StatusUpdateLike = {
-  installKind?: string | null;
-  git?: {
-    tag?: string | null;
-    branch?: string | null;
+type StatusUpdateLike = UpdateCheckResult;
+
+type StatusGatewayConnection = {
+  url: string;
+  urlSource?: string;
+};
+
+type StatusGatewayProbe = {
+  connectLatencyMs?: number | null;
+  error?: string | null;
+} | null;
+
+type StatusGatewayProbeAuth = {
+  token?: string;
+  password?: string;
+} | null;
+
+type StatusGatewaySelf =
+  | {
+      host?: string | null;
+      ip?: string | null;
+      version?: string | null;
+      platform?: string | null;
+    }
+  | null
+  | undefined;
+
+type StatusManagedService = {
+  label: string;
+  installed: boolean | null;
+  managedByOpenClaw?: boolean;
+  loadedText: string;
+  runtimeShort?: string | null;
+  runtime?: {
+    status?: string | null;
+    pid?: number | null;
   } | null;
-} & UpdateCheckResult;
+};
 
 export function resolveStatusUpdateChannelInfo(params: {
   updateConfigChannel?: string | null;
   update: {
-    installKind?: string | null;
+    installKind?: UpdateCheckResult["installKind"];
     git?: {
       tag?: string | null;
       branch?: string | null;
@@ -36,7 +69,7 @@ export function resolveStatusUpdateChannelInfo(params: {
 }) {
   return resolveUpdateChannelDisplay({
     configChannel: normalizeUpdateChannel(params.updateConfigChannel),
-    installKind: params.update.installKind ?? null,
+    installKind: params.update.installKind ?? "unknown",
     gitTag: params.update.git?.tag ?? null,
     gitBranch: params.update.git?.branch ?? null,
   });
@@ -60,7 +93,7 @@ export function buildStatusUpdateSurface(params: {
 }
 
 export function formatStatusDashboardValue(value: string | null | undefined): string {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   return trimmed && trimmed.length > 0 ? trimmed : "disabled";
 }
 
@@ -126,16 +159,7 @@ export function formatStatusServiceValue(params: {
 }
 
 export function resolveStatusDashboardUrl(params: {
-  cfg: {
-    gateway?: {
-      bind?: string;
-      customBindHost?: string;
-      controlUi?: {
-        enabled?: boolean;
-        basePath?: string;
-      };
-    };
-  };
+  cfg: Pick<OpenClawConfig, "gateway">;
 }): string | null {
   if (!(params.cfg.gateway?.controlUi?.enabled ?? true)) {
     return null;
@@ -196,6 +220,92 @@ export function buildStatusOverviewRows(params: {
   return rows;
 }
 
+export function buildStatusOverviewSurfaceRows(params: {
+  cfg: Pick<OpenClawConfig, "update" | "gateway">;
+  update: StatusUpdateLike;
+  tailscaleMode: string;
+  tailscaleDns?: string | null;
+  tailscaleHttpsUrl?: string | null;
+  tailscaleBackendState?: string | null;
+  includeBackendStateWhenOff?: boolean;
+  includeBackendStateWhenOn?: boolean;
+  includeDnsNameWhenOff?: boolean;
+  decorateTailscaleOff?: (value: string) => string;
+  decorateTailscaleWarn?: (value: string) => string;
+  gatewayMode: "local" | "remote";
+  remoteUrlMissing: boolean;
+  gatewayConnection: StatusGatewayConnection;
+  gatewayReachable: boolean;
+  gatewayProbe: StatusGatewayProbe;
+  gatewayProbeAuth: StatusGatewayProbeAuth;
+  gatewayProbeAuthWarning?: string | null;
+  gatewaySelf: StatusGatewaySelf;
+  gatewayService: StatusManagedService;
+  nodeService: StatusManagedService;
+  nodeOnlyGateway?: {
+    gatewayValue: string;
+  } | null;
+  decorateOk?: (value: string) => string;
+  decorateWarn?: (value: string) => string;
+  prefixRows?: StatusOverviewRow[];
+  middleRows?: StatusOverviewRow[];
+  suffixRows?: StatusOverviewRow[];
+  agentsValue: string;
+  updateValue?: string;
+  gatewayAuthWarningValue?: string | null;
+  gatewaySelfFallbackValue?: string | null;
+}) {
+  const updateSurface = buildStatusUpdateSurface({
+    updateConfigChannel: params.cfg.update?.channel,
+    update: params.update,
+  });
+  const { dashboardUrl, gatewayValue, gatewaySelfValue, gatewayServiceValue, nodeServiceValue } =
+    buildStatusGatewaySurfaceValues({
+      cfg: params.cfg,
+      gatewayMode: params.gatewayMode,
+      remoteUrlMissing: params.remoteUrlMissing,
+      gatewayConnection: params.gatewayConnection,
+      gatewayReachable: params.gatewayReachable,
+      gatewayProbe: params.gatewayProbe,
+      gatewayProbeAuth: params.gatewayProbeAuth,
+      gatewaySelf: params.gatewaySelf,
+      gatewayService: params.gatewayService,
+      nodeService: params.nodeService,
+      nodeOnlyGateway: params.nodeOnlyGateway,
+      decorateOk: params.decorateOk,
+      decorateWarn: params.decorateWarn,
+    });
+  return buildStatusOverviewRows({
+    prefixRows: params.prefixRows,
+    dashboardValue: formatStatusDashboardValue(dashboardUrl),
+    tailscaleValue: formatStatusTailscaleValue({
+      tailscaleMode: params.tailscaleMode,
+      dnsName: params.tailscaleDns,
+      httpsUrl: params.tailscaleHttpsUrl,
+      backendState: params.tailscaleBackendState,
+      includeBackendStateWhenOff: params.includeBackendStateWhenOff,
+      includeBackendStateWhenOn: params.includeBackendStateWhenOn,
+      includeDnsNameWhenOff: params.includeDnsNameWhenOff,
+      decorateOff: params.decorateTailscaleOff,
+      decorateWarn: params.decorateTailscaleWarn,
+    }),
+    channelLabel: updateSurface.channelLabel,
+    gitLabel: updateSurface.gitLabel,
+    updateValue: params.updateValue ?? updateSurface.updateLine,
+    gatewayValue,
+    gatewayAuthWarning:
+      params.gatewayAuthWarningValue !== undefined
+        ? params.gatewayAuthWarningValue
+        : params.gatewayProbeAuthWarning,
+    middleRows: params.middleRows,
+    gatewaySelfValue: params.gatewaySelfFallbackValue ?? gatewaySelfValue,
+    gatewayServiceValue,
+    nodeServiceValue,
+    agentsValue: params.agentsValue,
+    suffixRows: params.suffixRows,
+  });
+}
+
 export function formatGatewayAuthUsed(
   auth: {
     token?: string;
@@ -216,17 +326,7 @@ export function formatGatewayAuthUsed(
   return "none";
 }
 
-export function formatGatewaySelfSummary(
-  gatewaySelf:
-    | {
-        host?: string | null;
-        ip?: string | null;
-        version?: string | null;
-        platform?: string | null;
-      }
-    | null
-    | undefined,
-): string | null {
+export function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null {
   return gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
     ? [
         gatewaySelf.host ? gatewaySelf.host : null,
@@ -242,19 +342,10 @@ export function formatGatewaySelfSummary(
 export function buildGatewayStatusSummaryParts(params: {
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
-  gatewayConnection: {
-    url: string;
-    urlSource?: string;
-  };
+  gatewayConnection: StatusGatewayConnection;
   gatewayReachable: boolean;
-  gatewayProbe: {
-    connectLatencyMs?: number | null;
-    error?: string | null;
-  } | null;
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  } | null;
+  gatewayProbe: StatusGatewayProbe;
+  gatewayProbeAuth: StatusGatewayProbeAuth;
 }): {
   targetText: string;
   targetTextWithSource: string;
@@ -289,62 +380,16 @@ export function buildGatewayStatusSummaryParts(params: {
 }
 
 export function buildStatusGatewaySurfaceValues(params: {
-  cfg: {
-    gateway?: {
-      bind?: string;
-      customBindHost?: string;
-      controlUi?: {
-        enabled?: boolean;
-        basePath?: string;
-      };
-    };
-  };
+  cfg: Pick<OpenClawConfig, "gateway">;
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
-  gatewayConnection: {
-    url: string;
-    urlSource?: string;
-  };
+  gatewayConnection: StatusGatewayConnection;
   gatewayReachable: boolean;
-  gatewayProbe: {
-    connectLatencyMs?: number | null;
-    error?: string | null;
-  } | null;
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  } | null;
-  gatewaySelf:
-    | {
-        host?: string | null;
-        ip?: string | null;
-        version?: string | null;
-        platform?: string | null;
-      }
-    | null
-    | undefined;
-  gatewayService: {
-    label: string;
-    installed: boolean | null;
-    managedByOpenClaw?: boolean;
-    loadedText: string;
-    runtimeShort?: string | null;
-    runtime?: {
-      status?: string | null;
-      pid?: number | null;
-    } | null;
-  };
-  nodeService: {
-    label: string;
-    installed: boolean | null;
-    managedByOpenClaw?: boolean;
-    loadedText: string;
-    runtimeShort?: string | null;
-    runtime?: {
-      status?: string | null;
-      pid?: number | null;
-    } | null;
-  };
+  gatewayProbe: StatusGatewayProbe;
+  gatewayProbeAuth: StatusGatewayProbeAuth;
+  gatewaySelf: StatusGatewaySelf;
+  gatewayService: StatusManagedService;
+  nodeService: StatusManagedService;
   nodeOnlyGateway?: {
     gatewayValue: string;
   } | null;

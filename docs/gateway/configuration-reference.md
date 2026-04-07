@@ -646,8 +646,9 @@ Matrix is extension-backed and configured under `channels.matrix`.
 
 - Token auth uses `accessToken`; password auth uses `userId` + `password`.
 - `channels.matrix.proxy` routes Matrix HTTP traffic through an explicit HTTP(S) proxy. Named accounts can override it with `channels.matrix.accounts.<id>.proxy`.
-- `channels.matrix.allowPrivateNetwork` allows private/internal homeservers. `proxy` and `allowPrivateNetwork` are independent controls.
+- `channels.matrix.network.dangerouslyAllowPrivateNetwork` allows private/internal homeservers. `proxy` and this network opt-in are independent controls.
 - `channels.matrix.defaultAccount` selects the preferred account in multi-account setups.
+- `channels.matrix.autoJoin` defaults to `off`, so invited rooms and fresh DM-style invites are ignored until you set `autoJoin: "allowlist"` with `autoJoinAllowlist` or `autoJoin: "always"`.
 - `channels.matrix.execApprovals`: Matrix-native exec approval delivery and approver authorization.
   - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
   - `approvers`: Matrix user IDs (e.g. `@owner:example.org`) allowed to approve exec requests.
@@ -1082,6 +1083,37 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinkin
 Z.AI models enable `tool_stream` by default for tool call streaming. Set `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 Anthropic Claude 4.6 models default to `adaptive` thinking when no explicit thinking level is set.
 
+### `agents.defaults.cliBackends`
+
+Optional CLI backends for text-only fallback runs (no tool calls). Useful as a backup when API providers fail.
+
+```json5
+{
+  agents: {
+    defaults: {
+      cliBackends: {
+        "codex-cli": {
+          command: "/opt/homebrew/bin/codex",
+        },
+        "my-cli": {
+          command: "my-cli",
+          args: ["--json"],
+          output: "json",
+          modelArg: "--model",
+          sessionArg: "--session",
+          sessionMode: "existing",
+          systemPromptArg: "--system",
+          systemPromptWhen: "first",
+          imageArg: "--image",
+          imageMode: "repeat",
+        },
+      },
+    },
+  },
+}
+```
+
+- CLI backends are text-first; tools are always disabled.
 - Sessions supported when `sessionArg` is set.
 - Image pass-through supported when `imageArg` accepts file paths.
 
@@ -1128,6 +1160,7 @@ Periodic heartbeat runs.
     defaults: {
       compaction: {
         mode: "safeguard", // default | safeguard
+        provider: "my-provider", // id of a registered compaction provider plugin (optional)
         timeoutSeconds: 900,
         reserveTokensFloor: 24000,
         identifierPolicy: "strict", // strict | off | custom
@@ -1148,6 +1181,7 @@ Periodic heartbeat runs.
 ```
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
+- `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `900`.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
@@ -2317,6 +2351,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 - `models.providers.*.models.*.contextWindow`: native model context window metadata.
 - `models.providers.*.models.*.contextTokens`: optional runtime context cap. Use this when you want a smaller effective context budget than the model's native `contextWindow`.
 - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
+- `models.providers.*.models.*.compat.requiresStringContent`: optional compatibility hint for string-only OpenAI-compatible chat endpoints. When `true`, OpenClaw flattens pure text `messages[].content` arrays into plain strings before sending the request.
 - `plugins.entries.amazon-bedrock.config.discovery`: Bedrock auto-discovery settings root.
 - `plugins.entries.amazon-bedrock.config.discovery.enabled`: turn implicit discovery on/off.
 - `plugins.entries.amazon-bedrock.config.discovery.region`: AWS region for discovery.

@@ -1,7 +1,10 @@
+import { formatErrorMessage } from "../infra/errors.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
+  assertPageNavigationCompletedSafely,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
@@ -63,6 +66,24 @@ async function awaitEvalWithAbort<T>(
   }
 }
 
+async function assertPostInteractionNavigationSafe(opts: {
+  cdpUrl: string;
+  page: Awaited<ReturnType<typeof getPageForTargetId>>;
+  ssrfPolicy?: SsrFPolicy;
+  targetId?: string;
+}): Promise<void> {
+  if (!opts.ssrfPolicy) {
+    return;
+  }
+  await assertPageNavigationCompletedSafely({
+    cdpUrl: opts.cdpUrl,
+    page: opts.page,
+    response: null,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
+  });
+}
+
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -87,6 +108,7 @@ export async function clickViaPlaywright(opts: {
   modifiers?: Array<"Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift">;
   delayMs?: number;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
@@ -114,6 +136,12 @@ export async function clickViaPlaywright(opts: {
         modifiers: opts.modifiers,
       });
     }
+    await assertPostInteractionNavigationSafe({
+      cdpUrl: opts.cdpUrl,
+      page,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toAIFriendlyError(err, label);
   }
@@ -201,6 +229,7 @@ export async function pressKeyViaPlaywright(opts: {
   targetId?: string;
   key: string;
   delayMs?: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const key = String(opts.key ?? "").trim();
   if (!key) {
@@ -210,6 +239,12 @@ export async function pressKeyViaPlaywright(opts: {
   ensurePageState(page);
   await page.keyboard.press(key, {
     delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
+  });
+  await assertPostInteractionNavigationSafe({
+    cdpUrl: opts.cdpUrl,
+    page,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
   });
 }
 
@@ -222,6 +257,7 @@ export async function typeViaPlaywright(opts: {
   submit?: boolean;
   slowly?: boolean;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const text = String(opts.text ?? "");
@@ -240,6 +276,12 @@ export async function typeViaPlaywright(opts: {
     }
     if (opts.submit) {
       await locator.press("Enter", { timeout });
+      await assertPostInteractionNavigationSafe({
+        cdpUrl: opts.cdpUrl,
+        page,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+      });
     }
   } catch (err) {
     throw toAIFriendlyError(err, label);
@@ -712,6 +754,7 @@ async function executeSingleAction(
   cdpUrl: string,
   targetId?: string,
   evaluateEnabled?: boolean,
+  ssrfPolicy?: SsrFPolicy,
   depth = 0,
 ): Promise<void> {
   if (depth > MAX_BATCH_DEPTH) {
@@ -732,6 +775,7 @@ async function executeSingleAction(
         >,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
       });
       break;
     case "type":
@@ -744,6 +788,7 @@ async function executeSingleAction(
         submit: action.submit,
         slowly: action.slowly,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
       });
       break;
     case "press":
@@ -752,6 +797,7 @@ async function executeSingleAction(
         targetId: effectiveTargetId,
         key: action.key,
         delayMs: action.delayMs,
+        ssrfPolicy,
       });
       break;
     case "hover":
@@ -851,6 +897,7 @@ async function executeSingleAction(
         actions: action.actions,
         stopOnError: action.stopOnError,
         evaluateEnabled,
+        ssrfPolicy,
         depth: depth + 1,
       });
       break;
@@ -865,6 +912,7 @@ export async function batchViaPlaywright(opts: {
   actions: BrowserActRequest[];
   stopOnError?: boolean;
   evaluateEnabled?: boolean;
+  ssrfPolicy?: SsrFPolicy;
   depth?: number;
 }): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
   const depth = opts.depth ?? 0;
@@ -877,10 +925,17 @@ export async function batchViaPlaywright(opts: {
   const results: Array<{ ok: boolean; error?: string }> = [];
   for (const action of opts.actions) {
     try {
-      await executeSingleAction(action, opts.cdpUrl, opts.targetId, opts.evaluateEnabled, depth);
+      await executeSingleAction(
+        action,
+        opts.cdpUrl,
+        opts.targetId,
+        opts.evaluateEnabled,
+        opts.ssrfPolicy,
+        depth,
+      );
       results.push({ ok: true });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatErrorMessage(err);
       results.push({ ok: false, error: message });
       if (opts.stopOnError !== false) {
         break;

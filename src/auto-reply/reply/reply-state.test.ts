@@ -437,14 +437,14 @@ describe("incrementCompactionCount", () => {
     );
   });
 
-  it("falls back to the derived transcript path when rewritten absolute sessionFile is unsafe", async () => {
+  it("keeps rewritten absolute sessionFile paths that stay inside the sessions directory", async () => {
     const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
       tempPrefix: "openclaw-compact-unsafe-",
       sessionFile: (tmp) => path.join(tmp, "outside", "s1.jsonl"),
       newSessionId: "s2",
     });
     expect(stored[sessionKey].sessionId).toBe("s2");
-    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "s2.jsonl"));
+    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "outside", "s2.jsonl"));
   });
 
   it("increments compaction count by an explicit amount", async () => {

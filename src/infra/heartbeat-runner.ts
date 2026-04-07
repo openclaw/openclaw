@@ -33,7 +33,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveSessionFilePath, resolveStorePath } from "../config/sessions/paths.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
@@ -42,12 +42,17 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -196,42 +201,74 @@ function resolveHeartbeatSession(
   const mainEntry = store[mainSessionKey];
 
   if (scope === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: false,
+    };
   }
 
+  // Guard: never route heartbeats to subagent sessions, regardless of entry path.
   const forced = forcedSessionKey?.trim();
-  if (forced) {
+  if (forced && isSubagentSessionKey(forced)) {
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: true,
+    };
+  }
+
+  if (forced && !isSubagentSessionKey(forced)) {
     const forcedCandidate = toAgentStoreSessionKey({
       agentId: resolvedAgentId,
       requestKey: forced,
       mainKey: cfg.session?.mainKey,
     });
-    const forcedCanonical = canonicalizeMainSessionAlias({
-      cfg,
-      agentId: resolvedAgentId,
-      sessionKey: forcedCandidate,
-    });
-    if (forcedCanonical !== "global") {
-      const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
-      if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-        return {
-          sessionKey: forcedCanonical,
-          storePath,
-          store,
-          entry: store[forcedCanonical],
-        };
+    if (!isSubagentSessionKey(forcedCandidate)) {
+      const forcedCanonical = canonicalizeMainSessionAlias({
+        cfg,
+        agentId: resolvedAgentId,
+        sessionKey: forcedCandidate,
+      });
+      if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
+        const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
+        if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+          return {
+            sessionKey: forcedCanonical,
+            storePath,
+            store,
+            entry: store[forcedCanonical],
+            suppressOriginatingContext: false,
+          };
+        }
       }
     }
   }
 
   const trimmed = heartbeat?.session?.trim() ?? "";
-  if (!trimmed) {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  if (!trimmed || isSubagentSessionKey(trimmed)) {
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: false,
+    };
   }
 
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "main" || normalized === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: false,
+    };
   }
 
   const candidate = toAgentStoreSessionKey({
@@ -239,12 +276,21 @@ function resolveHeartbeatSession(
     requestKey: trimmed,
     mainKey: cfg.session?.mainKey,
   });
+  if (isSubagentSessionKey(candidate)) {
+    return {
+      sessionKey: mainSessionKey,
+      storePath,
+      store,
+      entry: mainEntry,
+      suppressOriginatingContext: false,
+    };
+  }
   const canonical = canonicalizeMainSessionAlias({
     cfg,
     agentId: resolvedAgentId,
     sessionKey: candidate,
   });
-  if (canonical !== "global") {
+  if (canonical !== "global" && !isSubagentSessionKey(canonical)) {
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
       return {
@@ -252,11 +298,18 @@ function resolveHeartbeatSession(
         storePath,
         store,
         entry: store[canonical],
+        suppressOriginatingContext: false,
       };
     }
   }
 
-  return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  return {
+    sessionKey: mainSessionKey,
+    storePath,
+    store,
+    entry: mainEntry,
+    suppressOriginatingContext: false,
+  };
 }
 
 function resolveHeartbeatReasoningPayloads(
@@ -298,58 +351,6 @@ async function restoreHeartbeatUpdatedAt(params: {
     }
     nextStore[sessionKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
   });
-}
-
-/**
- * Prune heartbeat transcript entries by truncating the file back to a previous size.
- * This removes the user+assistant turns that were written during a HEARTBEAT_OK run,
- * preventing context pollution from zero-information exchanges.
- */
-async function pruneHeartbeatTranscript(params: {
-  transcriptPath?: string;
-  preHeartbeatSize?: number;
-}) {
-  const { transcriptPath, preHeartbeatSize } = params;
-  if (!transcriptPath || typeof preHeartbeatSize !== "number" || preHeartbeatSize < 0) {
-    return;
-  }
-  try {
-    const stat = await fs.stat(transcriptPath);
-    // Only truncate if the file has grown during the heartbeat run
-    if (stat.size > preHeartbeatSize) {
-      await fs.truncate(transcriptPath, preHeartbeatSize);
-    }
-  } catch {
-    // File may not exist or may have been removed - ignore errors
-  }
-}
-
-/**
- * Get the transcript file path and its current size before a heartbeat run.
- * Returns undefined values if the session or transcript doesn't exist yet.
- */
-async function captureTranscriptState(params: {
-  storePath: string;
-  sessionKey: string;
-  agentId?: string;
-}): Promise<{ transcriptPath?: string; preHeartbeatSize?: number }> {
-  const { storePath, sessionKey, agentId } = params;
-  try {
-    const store = loadSessionStore(storePath);
-    const entry = store[sessionKey];
-    if (!entry?.sessionId) {
-      return {};
-    }
-    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
-      agentId,
-      sessionsDir: path.dirname(storePath),
-    });
-    const stat = await fs.stat(transcriptPath);
-    return { transcriptPath, preHeartbeatSize: stat.size };
-  } catch {
-    // Session or transcript doesn't exist yet - nothing to prune
-    return {};
-  }
 }
 
 function stripLeadingHeartbeatResponsePrefix(
@@ -634,7 +635,7 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "skipped", reason: preflight.skipReason };
   }
-  const { entry, sessionKey, storePath } = preflight.session;
+  const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
@@ -715,7 +716,6 @@ export async function runHeartbeatOnce(opts: {
   }
 
   let runSessionKey = sessionKey;
-  let runStorePath = storePath;
   if (useIsolatedSession) {
     const isolatedKey = `${sessionKey}:heartbeat`;
     const cronSession = resolveCronSession({
@@ -728,7 +728,6 @@ export async function runHeartbeatOnce(opts: {
     cronSession.store[isolatedKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
     runSessionKey = isolatedKey;
-    runStorePath = cronSession.storePath;
   }
 
   // Update task last run times AFTER successful heartbeat completion
@@ -765,8 +764,9 @@ export async function runHeartbeatOnce(opts: {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
     To: sender,
-    OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,
-    OriginatingTo: delivery.to,
+    OriginatingChannel:
+      !suppressOriginatingContext && delivery.channel !== "none" ? delivery.channel : undefined,
+    OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
     AccountId: delivery.accountId,
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
@@ -822,15 +822,7 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK.
-    // For isolated sessions, capture the isolated transcript (not the main session's).
-    const transcriptState = await captureTranscriptState({
-      storePath: runStorePath,
-      sessionKey: runSessionKey,
-      agentId,
-    });
-
-    const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
+    const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
@@ -857,8 +849,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
-      // Prune the transcript to remove HEARTBEAT_OK turns
-      await pruneHeartbeatTranscript(transcriptState);
+
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-empty",
@@ -894,8 +885,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
-      // Prune the transcript to remove HEARTBEAT_OK turns
-      await pruneHeartbeatTranscript(transcriptState);
+
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-token",
@@ -932,8 +922,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
-      // Prune the transcript to remove duplicate heartbeat turns
-      await pruneHeartbeatTranscript(transcriptState);
+
       emitHeartbeatEvent({
         status: "skipped",
         reason: "duplicate",
@@ -1206,7 +1195,7 @@ export function startHeartbeatRunner(opts: {
 
     const reason = params?.reason;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
-    const requestedSessionKey = params?.sessionKey?.trim() || undefined;
+    const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;

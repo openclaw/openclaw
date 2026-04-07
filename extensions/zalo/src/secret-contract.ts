@@ -5,7 +5,7 @@ import {
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
-} from "openclaw/plugin-sdk/security-runtime";
+} from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 export const secretTargetRegistryEntries = [
   {
@@ -102,3 +102,8 @@ export function collectRuntimeConfigAssignments(params: {
       "Zalo account is disabled or webhook mode is not active for this account.",
   });
 }
+
+export const channelSecrets = {
+  secretTargetRegistryEntries,
+  collectRuntimeConfigAssignments,
+};

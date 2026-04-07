@@ -9,6 +9,7 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
@@ -34,9 +35,9 @@ export function buildApprovalPendingReplyPayload(params: {
         approvalId: params.approvalId,
         approvalSlug: params.approvalSlug,
         approvalKind: params.approvalKind ?? "exec",
-        agentId: params.agentId?.trim() || undefined,
+        agentId: normalizeOptionalString(params.agentId),
         allowedDecisions,
-        sessionKey: params.sessionKey?.trim() || undefined,
+        sessionKey: normalizeOptionalString(params.sessionKey),
         state: "pending",
       },
       ...params.channelData,

@@ -77,6 +77,10 @@
       "destination": "/plugins/building-plugins#registering-agent-tools"
     },
     {
+      "source": "/cli/capability",
+      "destination": "/cli/infer"
+    },
+    {
       "source": "/tools/capability-cookbook",
       "destination": "/plugins/architecture"
     },
@@ -123,14 +127,6 @@
     {
       "source": "/context",
       "destination": "/concepts/context"
-    },
-    {
-      "source": "/zh-CN",
-      "destination": "/zh-CN/index"
-    },
-    {
-      "source": "/zh-CN/",
-      "destination": "/zh-CN/index"
     },
     {
       "source": "/compaction",
@@ -1116,6 +1112,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/webhooks",
                   "plugins/voice-call",
                   {
                     "group": "Building Plugins",
@@ -1165,6 +1162,7 @@
               {
                 "group": "Tools",
                 "pages": [
+                  "tools/media-overview",
                   "tools/apply-patch",
                   {
                     "group": "Web Browser",
@@ -1237,6 +1235,7 @@
                 "pages": [
                   "providers/alibaba",
                   "providers/anthropic",
+                  "providers/arcee",
                   "providers/bedrock",
                   "providers/bedrock-mantle",
                   "providers/chutes",
@@ -1366,6 +1365,7 @@
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
+                      "gateway/cli-backends",
                       "gateway/local-models"
                     ]
                   },

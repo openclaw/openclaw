@@ -19,6 +19,9 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
 );
 const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
+const createConfiguredOllamaStreamFnMock = vi.hoisted(() =>
+  vi.fn((_params: { model: unknown; providerBaseUrl?: string }) => ({}) as never),
+);
 
 vi.mock("./api.js", () => ({
   promptAndConfigureOllama: promptAndConfigureOllamaMock,
@@ -27,10 +30,19 @@ vi.mock("./api.js", () => ({
   buildOllamaProvider: buildOllamaProviderMock,
 }));
 
+vi.mock("./src/stream.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./src/stream.js")>();
+  return {
+    ...actual,
+    createConfiguredOllamaStreamFn: createConfiguredOllamaStreamFnMock,
+  };
+});
+
 beforeEach(() => {
   promptAndConfigureOllamaMock.mockClear();
   ensureOllamaModelPulledMock.mockClear();
   buildOllamaProviderMock.mockReset();
+  createConfiguredOllamaStreamFnMock.mockClear();
 });
 
 function registerProvider() {
@@ -103,13 +115,13 @@ describe("ollama plugin", () => {
 
     await provider.onModelSelected?.({
       config,
-      model: "ollama/glm-4.7-flash",
+      model: "ollama/gemma4",
       prompter,
     });
 
     expect(ensureOllamaModelPulledMock).toHaveBeenCalledWith({
       config,
-      model: "ollama/glm-4.7-flash",
+      model: "ollama/gemma4",
       prompter,
     });
   });
@@ -125,6 +137,125 @@ describe("ollama plugin", () => {
 
     expect(result).toBeNull();
     expect(buildOllamaProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps empty default-ish provider stubs quiet", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [],
+    });
+
+    const result = await provider.discovery.run({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      },
+      env: { NODE_ENV: "development" },
+      resolveProviderApiKey: () => ({ apiKey: "" }),
+    } as never);
+
+    expect(result).toBeNull();
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith("http://127.0.0.1:11434", {
+      quiet: true,
+    });
+  });
+
+  it("treats non-default baseUrl as explicit discovery config", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://remote-ollama:11434",
+      api: "ollama",
+      models: [],
+    });
+
+    const result = await provider.discovery.run({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://remote-ollama:11434",
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      },
+      env: { NODE_ENV: "development" },
+      resolveProviderApiKey: () => ({ apiKey: "" }),
+    } as never);
+
+    expect(result).toBeNull();
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith("http://remote-ollama:11434", {
+      quiet: false,
+    });
+  });
+
+  it("keeps stored ollama-local marker auth on the quiet ambient path", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [],
+    });
+
+    const result = await provider.discovery.run({
+      config: {},
+      env: { NODE_ENV: "development" },
+      resolveProviderApiKey: () => ({ apiKey: "ollama-local" }),
+    } as never);
+
+    expect(result).toMatchObject({
+      provider: {
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        apiKey: "ollama-local",
+        models: [],
+      },
+    });
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, {
+      quiet: true,
+    });
+  });
+
+  it("does not mint synthetic auth for empty default-ish provider stubs", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toBeUndefined();
+  });
+
+  it("mints synthetic auth for non-default explicit ollama config", () => {
+    const provider = registerProvider();
+
+    const auth = provider.resolveSyntheticAuth?.({
+      providerConfig: {
+        baseUrl: "http://remote-ollama:11434",
+        api: "ollama",
+        models: [],
+      },
+    });
+
+    expect(auth).toEqual({
+      apiKey: "ollama-local",
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key",
+    });
   });
 
   it("wraps OpenAI-compatible payloads with num_ctx for Ollama compat routes", () => {
@@ -205,6 +336,60 @@ describe("ollama plugin", () => {
         modelId: "qwen3.5:9b",
       } as never),
     ).toBeUndefined();
+  });
+
+  it("routes createStreamFn to the correct provider baseUrl for ollama2", () => {
+    const provider = registerProvider();
+    const config = {
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            models: [],
+          },
+          ollama2: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11435",
+            models: [],
+          },
+        },
+      },
+    };
+    const model = { id: "llama3.2", provider: "ollama2", baseUrl: undefined };
+
+    provider.createStreamFn?.({ config, model, provider: "ollama2" } as never);
+
+    expect(createConfiguredOllamaStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerBaseUrl: "http://127.0.0.1:11435" }),
+    );
+  });
+
+  it("uses ollama provider baseUrl when provider is ollama (backward compat)", () => {
+    const provider = registerProvider();
+    const config = {
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434",
+            models: [],
+          },
+          ollama2: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11435",
+            models: [],
+          },
+        },
+      },
+    };
+    const model = { id: "llama3.2", provider: "ollama", baseUrl: undefined };
+
+    provider.createStreamFn?.({ config, model, provider: "ollama" } as never);
+
+    expect(createConfiguredOllamaStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerBaseUrl: "http://127.0.0.1:11434" }),
+    );
   });
 
   it("wraps native Ollama payloads with top-level think=false when thinking is off", () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildStatusGatewaySurfaceValues,
   buildStatusOverviewRows,
+  buildStatusOverviewSurfaceRows,
   buildStatusUpdateSurface,
   buildGatewayStatusJsonPayload,
   buildGatewayStatusSummaryParts,
@@ -298,6 +299,82 @@ describe("status-all format", () => {
       { Item: "Gateway self", Value: "gateway-host" },
       { Item: "Gateway service", Value: "launchd loaded" },
       { Item: "Node service", Value: "node loaded" },
+      { Item: "Agents", Value: "2 total" },
+      { Item: "Secrets", Value: "none" },
+    ]);
+  });
+
+  it("builds overview surface rows from shared gateway and update inputs", () => {
+    expect(
+      buildStatusOverviewSurfaceRows({
+        cfg: {
+          update: { channel: "stable" },
+          gateway: { bind: "loopback" },
+        },
+        update: {
+          installKind: "git",
+          git: {
+            branch: "main",
+            tag: "v1.2.3",
+            upstream: "origin/main",
+            dirty: false,
+            behind: 2,
+            ahead: 0,
+            fetchOk: true,
+          },
+          registry: { latestVersion: "2026.4.9" },
+        } as never,
+        tailscaleMode: "serve",
+        tailscaleDns: "box.tail.ts.net",
+        tailscaleHttpsUrl: "https://box.tail.ts.net",
+        gatewayMode: "remote",
+        remoteUrlMissing: false,
+        gatewayConnection: {
+          url: "wss://gateway.example.com",
+          urlSource: "config",
+        },
+        gatewayReachable: true,
+        gatewayProbe: { connectLatencyMs: 123, error: null },
+        gatewayProbeAuth: { token: "tok" },
+        gatewayProbeAuthWarning: "warn-text",
+        gatewaySelf: { host: "gateway", version: "1.2.3" },
+        gatewayService: {
+          label: "LaunchAgent",
+          installed: true,
+          managedByOpenClaw: true,
+          loadedText: "loaded",
+          runtimeShort: "running",
+        },
+        nodeService: {
+          label: "node",
+          installed: true,
+          loadedText: "loaded",
+          runtime: { status: "running", pid: 42 },
+        },
+        prefixRows: [{ Item: "Version", Value: "1.0.0" }],
+        middleRows: [{ Item: "Security", Value: "Run audit" }],
+        suffixRows: [{ Item: "Secrets", Value: "none" }],
+        agentsValue: "2 total",
+        updateValue: "available · custom update",
+        gatewayAuthWarningValue: "warn(warn-text)",
+      }),
+    ).toEqual([
+      { Item: "Version", Value: "1.0.0" },
+      { Item: "Dashboard", Value: "http://127.0.0.1:18789/" },
+      { Item: "Tailscale", Value: "serve · box.tail.ts.net · https://box.tail.ts.net" },
+      { Item: "Channel", Value: "stable (config)" },
+      { Item: "Git", Value: "main · tag v1.2.3" },
+      { Item: "Update", Value: "available · custom update" },
+      {
+        Item: "Gateway",
+        Value:
+          "remote · wss://gateway.example.com (config) · reachable 123ms · auth token · gateway app 1.2.3",
+      },
+      { Item: "Gateway auth warning", Value: "warn(warn-text)" },
+      { Item: "Security", Value: "Run audit" },
+      { Item: "Gateway self", Value: "gateway app 1.2.3" },
+      { Item: "Gateway service", Value: "LaunchAgent installed · loaded · running" },
+      { Item: "Node service", Value: "node loaded · running (pid 42)" },
       { Item: "Agents", Value: "2 total" },
       { Item: "Secrets", Value: "none" },
     ]);

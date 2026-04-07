@@ -5,25 +5,35 @@
  * Known-user storage is delegated to `./known-users.ts`.
  */
 
-import type { ResolvedQQBotAccount } from "./types.js";
-import { debugLog, debugError } from "./utils/debug-log.js";
-
-// Re-export known-user types and functions from the canonical module.
-export type { KnownUser } from "./known-users.js";
-export {
-  recordKnownUser,
-  listKnownUsers as listKnownUsersFromStore,
-  getKnownUser as getKnownUserFromStore,
-  removeKnownUser as removeKnownUserFromStore,
-  clearKnownUsers as clearKnownUsersFromStore,
-  flushKnownUsers,
-} from "./known-users.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  listKnownUsers as listKnownUsersImpl,
-  removeKnownUser as removeKnownUserImpl,
+  getAccessToken,
+  sendC2CImageMessage,
+  sendGroupImageMessage,
+  sendProactiveC2CMessage,
+  sendProactiveGroupMessage,
+} from "./api.js";
+import { resolveDefaultQQBotAccountId, resolveQQBotAccount } from "./config.js";
+import {
   clearKnownUsers as clearKnownUsersImpl,
   getKnownUser as getKnownUserImpl,
+  listKnownUsers as listKnownUsersImpl,
+  removeKnownUser as removeKnownUserImpl,
 } from "./known-users.js";
+import type { ResolvedQQBotAccount } from "./types.js";
+import { debugError, debugLog } from "./utils/debug-log.js";
+
+// Re-export known-user types and functions from the canonical module.
+export {
+  clearKnownUsers as clearKnownUsersFromStore,
+  flushKnownUsers,
+  getKnownUser as getKnownUserFromStore,
+  listKnownUsers as listKnownUsersFromStore,
+  recordKnownUser,
+  removeKnownUser as removeKnownUserFromStore,
+} from "./known-users.js";
+export type { KnownUser } from "./known-users.js";
 
 /** Options for proactive message sending. */
 export interface ProactiveSendOptions {
@@ -49,16 +59,6 @@ export interface ListKnownUsersOptions {
   sortByLastInteraction?: boolean;
   limit?: number;
 }
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  getAccessToken,
-  sendProactiveC2CMessage,
-  sendProactiveGroupMessage,
-  sendChannelMessage,
-  sendC2CImageMessage,
-  sendGroupImageMessage,
-} from "./api.js";
-import { resolveDefaultQQBotAccountId, resolveQQBotAccount } from "./config.js";
 
 /** Look up a known user entry (adapter for the old proactive API shape). */
 export function getKnownUser(
@@ -75,7 +75,7 @@ export function listKnownUsers(
 ): ReturnType<typeof listKnownUsersImpl> {
   const type = options?.type;
   return listKnownUsersImpl({
-    type: type === "channel" ? undefined : (type as "c2c" | "group" | undefined),
+    type: type === "channel" ? undefined : type,
     accountId: options?.accountId,
     limit: options?.limit,
     sortBy: options?.sortByLastInteraction !== false ? "lastSeenAt" : undefined,
@@ -134,7 +134,7 @@ export async function sendProactive(
         }
         debugLog(`[qqbot:proactive] Sent image to ${type}:${to}`);
       } catch (err) {
-        debugError(`[qqbot:proactive] Failed to send image: ${err}`);
+        debugError(`[qqbot:proactive] Failed to send image: ${String(err)}`);
       }
     }
 
@@ -152,7 +152,7 @@ export async function sendProactive(
     } else {
       return {
         success: false,
-        error: `Unknown message type: ${type}`,
+        error: `Unknown message type: ${String(type)}`,
       };
     }
 
@@ -164,7 +164,7 @@ export async function sendProactive(
       timestamp: result.timestamp,
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     debugError(`[qqbot:proactive] Failed to send message: ${message}`);
 
     return {
@@ -237,7 +237,7 @@ export async function broadcastMessage(
       {
         to: targetId,
         text,
-        type: user.type as "c2c" | "group",
+        type: user.type,
         accountId: user.accountId,
       },
       cfg,
@@ -305,7 +305,7 @@ export async function sendProactiveMessageDirect(
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }

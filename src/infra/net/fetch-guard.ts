@@ -17,7 +17,11 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
-import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
+import {
+  createHttp1Agent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+} from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -33,6 +37,12 @@ export type GuardedFetchOptions = {
   fetchImpl?: FetchLike;
   init?: RequestInit;
   maxRedirects?: number;
+  /**
+   * Allow replaying unsafe request methods and bodies across cross-origin redirects.
+   * Sensitive cross-origin headers (for example Authorization/Cookie) are still stripped.
+   * Defaults to false.
+   */
+  allowCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   policy?: SsrFPolicy;
@@ -104,14 +114,15 @@ function createPolicyDispatcherWithoutPinnedDns(
   if (!dispatcherPolicy) {
     return null;
   }
-  const { Agent, EnvHttpProxyAgent, ProxyAgent } = loadUndiciRuntimeDeps();
 
   if (dispatcherPolicy.mode === "direct") {
-    return new Agent(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {});
+    return createHttp1Agent(
+      dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
+    );
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
-    return new EnvHttpProxyAgent({
+    return createHttp1EnvHttpProxyAgent({
       ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
       ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
     });
@@ -119,11 +130,11 @@ function createPolicyDispatcherWithoutPinnedDns(
 
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
   return dispatcherPolicy.proxyTls
-    ? new ProxyAgent({
+    ? createHttp1ProxyAgent({
         uri: proxyUrl,
         requestTls: { ...dispatcherPolicy.proxyTls },
       })
-    : new ProxyAgent(proxyUrl);
+    : createHttp1ProxyAgent({ uri: proxyUrl });
 }
 
 async function assertExplicitProxyAllowed(
@@ -148,8 +159,14 @@ async function assertExplicitProxyAllowed(
     policy:
       dispatcherPolicy.allowPrivateProxy === true
         ? {
+            // The proxy hostname is operator-configured, not user input.
+            // Clear the target-scoped hostnameAllowlist so configured proxies
+            // like localhost or internal hosts aren't rejected by an allowlist
+            // that was built for the target URL (e.g. api.telegram.org).
+            // Private-network IP checks still apply via allowPrivateNetwork.
             ...policy,
             allowPrivateNetwork: true,
+            hostnameAllowlist: undefined,
           }
         : policy,
   });
@@ -224,6 +241,27 @@ function rewriteRedirectInitForMethod(params: {
   };
 }
 
+function rewriteRedirectInitForCrossOrigin(params: {
+  init?: RequestInit;
+  allowUnsafeReplay: boolean;
+}): RequestInit | undefined {
+  const { init, allowUnsafeReplay } = params;
+  if (!init || allowUnsafeReplay) {
+    return init;
+  }
+
+  const currentMethod = init.method?.toUpperCase() ?? "GET";
+  if (currentMethod === "GET" || currentMethod === "HEAD") {
+    return init;
+  }
+
+  return {
+    ...init,
+    body: undefined,
+    headers: dropBodyHeaders(init.headers),
+  };
+}
+
 export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
@@ -282,8 +320,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
-        const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
-        dispatcher = new EnvHttpProxyAgent();
+        dispatcher = createHttp1EnvHttpProxyAgent();
       } else if (params.pinDns === false) {
         dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
       } else {
@@ -332,6 +369,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         }
         currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
         if (nextParsedUrl.origin !== parsedUrl.origin) {
+          currentInit = rewriteRedirectInitForCrossOrigin({
+            init: currentInit,
+            allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
+          });
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
         }
         visited.add(nextUrl);

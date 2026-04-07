@@ -1,13 +1,10 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { PluginRuntime } from "../runtime-api.js";
-import { nostrPlugin } from "./channel.js";
+import { nostrOutboundAdapter, startNostrGatewayAccount } from "./gateway.js";
 import { setNostrRuntime } from "./runtime.js";
-import {
-  TEST_RELAY_URL,
-  TEST_RESOLVED_PRIVATE_KEY,
-  buildResolvedNostrAccount,
-} from "./test-fixtures.js";
+import { TEST_RESOLVED_PRIVATE_KEY, buildResolvedNostrAccount } from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   normalizePubkey: vi.fn((value: string) => `normalized-${value.toLowerCase()}`),
@@ -58,17 +55,17 @@ describe("nostr outbound cfg threading", () => {
       publishProfile: vi.fn(),
       getProfileState: vi.fn(async () => null),
     };
-    mocks.startNostrBus.mockResolvedValueOnce(bus as any);
+    mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
 
-    const cleanup = (await nostrPlugin.gateway!.startAccount!(
+    const cleanup = (await startNostrGatewayAccount(
       createStartAccountContext({
         account: buildResolvedNostrAccount(),
       }),
     )) as { stop: () => void };
 
     const cfg = createCfg();
-    await nostrPlugin.outbound!.sendText!({
-      cfg: cfg as any,
+    await nostrOutboundAdapter.sendText({
+      cfg: cfg as OpenClawConfig,
       to: "NPUB123",
       text: "|a|b|",
       accountId: "default",
@@ -107,9 +104,9 @@ describe("nostr outbound cfg threading", () => {
       publishProfile: vi.fn(),
       getProfileState: vi.fn(async () => null),
     };
-    mocks.startNostrBus.mockResolvedValueOnce(bus as any);
+    mocks.startNostrBus.mockResolvedValueOnce(bus as unknown);
 
-    const cleanup = (await nostrPlugin.gateway!.startAccount!(
+    const cleanup = (await startNostrGatewayAccount(
       createStartAccountContext({
         account: buildResolvedNostrAccount({ accountId: "work" }),
       }),
@@ -124,8 +121,8 @@ describe("nostr outbound cfg threading", () => {
       },
     };
 
-    await nostrPlugin.outbound!.sendText!({
-      cfg: cfg as any,
+    await nostrOutboundAdapter.sendText({
+      cfg: cfg as OpenClawConfig,
       to: "NPUB123",
       text: "hello",
     });

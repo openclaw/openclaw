@@ -9,6 +9,7 @@ import {
   type SsrFPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -107,7 +108,7 @@ function resolveFalQueueBaseUrl(baseUrl: string): string {
 }
 
 function isFalMiniMaxLiveModel(model: string): boolean {
-  return model.trim().toLowerCase() === DEFAULT_FAL_VIDEO_MODEL;
+  return normalizeLowercaseStringOrEmpty(model) === DEFAULT_FAL_VIDEO_MODEL;
 }
 
 function buildFalVideoRequestBody(params: {
@@ -251,12 +252,23 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 0,
-      supportsAspectRatio: true,
-      supportsResolution: true,
-      supportsSize: true,
+      generate: {
+        maxVideos: 1,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsSize: true,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+        supportsSize: true,
+      },
+      videoToVideo: {
+        enabled: false,
+      },
     },
     async generateVideo(req) {
       if ((req.inputVideos?.length ?? 0) > 0) {

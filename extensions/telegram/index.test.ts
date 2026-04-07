@@ -1,11 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import entry from "./index.js";
 import setupEntry from "./setup-entry.js";
 
 describe("telegram bundled entries", () => {
-  it("loads the channel plugin without importing the broad api barrel", () => {
-    const plugin = entry.loadChannelPlugin();
-    expect(plugin.id).toBe("telegram");
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("declares the channel entry without importing the broad api barrel", () => {
+    expect(entry.id).toBe("telegram");
+    expect(entry.name).toBe("Telegram");
   });
 
   it("loads the setup plugin without importing the broad api barrel", () => {

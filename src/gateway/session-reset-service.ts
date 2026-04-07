@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
+import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
@@ -19,6 +21,7 @@ import {
   updateSessionStore,
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
@@ -284,6 +287,7 @@ async function closeAcpRuntimeForSession(params: {
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         reason: params.reason,
+        discardPersistentState: true,
         requireAcpSession: false,
         allowBackendUnavailable: true,
       });
@@ -300,7 +304,82 @@ async function closeAcpRuntimeForSession(params: {
       `sessions.${params.reason}: ACP runtime close failed for ${params.sessionKey}: ${String(closeOutcome.error)}`,
     );
   }
+  await ensureFreshAcpResetState({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    reason: params.reason,
+    entry: params.entry,
+  });
   return undefined;
+}
+
+function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionAcpMeta {
+  const currentIdentity = base.identity;
+  const nextIdentity = currentIdentity
+    ? {
+        state: "pending" as const,
+        ...(currentIdentity.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
+        source: currentIdentity.source,
+        lastUpdatedAt: now,
+      }
+    : undefined;
+  return {
+    backend: base.backend,
+    agent: base.agent,
+    runtimeSessionName: base.runtimeSessionName,
+    ...(nextIdentity ? { identity: nextIdentity } : {}),
+    mode: base.mode,
+    ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
+    ...(base.cwd ? { cwd: base.cwd } : {}),
+    state: "idle",
+    lastActivityAt: now,
+  };
+}
+
+async function ensureFreshAcpResetState(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  sessionKey: string;
+  reason: "session-reset" | "session-delete";
+  entry?: SessionEntry;
+}): Promise<void> {
+  if (params.reason !== "session-reset" || !params.entry?.acp) {
+    return;
+  }
+  const latestMeta = readAcpSessionEntry({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  })?.acp;
+  if (
+    !latestMeta?.identity ||
+    latestMeta.identity.state !== "resolved" ||
+    (!latestMeta.identity.acpxSessionId && !latestMeta.identity.agentSessionId)
+  ) {
+    return;
+  }
+
+  const backendId = (latestMeta.backend || params.cfg.acp?.backend || "").trim() || undefined;
+  try {
+    await getAcpRuntimeBackend(backendId)?.runtime.prepareFreshSession?.({
+      sessionKey: params.sessionKey,
+    });
+  } catch (error) {
+    logVerbose(
+      `sessions.${params.reason}: ACP prepareFreshSession failed for ${params.sessionKey}: ${String(error)}`,
+    );
+  }
+
+  const now = Date.now();
+  await upsertAcpSessionMeta({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    mutate: (current, entry) => {
+      const base = current ?? entry?.acp;
+      if (!base) {
+        return null;
+      }
+      return buildPendingAcpMeta(base, now);
+    },
+  });
 }
 
 export async function cleanupSessionBeforeMutation(params: {
@@ -472,6 +551,8 @@ export async function performGatewaySessionReset(params: {
       model: resolvedModel.model,
       modelProvider: resolvedModel.provider,
       contextTokens: resetEntry?.contextTokens,
+      compactionCount: currentEntry?.compactionCount,
+      compactionCheckpoints: currentEntry?.compactionCheckpoints,
       sendPolicy: currentEntry?.sendPolicy,
       queueMode: currentEntry?.queueMode,
       queueDebounceMs: currentEntry?.queueDebounceMs,
@@ -493,6 +574,9 @@ export async function performGatewaySessionReset(params: {
       space: currentEntry?.space,
       origin: snapshotSessionOrigin(currentEntry),
       deliveryContext: currentEntry?.deliveryContext,
+      cliSessionBindings: currentEntry?.cliSessionBindings,
+      cliSessionIds: currentEntry?.cliSessionIds,
+      claudeCliSessionId: currentEntry?.claudeCliSessionId,
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,

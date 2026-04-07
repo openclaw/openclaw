@@ -24,6 +24,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
@@ -69,10 +70,10 @@ type ExaSearchResponse = {
 };
 
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
-  if (!value) {
+  const trimmed = normalizeOptionalLowercaseString(value);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = value.trim().toLowerCase();
   return EXA_FRESHNESS_VALUES.includes(trimmed as ExaFreshness)
     ? (trimmed as ExaFreshness)
     : undefined;
@@ -187,11 +188,9 @@ function parseExaContents(
     if ("maxCharacters" in obj && parsePositiveInteger(obj.maxCharacters) === undefined) {
       return invalidContentsPayload("contents.text.maxCharacters must be a positive integer.");
     }
-    return {
-      ...(parsePositiveInteger(obj.maxCharacters)
-        ? { maxCharacters: parsePositiveInteger(obj.maxCharacters) }
-        : {}),
-    };
+    return parsePositiveInteger(obj.maxCharacters)
+      ? { maxCharacters: parsePositiveInteger(obj.maxCharacters) }
+      : {};
   };
 
   const parseHighlights = (
@@ -457,7 +456,7 @@ function createExaToolDefinition(
       "Search the web using Exa AI. Supports neural or keyword search, publication date filters, and optional highlights or text extraction.",
     parameters: createExaSchema(),
     execute: async (args) => {
-      const params = args as Record<string, unknown>;
+      const params = args;
       const exaConfig = resolveExaConfig(searchConfig);
       const apiKey = resolveExaApiKey(exaConfig);
       if (!apiKey) {
@@ -592,6 +591,7 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
     id: "exa",
     label: "Exa Search",
     hint: "Neural + keyword search with date filters and content extraction",
+    onboardingScopes: ["text-inference"],
     credentialLabel: "Exa API key",
     envVars: ["EXA_API_KEY"],
     placeholder: "exa-...",
@@ -612,10 +612,10 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) =>
       createExaToolDefinition(
         mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "exa",
           resolveProviderWebSearchPluginConfig(ctx.config, "exa"),
-        ) as SearchConfigRecord | undefined,
+        ),
       ),
   };
 }

@@ -2807,6 +2807,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           supportsStrictMode: {
                             type: "boolean",
                           },
+                          requiresStringContent: {
+                            type: "boolean",
+                          },
                           maxTokensField: {
                             anyOf: [
                               {
@@ -3080,6 +3083,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              mediaGenerationAutoProviderFallback: {
+                type: "boolean",
+                title: "Media Generation Auto Provider Fallback",
+                description:
+                  "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -3168,6 +3177,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 title: "Repo Root",
                 description:
                   "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
+              },
+              systemPromptOverride: {
+                type: "string",
               },
               skipBootstrap: {
                 type: "boolean",
@@ -3279,6 +3291,268 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+              },
+              cliBackends: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    command: {
+                      type: "string",
+                    },
+                    args: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    output: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "json",
+                        },
+                        {
+                          type: "string",
+                          const: "text",
+                        },
+                        {
+                          type: "string",
+                          const: "jsonl",
+                        },
+                      ],
+                    },
+                    resumeOutput: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "json",
+                        },
+                        {
+                          type: "string",
+                          const: "text",
+                        },
+                        {
+                          type: "string",
+                          const: "jsonl",
+                        },
+                      ],
+                    },
+                    input: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "arg",
+                        },
+                        {
+                          type: "string",
+                          const: "stdin",
+                        },
+                      ],
+                    },
+                    maxPromptArgChars: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    env: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "string",
+                      },
+                    },
+                    clearEnv: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    modelArg: {
+                      type: "string",
+                    },
+                    modelAliases: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "string",
+                      },
+                    },
+                    sessionArg: {
+                      type: "string",
+                    },
+                    sessionArgs: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    resumeArgs: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    sessionMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "always",
+                        },
+                        {
+                          type: "string",
+                          const: "existing",
+                        },
+                        {
+                          type: "string",
+                          const: "none",
+                        },
+                      ],
+                    },
+                    sessionIdFields: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    systemPromptArg: {
+                      type: "string",
+                    },
+                    systemPromptMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "append",
+                        },
+                        {
+                          type: "string",
+                          const: "replace",
+                        },
+                      ],
+                    },
+                    systemPromptWhen: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "first",
+                        },
+                        {
+                          type: "string",
+                          const: "always",
+                        },
+                        {
+                          type: "string",
+                          const: "never",
+                        },
+                      ],
+                    },
+                    imageArg: {
+                      type: "string",
+                    },
+                    imageMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "repeat",
+                        },
+                        {
+                          type: "string",
+                          const: "list",
+                        },
+                      ],
+                    },
+                    imagePathScope: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "temp",
+                        },
+                        {
+                          type: "string",
+                          const: "workspace",
+                        },
+                      ],
+                    },
+                    serialize: {
+                      type: "boolean",
+                    },
+                    reliability: {
+                      type: "object",
+                      properties: {
+                        watchdog: {
+                          type: "object",
+                          properties: {
+                            fresh: {
+                              type: "object",
+                              properties: {
+                                noOutputTimeoutMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                noOutputTimeoutRatio: {
+                                  type: "number",
+                                  minimum: 0.05,
+                                  maximum: 0.95,
+                                },
+                                minMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                maxMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                            resume: {
+                              type: "object",
+                              properties: {
+                                noOutputTimeoutMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                noOutputTimeoutRatio: {
+                                  type: "number",
+                                  minimum: 0.05,
+                                  maximum: 0.95,
+                                },
+                                minMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                                maxMs: {
+                                  type: "integer",
+                                  minimum: 1000,
+                                  maximum: 9007199254740991,
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["command"],
+                  additionalProperties: false,
+                },
+                title: "CLI Backends",
+                description: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
               },
               memorySearch: {
                 type: "object",
@@ -3966,6 +4240,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
                   },
+                  provider: {
+                    type: "string",
+                    title: "Compaction Provider",
+                    description:
+                      "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
+                  },
                   reserveTokens: {
                     type: "integer",
                     minimum: 0,
@@ -4458,6 +4738,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   prompt: {
                     type: "string",
+                  },
+                  includeSystemPromptSection: {
+                    type: "boolean",
+                    title: "Heartbeat Include System Prompt Section",
+                    description:
+                      "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
                   },
                   ackMaxChars: {
                     type: "integer",
@@ -5114,6 +5400,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 agentDir: {
                   type: "string",
                 },
+                systemPromptOverride: {
+                  type: "string",
+                },
                 model: {
                   anyOf: [
                     {
@@ -5672,6 +5961,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     prompt: {
                       type: "string",
+                    },
+                    includeSystemPromptSection: {
+                      type: "boolean",
+                      title: "Heartbeat Include System Prompt Section",
+                      description:
+                        "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
                     },
                     ackMaxChars: {
                       type: "integer",
@@ -24745,6 +25040,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Ordered fallback music-generation models (provider/model).",
       tags: ["reliability"],
     },
+    "agents.defaults.mediaGenerationAutoProviderFallback": {
+      label: "Media Generation Auto Provider Fallback",
+      help: "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
+      tags: ["reliability"],
+    },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",
       help: "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
@@ -24785,6 +25085,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum delay in ms for custom humanDelay (default: 2500).",
       tags: ["performance"],
     },
+    "agents.defaults.cliBackends": {
+      label: "CLI Backends",
+      help: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+      tags: ["advanced"],
+    },
     "agents.defaults.compaction": {
       label: "Compaction",
       help: "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
@@ -24793,6 +25098,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.compaction.mode": {
       label: "Compaction Mode",
       help: 'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.compaction.provider": {
+      label: "Compaction Provider",
+      help: "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
       tags: ["advanced"],
     },
     "agents.defaults.compaction.reserveTokens": {
@@ -24914,6 +25224,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Embedded Pi Project Settings Policy",
       help: 'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
       tags: ["access"],
+    },
+    "agents.defaults.heartbeat.includeSystemPromptSection": {
+      label: "Heartbeat Include System Prompt Section",
+      help: "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
+      tags: ["automation"],
+    },
+    "agents.list.*.heartbeat.includeSystemPromptSection": {
+      label: "Heartbeat Include System Prompt Section",
+      help: "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
+      tags: ["automation"],
     },
     "agents.defaults.heartbeat.directPolicy": {
       label: "Heartbeat Direct Policy",
@@ -26584,6 +26904,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.5",
+  version: "2026.4.6",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

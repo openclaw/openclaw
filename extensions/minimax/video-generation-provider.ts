@@ -228,13 +228,25 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
         agentDir,
       }),
     capabilities: {
-      maxVideos: 1,
-      maxInputImages: 1,
-      maxInputVideos: 0,
-      maxDurationSeconds: 10,
-      supportedDurationSecondsByModel: MINIMAX_MODEL_ALLOWED_DURATIONS,
-      supportsResolution: true,
-      supportsWatermark: false,
+      generate: {
+        maxVideos: 1,
+        maxDurationSeconds: 10,
+        supportedDurationSecondsByModel: MINIMAX_MODEL_ALLOWED_DURATIONS,
+        supportsResolution: true,
+        supportsWatermark: false,
+      },
+      imageToVideo: {
+        enabled: true,
+        maxVideos: 1,
+        maxInputImages: 1,
+        maxDurationSeconds: 10,
+        supportedDurationSecondsByModel: MINIMAX_MODEL_ALLOWED_DURATIONS,
+        supportsResolution: true,
+        supportsWatermark: false,
+      },
+      videoToVideo: {
+        enabled: false,
+      },
     },
     async generateVideo(req) {
       if ((req.inputVideos?.length ?? 0) > 0) {

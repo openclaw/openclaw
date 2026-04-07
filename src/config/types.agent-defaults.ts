@@ -46,6 +46,81 @@ export type AgentContextPruningConfig = {
   };
 };
 
+export type CliBackendConfig = {
+  /** CLI command to execute (absolute path or on PATH). */
+  command: string;
+  /** Base args applied to every invocation. */
+  args?: string[];
+  /** Output parsing mode (default: json). */
+  output?: "json" | "text" | "jsonl";
+  /** Output parsing mode when resuming a CLI session. */
+  resumeOutput?: "json" | "text" | "jsonl";
+  /** Prompt input mode (default: arg). */
+  input?: "arg" | "stdin";
+  /** Max prompt length for arg mode (if exceeded, stdin is used). */
+  maxPromptArgChars?: number;
+  /** Extra env vars injected for this CLI. */
+  env?: Record<string, string>;
+  /** Env vars to remove before launching this CLI. */
+  clearEnv?: string[];
+  /** Flag used to pass model id (e.g. --model). */
+  modelArg?: string;
+  /** Model aliases mapping (config model id → CLI model id). */
+  modelAliases?: Record<string, string>;
+  /** Flag used to pass session id (e.g. --session-id). */
+  sessionArg?: string;
+  /** Extra args used when resuming a session (use {sessionId} placeholder). */
+  sessionArgs?: string[];
+  /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
+  resumeArgs?: string[];
+  /** When to pass session ids. */
+  sessionMode?: "always" | "existing" | "none";
+  /** JSON fields to read session id from (in order). */
+  sessionIdFields?: string[];
+  /** Flag used to pass system prompt. */
+  systemPromptArg?: string;
+  /** System prompt behavior (append vs replace). */
+  systemPromptMode?: "append" | "replace";
+  /** When to send system prompt. */
+  systemPromptWhen?: "first" | "always" | "never";
+  /** Flag used to pass image paths. */
+  imageArg?: string;
+  /** How to pass multiple images. */
+  imageMode?: "repeat" | "list";
+  /** Where staged image files should live before handing them to the CLI. */
+  imagePathScope?: "temp" | "workspace";
+  /** Serialize runs for this CLI. */
+  serialize?: boolean;
+  /** Runtime reliability tuning for this backend's process lifecycle. */
+  reliability?: {
+    /** No-output watchdog tuning (fresh vs resumed runs). */
+    watchdog?: {
+      /** Fresh/new sessions (non-resume). */
+      fresh?: {
+        /** Fixed watchdog timeout in ms (overrides ratio when set). */
+        noOutputTimeoutMs?: number;
+        /** Fraction of overall timeout used when fixed timeout is not set. */
+        noOutputTimeoutRatio?: number;
+        /** Lower bound for computed watchdog timeout. */
+        minMs?: number;
+        /** Upper bound for computed watchdog timeout. */
+        maxMs?: number;
+      };
+      /** Resume sessions. */
+      resume?: {
+        /** Fixed watchdog timeout in ms (overrides ratio when set). */
+        noOutputTimeoutMs?: number;
+        /** Fraction of overall timeout used when fixed timeout is not set. */
+        noOutputTimeoutRatio?: number;
+        /** Lower bound for computed watchdog timeout. */
+        minMs?: number;
+        /** Upper bound for computed watchdog timeout. */
+        maxMs?: number;
+      };
+    };
+  };
+};
+
 export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
@@ -59,6 +134,13 @@ export type AgentDefaultsConfig = {
   videoGenerationModel?: AgentModelConfig;
   /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   musicGenerationModel?: AgentModelConfig;
+  /**
+   * When true (default), shared image/music/video generation appends other
+   * auth-backed provider defaults after explicit primary/fallback refs. Set to
+   * false to disable implicit cross-provider fallback while keeping explicit
+   * fallbacks.
+   */
+  mediaGenerationAutoProviderFallback?: boolean;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */
@@ -73,6 +155,8 @@ export type AgentDefaultsConfig = {
   skills?: string[];
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
+  /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
+  systemPromptOverride?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /**
@@ -112,6 +196,8 @@ export type AgentDefaultsConfig = {
   envelopeElapsed?: "on" | "off";
   /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
+  /** Optional CLI backends for text-only fallback (claude-cli, etc.). */
+  cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
   /** LLM timeout configuration. */
@@ -191,6 +277,8 @@ export type AgentDefaultsConfig = {
     accountId?: string;
     /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
     prompt?: string;
+    /** Include the ## Heartbeats system prompt section for the default agent (default: true). */
+    includeSystemPromptSection?: boolean;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
     ackMaxChars?: number;
     /** Suppress tool error warning payloads during heartbeat runs. */
@@ -291,6 +379,12 @@ export type AgentCompactionConfig = {
   model?: string;
   /** Maximum time in seconds for a single compaction operation (default: 900). */
   timeoutSeconds?: number;
+  /**
+   * Id of a registered compaction provider plugin.
+   * When set, the provider's summarize() is called instead of
+   * the built-in summarizeInStages(). Falls back to built-in on failure.
+   */
+  provider?: string;
   /**
    * Truncate the session JSONL file after compaction to remove entries that
    * were summarized. Prevents unbounded file growth in long-running sessions.

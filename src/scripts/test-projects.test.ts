@@ -37,6 +37,13 @@ const { buildVitestArgs, buildVitestRunPlans, createVitestRunSpecs, parseTestPro
     };
   };
 
+const VITEST_NODE_PREFIX = [
+  "exec",
+  "node",
+  "--no-maglev",
+  expect.stringContaining("/node_modules/vitest/vitest.mjs"),
+];
+
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
     expect(parseTestProjectsArgs(["--", "src/foo.test.ts", "-t", "target"])).toEqual({
@@ -48,8 +55,7 @@ describe("test-projects args", () => {
 
   it("keeps watch mode explicit without leaking the sentinel to Vitest", () => {
     expect(buildVitestArgs(["--watch", "--", "src/foo.test.ts"])).toEqual([
-      "exec",
-      "vitest",
+      ...VITEST_NODE_PREFIX,
       "--config",
       "vitest.unit.config.ts",
       "src/foo.test.ts",
@@ -58,8 +64,7 @@ describe("test-projects args", () => {
 
   it("uses run mode by default", () => {
     expect(buildVitestArgs(["src/foo.test.ts"])).toEqual([
-      "exec",
-      "vitest",
+      ...VITEST_NODE_PREFIX,
       "run",
       "--config",
       "vitest.unit.config.ts",
@@ -158,33 +163,44 @@ describe("test-projects args", () => {
   });
 
   it("routes daemon targets to the daemon config", () => {
-    expect(buildVitestRunPlans(["src/daemon/constants.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/daemon/inspect.test.ts"])).toEqual([
       {
         config: "vitest.daemon.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/daemon/constants.test.ts"],
+        includePatterns: ["src/daemon/inspect.test.ts"],
         watchMode: false,
       },
     ]);
   });
 
   it("routes media targets to the media config", () => {
-    expect(buildVitestRunPlans(["src/media/mime.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/media/fetch.test.ts"])).toEqual([
       {
         config: "vitest.media.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/media/mime.test.ts"],
+        includePatterns: ["src/media/fetch.test.ts"],
         watchMode: false,
       },
     ]);
   });
 
   it("routes plugin-sdk targets to the plugin-sdk config", () => {
-    expect(buildVitestRunPlans(["src/plugin-sdk/provider-stream.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/plugin-sdk/anthropic-vertex-auth-presence.test.ts"])).toEqual([
       {
         config: "vitest.plugin-sdk.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/provider-stream.test.ts"],
+        includePatterns: ["src/plugin-sdk/anthropic-vertex-auth-presence.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes unit-fast light targets to the cache-friendly unit-fast config", () => {
+    expect(buildVitestRunPlans(["src/plugin-sdk/provider-entry.test.ts"])).toEqual([
+      {
+        config: "vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
         watchMode: false,
       },
     ]);
@@ -212,10 +228,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes shared-core targets to the shared-core config", () => {
+  it("routes unit-fast shared-core targets to the unit-fast config", () => {
     expect(buildVitestRunPlans(["src/shared/text-chunking.test.ts"])).toEqual([
       {
-        config: "vitest.shared-core.config.ts",
+        config: "vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/shared/text-chunking.test.ts"],
         watchMode: false,
@@ -235,11 +251,11 @@ describe("test-projects args", () => {
   });
 
   it("routes logging targets to the logging config", () => {
-    expect(buildVitestRunPlans(["src/logging/load-levels.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/logging/console-settings.test.ts"])).toEqual([
       {
         config: "vitest.logging.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/logging/load-levels.test.ts"],
+        includePatterns: ["src/logging/console-settings.test.ts"],
         watchMode: false,
       },
     ]);
@@ -334,11 +350,11 @@ describe("test-projects args", () => {
   });
 
   it("routes channel targets to the channels config", () => {
-    expect(buildVitestRunPlans(["src/channels/ids.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["src/channels/session.test.ts"])).toEqual([
       {
         config: "vitest.channels.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/channels/ids.test.ts"],
+        includePatterns: ["src/channels/session.test.ts"],
         watchMode: false,
       },
     ]);
@@ -619,10 +635,10 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes browser extension targets to the extension channel config", () => {
+  it("routes browser extension targets to the extensions config", () => {
     expect(buildVitestRunPlans(["extensions/browser/index.test.ts"])).toEqual([
       {
-        config: "vitest.extension-channels.config.ts",
+        config: "vitest.extensions.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/browser/index.test.ts"],
         watchMode: false,
@@ -704,8 +720,7 @@ describe("test-projects args", () => {
     ]);
 
     expect(spec?.pnpmArgs).toEqual([
-      "exec",
-      "vitest",
+      ...VITEST_NODE_PREFIX,
       "run",
       "--config",
       "vitest.extension-channels.config.ts",

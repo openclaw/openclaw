@@ -5,6 +5,7 @@ import {
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -111,7 +112,7 @@ type FoundryConfigShape = {
 };
 
 export function normalizeFoundryModelName(value?: string | null): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim().toLowerCase() : "";
+  const trimmed = normalizeLowercaseStringOrEmpty(value);
   return trimmed || undefined;
 }
 
@@ -185,7 +186,7 @@ export function buildFoundryV1BaseUrl(endpoint: string): string {
 export function resolveFoundryApi(
   modelId: string,
   modelNameHint?: string | null,
-  configuredApi?: ModelApi | string | null,
+  configuredApi?: ModelApi | null,
 ): FoundryProviderApi {
   if (isFoundryProviderApi(configuredApi)) {
     return configuredApi;
@@ -196,9 +197,9 @@ export function resolveFoundryApi(
 
 export function buildFoundryProviderBaseUrl(
   endpoint: string,
-  modelId: string,
-  modelNameHint?: string | null,
-  configuredApi?: ModelApi | string | null,
+  _modelId: string,
+  _modelNameHint?: string | null,
+  _configuredApi?: ModelApi | null,
 ): string {
   return buildFoundryV1BaseUrl(endpoint);
 }
@@ -217,7 +218,7 @@ export function extractFoundryEndpoint(baseUrl: string | null | undefined): stri
 export function buildFoundryModelCompat(
   modelId: string,
   modelNameHint?: string | null,
-  configuredApi?: ModelApi | string | null,
+  configuredApi?: ModelApi | null,
 ): FoundryModelCompat | undefined {
   const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
   const configuredModelName = resolveConfiguredModelNameHint(modelId, modelNameHint);
@@ -234,7 +235,7 @@ export function buildFoundryModelCompat(
 export function resolveFoundryModelCapabilities(
   modelId: string,
   modelNameHint?: string | null,
-  configuredApi?: ModelApi | string | null,
+  configuredApi?: ModelApi | null,
   existingInput?: unknown,
 ): FoundryModelCapabilities {
   const modelName = resolveConfiguredModelNameHint(modelId, modelNameHint) ?? modelId;

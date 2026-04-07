@@ -2,12 +2,17 @@ import {
   createApproverRestrictedNativeApprovalCapability,
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { listSlackAccountIds } from "./accounts.js";
 import { isSlackApprovalAuthorizedSender } from "./approval-auth.js";
 import {
@@ -33,7 +38,7 @@ function extractSlackSessionKind(
 }
 
 function normalizeComparableTarget(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function normalizeSlackThreadMatchKey(threadId?: string): string {
@@ -46,7 +51,7 @@ function normalizeSlackThreadMatchKey(threadId?: string): string {
 }
 
 function resolveTurnSourceSlackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
-  const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
   const turnSourceTo = request.request.turnSourceTo?.trim() || "";
   if (turnSourceChannel !== "slack" || !turnSourceTo) {
     return null;
@@ -78,10 +83,30 @@ function resolveSessionSlackOriginTarget(sessionTarget: {
     to: sessionTarget.to,
     threadId:
       typeof sessionTarget.threadId === "string"
-        ? sessionTarget.threadId
+        ? sessionTarget.threadId.trim() || undefined
         : typeof sessionTarget.threadId === "number"
           ? String(sessionTarget.threadId)
           : undefined,
+  };
+}
+
+function resolveSlackFallbackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
+  const sessionTarget = resolveApprovalRequestSessionConversation({
+    request,
+    channel: "slack",
+  });
+  if (!sessionTarget) {
+    return null;
+  }
+  const parsed = parseSlackTarget(sessionTarget.id.toUpperCase(), {
+    defaultKind: "channel",
+  });
+  if (!parsed) {
+    return null;
+  }
+  return {
+    to: `${parsed.kind}:${parsed.id}`,
+    threadId: sessionTarget.threadId,
   };
 }
 
@@ -103,6 +128,7 @@ const resolveSlackOriginTarget = createChannelNativeOriginTargetResolver({
   resolveTurnSourceTarget: resolveTurnSourceSlackOriginTarget,
   resolveSessionTarget: resolveSessionSlackOriginTarget,
   targetsMatch: slackTargetsMatch,
+  resolveFallbackTarget: resolveSlackFallbackOriginTarget,
 });
 
 const resolveSlackApproverDmTargets = createChannelApproverDmTargetResolver({
@@ -139,10 +165,26 @@ export const slackApprovalCapability = createApproverRestrictedNativeApprovalCap
     resolveSlackExecApprovalTarget({ cfg, accountId }),
   requireMatchingTurnSourceChannel: true,
   resolveSuppressionAccountId: ({ target, request }) =>
-    target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
+    normalizeOptionalString(target.accountId) ??
+    normalizeOptionalString(request.request.turnSourceAccountId),
   resolveOriginTarget: resolveSlackOriginTarget,
   resolveApproverDmTargets: resolveSlackApproverDmTargets,
   notifyOriginWhenDmOnly: true,
+  nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    eventKinds: ["exec"],
+    isConfigured: ({ cfg, accountId }) =>
+      isSlackExecApprovalClientEnabled({
+        cfg,
+        accountId,
+      }),
+    shouldHandle: ({ cfg, accountId, request }) =>
+      shouldHandleSlackExecApprovalRequest({
+        cfg,
+        accountId,
+        request,
+      }),
+    load: async () => (await import("./approval-handler.runtime.js")).slackApprovalNativeRuntime,
+  }),
 });
 
 export const slackNativeApprovalAdapter = splitChannelApprovalCapability(slackApprovalCapability);

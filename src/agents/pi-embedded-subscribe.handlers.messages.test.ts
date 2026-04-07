@@ -153,6 +153,7 @@ describe("handleMessageUpdate", () => {
         onPartialReply,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         streamReasoning: false,
@@ -211,6 +212,7 @@ describe("handleMessageUpdate", () => {
         onPartialReply,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         streamReasoning: false,
@@ -254,7 +256,7 @@ describe("handleMessageUpdate", () => {
     expect(ctx.state.blockBuffer).toBe("");
   });
 
-  it("suppresses commentary partials until a final_answer partial arrives", () => {
+  it("suppresses commentary partials even when they contain visible text", () => {
     const onAgentEvent = vi.fn();
     const ctx = {
       params: {
@@ -263,6 +265,7 @@ describe("handleMessageUpdate", () => {
         onAgentEvent,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         streamReasoning: false,
@@ -313,6 +316,10 @@ describe("handleMessageUpdate", () => {
       },
     } as never);
 
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.state.blockBuffer).toBe("");
+
     handleMessageUpdate(ctx, {
       type: "message_update",
       message: { role: "assistant", content: [] },
@@ -357,6 +364,7 @@ describe("handleMessageUpdate", () => {
         session: { id: "session-1" },
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         streamReasoning: false,
@@ -409,6 +417,7 @@ describe("handleMessageEnd", () => {
         assistantTexts: [],
         assistantTextBaseline: 0,
         emittedAssistantUpdate: false,
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         includeReasoning: false,
@@ -466,6 +475,7 @@ describe("handleMessageEnd", () => {
         assistantTexts: [],
         assistantTextBaseline: 0,
         emittedAssistantUpdate: false,
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         includeReasoning: false,
@@ -527,6 +537,7 @@ describe("handleMessageEnd", () => {
         onBlockReply,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         messagingToolSentTexts: [],
         messagingToolSentTextsNormalized: [],
@@ -588,6 +599,7 @@ describe("handleMessageEnd", () => {
         onBlockReply,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         messagingToolSentTexts: [],
         messagingToolSentTextsNormalized: [],
@@ -647,6 +659,7 @@ describe("handleMessageEnd", () => {
         onAgentEvent,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         messagingToolSentTexts: [],
         messagingToolSentTextsNormalized: [],

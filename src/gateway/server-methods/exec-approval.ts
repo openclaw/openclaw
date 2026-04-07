@@ -7,6 +7,7 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalRequestAllowedDecisions,
+  type ExecApprovalDecision,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "../../infra/exec-approvals.js";
@@ -37,6 +38,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
 } as const;
+const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
 
 type ExecApprovalIosPushDelivery = {
   handleRequested?: (request: ExecApprovalRequest) => Promise<boolean>;
@@ -88,6 +90,18 @@ export function createExecApprovalHandlers(
           agentId: resolved.snapshot.request.agentId ?? null,
           expiresAtMs: resolved.snapshot.expiresAtMs,
         },
+        undefined,
+      );
+    },
+    "exec.approval.list": async ({ respond }) => {
+      respond(
+        true,
+        manager.listPendingRecords().map((record) => ({
+          id: record.id,
+          request: record.request,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        })),
         undefined,
       );
     },
@@ -164,6 +178,17 @@ export function createExecApprovalHandlers(
       }
       if (!effectiveCommandText) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
+        return;
+      }
+      if (explicitId?.startsWith(RESERVED_PLUGIN_APPROVAL_ID_PREFIX)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `approval ids starting with ${RESERVED_PLUGIN_APPROVAL_ID_PREFIX} are reserved`,
+          ),
+        );
         return;
       }
       if (
@@ -324,17 +349,18 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
+      const decision: ExecApprovalDecision = p.decision;
       await handleApprovalResolve({
         manager,
         inputId: p.id,
-        decision: p.decision,
+        decision,
         respond,
         context,
         client,
         exposeAmbiguousPrefixError: true,
         validateDecision: (snapshot) => {
           const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot.request);
-          return allowedDecisions.includes(p.decision)
+          return allowedDecisions.includes(decision)
             ? null
             : {
                 message:

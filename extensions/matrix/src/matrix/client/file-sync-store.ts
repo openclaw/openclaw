@@ -11,6 +11,7 @@ import {
   type IStoredClientOpts,
 } from "matrix-js-sdk/lib/matrix.js";
 import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { isRecord } from "../../record-shared.js";
 import { createAsyncLock } from "../async-lock.js";
 import { LogService } from "../sdk/logger.js";
 import { claimCurrentTokenStorageState } from "./storage.js";
@@ -24,10 +25,6 @@ type PersistedMatrixSyncStore = {
   clientOptions?: IStoredClientOpts;
   cleanShutdown?: boolean;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function normalizeRoomsData(value: unknown): IRooms | null {
   if (!isRecord(value)) {
@@ -274,7 +271,7 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     const payload: PersistedMatrixSyncStore = {
       version: STORE_VERSION,
       savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
-      cleanShutdown: this.cleanShutdown === true,
+      cleanShutdown: this.cleanShutdown,
       ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
     };
     try {

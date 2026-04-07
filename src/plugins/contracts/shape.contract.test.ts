@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "../../../test/helpers/plugins/contracts-testkit.js";
 import { buildAllPluginInspectReports } from "../status.js";
-import { createPluginRegistryFixture, registerVirtualTestPlugin } from "./testkit.js";
 
 describe("plugin shape compatibility matrix", () => {
   it("keeps legacy hook-only, plain capability, and hybrid capability shapes explicit", () => {

@@ -1,13 +1,21 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import {
+  resolveMemorySlotDecisionShared,
+  resolveEnableStateShared,
+  resolveEnableStateResult,
+} from "./config-activation-shared.js";
+import {
   hasExplicitPluginConfig as hasExplicitPluginConfigShared,
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolver,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import { hasKind } from "./slots.js";
-import type { PluginKind, PluginOrigin } from "./types.js";
+import type { PluginOrigin } from "./types.js";
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
 
@@ -65,12 +73,21 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
     if (plugin.origin !== "bundled") {
       continue;
     }
-    lookup.set(plugin.id.toLowerCase(), plugin.id);
+    const pluginId = normalizeOptionalLowercaseString(plugin.id);
+    if (pluginId) {
+      lookup.set(pluginId, plugin.id);
+    }
     for (const providerId of plugin.providers) {
-      lookup.set(providerId.toLowerCase(), plugin.id);
+      const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
+      if (normalizedProviderId) {
+        lookup.set(normalizedProviderId, plugin.id);
+      }
     }
     for (const legacyPluginId of plugin.legacyPluginIds ?? []) {
-      lookup.set(legacyPluginId.toLowerCase(), plugin.id);
+      const normalizedLegacyPluginId = normalizeOptionalLowercaseString(legacyPluginId);
+      if (normalizedLegacyPluginId) {
+        lookup.set(normalizedLegacyPluginId, plugin.id);
+      }
     }
   }
   bundledPluginAliasLookupCache = lookup;
@@ -78,8 +95,9 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
 }
 
 export function normalizePluginId(id: string): string {
-  const trimmed = id.trim();
-  return getBundledPluginAliasLookup().get(trimmed.toLowerCase()) ?? trimmed;
+  const trimmed = normalizeOptionalString(id) ?? "";
+  const normalized = normalizeOptionalLowercaseString(trimmed) ?? "";
+  return getBundledPluginAliasLookup().get(normalized) ?? trimmed;
 }
 
 const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> = {
@@ -377,13 +395,10 @@ export function resolveEnableState(
   config: NormalizedPluginsConfig,
   enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } {
-  const state = resolvePluginActivationState({
-    id,
-    origin,
-    config,
-    enabledByDefault,
-  });
-  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+  return resolveEnableStateShared(
+    { id, origin, config, enabledByDefault },
+    resolvePluginActivationState,
+  );
 }
 
 export function isBundledChannelEnabledByChannelConfig(
@@ -401,8 +416,7 @@ export function resolveEffectiveEnableState(params: {
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
 }): { enabled: boolean; reason?: string } {
-  const state = resolveEffectivePluginActivationState(params);
-  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+  return resolveEnableStateResult(params, resolveEffectivePluginActivationState);
 }
 
 export function resolveEffectivePluginActivationState(params: {
@@ -423,27 +437,5 @@ export function resolveMemorySlotDecision(params: {
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (!hasKind(params.kind as PluginKind | PluginKind[] | undefined, "memory")) {
-    return { enabled: true };
-  }
-  // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the
-  // memory slot must stay enabled so its other slot role can still load.
-  const isMultiKind = Array.isArray(params.kind) && params.kind.length > 1;
-  if (params.slot === null) {
-    return isMultiKind ? { enabled: true } : { enabled: false, reason: "memory slot disabled" };
-  }
-  if (typeof params.slot === "string") {
-    if (params.slot === params.id) {
-      return { enabled: true, selected: true };
-    }
-    return isMultiKind
-      ? { enabled: true }
-      : { enabled: false, reason: `memory slot set to "${params.slot}"` };
-  }
-  if (params.selectedId && params.selectedId !== params.id) {
-    return isMultiKind
-      ? { enabled: true }
-      : { enabled: false, reason: `memory slot already filled by "${params.selectedId}"` };
-  }
-  return { enabled: true, selected: true };
+  return resolveMemorySlotDecisionShared(params);
 }

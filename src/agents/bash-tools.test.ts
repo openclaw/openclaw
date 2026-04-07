@@ -1,11 +1,17 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resetHeartbeatWakeStateForTests,
   setHeartbeatWakeHandler,
 } from "../infra/heartbeat-wake.js";
 import { applyPathPrepend, findPathKey } from "../infra/path-prepend.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
@@ -53,6 +59,7 @@ const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
 const ECHO_HI_COMMAND = shellEcho("hi");
 let callIdCounter = 0;
 const nextCallId = () => `call${++callIdCounter}`;
+const notifyCfg = {} as OpenClawConfig;
 type ExecToolInstance = ReturnType<typeof createExecTool>;
 type ProcessToolInstance = ReturnType<typeof createProcessTool>;
 type ExecToolArgs = Parameters<ExecToolInstance["execute"]>[1];
@@ -224,6 +231,16 @@ async function startBackgroundCommand(tool: ExecToolInstance, command: string) {
   const result = await executeExecCommand(tool, command, { background: true });
   return requireRunningSessionId(result);
 }
+
+async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
+  return await drainFormattedSystemEvents({
+    cfg: notifyCfg,
+    sessionKey,
+    isMainSession: false,
+    isNewSession: false,
+  });
+}
+
 async function runBackgroundCommandToCompletion(tool: ExecToolInstance, command: string) {
   const sessionId = await startBackgroundCommand(tool, command);
   const status = await waitForCompletion(sessionId);
@@ -551,9 +568,15 @@ describe("exec notifyOnExit", () => {
     const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify"));
 
     const { finished, hasEvent } = await waitForNotifyEvent(sessionId);
+    const queuedEvent = peekSystemEventEntries(DEFAULT_NOTIFY_SESSION_KEY).find((event) =>
+      event.text.includes(sessionId.slice(0, 8)),
+    );
+    const formatted = await drainNotifyEvents();
 
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
+    expect(queuedEvent).toMatchObject({ trusted: false });
+    expect(formatted).toContain("System (untrusted):");
   });
 
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {

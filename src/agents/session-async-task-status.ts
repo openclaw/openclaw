@@ -9,10 +9,10 @@ export function findActiveSessionTask(params: {
   taskKind?: string;
   statuses?: ReadonlySet<TaskStatus>;
   sourceIdPrefix?: string;
-}): TaskRecord | null {
+}): TaskRecord | undefined {
   const normalizedSessionKey = params.sessionKey?.trim();
   if (!normalizedSessionKey) {
-    return null;
+    return undefined;
   }
   const statuses = params.statuses ?? DEFAULT_ACTIVE_STATUSES;
   const taskKind = params.taskKind?.trim();
@@ -39,9 +39,9 @@ export function findActiveSessionTask(params: {
     return true;
   });
   if (matches.length === 0) {
-    return null;
+    return undefined;
   }
-  return matches.find((task) => task.status === "running") ?? matches[0] ?? null;
+  return matches.find((task) => task.status === "running") ?? matches[0];
 }
 
 export function buildSessionAsyncTaskStatusDetails(task: TaskRecord): Record<string, unknown> {

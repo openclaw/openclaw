@@ -2,17 +2,21 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildNoCapabilityModelConfiguredMessage,
+  deriveAspectRatioFromSize,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { parseImageGenerationModelRef } from "./model-ref.js";
+import { resolveImageGenerationOverrides } from "./normalization.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedImageAsset,
   ImageGenerationIgnoredOverride,
+  ImageGenerationNormalization,
   ImageGenerationResolution,
   ImageGenerationResult,
   ImageGenerationSourceImage,
@@ -38,6 +42,7 @@ export type GenerateImageRuntimeResult = {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  normalization?: ImageGenerationNormalization;
   metadata?: Record<string, unknown>;
   ignoredOverrides: ImageGenerationIgnoredOverride[];
 };
@@ -54,58 +59,6 @@ export function listRuntimeImageGenerationProviders(params?: { config?: OpenClaw
   return listImageGenerationProviders(params?.config);
 }
 
-function resolveProviderImageGenerationOverrides(params: {
-  provider: NonNullable<ReturnType<typeof getImageGenerationProvider>>;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: ImageGenerationResolution;
-  inputImages?: ImageGenerationSourceImage[];
-}) {
-  const hasInputImages = (params.inputImages?.length ?? 0) > 0;
-  const modeCaps = hasInputImages
-    ? params.provider.capabilities.edit
-    : params.provider.capabilities.generate;
-  const geometry = params.provider.capabilities.geometry;
-  const ignoredOverrides: ImageGenerationIgnoredOverride[] = [];
-  let size = params.size;
-  let aspectRatio = params.aspectRatio;
-  let resolution = params.resolution;
-
-  if (
-    size &&
-    (!modeCaps.supportsSize ||
-      ((geometry?.sizes?.length ?? 0) > 0 && !geometry?.sizes?.includes(size)))
-  ) {
-    ignoredOverrides.push({ key: "size", value: size });
-    size = undefined;
-  }
-
-  if (
-    aspectRatio &&
-    (!modeCaps.supportsAspectRatio ||
-      ((geometry?.aspectRatios?.length ?? 0) > 0 && !geometry?.aspectRatios?.includes(aspectRatio)))
-  ) {
-    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
-    aspectRatio = undefined;
-  }
-
-  if (
-    resolution &&
-    (!modeCaps.supportsResolution ||
-      ((geometry?.resolutions?.length ?? 0) > 0 && !geometry?.resolutions?.includes(resolution)))
-  ) {
-    ignoredOverrides.push({ key: "resolution", value: resolution });
-    resolution = undefined;
-  }
-
-  return {
-    size,
-    aspectRatio,
-    resolution,
-    ignoredOverrides,
-  };
-}
-
 export async function generateImage(
   params: GenerateImageParams,
 ): Promise<GenerateImageRuntimeResult> {
@@ -114,6 +67,8 @@ export async function generateImage(
     modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
+    agentDir: params.agentDir,
+    listProviders: listImageGenerationProviders,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg));
@@ -136,7 +91,7 @@ export async function generateImage(
     }
 
     try {
-      const sanitized = resolveProviderImageGenerationOverrides({
+      const sanitized = resolveImageGenerationOverrides({
         provider,
         size: params.size,
         aspectRatio: params.aspectRatio,
@@ -164,7 +119,38 @@ export async function generateImage(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
-        metadata: result.metadata,
+        normalization: sanitized.normalization,
+        metadata: {
+          ...result.metadata,
+          ...(sanitized.normalization?.size?.requested !== undefined &&
+          sanitized.normalization.size.applied !== undefined
+            ? {
+                requestedSize: sanitized.normalization.size.requested,
+                normalizedSize: sanitized.normalization.size.applied,
+              }
+            : {}),
+          ...(sanitized.normalization?.aspectRatio?.applied !== undefined
+            ? {
+                ...(sanitized.normalization.aspectRatio.requested !== undefined
+                  ? { requestedAspectRatio: sanitized.normalization.aspectRatio.requested }
+                  : {}),
+                normalizedAspectRatio: sanitized.normalization.aspectRatio.applied,
+                ...(sanitized.normalization.aspectRatio.derivedFrom === "size" && params.size
+                  ? {
+                      requestedSize: params.size,
+                      aspectRatioDerivedFromSize: deriveAspectRatioFromSize(params.size),
+                    }
+                  : {}),
+              }
+            : {}),
+          ...(sanitized.normalization?.resolution?.requested !== undefined &&
+          sanitized.normalization.resolution.applied !== undefined
+            ? {
+                requestedResolution: sanitized.normalization.resolution.requested,
+                normalizedResolution: sanitized.normalization.resolution.applied,
+              }
+            : {}),
+        },
         ignoredOverrides: sanitized.ignoredOverrides,
       };
     } catch (err) {
@@ -173,7 +159,7 @@ export async function generateImage(
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
-        error: described?.message ?? (err instanceof Error ? err.message : String(err)),
+        error: described?.message ?? formatErrorMessage(err),
         reason: described?.reason,
         status: described?.status,
         code: described?.code,

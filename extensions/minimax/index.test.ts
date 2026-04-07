@@ -5,12 +5,20 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
-import minimaxPlugin from "./index.js";
+import { registerMinimaxProviders } from "./provider-registration.js";
+import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
+
+const minimaxProviderPlugin = {
+  register(api: Parameters<typeof registerMinimaxProviders>[0]) {
+    registerMinimaxProviders(api);
+    api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
+  },
+};
 
 describe("minimax provider hooks", () => {
   it("keeps native reasoning mode for MiniMax transports", async () => {
     const { providers } = await registerProviderPlugin({
-      plugin: minimaxPlugin,
+      plugin: minimaxProviderPlugin,
       id: "minimax",
       name: "MiniMax Provider",
     });
@@ -38,7 +46,7 @@ describe("minimax provider hooks", () => {
 
   it("owns replay policy for Anthropic and OpenAI-compatible MiniMax transports", async () => {
     const { providers } = await registerProviderPlugin({
-      plugin: minimaxPlugin,
+      plugin: minimaxProviderPlugin,
       id: "minimax",
       name: "MiniMax Provider",
     });
@@ -75,7 +83,7 @@ describe("minimax provider hooks", () => {
 
   it("owns fast-mode stream wrapping for MiniMax transports", async () => {
     const { providers } = await registerProviderPlugin({
-      plugin: minimaxPlugin,
+      plugin: minimaxProviderPlugin,
       id: "minimax",
       name: "MiniMax Provider",
     });
@@ -133,7 +141,7 @@ describe("minimax provider hooks", () => {
   it("registers the bundled MiniMax web search provider", () => {
     const webSearchProviders: unknown[] = [];
 
-    minimaxPlugin.register({
+    minimaxProviderPlugin.register({
       registerProvider() {},
       registerMediaUnderstandingProvider() {},
       registerImageGenerationProvider() {},
@@ -155,7 +163,7 @@ describe("minimax provider hooks", () => {
 
   it("prefers minimax-portal oauth when resolving MiniMax usage auth", async () => {
     const { providers } = await registerProviderPlugin({
-      plugin: minimaxPlugin,
+      plugin: minimaxProviderPlugin,
       id: "minimax",
       name: "MiniMax Provider",
     });

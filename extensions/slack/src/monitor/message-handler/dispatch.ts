@@ -18,6 +18,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -74,10 +75,6 @@ const UNICODE_TO_SLACK: Record<string, string> = {
 function toSlackEmojiName(emoji: string): string {
   const trimmed = emoji.trim().replace(/^:+|:+$/g, "");
   return UNICODE_TO_SLACK[trimmed] ?? trimmed;
-}
-
-function hasMedia(payload: ReplyPayload): boolean {
-  return resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
 export function isSlackStreamingEnabled(params: {
@@ -165,11 +162,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       allowFrom: ctx.allowFrom,
       normalizeEntry: normalizeSlackAllowOwnerEntry,
     });
-    const senderRecipient = message.user?.trim().toLowerCase();
+    const senderRecipient = normalizeOptionalLowercaseString(message.user);
     const skipMainUpdate =
       pinnedMainDmOwner &&
       senderRecipient &&
-      pinnedMainDmOwner.trim().toLowerCase() !== senderRecipient;
+      normalizeOptionalLowercaseString(pinnedMainDmOwner) !== senderRecipient;
     if (skipMainUpdate) {
       logVerbose(
         `slack: skip main-session last route for ${senderRecipient} (pinned owner ${pinnedMainDmOwner})`,
@@ -436,7 +433,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const slackBlocks = readSlackReplyBlocks(payload);
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
-      const finalText = reply.text;
       const trimmedFinalText = reply.trimmedText;
       const canFinalizeViaPreviewEdit =
         previewStreamingEnabled &&

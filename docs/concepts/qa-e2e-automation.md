@@ -21,13 +21,36 @@ Current pieces:
 - `qa/`: repo-backed seed assets for the kickoff task and baseline QA
   scenarios.
 
-The long-term goal is a two-pane QA site:
+The current QA operator flow is a two-pane QA site:
 
 - Left: Gateway dashboard (Control UI) with the agent.
 - Right: QA Lab, showing the Slack-ish transcript and scenario plan.
 
-That lets an operator or automation loop give the agent a QA mission, observe
-real channel behavior, and record what worked, failed, or stayed blocked.
+Run it with:
+
+```bash
+pnpm qa:lab:up
+```
+
+That builds the QA site, starts the Docker-backed gateway lane, and exposes the
+QA Lab page where an operator or automation loop can give the agent a QA
+mission, observe real channel behavior, and record what worked, failed, or
+stayed blocked.
+
+For faster QA Lab UI iteration without rebuilding the Docker image each time,
+start the stack with a bind-mounted QA Lab bundle:
+
+```bash
+pnpm openclaw qa docker-build-image
+pnpm qa:lab:build
+pnpm qa:lab:up:fast
+pnpm qa:lab:watch
+```
+
+`qa:lab:up:fast` keeps the Docker services on a prebuilt image and bind-mounts
+`extensions/qa-lab/web/dist` into the `qa-lab` container. `qa:lab:watch`
+rebuilds that bundle on change, and the browser auto-reloads when the QA Lab
+asset hash changes.
 
 ## Repo-backed seeds
 

@@ -190,8 +190,8 @@ Control how group/room messages are handled per channel:
       groupPolicy: "allowlist",
       groupAllowFrom: ["@owner:example.org"],
       groups: {
-        "!roomId:example.org": { allow: true },
-        "#alias:example.org": { allow: true },
+        "!roomId:example.org": { enabled: true },
+        "#alias:example.org": { enabled: true },
       },
     },
   },
@@ -227,7 +227,10 @@ Quick mental model (evaluation order for group messages):
 
 Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
-Replying to a bot message counts as an implicit mention (when the channel supports reply metadata). This applies to Telegram, WhatsApp, Slack, Discord, and Microsoft Teams.
+Replying to a bot message counts as an implicit mention when the channel
+supports reply metadata. Quoting a bot message can also count as an implicit
+mention on channels that expose quote metadata. Current built-in cases include
+Telegram, WhatsApp, Slack, Discord, Microsoft Teams, and ZaloUser.
 
 ```json5
 {

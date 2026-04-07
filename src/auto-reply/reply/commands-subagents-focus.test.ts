@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { handleSubagentsFocusAction } from "./commands-subagents/action-focus.js";
 import { handleSubagentsUnfocusAction } from "./commands-subagents/action-unfocus.js";
+import type { HandleCommandsParams } from "./commands-types.js";
+import type { InlineDirectives } from "./directive-handling.js";
 
 const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
@@ -150,6 +153,62 @@ function createSessionBindingCapabilities() {
   };
 }
 
+function buildCommandParams(params?: {
+  cfg?: OpenClawConfig;
+  chatType?: string;
+  senderId?: string;
+  sessionEntry?: SessionEntry;
+}): HandleCommandsParams {
+  const directives: InlineDirectives = {
+    cleaned: "",
+    hasThinkDirective: false,
+    hasVerboseDirective: false,
+    hasFastDirective: false,
+    hasReasoningDirective: false,
+    hasElevatedDirective: false,
+    hasExecDirective: false,
+    hasExecOptions: false,
+    invalidExecHost: false,
+    invalidExecSecurity: false,
+    invalidExecAsk: false,
+    invalidExecNode: false,
+    hasStatusDirective: false,
+    hasModelDirective: false,
+    hasQueueDirective: false,
+    queueReset: false,
+    hasQueueOptions: false,
+  };
+  return {
+    cfg: params?.cfg ?? baseCfg,
+    ctx: {
+      ChatType: params?.chatType ?? "group",
+    },
+    command: {
+      surface: "whatsapp",
+      channel: "whatsapp",
+      ownerList: [],
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      senderId: params?.senderId ?? "user-1",
+      rawBodyNormalized: "",
+      commandBodyNormalized: "",
+    },
+    directives,
+    elevated: { enabled: false, allowed: false, failures: [] },
+    sessionEntry: params?.sessionEntry,
+    sessionKey: "agent:main:main",
+    workspaceDir: "/tmp/openclaw-subagents-focus",
+    defaultGroupActivation: () => "mention",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    provider: "whatsapp",
+    model: "test-model",
+    contextTokens: 0,
+    isGroup: true,
+  };
+}
+
 function buildFocusContext(params?: {
   cfg?: OpenClawConfig;
   chatType?: string;
@@ -157,38 +216,28 @@ function buildFocusContext(params?: {
   token?: string;
 }) {
   return {
-    params: {
-      cfg: params?.cfg ?? baseCfg,
-      ctx: {
-        ChatType: params?.chatType ?? "group",
-      },
-      command: {
-        senderId: params?.senderId ?? "user-1",
-      },
-    },
+    params: buildCommandParams({
+      cfg: params?.cfg,
+      chatType: params?.chatType,
+      senderId: params?.senderId,
+    }),
     handledPrefix: "/focus",
     requesterKey: "agent:main:main",
     runs: [],
     restTokens: [params?.token ?? "codex-acp"],
-  } as Parameters<typeof handleSubagentsFocusAction>[0];
+  } satisfies Parameters<typeof handleSubagentsFocusAction>[0];
 }
 
 function buildUnfocusContext(params?: { senderId?: string }) {
   return {
-    params: {
-      cfg: baseCfg,
-      ctx: {
-        ChatType: "group",
-      },
-      command: {
-        senderId: params?.senderId ?? "user-1",
-      },
-    },
+    params: buildCommandParams({
+      senderId: params?.senderId,
+    }),
     handledPrefix: "/unfocus",
     requesterKey: "agent:main:main",
     runs: [],
     restTokens: [],
-  } as Parameters<typeof handleSubagentsUnfocusAction>[0];
+  } satisfies Parameters<typeof handleSubagentsUnfocusAction>[0];
 }
 
 describe("focus actions", () => {

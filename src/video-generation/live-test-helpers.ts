@@ -1,5 +1,9 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 
 export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   alibaba: "alibaba/wan2.6-t2v",
@@ -11,8 +15,23 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   qwen: "qwen/wan2.6-t2v",
   runway: "runway/gen4.5",
   together: "together/Wan-AI/Wan2.2-T2V-A14B",
+  vydra: "vydra/veo3",
   xai: "xai/grok-imagine-video",
 };
+
+const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "openai", "qwen", "xai"]);
+const BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS = new Set(["vydra"]);
+
+export function resolveLiveVideoResolution(params: {
+  providerId: string;
+  modelRef: string;
+}): "480P" | "768P" | "1080P" {
+  const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
+  if (providerId === "minimax") {
+    return "768P";
+  }
+  return "480P";
+}
 
 export function redactLiveApiKey(value: string | undefined): string {
   const trimmed = value?.trim();
@@ -32,8 +51,8 @@ export function parseCsvFilter(raw?: string): Set<string> | null {
   }
   const values = trimmed
     .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
   return values.length > 0 ? new Set(values) : null;
 }
 
@@ -48,7 +67,11 @@ export function parseProviderModelMap(raw?: string): Map<string, string> {
     if (slash <= 0 || slash === trimmed.length - 1) {
       continue;
     }
-    entries.set(trimmed.slice(0, slash).trim().toLowerCase(), trimmed);
+    const providerId = normalizeOptionalLowercaseString(trimmed.slice(0, slash));
+    if (!providerId) {
+      continue;
+    }
+    entries.set(providerId, trimmed);
   }
   return entries;
 }
@@ -65,7 +88,11 @@ export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<strin
     if (slash <= 0 || slash === trimmed.length - 1) {
       return;
     }
-    resolved.set(trimmed.slice(0, slash).trim().toLowerCase(), trimmed);
+    const providerId = normalizeOptionalLowercaseString(trimmed.slice(0, slash));
+    if (!providerId) {
+      return;
+    }
+    resolved.set(providerId, trimmed);
   };
   if (typeof configured === "string") {
     add(configured);
@@ -76,6 +103,36 @@ export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<strin
     add(fallback);
   }
   return resolved;
+}
+
+export function canRunBufferBackedVideoToVideoLiveLane(params: {
+  providerId: string;
+  modelRef: string;
+}): boolean {
+  const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
+  if (REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS.has(providerId)) {
+    return false;
+  }
+  if (providerId !== "runway") {
+    return true;
+  }
+  const slash = params.modelRef.indexOf("/");
+  const model =
+    slash <= 0 || slash === params.modelRef.length - 1
+      ? params.modelRef.trim()
+      : params.modelRef.slice(slash + 1).trim();
+  return model === "gen4_aleph";
+}
+
+export function canRunBufferBackedImageToVideoLiveLane(params: {
+  providerId: string;
+  modelRef: string;
+}): boolean {
+  const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
+  if (BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS.has(providerId)) {
+    return false;
+  }
+  return true;
 }
 
 export function resolveLiveVideoAuthStore(params: {

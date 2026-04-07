@@ -5,6 +5,10 @@ import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
@@ -357,7 +361,7 @@ async function buildReminderContextLines(params: {
 }
 
 function stripThreadSuffixFromSessionKey(sessionKey: string): string {
-  const normalized = sessionKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   const idx = normalized.lastIndexOf(":thread:");
   if (idx <= 0) {
     return sessionKey;
@@ -379,7 +383,7 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   if (parts.length === 0) {
     return null;
   }
-  const head = parts[0]?.trim().toLowerCase();
+  const head = normalizeOptionalLowercaseString(parts[0]);
   if (!head || head === "main" || head === "subagent" || head === "acp") {
     return null;
   }
@@ -409,7 +413,7 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
 
   let channel: CronMessageChannel | undefined;
   if (markerIndex >= 1) {
-    channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
+    channel = normalizeOptionalLowercaseString(parts[0]) as CronMessageChannel | undefined;
   }
 
   const delivery: CronDelivery = { mode: "announce", to: peerId };
@@ -586,7 +590,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const deliveryValue = (job as { delivery?: unknown }).delivery;
             const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
             const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
-            const mode = modeRaw.trim().toLowerCase();
+            const mode = normalizeLowercaseStringOrEmpty(modeRaw);
             if (mode === "webhook") {
               const webhookUrl = normalizeHttpWebhookUrl(delivery?.to);
               if (!webhookUrl) {
