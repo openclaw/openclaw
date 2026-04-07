@@ -58,7 +58,7 @@ function matchExecDiagnosticType(command: string): ReplayDiagnosticType | null {
   }
   if (
     /\bcat\s+["']?[^"'`\s]*openclaw\.json["']?/iu.test(command) ||
-    /\bcat\s+["']?[^"'`\s]*extensions\/openclaw-[^/"'`\s]+\/package\.json["']?/iu.test(command)
+    /\bcat\s+["']?[^"'`\s]*extensions\/[^/"'`\s]+\/package\.json["']?/iu.test(command)
   ) {
     return command.includes("openclaw.json")
       ? "openclaw.config_snapshot"
@@ -71,7 +71,7 @@ function matchReadDiagnosticType(filePath: string): ReplayDiagnosticType | null 
   if (/openclaw\.json$/iu.test(filePath)) {
     return "openclaw.config_snapshot";
   }
-  if (/extensions\/openclaw-[^/]+\/package\.json$/iu.test(filePath)) {
+  if (/extensions\/[^/]+\/package\.json$/iu.test(filePath)) {
     return "openclaw.plugin_path_probe";
   }
   return null;

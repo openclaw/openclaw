@@ -3,7 +3,10 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
-import { recordPendingToolResultReplayMetadata } from "./tool-result-replay-metadata.js";
+import {
+  detectToolResultReplayPolicyMeta,
+  recordPendingToolResultReplayMetadata,
+} from "./tool-result-replay-metadata.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -309,6 +312,57 @@ describe("installSessionToolResultGuard", () => {
     expect(messages[1]?.__openclaw?.transient).toBe(true);
     expect(messages[1]?.__openclaw?.diagnosticType).toBe("openclaw.config_snapshot");
     expect(messages[1]?.__openclaw?.sourceTool).toBe("read");
+  });
+
+  it("re-applies replay metadata after before_message_write rewrites", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      sessionKey: "agent:main:main",
+      beforeMessageWriteHook: ({ message }) => {
+        if (message.role !== "toolResult") {
+          return undefined;
+        }
+        return {
+          message: castAgentMessage({
+            role: "toolResult",
+            toolCallId: message.toolCallId,
+            toolName: message.toolName,
+            content: message.content,
+            isError: message.isError,
+            timestamp: message.timestamp,
+          }),
+        };
+      },
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      }),
+    );
+    recordPendingToolResultReplayMetadata({
+      sessionKey: "agent:main:main",
+      toolCallId: "call_1",
+      toolName: "read",
+      args: { path: "/tmp/openclaw.json" },
+    });
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "{\"ok\":true}" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]) as Array<
+      AgentMessage & { __openclaw?: Record<string, unknown> }
+    >;
+    expect(messages[1]?.__openclaw?.transient).toBe(true);
+    expect(messages[1]?.__openclaw?.diagnosticType).toBe("openclaw.config_snapshot");
   });
 
   it("drains replay metadata when clearing pending tool calls", () => {
@@ -640,6 +694,29 @@ describe("installSessionToolResultGuard", () => {
 
     const text = getToolResultText(getPersistedMessages(sm));
     expect(text).toBe("rewritten by hook");
+  });
+
+  it("detects bundled plugin package probes as transient diagnostics", () => {
+    expect(
+      detectToolResultReplayPolicyMeta({
+        toolName: "read",
+        args: { path: "/repo/extensions/telegram/package.json" },
+      }),
+    ).toMatchObject({
+      transient: true,
+      diagnosticType: "openclaw.plugin_path_probe",
+      sourceTool: "read",
+    });
+    expect(
+      detectToolResultReplayPolicyMeta({
+        toolName: "exec",
+        args: { command: "cat extensions/telegram/package.json" },
+      }),
+    ).toMatchObject({
+      transient: true,
+      diagnosticType: "openclaw.plugin_path_probe",
+      sourceTool: "exec",
+    });
   });
 
   it("applies before_message_write to synthetic tool-result flushes", () => {

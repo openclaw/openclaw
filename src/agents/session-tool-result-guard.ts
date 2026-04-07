@@ -237,7 +237,8 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(persisted as never);
+      const replayTaggedPersisted = applyToolResultReplayMetadata(persisted, replayMeta);
+      return originalAppend(replayTaggedPersisted as never);
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.
