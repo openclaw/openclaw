@@ -84,4 +84,20 @@ describe("canvas a2ui copy", () => {
       );
     });
   });
+
+  it("preserves unrelated files already present in the output directory", async () => {
+    await withA2uiFixture(async (dir) => {
+      const srcDir = path.join(dir, "src");
+      const outDir = path.join(dir, "dist");
+      await fs.mkdir(srcDir, { recursive: true });
+      await fs.writeFile(path.join(srcDir, "index.html"), "<html></html>", "utf8");
+      await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log(1);", "utf8");
+      await fs.mkdir(outDir, { recursive: true });
+      await fs.writeFile(path.join(outDir, "keep.txt"), "keep", "utf8");
+
+      await copyA2uiAssets({ srcDir, outDir });
+
+      await expect(fs.readFile(path.join(outDir, "keep.txt"), "utf8")).resolves.toBe("keep");
+    });
+  });
 });
