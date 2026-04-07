@@ -632,6 +632,103 @@ describe("local embedding normalization", () => {
       expect(magnitude).toBeCloseTo(1.0, 5);
     }
   });
+
+  it("retries GPU-fit initialization once after a VRAM-style failure", async () => {
+    const gpuContext = {
+      getEmbeddingFor: vi.fn().mockResolvedValue({
+        vector: new Float32Array([1, 0, 0, 0]),
+      }),
+      dispose: vi.fn(),
+    };
+    const loadModelSpy = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("A context size of 24 is too large for the available VRAM"))
+      .mockResolvedValueOnce({
+        createEmbeddingContext: vi.fn().mockResolvedValue(gpuContext),
+        dispose: vi.fn(),
+      });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    vi.mocked(nodeLlamaModule.importNodeLlamaCpp).mockResolvedValue({
+      getLlama: vi.fn(async () => ({
+        loadModel: loadModelSpy,
+      })),
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    } as never);
+
+    const result = await createLocalProvider();
+    const provider = requireProvider(result);
+    const embedding = await provider.embedQuery("retry-me");
+
+    expect(embedding).toEqual([1, 0, 0, 0]);
+    expect(loadModelSpy).toHaveBeenCalledTimes(2);
+    expect(loadModelSpy).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        gpuLayers: {
+          fitContext: {
+            contextSize: 24,
+            embeddingContext: true,
+          },
+        },
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("retrying once with a fresh GPU-fit calculation"),
+    );
+  });
+
+  it("falls back to CPU-only for one operation after repeated VRAM-style failures", async () => {
+    const gpuModelDispose = vi.fn();
+    const cpuContext = {
+      getEmbeddingFor: vi.fn().mockResolvedValue({
+        vector: new Float32Array([0, 1, 0, 0]),
+      }),
+      dispose: vi.fn(),
+    };
+    const getLlamaSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        loadModel: vi
+          .fn()
+          .mockRejectedValueOnce(
+            new Error("A context size of 24 is too large for the available VRAM"),
+          )
+          .mockRejectedValueOnce(
+            new Error("A context size of 24 is too large for the available VRAM"),
+          ),
+      })
+      .mockResolvedValueOnce({
+        loadModel: vi.fn().mockResolvedValue({
+          createEmbeddingContext: vi.fn().mockResolvedValue(cpuContext),
+          dispose: gpuModelDispose,
+        }),
+      });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    vi.mocked(nodeLlamaModule.importNodeLlamaCpp).mockResolvedValue({
+      getLlama: getLlamaSpy,
+      resolveModelFile: async () => "/fake/model.gguf",
+      LlamaLogLevel: { error: 0 },
+    } as never);
+
+    const result = await createLocalProvider();
+    const provider = requireProvider(result);
+    const embedding = await provider.embedQuery("cpu-fallback");
+
+    expect(embedding).toEqual([0, 1, 0, 0]);
+    expect(getLlamaSpy).toHaveBeenNthCalledWith(1, { logLevel: 0 });
+    expect(getLlamaSpy).toHaveBeenNthCalledWith(2, { logLevel: 0, gpu: false });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("retrying once with a fresh GPU-fit calculation"),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("falling back to CPU-only for this operation"),
+    );
+    expect(cpuContext.dispose).toHaveBeenCalledTimes(1);
+    expect(gpuModelDispose).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("local embedding ensureContext concurrency", () => {
