@@ -50,7 +50,31 @@ export function setSignalToolResultTestConfig(next: Record<string, unknown>) {
   config = next;
 }
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export function createSignalToolResultConfig(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const base = config as { channels?: Record<string, unknown> };
+  const channels = base.channels ?? {};
+  const signal = (channels.signal ?? {}) as Record<string, unknown>;
+  return {
+    ...base,
+    channels: {
+      ...channels,
+      signal: {
+        ...signal,
+        autoStart: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...overrides,
+      },
+    },
+  };
+}
+
+export async function flush() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
 export function createMockSignalDaemonHandle(
   overrides: {
@@ -101,7 +125,9 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
         waitForIdle?: () => Promise<void>;
       };
     }) => {
-      const resolved = await replyMock(params.ctx, {}, params.cfg);
+      const resolved = (await replyMock(params.ctx, {}, params.cfg)) as
+        | { text?: string }
+        | undefined;
       const text = typeof resolved?.text === "string" ? resolved.text.trim() : "";
       if (text) {
         params.dispatcher.sendFinalReply({ text });
@@ -164,11 +190,11 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   );
   return {
     ...actual,
-    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
     enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
       enqueueSystemEventMock(...args);
       return actual.enqueueSystemEvent(...args);
     },
+    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
   };
 });
 

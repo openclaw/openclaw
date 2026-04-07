@@ -21,7 +21,6 @@ export type SlackChannelConfigResolved = {
 
 export type SlackChannelConfigEntry = {
   enabled?: boolean;
-  allow?: boolean;
   requireMention?: boolean;
   allowBots?: boolean;
   users?: Array<string | number>;
@@ -135,9 +134,7 @@ export function resolveSlackChannelConfig(params: {
   }
 
   const resolved = matched ?? fallback ?? {};
-  const allowed =
-    firstDefined(resolved.enabled, resolved.allow, fallback?.enabled, fallback?.allow, true) ??
-    true;
+  const allowed = firstDefined(resolved.enabled, fallback?.enabled, true) ?? true;
   const requireMention =
     firstDefined(resolved.requireMention, fallback?.requireMention, requireMentionDefault) ??
     requireMentionDefault;

@@ -4,12 +4,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 export type ClaudeBundleCommandSpec = {
@@ -21,10 +22,10 @@ export type ClaudeBundleCommandSpec = {
 };
 
 function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
-  if (typeof value !== "string") {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return fallback;
   }
-  const normalized = value.trim().toLowerCase();
   if (normalized === "true" || normalized === "yes" || normalized === "1") {
     return true;
   }
@@ -179,13 +180,13 @@ export function loadEnabledClaudeBundleCommands(params: {
     ) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
     for (const relativeRoot of resolveClaudeCommandRootDirs(record.rootDir)) {

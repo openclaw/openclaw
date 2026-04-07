@@ -1,4 +1,3 @@
-import { resolveControlUiLinks } from "../../commands/onboard-helpers.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -10,8 +9,9 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../../daemon/systemd-hints.js";
+import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
+import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { isWSLEnv } from "../../infra/wsl.js";
-import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
@@ -20,6 +20,7 @@ import {
   createCliStatusTextStyles,
   filterDaemonEnv,
   formatRuntimeStatus,
+  resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
   renderRuntimeHints,
   safeDaemonEnv,
@@ -65,11 +66,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     ? okText(service.loadedText)
     : warnText(service.notLoadedText);
   defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
-  try {
-    const logFile = getResolvedLoggerSettings().file;
-    defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(logFile))}`);
-  } catch {
-    // ignore missing config/log resolution
+  if (status.logFile) {
+    defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(status.logFile))}`);
   }
   if (service.command?.programArguments?.length) {
     defaultRuntime.log(
@@ -219,8 +217,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   const systemdUnavailable =
     process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
+    const container = Boolean(
+      resolveDaemonContainerContext(service.command?.environment ?? process.env),
+    );
     defaultRuntime.error(errorText("systemd user services unavailable."));
-    for (const hint of renderSystemdUnavailableHints({ wsl: isWSLEnv() })) {
+    for (const hint of renderSystemdUnavailableHints({
+      wsl: isWSLEnv(),
+      kind: classifySystemdUnavailableDetail(service.runtime?.detail),
+      container,
+    })) {
       defaultRuntime.error(errorText(hint));
     }
     spacer();
@@ -228,7 +233,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
 
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
-    for (const hint of renderRuntimeHints(service.runtime)) {
+    for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {
@@ -238,6 +243,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     for (const hint of renderRuntimeHints(
       service.runtime,
       service.command?.environment ?? process.env,
+      status.logFile,
     )) {
       defaultRuntime.error(errorText(hint));
     }

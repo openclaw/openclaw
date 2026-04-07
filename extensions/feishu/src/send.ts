@@ -1,10 +1,14 @@
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  convertMarkdownTables,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
-import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
+import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
-import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
@@ -184,7 +188,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
   const elements = Array.isArray(candidate.elements)
     ? candidate.elements
     : Array.isArray(candidate.body?.elements)
-      ? candidate.body!.elements
+      ? candidate.body.elements
       : null;
   if (!elements) {
     return "[Interactive Card]";
@@ -286,7 +290,7 @@ export async function getMessageFeishu(params: {
   accountId?: string;
 }): Promise<FeishuMessageInfo | null> {
   const { cfg, messageId, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -343,7 +347,7 @@ export async function listFeishuThreadMessages(params: {
   accountId?: string;
 }): Promise<FeishuThreadMessageInfo[]> {
   const { cfg, threadId, currentMessageId, rootMessageId, limit = 20, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -383,8 +387,12 @@ export async function listFeishuThreadMessages(params: {
   const results: FeishuThreadMessageInfo[] = [];
 
   for (const item of items) {
-    if (currentMessageId && item.message_id === currentMessageId) continue;
-    if (rootMessageId && item.message_id === rootMessageId) continue;
+    if (currentMessageId && item.message_id === currentMessageId) {
+      continue;
+    }
+    if (rootMessageId && item.message_id === rootMessageId) {
+      continue;
+    }
 
     const parsed = parseFeishuMessageItem(item);
 
@@ -397,7 +405,9 @@ export async function listFeishuThreadMessages(params: {
       createTime: parsed.createTime,
     });
 
-    if (results.length >= limit) break;
+    if (results.length >= limit) {
+      break;
+    }
   }
 
   // Restore chronological order (oldest first) since we fetched newest-first.
@@ -445,7 +455,7 @@ export async function sendMessageFeishu(
 ): Promise<FeishuSendResult> {
   const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
-  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
+  const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
   });
@@ -455,7 +465,7 @@ export async function sendMessageFeishu(
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
+  const messageText = convertMarkdownTables(rawText, tableMode);
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
@@ -506,7 +516,7 @@ export async function editMessageFeishu(params: {
   accountId?: string;
 }): Promise<{ messageId: string; contentType: "post" | "interactive" }> {
   const { cfg, messageId, text, card, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -533,11 +543,11 @@ export async function editMessageFeishu(params: {
     return { messageId, contentType: "interactive" };
   }
 
-  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
+  const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
   });
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text!, tableMode);
+  const messageText = convertMarkdownTables(text!, tableMode);
   const payload = buildFeishuPostMessagePayload({ messageText });
   const response = await client.im.message.patch({
     path: { message_id: messageId },
@@ -558,7 +568,7 @@ export async function updateCardFeishu(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, messageId, card, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -585,7 +595,7 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
     schema: "2.0",
     config: {
-      wide_screen_mode: true,
+      width_mode: "fill",
     },
     body: {
       elements: [
@@ -607,7 +617,7 @@ export type CardHeaderConfig = {
 };
 
 export function resolveFeishuCardTemplate(template?: string): string | undefined {
-  const normalized = template?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(template);
   if (!normalized || !FEISHU_CARD_TEMPLATES.has(normalized)) {
     return undefined;
   }
@@ -632,7 +642,7 @@ export function buildStructuredCard(
   }
   const card: Record<string, unknown> = {
     schema: "2.0",
-    config: { wide_screen_mode: true },
+    config: { width_mode: "fill" },
     body: { elements },
   };
   if (options?.header) {

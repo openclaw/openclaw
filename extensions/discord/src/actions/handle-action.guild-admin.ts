@@ -6,7 +6,8 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
-import { handleDiscordAction } from "./runtime.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { handleDiscordAction } from "../../action-runtime-api.js";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
@@ -360,7 +361,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         integer: true,
       }),
     });
-    const senderUserId = ctx.requesterSenderId?.trim() || undefined;
+    const senderUserId = normalizeOptionalString(ctx.requesterSenderId);
     return await handleDiscordAction(
       {
         action: moderation.action,

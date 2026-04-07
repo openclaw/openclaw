@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
@@ -6,26 +7,54 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
-  createProviderApiKeyAuthMethod,
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
+import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
+import {
+  buildMinimaxImageGenerationProvider,
+  buildMinimaxPortalImageGenerationProvider,
+} from "./image-generation-provider.js";
 import {
   minimaxMediaUnderstandingProvider,
   minimaxPortalMediaUnderstandingProvider,
 } from "./media-understanding-provider.js";
+import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
+import { buildMinimaxVideoGenerationProvider } from "./video-generation-provider.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
 const PROVIDER_LABEL = "MiniMax";
-const DEFAULT_MODEL = "MiniMax-M2.7";
+const DEFAULT_MODEL = MINIMAX_DEFAULT_MODEL_ID;
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
+const MINIMAX_USAGE_ENV_VAR_KEYS = [
+  "MINIMAX_OAUTH_TOKEN",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_API_KEY",
+] as const;
+const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "hybrid-anthropic-openai",
+  anthropicModelDropThinkingBlocks: true,
+});
+const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
+
+function resolveMinimaxReasoningOutputMode(): "native" {
+  // Keep MiniMax on native reasoning mode. Tagged enforcement previously
+  // suppressed normal assistant replies on this Anthropic-compatible surface.
+  return "native";
+}
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
   return region === "cn" ? DEFAULT_BASE_URL_CN : DEFAULT_BASE_URL_GLOBAL;
@@ -37,16 +66,6 @@ function apiModelRef(modelId: string): string {
 
 function portalModelRef(modelId: string): string {
   return `${PORTAL_PROVIDER_ID}/${modelId}`;
-}
-
-function isModernMiniMaxModel(modelId: string): boolean {
-  const lower = modelId.trim().toLowerCase();
-  return (
-    lower === "minimax-m2" ||
-    lower.startsWith("minimax-m2.1") ||
-    lower.startsWith("minimax-m2.5") ||
-    lower.startsWith("minimax-m2.7")
-  );
 }
 
 function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string }) {
@@ -64,7 +83,7 @@ function resolveApiCatalog(ctx: ProviderCatalogContext) {
   }
   return {
     provider: {
-      ...buildMinimaxProvider(),
+      ...buildMinimaxProvider(ctx.env),
       apiKey,
     },
   };
@@ -89,7 +108,7 @@ function resolvePortalCatalog(ctx: ProviderCatalogContext) {
 
   return {
     provider: buildPortalProviderCatalog({
-      baseUrl: explicitBaseUrl || DEFAULT_BASE_URL_GLOBAL,
+      baseUrl: explicitBaseUrl || buildMinimaxPortalProvider(ctx.env).baseUrl,
       apiKey,
     }),
   };
@@ -136,21 +155,9 @@ function createOAuthHandler(region: MiniMaxRegion) {
           agents: {
             defaults: {
               models: {
-                [portalModelRef("MiniMax-M2")]: { alias: "minimax-m2" },
-                [portalModelRef("MiniMax-M2.1")]: { alias: "minimax-m2.1" },
-                [portalModelRef("MiniMax-M2.1-highspeed")]: {
-                  alias: "minimax-m2.1-highspeed",
-                },
                 [portalModelRef("MiniMax-M2.7")]: { alias: "minimax-m2.7" },
                 [portalModelRef("MiniMax-M2.7-highspeed")]: {
                   alias: "minimax-m2.7-highspeed",
-                },
-                [portalModelRef("MiniMax-M2.5")]: { alias: "minimax-m2.5" },
-                [portalModelRef("MiniMax-M2.5-highspeed")]: {
-                  alias: "minimax-m2.5-highspeed",
-                },
-                [portalModelRef("MiniMax-M2.5-Lightning")]: {
-                  alias: "minimax-m2.5-lightning",
                 },
               },
             },
@@ -163,7 +170,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         ],
       });
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorMsg = formatErrorMessage(err);
       progress.stop(`MiniMax OAuth failed: ${errorMsg}`);
       await ctx.prompter.note(
         "If OAuth fails, verify your MiniMax account has portal access and try again.",
@@ -182,6 +189,7 @@ export default definePluginEntry({
     api.registerProvider({
       id: API_PROVIDER_ID,
       label: PROVIDER_LABEL,
+      hookAliases: ["minimax-cn"],
       docsPath: "/providers/minimax",
       envVars: ["MINIMAX_API_KEY"],
       auth: [
@@ -239,19 +247,31 @@ export default definePluginEntry({
         run: async (ctx) => resolveApiCatalog(ctx),
       },
       resolveUsageAuth: async (ctx) => {
+        const portalOauth = await ctx.resolveOAuthToken({ provider: PORTAL_PROVIDER_ID });
+        if (portalOauth) {
+          return portalOauth;
+        }
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env.MINIMAX_CODE_PLAN_KEY, ctx.env.MINIMAX_API_KEY],
+          providerIds: [API_PROVIDER_ID, PORTAL_PROVIDER_ID],
+          envDirect: MINIMAX_USAGE_ENV_VAR_KEYS.map((name) => ctx.env[name]),
         });
         return apiKey ? { token: apiKey } : null;
       },
-      isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
+      ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
+      ...MINIMAX_FAST_MODE_STREAM_HOOKS,
+      resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
+      isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
       fetchUsageSnapshot: async (ctx) =>
         await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
 
+    api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
+
     api.registerProvider({
       id: PORTAL_PROVIDER_ID,
       label: PROVIDER_LABEL,
+      hookAliases: ["minimax-portal-cn"],
       docsPath: "/providers/minimax",
       envVars: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
       catalog: {
@@ -289,9 +309,16 @@ export default definePluginEntry({
           run: createOAuthHandler("cn"),
         },
       ],
-      isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
+      ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
+      ...MINIMAX_FAST_MODE_STREAM_HOOKS,
+      resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
+      isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     });
-    api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
-    api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
+    api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
+    api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildMinimaxMusicGenerationProvider());
+    api.registerVideoGenerationProvider(buildMinimaxVideoGenerationProvider());
+    api.registerSpeechProvider(buildMinimaxSpeechProvider());
+    api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
   },
 });

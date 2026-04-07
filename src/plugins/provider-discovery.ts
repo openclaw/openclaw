@@ -1,24 +1,29 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
+let providerRuntimePromise: Promise<typeof import("./provider-discovery.runtime.js")> | undefined;
+
+function loadProviderRuntime() {
+  providerRuntimePromise ??= import("./provider-discovery.runtime.js");
+  return providerRuntimePromise;
+}
 
 function resolveProviderCatalogHook(provider: ProviderPlugin) {
   return provider.catalog ?? provider.discovery;
 }
 
-export function resolvePluginDiscoveryProviders(params: {
+export async function resolvePluginDiscoveryProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): ProviderPlugin[] {
-  return resolvePluginProviders({
-    ...params,
-    bundledProviderAllowlistCompat: true,
-  }).filter((provider) => resolveProviderCatalogHook(provider));
+  onlyPluginIds?: string[];
+}): Promise<ProviderPlugin[]> {
+  return (await loadProviderRuntime())
+    .resolvePluginDiscoveryProvidersRuntime(params)
+    .filter((provider) => resolveProviderCatalogHook(provider));
 }
 
 export function groupPluginDiscoveryProvidersByOrder(
@@ -57,7 +62,19 @@ export function normalizePluginDiscoveryResult(params: {
   }
 
   if ("provider" in result) {
-    return { [normalizeProviderId(params.provider.id)]: result.provider };
+    const normalized: Record<string, ModelProviderConfig> = {};
+    for (const providerId of [
+      params.provider.id,
+      ...(params.provider.aliases ?? []),
+      ...(params.provider.hookAliases ?? []),
+    ]) {
+      const normalizedKey = normalizeProviderId(providerId);
+      if (!normalizedKey) {
+        continue;
+      }
+      normalized[normalizedKey] = result.provider;
+    }
+    return normalized;
   }
 
   const normalized: Record<string, ModelProviderConfig> = {};

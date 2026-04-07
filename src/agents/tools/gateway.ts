@@ -1,7 +1,11 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
-import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/method-scopes.js";
+import {
+  resolveLeastPrivilegeOperatorScopesForMethod,
+  type OperatorScope,
+} from "../../gateway/method-scopes.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { readStringParam } from "./common.js";
 
@@ -29,7 +33,7 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
   try {
     url = new URL(input);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     throw new Error(`invalid gatewayUrl: ${input} (${message})`, { cause: error });
   }
 
@@ -141,10 +145,12 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCallOptions,
   params?: unknown,
-  extra?: { expectFinal?: boolean },
+  extra?: { expectFinal?: boolean; scopes?: OperatorScope[] },
 ) {
   const gateway = resolveGatewayOptions(opts);
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method);
+  const scopes = Array.isArray(extra?.scopes)
+    ? extra.scopes
+    : resolveLeastPrivilegeOperatorScopesForMethod(method);
   return await callGateway<T>({
     url: gateway.url,
     token: gateway.token,

@@ -3,7 +3,10 @@ import path from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
   DEFAULT_THREAD_BINDING_MAX_AGE_MS,
@@ -31,6 +34,7 @@ type ThreadBindingsGlobalState = {
 // Plugin hooks can load this module via Jiti while core imports it via ESM.
 // Store mutable state on globalThis so both loader paths share one registry.
 const THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.discordThreadBindingsState");
+let threadBindingsState: ThreadBindingsGlobalState | undefined;
 
 function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
   return {
@@ -53,10 +57,14 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
 }
 
 function resolveThreadBindingsGlobalState(): ThreadBindingsGlobalState {
-  return resolveGlobalSingleton<ThreadBindingsGlobalState>(
-    THREAD_BINDINGS_STATE_KEY,
-    createThreadBindingsGlobalState,
-  );
+  if (!threadBindingsState) {
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    threadBindingsState =
+      (globalStore[THREAD_BINDINGS_STATE_KEY] as ThreadBindingsGlobalState | undefined) ??
+      createThreadBindingsGlobalState();
+    globalStore[THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
+  }
+  return threadBindingsState;
 }
 
 const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
@@ -108,14 +116,7 @@ export function normalizeTargetKind(
 }
 
 export function normalizeThreadId(raw: unknown): string | undefined {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return String(Math.floor(raw));
-  }
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalStringifiedId(raw);
 }
 
 export function toBindingRecordKey(params: { accountId: string; threadId: string }): string {
@@ -318,7 +319,7 @@ function unlinkSessionBinding(targetSessionKey: string, bindingKey: string) {
 }
 
 export function toReusableWebhookKey(params: { accountId: string; channelId: string }): string {
-  return `${params.accountId.trim().toLowerCase()}:${params.channelId.trim()}`;
+  return `${normalizeLowercaseStringOrEmpty(params.accountId)}:${params.channelId.trim()}`;
 }
 
 export function rememberReusableWebhook(record: ThreadBindingRecord) {

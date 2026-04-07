@@ -14,7 +14,11 @@ import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
+import {
+  canPersistInternalExecDirective,
+  canPersistInternalVerboseDirective,
+  enqueueModeSwitchEvents,
+} from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export async function persistInlineDirectives(params: {
@@ -37,6 +41,9 @@ export async function persistInlineDirectives(params: {
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
+  messageProvider?: string;
+  surface?: string;
+  gatewayClientScopes?: string[];
 }): Promise<{ provider: string; model: string; contextTokens: number }> {
   const {
     directives,
@@ -56,6 +63,16 @@ export async function persistInlineDirectives(params: {
     agentCfg,
   } = params;
   let { provider, model } = params;
+  const allowInternalExecPersistence = canPersistInternalExecDirective({
+    messageProvider: params.messageProvider,
+    surface: params.surface,
+    gatewayClientScopes: params.gatewayClientScopes,
+  });
+  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+    messageProvider: params.messageProvider,
+    surface: params.surface,
+    gatewayClientScopes: params.gatewayClientScopes,
+  });
   const activeAgentId = sessionKey
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
@@ -80,7 +97,11 @@ export async function persistInlineDirectives(params: {
       sessionEntry.thinkingLevel = directives.thinkLevel;
       updated = true;
     }
-    if (directives.hasVerboseDirective && directives.verboseLevel) {
+    if (
+      directives.hasVerboseDirective &&
+      directives.verboseLevel &&
+      allowInternalVerbosePersistence
+    ) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
       updated = true;
     }
@@ -110,7 +131,7 @@ export async function persistInlineDirectives(params: {
         (directives.elevatedLevel !== prevElevatedLevel && directives.elevatedLevel !== undefined);
       updated = true;
     }
-    if (directives.hasExecDirective && directives.hasExecOptions) {
+    if (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) {
       if (directives.execHost) {
         sessionEntry.execHost = directives.execHost;
         updated = true;

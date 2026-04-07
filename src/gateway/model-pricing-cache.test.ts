@@ -88,6 +88,24 @@ describe("model-pricing-cache", () => {
     expect(new Set(refs).size).toBe(refs.length);
   });
 
+  it("collects manifest-owned web search plugin model refs without a hardcoded plugin list", () => {
+    const refs = collectConfiguredModelPricingRefs({
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                model: "tavily/search-preview",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig).map((ref) => modelKey(ref.provider, ref.model));
+
+    expect(refs).toContain("tavily/search-preview");
+  });
+
   it("loads openrouter pricing and maps provider aliases, wrappers, and anthropic dotted ids", async () => {
     const config = {
       agents: {
@@ -197,6 +215,47 @@ describe("model-pricing-cache", () => {
     expect(getCachedGatewayModelPricing({ provider: "zai", model: "glm-5" })).toEqual({
       input: 1,
       output: 4,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("does not recurse forever for native openrouter auto refs", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/auto" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fetchImpl = withFetchPreconnect(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "openrouter/auto",
+                pricing: {
+                  prompt: "0.000001",
+                  completion: "0.000002",
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+    );
+
+    await expect(refreshGatewayModelPricingCache({ config, fetchImpl })).resolves.toBeUndefined();
+    expect(
+      getCachedGatewayModelPricing({ provider: "openrouter", model: "openrouter/auto" }),
+    ).toEqual({
+      input: 1,
+      output: 2,
       cacheRead: 0,
       cacheWrite: 0,
     });

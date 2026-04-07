@@ -1,4 +1,5 @@
 import type { WebClient } from "@slack/web-api";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createSlackWebClient } from "./client.js";
 import {
   collectSlackCursorItems,
@@ -74,8 +75,8 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
     collectPageItems: (res) =>
       (res.members ?? [])
         .map((member) => {
-          const id = member.id?.trim();
-          const name = member.name?.trim();
+          const id = normalizeOptionalString(member.id);
+          const name = normalizeOptionalString(member.name);
           if (!id || !name) {
             return null;
           }
@@ -83,9 +84,11 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
           return {
             id,
             name,
-            displayName: profile.display_name?.trim() || undefined,
-            realName: profile.real_name?.trim() || member.real_name?.trim() || undefined,
-            email: profile.email?.trim()?.toLowerCase() || undefined,
+            displayName: normalizeOptionalString(profile.display_name),
+            realName:
+              normalizeOptionalString(profile.real_name) ??
+              normalizeOptionalString(member.real_name),
+            email: normalizeOptionalString(profile.email)?.toLowerCase(),
             deleted: Boolean(member.deleted),
             isBot: Boolean(member.is_bot),
             isAppUser: Boolean(member.is_app_user),

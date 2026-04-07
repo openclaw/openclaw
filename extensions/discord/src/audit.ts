@@ -3,6 +3,7 @@ import type {
   DiscordGuildChannelConfig,
   DiscordGuildEntry,
 } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
@@ -29,9 +30,6 @@ const REQUIRED_CHANNEL_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined) {
   if (!config) {
     return true;
-  }
-  if (config.allow === false) {
-    return false;
   }
   if (config.enabled === false) {
     return false;
@@ -127,7 +125,7 @@ export async function auditDiscordChannelPermissions(params: {
       channels.push({
         channelId,
         ok: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatErrorMessage(err),
         matchKey: channelId,
         matchSource: "id",
       });

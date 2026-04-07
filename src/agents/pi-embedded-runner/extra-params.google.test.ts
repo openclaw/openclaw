@@ -1,17 +1,13 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-  return {
-    ...original,
-    streamSimple: vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(),
-    })),
-  };
-});
+vi.mock("@mariozechner/pi-ai", async () =>
+  createPiAiStreamSimpleMock(() =>
+    vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai"),
+  ),
+);
 
 describe("extra-params: Google thinking payload compatibility", () => {
   it("strips negative thinking budgets and fills Gemini 3.1 thinkingLevel", () => {
@@ -40,5 +36,72 @@ describe("extra-params: Google thinking payload compatibility", () => {
 
     expect(payload.config?.thinkingConfig?.thinkingBudget).toBeUndefined();
     expect(payload.config?.thinkingConfig?.thinkingLevel).toBe("HIGH");
+  });
+
+  it("passes cachedContent through Google extra params", () => {
+    const { options } = runExtraParamsCase({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "google/gemini-2.5-pro": {
+                params: {
+                  cachedContent: "cachedContents/test-cache",
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      model: {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-2.5-pro",
+      } as unknown as Model<"openai-completions">,
+      payload: {
+        contents: [],
+      },
+    });
+
+    expect((options as { cachedContent?: string } | undefined)?.cachedContent).toBe(
+      "cachedContents/test-cache",
+    );
+  });
+
+  it("lets higher-precedence cachedContent override lower-precedence cached_content", () => {
+    const { options } = runExtraParamsCase({
+      cfg: {
+        agents: {
+          defaults: {
+            params: {
+              cached_content: "cachedContents/default-cache",
+            },
+            models: {
+              "google/gemini-2.5-pro": {
+                params: {
+                  cachedContent: "cachedContents/model-cache",
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      model: {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-2.5-pro",
+      } as unknown as Model<"openai-completions">,
+      payload: {
+        contents: [],
+      },
+    });
+
+    expect((options as { cachedContent?: string } | undefined)?.cachedContent).toBe(
+      "cachedContents/model-cache",
+    );
   });
 });

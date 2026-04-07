@@ -1,9 +1,29 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerCronCli } from "./cron-cli.js";
 
 const CRON_CLI_TEST_TIMEOUT_MS = 15_000;
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mocks = vi.hoisted(() => {
+  const defaultRuntime = {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeStdout: vi.fn((value: string) => {
+      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  };
+  return {
+    defaultRuntime,
+    callGatewayFromCli: vi.fn(),
+  };
+});
+
+const { defaultRuntime, callGatewayFromCli } = mocks;
 
 const defaultGatewayMock = async (
   method: string,
@@ -16,22 +36,20 @@ const defaultGatewayMock = async (
   }
   return { ok: true, params };
 };
-const callGatewayFromCli = vi.fn(defaultGatewayMock);
+callGatewayFromCli.mockImplementation(defaultGatewayMock);
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
     callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-      callGatewayFromCli(method, opts, params, extra as number | undefined),
+      mocks.callGatewayFromCli(method, opts, params, extra as number | undefined),
   };
 });
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: mocks.defaultRuntime,
 }));
-
-const { registerCronCli } = await import("./cron-cli.js");
 
 type CronUpdatePatch = {
   patch?: {
@@ -72,7 +90,11 @@ function buildProgram() {
 function resetGatewayMock() {
   callGatewayFromCli.mockClear();
   callGatewayFromCli.mockImplementation(defaultGatewayMock);
-  resetRuntimeCapture();
+  defaultRuntime.log.mockClear();
+  defaultRuntime.error.mockClear();
+  defaultRuntime.writeStdout.mockClear();
+  defaultRuntime.writeJson.mockClear();
+  defaultRuntime.exit.mockClear();
 }
 
 async function runCronCommand(args: string[]): Promise<void> {
@@ -176,8 +198,7 @@ async function runCronRunAndCaptureExit(params: {
     },
   );
 
-  const runtimeModule = await import("../runtime.js");
-  const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
+  const runtime = defaultRuntime as { exit: (code: number) => void };
   const originalExit = runtime.exit;
   const exitSpy = vi.fn();
   runtime.exit = exitSpy;
@@ -614,6 +635,105 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --tz with --every on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid",
+      "--every",
+      "10m",
+      "--tz",
+      "UTC",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+    ]);
+  });
+
+  it("applies --tz to --at for offset-less datetimes on cron add", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-test",
+      "--at",
+      "2026-03-23T23:00:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+
+    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    // 2026-03-23 is CET (+01:00), so 23:00 Oslo = 22:00 UTC
+    expect(params.schedule.kind).toBe("at");
+    expect(params.schedule.at).toBe("2026-03-23T22:00:00.000Z");
+  });
+
+  it("does not apply --tz when --at already has an offset", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-offset-test",
+      "--at",
+      "2026-03-23T23:00:00+02:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+
+    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    // Explicit +02:00 should be honored, not overridden by --tz
+    expect(params.schedule.kind).toBe("at");
+    expect(params.schedule.at).toBe("2026-03-23T21:00:00.000Z");
+  });
+
+  it("applies --tz to --at correctly across DST boundaries on cron add", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-dst-test",
+      "--at",
+      "2026-03-29T01:30:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+
+    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
+    expect(params.schedule.kind).toBe("at");
+    expect(params.schedule.at).toBe("2026-03-29T00:30:00.000Z");
+  });
+
+  it("rejects nonexistent DST gap wall-clock times on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "tz-at-gap-test",
+      "--at",
+      "2026-03-29T02:30:00",
+      "--tz",
+      "Europe/Oslo",
+      "--session",
+      "isolated",
+      "--message",
+      "test",
+    ]);
+  });
+
   it("sets explicit stagger for cron edit", async () => {
     await runCronCommand(["cron", "edit", "job-1", "--cron", "0 * * * *", "--stagger", "30s"]);
 
@@ -639,6 +759,24 @@ describe("cron cli", () => {
 
   it("rejects --exact on edit when existing job is not cron", async () => {
     await expectCronEditWithScheduleLookupExit({ kind: "every", everyMs: 60_000 }, ["--exact"]);
+  });
+
+  it("applies --tz to --at for offset-less datetimes on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--at",
+      "2026-03-23T23:00:00",
+      "--tz",
+      "Europe/Oslo",
+    ]);
+
+    expect(patch?.patch?.schedule).toEqual({
+      kind: "at",
+      at: "2026-03-23T22:00:00.000Z",
+    });
+  });
+
+  it("rejects --tz with --every on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--every", "10m", "--tz", "UTC"]);
   });
 
   it("patches failure alert settings on cron edit", async () => {

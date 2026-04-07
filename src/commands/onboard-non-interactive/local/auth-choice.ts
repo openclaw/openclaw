@@ -1,13 +1,16 @@
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
-import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.js";
-import { setCloudflareAiGatewayConfig } from "../../../plugins/provider-auth-storage.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
+import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
+import {
+  formatDeprecatedNonInteractiveAuthChoiceError,
+  isDeprecatedAuthChoice,
+} from "../../auth-choice-legacy.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
-import { applyCloudflareAiGatewayConfig } from "../../onboard-auth.config-gateways.js";
 import {
   applyCustomApiConfig,
   CustomApiError,
@@ -16,7 +19,6 @@ import {
 } from "../../onboard-custom.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
-import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ResolvedNonInteractiveApiKey = NonNullable<
@@ -44,9 +46,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     runtime.exit(1);
     return null;
   }
-  const apiKeyStorageOptions = requestedSecretInputMode
-    ? { secretInputMode: requestedSecretInputMode }
-    : undefined;
   const toStoredSecretInput = (resolved: ResolvedNonInteractiveApiKey): SecretInput | null => {
     const storePlaintextSecret = requestedSecretInputMode !== "ref"; // pragma: allowlist secret
     if (storePlaintextSecret) {
@@ -118,38 +117,12 @@ export async function applyNonInteractiveAuthChoice(params: {
       ...(params.metadata ? { metadata: params.metadata } : {}),
     };
   };
-  const maybeSetResolvedApiKey = async (
-    resolved: ResolvedNonInteractiveApiKey,
-    setter: (value: SecretInput) => Promise<void> | void,
-  ): Promise<boolean> => {
-    if (resolved.source === "profile") {
-      return true;
-    }
-    const stored = toStoredSecretInput(resolved);
-    if (!stored) {
-      return false;
-    }
-    await setter(stored);
-    return true;
-  };
-
-  if (authChoice === "claude-cli" || authChoice === "codex-cli") {
+  if (isDeprecatedAuthChoice(authChoice, { config: nextConfig, env: process.env })) {
     runtime.error(
-      [
-        `Auth choice "${authChoice}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
-  }
-
-  if (authChoice === "setup-token") {
-    runtime.error(
-      [
-        'Auth choice "setup-token" requires interactive mode.',
-        'Use "--auth-choice token" with --token and --token-provider anthropic.',
-      ].join("\n"),
+      formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
+        config: nextConfig,
+        env: process.env,
+      })!,
     );
     runtime.exit(1);
     return null;
@@ -173,81 +146,24 @@ export async function applyNonInteractiveAuthChoice(params: {
     return pluginProviderChoice;
   }
 
-  const simpleApiKeyChoice = await applySimpleNonInteractiveApiKeyChoice({
-    authChoice,
-    nextConfig,
-    baseConfig,
-    opts,
-    runtime,
-    apiKeyStorageOptions,
-    resolveApiKey,
-    maybeSetResolvedApiKey,
-  });
-  if (simpleApiKeyChoice !== undefined) {
-    return simpleApiKeyChoice;
-  }
-
-  if (authChoice === "cloudflare-ai-gateway-api-key") {
-    const accountId = opts.cloudflareAiGatewayAccountId?.trim() ?? "";
-    const gatewayId = opts.cloudflareAiGatewayGatewayId?.trim() ?? "";
-    if (!accountId || !gatewayId) {
-      runtime.error(
-        [
-          'Auth choice "cloudflare-ai-gateway-api-key" requires Account ID and Gateway ID.',
-          "Use --cloudflare-ai-gateway-account-id and --cloudflare-ai-gateway-gateway-id.",
-        ].join("\n"),
-      );
-      runtime.exit(1);
-      return null;
-    }
-    const resolved = await resolveApiKey({
-      provider: "cloudflare-ai-gateway",
-      cfg: baseConfig,
-      flagValue: opts.cloudflareAiGatewayApiKey,
-      flagName: "--cloudflare-ai-gateway-api-key",
-      envVar: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (resolved.source !== "profile") {
-      const stored = toStoredSecretInput(resolved);
-      if (!stored) {
-        return null;
-      }
-      await setCloudflareAiGatewayConfig(
-        accountId,
-        gatewayId,
-        stored,
-        undefined,
-        apiKeyStorageOptions,
-      );
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "cloudflare-ai-gateway:default",
-      provider: "cloudflare-ai-gateway",
-      mode: "api_key",
-    });
-    return applyCloudflareAiGatewayConfig(nextConfig, {
-      accountId,
-      gatewayId,
-    });
-  }
-
-  // Legacy aliases: these choice values were removed; fail with an actionable message so
-  // existing CI automation gets a clear error instead of silently exiting 0 with no auth.
-  const REMOVED_MINIMAX_CHOICES: Record<string, string> = {
-    minimax: "minimax-global-api",
-    "minimax-api": "minimax-global-api",
-    "minimax-cloud": "minimax-global-api",
-    "minimax-api-lightning": "minimax-global-api",
-    "minimax-api-key-cn": "minimax-cn-api",
-  };
-  if (Object.prototype.hasOwnProperty.call(REMOVED_MINIMAX_CHOICES, authChoice as string)) {
-    const replacement = REMOVED_MINIMAX_CHOICES[authChoice as string];
+  if (authChoice === "setup-token" || authChoice === "token") {
     runtime.error(
-      `"${authChoice as string}" is no longer supported. Use --auth-choice ${replacement} instead.`,
+      [
+        `Auth choice "${params.authChoice}" was not matched to a provider setup flow.`,
+        'For Anthropic legacy token auth, use "--auth-choice setup-token --token-provider anthropic --token <token>" or pass "--auth-choice token --token-provider anthropic".',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
+  }
+
+  const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
+    config: nextConfig,
+    env: process.env,
+  });
+  if (deprecatedChoice) {
+    runtime.error(
+      `"${authChoice as string}" is no longer supported. Use --auth-choice ${deprecatedChoice.choiceId} instead.`,
     );
     runtime.exit(1);
     return null;
@@ -318,7 +234,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         runtime.exit(1);
         return null;
       }
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       runtime.error(`Invalid custom provider config: ${reason}`);
       runtime.exit(1);
       return null;
@@ -328,11 +244,14 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
-    authChoice === "qwen-portal" ||
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
-    runtime.error("OAuth requires interactive mode.");
+    runtime.error(
+      authChoice === "oauth"
+        ? 'Auth choice "oauth" is no longer supported directly. Use "--auth-choice setup-token --token-provider anthropic" for Anthropic legacy token auth, or a provider-specific OAuth choice.'
+        : "OAuth requires interactive mode.",
+    );
     runtime.exit(1);
     return null;
   }

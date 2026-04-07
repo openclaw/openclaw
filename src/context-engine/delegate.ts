@@ -1,3 +1,6 @@
+import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
 
 /**
@@ -19,11 +22,13 @@ export async function delegateCompactionToRuntime(
   // Import through a dedicated runtime boundary so the lazy edge remains effective.
   const { compactEmbeddedPiSessionDirect } =
     await import("../agents/pi-embedded-runner/compact.runtime.js");
+  type RuntimeCompactionParams = Parameters<typeof compactEmbeddedPiSessionDirect>[0];
 
   // runtimeContext carries the full CompactEmbeddedPiSessionParams fields set
   // by runtime callers. We spread them and override the fields that come from
   // the public ContextEngine compact() signature directly.
-  const runtimeContext: ContextEngineRuntimeContext = params.runtimeContext ?? {};
+  const runtimeContext = (params.runtimeContext ?? {}) as ContextEngineRuntimeContext &
+    Partial<RuntimeCompactionParams>;
   const currentTokenCount =
     params.currentTokenCount ??
     (typeof runtimeContext.currentTokenCount === "number" &&
@@ -32,7 +37,6 @@ export async function delegateCompactionToRuntime(
       ? Math.floor(runtimeContext.currentTokenCount)
       : undefined);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- bridge runtimeContext matches CompactEmbeddedPiSessionParams
   const result = await compactEmbeddedPiSessionDirect({
     ...runtimeContext,
     sessionId: params.sessionId,
@@ -41,8 +45,9 @@ export async function delegateCompactionToRuntime(
     ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     force: params.force,
     customInstructions: params.customInstructions,
-    workspaceDir: (runtimeContext.workspaceDir as string) ?? process.cwd(),
-  } as Parameters<typeof compactEmbeddedPiSessionDirect>[0]);
+    workspaceDir:
+      typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
+  });
 
   return {
     ok: result.ok,
@@ -58,4 +63,25 @@ export async function delegateCompactionToRuntime(
         }
       : undefined,
   };
+}
+
+/**
+ * Build a context-engine-ready systemPromptAddition from the active memory
+ * plugin prompt path. This lets non-legacy engines explicitly opt into the
+ * same memory/wiki guidance that the legacy engine gets via system prompt
+ * assembly, without reimplementing memory prompt formatting.
+ */
+export function buildMemorySystemPromptAddition(params: {
+  availableTools: Set<string>;
+  citationsMode?: MemoryCitationsMode;
+}): string | undefined {
+  const lines = buildMemoryPromptSection({
+    availableTools: params.availableTools,
+    citationsMode: params.citationsMode,
+  });
+  if (lines.length === 0) {
+    return undefined;
+  }
+  const normalized = normalizeStructuredPromptSection(lines.join("\n"));
+  return normalized || undefined;
 }

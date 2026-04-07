@@ -25,9 +25,10 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { DEFAULT_GOOGLE_API_BASE_URL } from "../api.js";
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const GEMINI_API_BASE = DEFAULT_GOOGLE_API_BASE_URL;
 
 type GeminiConfig = {
   apiKey?: string;
@@ -180,7 +181,7 @@ function createGeminiToolDefinition(
       "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search.",
     parameters: createGeminiSchema(),
     execute: async (args) => {
-      const params = args as Record<string, unknown>;
+      const params = args;
       const unsupportedResponse = buildUnsupportedSearchFilterResponse(params, "gemini");
       if (unsupportedResponse) {
         return unsupportedResponse;
@@ -246,6 +247,7 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     id: "gemini",
     label: "Gemini (Google Search)",
     hint: "Requires Google Gemini API key · Google Search grounding",
+    onboardingScopes: ["text-inference"],
     credentialLabel: "Google Gemini API key",
     envVars: ["GEMINI_API_KEY"],
     placeholder: "AIza...",

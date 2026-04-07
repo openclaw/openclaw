@@ -6,11 +6,46 @@ import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderChatSessionSelect } from "../app-render.helpers.ts";
 import type { AppViewState } from "../app-view-state.ts";
+import {
+  createModelCatalog,
+  createSessionsListResult,
+  DEEPSEEK_CHAT_MODEL,
+  DEFAULT_CHAT_MODEL_CATALOG,
+} from "../chat-model.test-helpers.ts";
+import { SKIP_DELETE_CONFIRM_KEY } from "../chat/grouped-render.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { SessionsListResult } from "../types.ts";
 import { renderChat, type ChatProps } from "./chat.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
+
+function readDeleteConfirmPreference(): string | null {
+  try {
+    return getSafeLocalStorage()?.getItem(SKIP_DELETE_CONFIRM_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function clearDeleteConfirmPreference(): void {
+  try {
+    getSafeLocalStorage()?.removeItem(SKIP_DELETE_CONFIRM_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
+function restoreDeleteConfirmPreference(value: string | null): void {
+  try {
+    if (value === null) {
+      getSafeLocalStorage()?.removeItem(SKIP_DELETE_CONFIRM_KEY);
+      return;
+    }
+    getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, value);
+  } catch {
+    /* noop */
+  }
+}
 
 function createSessions(): SessionsListResult {
   return {
@@ -25,20 +60,24 @@ function createSessions(): SessionsListResult {
 function createChatHeaderState(
   overrides: {
     model?: string | null;
+    modelProvider?: string | null;
+    thinkingLevel?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
-  let currentModelProvider = currentModel ? "openai" : null;
+  let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
+  let currentThinkingLevel = overrides.thinkingLevel ?? null;
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
-  const catalog = overrides.models ?? [
-    { id: "gpt-5", name: "GPT-5", provider: "openai" },
-    { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
-  ];
+  const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === "sessions.patch") {
       const nextModel = (params.model as string | null | undefined) ?? null;
+      const nextThinkingLevel = params.thinkingLevel as string | null | undefined;
+      if ("thinkingLevel" in params) {
+        currentThinkingLevel = nextThinkingLevel ?? null;
+      }
       if (!nextModel) {
         currentModel = null;
         currentModelProvider = null;
@@ -64,26 +103,25 @@ function createChatHeaderState(
       return { messages: [], thinkingLevel: null };
     }
     if (method === "sessions.list") {
-      return {
-        ts: 0,
-        path: "",
-        count: omitSessionFromList ? 0 : 1,
-        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-        sessions: omitSessionFromList
-          ? []
-          : [
-              {
-                key: "main",
-                kind: "direct",
-                updatedAt: null,
-                modelProvider: currentModelProvider,
-                model: currentModel,
-              },
-            ],
-      };
+      const result = createSessionsListResult({
+        model: currentModel,
+        modelProvider: currentModelProvider,
+        omitSessionFromList,
+      });
+      if (result.sessions[0]) {
+        result.sessions[0].thinkingLevel = currentThinkingLevel ?? undefined;
+      }
+      return result;
     }
     if (method === "models.list") {
       return { models: catalog };
+    }
+    if (method === "tools.effective") {
+      return {
+        agentId: "main",
+        profile: "coding",
+        groups: [],
+      };
     }
     throw new Error(`Unexpected request: ${method}`);
   });
@@ -91,23 +129,17 @@ function createChatHeaderState(
     sessionKey: "main",
     connected: true,
     sessionsHideCron: true,
-    sessionsResult: {
-      ts: 0,
-      path: "",
-      count: omitSessionFromList ? 0 : 1,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: omitSessionFromList
-        ? []
-        : [
-            {
-              key: "main",
-              kind: "direct",
-              updatedAt: null,
-              modelProvider: currentModelProvider,
-              model: currentModel,
-            },
-          ],
-    },
+    sessionsResult: (() => {
+      const result = createSessionsListResult({
+        model: currentModel,
+        modelProvider: currentModelProvider,
+        omitSessionFromList,
+      });
+      if (result.sessions[0]) {
+        result.sessions[0].thinkingLevel = currentThinkingLevel ?? undefined;
+      }
+      return result;
+    })(),
     chatModelOverrides: {},
     chatModelCatalog: catalog,
     chatModelsLoading: false,
@@ -140,6 +172,13 @@ function createChatHeaderState(
     basePath: "",
     hello: null,
     agentsList: null,
+    agentsPanel: "overview",
+    agentsSelectedId: null,
+    toolsEffectiveLoading: false,
+    toolsEffectiveLoadingKey: null,
+    toolsEffectiveResultKey: null,
+    toolsEffectiveError: null,
+    toolsEffectiveResult: null,
     applySettings(next: AppViewState["settings"]) {
       state.settings = next;
     },
@@ -227,6 +266,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     cronEnabled: null,
     cronNext: null,
     lastChannelsRefresh: null,
+    warnQueryToken: false,
     usageResult: null,
     sessionsResult: null,
     skillsReport: null,
@@ -468,11 +508,7 @@ describe("chat view", () => {
       },
     });
 
-    try {
-      localStorage.clear();
-    } catch {
-      /* noop */
-    }
+    getSafeLocalStorage()?.clear();
     await i18n.setLocale("en");
 
     render(renderOverview(props), container);
@@ -500,7 +536,8 @@ describe("chat view", () => {
       renderChat(
         createProps({
           compactionStatus: {
-            active: true,
+            phase: "active",
+            runId: "run-1",
             startedAt: Date.now(),
             completedAt: null,
           },
@@ -514,6 +551,27 @@ describe("chat view", () => {
     expect(indicator?.textContent).toContain("Compacting context...");
   });
 
+  it("renders retry-pending compaction indicator as a badge", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          compactionStatus: {
+            phase: "retrying",
+            runId: "run-1",
+            startedAt: Date.now(),
+            completedAt: null,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const indicator = container.querySelector(".compaction-indicator--active");
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain("Retrying after compaction...");
+  });
+
   it("renders completion indicator shortly after compaction", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -521,7 +579,8 @@ describe("chat view", () => {
       renderChat(
         createProps({
           compactionStatus: {
-            active: false,
+            phase: "complete",
+            runId: "run-1",
             startedAt: 900,
             completedAt: 900,
           },
@@ -543,7 +602,8 @@ describe("chat view", () => {
       renderChat(
         createProps({
           compactionStatus: {
-            active: false,
+            phase: "complete",
+            runId: "run-1",
             startedAt: 0,
             completedAt: 0,
           },
@@ -563,9 +623,9 @@ describe("chat view", () => {
       renderChat(
         createProps({
           fallbackStatus: {
-            selected: "fireworks/minimax-m2p5",
+            selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
             active: "deepinfra/moonshotai/Kimi-K2.5",
-            attempts: ["fireworks/minimax-m2p5: rate limit"],
+            attempts: ["fireworks/accounts/fireworks/routers/kimi-k2p5-turbo: rate limit"],
             occurredAt: 900,
           },
         }),
@@ -586,7 +646,7 @@ describe("chat view", () => {
       renderChat(
         createProps({
           fallbackStatus: {
-            selected: "fireworks/minimax-m2p5",
+            selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
             active: "deepinfra/moonshotai/Kimi-K2.5",
             attempts: [],
             occurredAt: 0,
@@ -608,8 +668,8 @@ describe("chat view", () => {
         createProps({
           fallbackStatus: {
             phase: "cleared",
-            selected: "fireworks/minimax-m2p5",
-            active: "fireworks/minimax-m2p5",
+            selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+            active: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
             previous: "deepinfra/moonshotai/Kimi-K2.5",
             attempts: [],
             occurredAt: 900,
@@ -621,7 +681,9 @@ describe("chat view", () => {
 
     const indicator = container.querySelector(".compaction-indicator--fallback-cleared");
     expect(indicator).not.toBeNull();
-    expect(indicator?.textContent).toContain("Fallback cleared: fireworks/minimax-m2p5");
+    expect(indicator?.textContent).toContain(
+      "Fallback cleared: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+    );
     nowSpy.mockRestore();
   });
 
@@ -643,6 +705,27 @@ describe("chat view", () => {
     expect(stopButton).not.toBeUndefined();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain("New session");
+  });
+
+  it("shows a stop button when aborting is available without an active stream", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          canAbort: true,
+          sending: false,
+          stream: null,
+          onAbort: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    const stopButton = container.querySelector<HTMLButtonElement>('button[title="Stop"]');
+    const sendButton = container.querySelector<HTMLButtonElement>('button[title="Send"]');
+    expect(stopButton).not.toBeNull();
+    expect(sendButton).toBeNull();
     expect(container.textContent).not.toContain("New session");
   });
 
@@ -727,71 +810,122 @@ describe("chat view", () => {
   });
 
   it("opens delete confirm on the left for user messages", () => {
-    try {
-      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
-    } catch {
-      /* noop */
-    }
+    const originalPreference = readDeleteConfirmPreference();
+    clearDeleteConfirmPreference();
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          messages: [
-            {
-              role: "user",
-              content: "hello from user",
-              timestamp: 1000,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
+    try {
+      render(
+        renderChat(
+          createProps({
+            messages: [
+              {
+                role: "user",
+                content: "hello from user",
+                timestamp: 1000,
+              },
+            ],
+          }),
+        ),
+        container,
+      );
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
-      ".chat-group.user .chat-group-delete",
-    );
-    expect(deleteButton).not.toBeNull();
-    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const deleteButton = container.querySelector<HTMLButtonElement>(
+        ".chat-group.user .chat-group-delete",
+      );
+      expect(deleteButton).not.toBeNull();
+      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const confirm = container.querySelector<HTMLElement>(".chat-group.user .chat-delete-confirm");
-    expect(confirm).not.toBeNull();
-    expect(confirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
+      const confirm = container.querySelector<HTMLElement>(".chat-group.user .chat-delete-confirm");
+      expect(confirm).not.toBeNull();
+      expect(confirm?.classList.contains("chat-delete-confirm--left")).toBe(true);
+    } finally {
+      restoreDeleteConfirmPreference(originalPreference);
+    }
   });
 
   it("opens delete confirm on the right for assistant messages", () => {
-    try {
-      getSafeLocalStorage()?.removeItem("openclaw:skipDeleteConfirm");
-    } catch {
-      /* noop */
-    }
+    const originalPreference = readDeleteConfirmPreference();
+    clearDeleteConfirmPreference();
     const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          messages: [
-            {
-              role: "assistant",
-              content: "hello from assistant",
-              timestamp: 1000,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
+    try {
+      render(
+        renderChat(
+          createProps({
+            messages: [
+              {
+                role: "assistant",
+                content: "hello from assistant",
+                timestamp: 1000,
+              },
+            ],
+          }),
+        ),
+        container,
+      );
 
-    const deleteButton = container.querySelector<HTMLButtonElement>(
-      ".chat-group.assistant .chat-group-delete",
-    );
-    expect(deleteButton).not.toBeNull();
-    deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const deleteButton = container.querySelector<HTMLButtonElement>(
+        ".chat-group.assistant .chat-group-delete",
+      );
+      expect(deleteButton).not.toBeNull();
+      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    const confirm = container.querySelector<HTMLElement>(
-      ".chat-group.assistant .chat-delete-confirm",
-    );
-    expect(confirm).not.toBeNull();
-    expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+      const confirm = container.querySelector<HTMLElement>(
+        ".chat-group.assistant .chat-delete-confirm",
+      );
+      expect(confirm).not.toBeNull();
+      expect(confirm?.classList.contains("chat-delete-confirm--right")).toBe(true);
+    } finally {
+      restoreDeleteConfirmPreference(originalPreference);
+    }
+  });
+
+  it("renders delete confirm with the expected safe structure", () => {
+    const originalPreference = readDeleteConfirmPreference();
+    clearDeleteConfirmPreference();
+    const container = document.createElement("div");
+    try {
+      render(
+        renderChat(
+          createProps({
+            messages: [
+              {
+                role: "assistant",
+                content: "hello from assistant",
+                timestamp: 1000,
+              },
+            ],
+          }),
+        ),
+        container,
+      );
+
+      const deleteButton = container.querySelector<HTMLButtonElement>(
+        ".chat-group.assistant .chat-group-delete",
+      );
+      expect(deleteButton).not.toBeNull();
+      deleteButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      const confirm = container.querySelector<HTMLElement>(
+        ".chat-group.assistant .chat-delete-confirm",
+      );
+      expect(confirm?.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
+        "Delete this message?",
+      );
+      expect(confirm?.querySelector(".chat-delete-confirm__remember span")?.textContent).toBe(
+        "Don't ask again",
+      );
+      expect(confirm?.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel")?.type).toBe(
+        "button",
+      );
+      expect(confirm?.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")?.type).toBe(
+        "button",
+      );
+      expect(confirm?.querySelector<HTMLInputElement>(".chat-delete-confirm__check")?.type).toBe(
+        "checkbox",
+      );
+    } finally {
+      restoreDeleteConfirmPreference(originalPreference);
+    }
   });
 
   it("patches the current session model from the chat header picker", async () => {
@@ -825,6 +959,108 @@ describe("chat view", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shows the default thinking level in the chat header picker", async () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    expect(thinkingSelect).not.toBeNull();
+    expect(thinkingSelect?.value).toBe("");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (off)");
+  });
+
+  it("patches the current session thinking level from the chat header picker", async () => {
+    const { state, request } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    expect(thinkingSelect).not.toBeNull();
+
+    thinkingSelect!.value = "off";
+    thinkingSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      thinkingLevel: "off",
+    });
+    expect(state.sessionsResult?.sessions[0]?.thinkingLevel).toBe("off");
+  });
+
+  it("clears the session thinking override back to the default thinking level", async () => {
+    const { state, request } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+      thinkingLevel: "high",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    expect(thinkingSelect).not.toBeNull();
+    expect(thinkingSelect?.value).toBe("high");
+
+    thinkingSelect!.value = "";
+    thinkingSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      thinkingLevel: null,
+    });
+    expect(state.sessionsResult?.sessions[0]?.thinkingLevel).toBeUndefined();
+  });
+
+  it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+      } satisfies Partial<Response>),
+    );
+    const { state, request } = createChatHeaderState();
+    state.agentsPanel = "tools";
+    state.agentsSelectedId = "main";
+    state.toolsEffectiveResultKey = "main:main";
+    state.toolsEffectiveResult = {
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+
+    modelSelect!.value = "openai/gpt-5-mini";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("tools.effective", {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
+    vi.unstubAllGlobals();
+  });
+
   it("clears the session model override back to the default model", async () => {
     vi.stubGlobal(
       "fetch",
@@ -850,7 +1086,7 @@ describe("chat view", () => {
       key: "main",
       model: null,
     });
-    expect(state.sessionsResult?.sessions[0]?.model).toBeNull();
+    expect(state.sessionsResult?.sessions[0]?.model).toBeUndefined();
     vi.unstubAllGlobals();
   });
 
@@ -907,6 +1143,43 @@ describe("chat view", () => {
       'select[data-chat-model-select="true"]',
     );
     expect(modelSelect).not.toBeNull();
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
+
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    expect(optionValues).toContain("openai/gpt-5-mini");
+    expect(optionValues).not.toContain("gpt-5-mini");
+  });
+
+  it("prefers the catalog provider when the active session reports a stale provider", () => {
+    const { state } = createChatHeaderState({
+      model: "deepseek-chat",
+      modelProvider: "zai",
+      models: createModelCatalog(DEEPSEEK_CHAT_MODEL),
+    });
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect?.value).toBe("deepseek/deepseek-chat");
+  });
+
+  it("falls back to the server-qualified session model when catalog lookup fails", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5-mini",
+      models: [],
+    });
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
     expect(modelSelect?.value).toBe("openai/gpt-5-mini");
 
     const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(

@@ -1,64 +1,72 @@
 import type { Command } from "commander";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadOpenClawPlugins } from "./loader.js";
-import type { PluginLogger } from "./types.js";
+import { loadConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
+import {
+  createPluginCliLogger,
+  loadPluginCliDescriptors,
+  loadPluginCliRegistrationEntriesWithDefaults,
+  type PluginCliLoaderOptions,
+} from "./cli-registry-loader.js";
+import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
+import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
 
-const log = createSubsystemLogger("plugins");
+type PluginCliRegistrationMode = "eager" | "lazy";
 
-export function registerPluginCliCommands(
+type RegisterPluginCliOptions = {
+  mode?: PluginCliRegistrationMode;
+  primary?: string | null;
+};
+
+const logger = createPluginCliLogger();
+
+export const loadValidatedConfigForPluginRegistration =
+  async (): Promise<OpenClawConfig | null> => {
+    const snapshot = await readConfigFileSnapshot();
+    if (!snapshot.valid) {
+      return null;
+    }
+    return loadConfig();
+  };
+
+export async function getPluginCliCommandDescriptors(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: PluginCliLoaderOptions,
+): Promise<OpenClawPluginCliCommandDescriptor[]> {
+  return loadPluginCliDescriptors({ cfg, env, loaderOptions });
+}
+
+export async function registerPluginCliCommands(
   program: Command,
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  loaderOptions?: PluginCliLoaderOptions,
+  options?: RegisterPluginCliOptions,
 ) {
-  const config = cfg ?? loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-  const logger: PluginLogger = {
-    info: (msg: string) => log.info(msg),
-    warn: (msg: string) => log.warn(msg),
-    error: (msg: string) => log.error(msg),
-    debug: (msg: string) => log.debug(msg),
-  };
-  const registry = loadOpenClawPlugins({
-    config,
-    workspaceDir,
-    env,
-    logger,
-  });
+  const mode = options?.mode ?? "eager";
+  const primary = options?.primary ?? null;
 
-  const existingCommands = new Set(program.commands.map((cmd) => cmd.name()));
+  await registerPluginCliCommandGroups(
+    program,
+    await loadPluginCliRegistrationEntriesWithDefaults({ cfg, env, loaderOptions }),
+    {
+      mode,
+      primary,
+      existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+      logger,
+    },
+  );
+}
 
-  for (const entry of registry.cliRegistrars) {
-    if (entry.commands.length > 0) {
-      const overlaps = entry.commands.filter((command) => existingCommands.has(command));
-      if (overlaps.length > 0) {
-        log.debug(
-          `plugin CLI register skipped (${entry.pluginId}): command already registered (${overlaps.join(
-            ", ",
-          )})`,
-        );
-        continue;
-      }
-    }
-    try {
-      const result = entry.register({
-        program,
-        config,
-        workspaceDir,
-        logger,
-      });
-      if (result && typeof result.then === "function") {
-        void result.catch((err) => {
-          log.warn(`plugin CLI register failed (${entry.pluginId}): ${String(err)}`);
-        });
-      }
-      for (const command of entry.commands) {
-        existingCommands.add(command);
-      }
-    } catch (err) {
-      log.warn(`plugin CLI register failed (${entry.pluginId}): ${String(err)}`);
-    }
+export async function registerPluginCliCommandsFromValidatedConfig(
+  program: Command,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: PluginCliLoaderOptions,
+  options?: RegisterPluginCliOptions,
+): Promise<OpenClawConfig | null> {
+  const config = await loadValidatedConfigForPluginRegistration();
+  if (!config) {
+    return null;
   }
+  await registerPluginCliCommands(program, config, env, loaderOptions, options);
+  return config;
 }

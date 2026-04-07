@@ -1,11 +1,12 @@
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createPinnedLookup,
   hasEnvHttpProxyConfigured,
   resolveFetch,
   type PinnedDispatcherPolicy,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import {
@@ -206,11 +207,13 @@ function resolveTelegramDispatcherPolicy(params: {
         ? {
             mode: "explicit-proxy",
             proxyUrl: explicitProxyUrl,
+            allowPrivateProxy: true,
             proxyTls: { ...connect },
           }
         : {
             mode: "explicit-proxy",
             proxyUrl: explicitProxyUrl,
+            allowPrivateProxy: true,
           },
       mode: "explicit-proxy",
     };
@@ -254,11 +257,11 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   effectivePolicy: PinnedDispatcherPolicy;
 } {
   if (policy.mode === "explicit-proxy") {
-    const proxyTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
-    const proxyOptions = proxyTlsOptions
+    const requestTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
+    const proxyOptions = requestTlsOptions
       ? ({
           uri: policy.proxyUrl,
-          proxyTls: proxyTlsOptions,
+          requestTls: requestTlsOptions,
         } satisfies ConstructorParameters<typeof ProxyAgent>[0])
       : policy.proxyUrl;
     try {
@@ -268,7 +271,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
         effectivePolicy: policy,
       };
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = formatErrorMessage(err);
       throw new Error(`explicit proxy dispatcher init failed: ${reason}`, { cause: err });
     }
   }
@@ -291,9 +294,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       };
     } catch (err) {
       log.warn(
-        `env proxy dispatcher init failed; falling back to direct dispatcher: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `env proxy dispatcher init failed; falling back to direct dispatcher: ${formatErrorMessage(err)}`,
       );
       const directPolicy: PinnedDispatcherPolicy = {
         mode: "direct",
@@ -348,11 +349,11 @@ function logResolverNetworkDecisions(params: {
     const sourceLabel = params.autoSelectDecision.source
       ? ` (${params.autoSelectDecision.source})`
       : "";
-    log.info(`autoSelectFamily=${params.autoSelectDecision.value}${sourceLabel}`);
+    log.debug(`autoSelectFamily=${params.autoSelectDecision.value}${sourceLabel}`);
   }
   if (params.dnsDecision.value !== null) {
     const sourceLabel = params.dnsDecision.source ? ` (${params.dnsDecision.source})` : "";
-    log.info(`dnsResultOrder=${params.dnsDecision.value}${sourceLabel}`);
+    log.debug(`dnsResultOrder=${params.dnsDecision.value}${sourceLabel}`);
   }
 }
 

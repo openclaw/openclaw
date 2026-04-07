@@ -5,7 +5,7 @@ import {
   enablePluginInConfig,
   getScopedCredentialValue,
   mergeScopedSearchConfig,
-  normalizeToIsoDate,
+  parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
@@ -24,6 +24,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
@@ -69,10 +70,10 @@ type ExaSearchResponse = {
 };
 
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
-  if (!value) {
+  const trimmed = normalizeOptionalLowercaseString(value);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = value.trim().toLowerCase();
   return EXA_FRESHNESS_VALUES.includes(trimmed as ExaFreshness)
     ? (trimmed as ExaFreshness)
     : undefined;
@@ -187,11 +188,9 @@ function parseExaContents(
     if ("maxCharacters" in obj && parsePositiveInteger(obj.maxCharacters) === undefined) {
       return invalidContentsPayload("contents.text.maxCharacters must be a positive integer.");
     }
-    return {
-      ...(parsePositiveInteger(obj.maxCharacters)
-        ? { maxCharacters: parsePositiveInteger(obj.maxCharacters) }
-        : {}),
-    };
+    return parsePositiveInteger(obj.maxCharacters)
+      ? { maxCharacters: parsePositiveInteger(obj.maxCharacters) }
+      : {};
   };
 
   const parseHighlights = (
@@ -457,7 +456,7 @@ function createExaToolDefinition(
       "Search the web using Exa AI. Supports neural or keyword search, publication date filters, and optional highlights or text extraction.",
     parameters: createExaSchema(),
     execute: async (args) => {
-      const params = args as Record<string, unknown>;
+      const params = args;
       const exaConfig = resolveExaConfig(searchConfig);
       const apiKey = resolveExaApiKey(exaConfig);
       if (!apiKey) {
@@ -493,32 +492,17 @@ function createExaToolDefinition(
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
-
-      const dateAfter = rawDateAfter ? normalizeToIsoDate(rawDateAfter) : undefined;
-      if (rawDateAfter && !dateAfter) {
-        return {
-          error: "invalid_date",
-          message: "date_after must be YYYY-MM-DD format.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
+      const parsedDateRange = parseIsoDateRange({
+        rawDateAfter,
+        rawDateBefore,
+        invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
+        invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
+        invalidDateRangeMessage: "date_after must be earlier than or equal to date_before.",
+      });
+      if ("error" in parsedDateRange) {
+        return parsedDateRange;
       }
-
-      const dateBefore = rawDateBefore ? normalizeToIsoDate(rawDateBefore) : undefined;
-      if (rawDateBefore && !dateBefore) {
-        return {
-          error: "invalid_date",
-          message: "date_before must be YYYY-MM-DD format.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
-      }
-
-      if (dateAfter && dateBefore && dateAfter > dateBefore) {
-        return {
-          error: "invalid_date_range",
-          message: "date_after must be earlier than or equal to date_before.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        };
-      }
+      const { dateAfter, dateBefore } = parsedDateRange;
 
       const parsedContents = parseExaContents(params.contents);
       if (isErrorPayload(parsedContents)) {
@@ -607,6 +591,7 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
     id: "exa",
     label: "Exa Search",
     hint: "Neural + keyword search with date filters and content extraction",
+    onboardingScopes: ["text-inference"],
     credentialLabel: "Exa API key",
     envVars: ["EXA_API_KEY"],
     placeholder: "exa-...",
@@ -627,10 +612,10 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) =>
       createExaToolDefinition(
         mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "exa",
           resolveProviderWebSearchPluginConfig(ctx.config, "exa"),
-        ) as SearchConfigRecord | undefined,
+        ),
       ),
   };
 }

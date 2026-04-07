@@ -1,50 +1,95 @@
 import { defineConfig } from "vitest/config";
-import baseConfig from "./vitest.config.ts";
+import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { unitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
+
+function normalizePathPattern(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
+function relativizeScopedPattern(value: string, dir: string): string {
+  const normalizedValue = normalizePathPattern(value);
+  const normalizedDir = normalizePathPattern(dir).replace(/\/+$/u, "");
+  if (!normalizedDir) {
+    return normalizedValue;
+  }
+  if (normalizedValue === normalizedDir) {
+    return ".";
+  }
+  const prefix = `${normalizedDir}/`;
+  return normalizedValue.startsWith(prefix)
+    ? normalizedValue.slice(prefix.length)
+    : normalizedValue;
+}
+
+function relativizeScopedPatterns(values: string[], dir?: string): string[] {
+  if (!dir) {
+    return values.map(normalizePathPattern);
+  }
+  return values.map((value) => relativizeScopedPattern(value, dir));
+}
 
 export function resolveVitestIsolation(
-  env: Record<string, string | undefined> = process.env,
+  _env: Record<string, string | undefined> = process.env,
 ): boolean {
-  const forceIsolation = env.OPENCLAW_TEST_ISOLATE === "1" || env.OPENCLAW_TEST_ISOLATE === "true";
-  if (forceIsolation) {
-    return true;
-  }
-  return env.OPENCLAW_TEST_NO_ISOLATE === "0" || env.OPENCLAW_TEST_NO_ISOLATE === "false";
+  return false;
 }
 
 export function createScopedVitestConfig(
   include: string[],
   options?: {
+    deps?: Record<string, unknown>;
     dir?: string;
+    env?: Record<string, string | undefined>;
+    environment?: string;
     exclude?: string[];
-    pool?: "threads" | "forks";
+    argv?: string[];
+    includeOpenClawRuntimeSetup?: boolean;
+    isolate?: boolean;
+    name?: string;
+    pool?: "forks" | "threads";
     passWithNoTests?: boolean;
+    setupFiles?: string[];
+    useNonIsolatedRunner?: boolean;
   },
 ) {
-  const base = baseConfig as unknown as Record<string, unknown>;
-  const baseTest =
-    (
-      baseConfig as {
-        test?: {
-          dir?: string;
-          exclude?: string[];
-          pool?: "threads" | "forks";
-          passWithNoTests?: boolean;
-        };
-      }
-    ).test ?? {};
-  const exclude = [...(baseTest.exclude ?? []), ...(options?.exclude ?? [])];
+  const base = sharedVitestConfig as Record<string, unknown>;
+  const baseTest = sharedVitestConfig.test ?? {};
+  const scopedDir = options?.dir;
+  const env = options?.env;
+  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const cliInclude = narrowIncludePatternsForCli(include, options?.argv);
+  const exclude = relativizeScopedPatterns(
+    [...(baseTest.exclude ?? []), ...unitFastTestFiles, ...(options?.exclude ?? [])],
+    scopedDir,
+  );
+  const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
+  const setupFiles = [
+    ...new Set([
+      ...(baseTest.setupFiles ?? []),
+      ...(options?.setupFiles ?? []),
+      ...(options?.includeOpenClawRuntimeSetup === false ? [] : ["test/setup-openclaw-runtime.ts"]),
+    ]),
+  ];
+  const useNonIsolatedRunner = options?.useNonIsolatedRunner ?? !isolate;
+  const runner = useNonIsolatedRunner ? "./test/non-isolated-runner.ts" : undefined;
 
   return defineConfig({
     ...base,
     test: {
       ...baseTest,
-      isolate: resolveVitestIsolation(),
-      ...(options?.dir ? { dir: options.dir } : {}),
-      include,
+      ...(options?.deps ? { deps: options.deps } : {}),
+      ...(options?.name ? { name: options.name } : {}),
+      ...(options?.environment ? { environment: options.environment } : {}),
+      isolate,
+      ...(runner ? { runner } : { runner: undefined }),
+      setupFiles,
+      ...(scopedDir ? { dir: scopedDir } : {}),
+      include: relativizeScopedPatterns(includeFromEnv ?? cliInclude ?? include, scopedDir),
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
-      ...(options?.passWithNoTests !== undefined
-        ? { passWithNoTests: options.passWithNoTests }
+      ...(options?.passWithNoTests !== undefined || cliInclude !== null
+        ? { passWithNoTests: options?.passWithNoTests ?? true }
         : {}),
     },
   });

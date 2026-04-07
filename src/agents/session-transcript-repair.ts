@@ -1,8 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
-const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
+const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -96,7 +97,7 @@ function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
 }
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
-  const rawName = typeof block.name === "string" ? block.name : undefined;
+  const rawName = readStringValue(block.name);
   const trimmedName = rawName?.trim();
   const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
   const normalizedName = hasTrimmedName ? trimmedName : undefined;
@@ -151,20 +152,12 @@ function makeMissingToolResult(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
-function trimNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function normalizeToolResultName(
   message: Extract<AgentMessage, { role: "toolResult" }>,
   fallbackName?: string,
 ): Extract<AgentMessage, { role: "toolResult" }> {
   const rawToolName = (message as { toolName?: unknown }).toolName;
-  const normalizedToolName = trimNonEmptyString(rawToolName);
+  const normalizedToolName = normalizeOptionalString(rawToolName);
   if (normalizedToolName) {
     if (rawToolName === normalizedToolName) {
       return message;
@@ -172,7 +165,7 @@ function normalizeToolResultName(
     return { ...message, toolName: normalizedToolName };
   }
 
-  const normalizedFallback = trimNonEmptyString(fallbackName);
+  const normalizedFallback = normalizeOptionalString(fallbackName);
   if (normalizedFallback) {
     return { ...message, toolName: normalizedFallback };
   }
@@ -195,8 +188,10 @@ export type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
 };
 
+export type ErroredAssistantResultPolicy = "preserve" | "drop";
+
 export type ToolUseResultPairingOptions = {
-  preserveErroredAssistantResults?: boolean;
+  erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
 };
 
 export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
@@ -346,6 +341,10 @@ export type ToolUseRepairReport = {
   moved: boolean;
 };
 
+function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions): boolean {
+  return options?.erroredAssistantResultPolicy === "drop";
+}
+
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
   options?: ToolUseResultPairingOptions,
@@ -463,7 +462,7 @@ export function repairToolUseResultPairing(
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
       out.push(msg);
-      if (options?.preserveErroredAssistantResults) {
+      if (!shouldDropErroredAssistantResults(options)) {
         for (const toolCall of toolCalls) {
           const result = spanResultsById.get(toolCall.id);
           if (!result) {
@@ -471,6 +470,8 @@ export function repairToolUseResultPairing(
           }
           pushToolResult(result);
         }
+      } else if (spanResultsById.size > 0) {
+        changed = true;
       }
       for (const rem of remainder) {
         out.push(rem);

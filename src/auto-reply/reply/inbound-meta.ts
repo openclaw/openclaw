@@ -1,16 +1,11 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
-
-function safeTrim(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function formatConversationTimestamp(
   value: unknown,
@@ -23,9 +18,10 @@ function formatConversationTimestamp(
 }
 
 function resolveInboundChannel(ctx: TemplateContext): string | undefined {
-  let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  let channelValue =
+    normalizeOptionalString(ctx.OriginatingChannel) ?? normalizeOptionalString(ctx.Surface);
   if (!channelValue) {
-    const provider = safeTrim(ctx.Provider);
+    const provider = normalizeOptionalString(ctx.Provider);
     if (provider !== "webchat" && ctx.Surface !== "webchat") {
       channelValue = provider;
     }
@@ -33,7 +29,29 @@ function resolveInboundChannel(ctx: TemplateContext): string | undefined {
   return channelValue;
 }
 
-export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
+function resolveInboundFormattingHints(ctx: TemplateContext):
+  | {
+      text_markup: string;
+      rules: string[];
+    }
+  | undefined {
+  const channelValue = resolveInboundChannel(ctx);
+  if (!channelValue) {
+    return undefined;
+  }
+  const normalizedChannel = normalizeChannelId(channelValue) ?? channelValue;
+  const agentPrompt =
+    getLoadedChannelPlugin(normalizedChannel)?.agentPrompt ??
+    getBundledChannelPlugin(normalizedChannel)?.agentPrompt;
+  return agentPrompt?.inboundFormattingHints?.({
+    accountId: normalizeOptionalString(ctx.AccountId) ?? undefined,
+  });
+}
+
+export function buildInboundMetaSystemPrompt(
+  ctx: TemplateContext,
+  options?: { includeFormattingHints?: boolean },
+): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
@@ -50,12 +68,14 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
 
   const payload = {
     schema: "openclaw.inbound_meta.v1",
-    chat_id: safeTrim(ctx.OriginatingTo),
-    account_id: safeTrim(ctx.AccountId),
+    chat_id: normalizeOptionalString(ctx.OriginatingTo),
+    account_id: normalizeOptionalString(ctx.AccountId),
     channel: channelValue,
-    provider: safeTrim(ctx.Provider),
-    surface: safeTrim(ctx.Surface),
+    provider: normalizeOptionalString(ctx.Provider),
+    surface: normalizeOptionalString(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    response_format:
+      options?.includeFormattingHints === false ? undefined : resolveInboundFormattingHints(ctx),
   };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.
@@ -85,34 +105,34 @@ export function buildInboundUserContextPrefix(
   );
   const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
 
-  const messageId = safeTrim(ctx.MessageSid);
-  const messageIdFull = safeTrim(ctx.MessageSidFull);
+  const messageId = normalizeOptionalString(ctx.MessageSid);
+  const messageIdFull = normalizeOptionalString(ctx.MessageSidFull);
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
 
   const conversationInfo = {
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
-    reply_to_id: shouldIncludeConversationInfo ? safeTrim(ctx.ReplyToId) : undefined,
-    sender_id: shouldIncludeConversationInfo ? safeTrim(ctx.SenderId) : undefined,
-    conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
+    reply_to_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.ReplyToId) : undefined,
+    sender_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.SenderId) : undefined,
+    conversation_label: isDirect ? undefined : normalizeOptionalString(ctx.ConversationLabel),
     sender: shouldIncludeConversationInfo
-      ? (safeTrim(ctx.SenderName) ??
-        safeTrim(ctx.SenderE164) ??
-        safeTrim(ctx.SenderId) ??
-        safeTrim(ctx.SenderUsername))
+      ? (normalizeOptionalString(ctx.SenderName) ??
+        normalizeOptionalString(ctx.SenderE164) ??
+        normalizeOptionalString(ctx.SenderId) ??
+        normalizeOptionalString(ctx.SenderUsername))
       : undefined,
     timestamp: timestampStr,
-    group_subject: safeTrim(ctx.GroupSubject),
-    group_channel: safeTrim(ctx.GroupChannel),
-    group_space: safeTrim(ctx.GroupSpace),
-    thread_label: safeTrim(ctx.ThreadLabel),
+    group_subject: normalizeOptionalString(ctx.GroupSubject),
+    group_channel: normalizeOptionalString(ctx.GroupChannel),
+    group_space: normalizeOptionalString(ctx.GroupSpace),
+    thread_label: normalizeOptionalString(ctx.ThreadLabel),
     topic_id: ctx.MessageThreadId != null ? String(ctx.MessageThreadId) : undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
     has_reply_context: ctx.ReplyToBody ? true : undefined,
     has_forwarded_context: ctx.ForwardedFrom ? true : undefined,
-    has_thread_starter: safeTrim(ctx.ThreadStarterBody) ? true : undefined,
+    has_thread_starter: normalizeOptionalString(ctx.ThreadStarterBody) ? true : undefined,
     history_count:
       Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0
         ? ctx.InboundHistory.length
@@ -131,17 +151,17 @@ export function buildInboundUserContextPrefix(
 
   const senderInfo = {
     label: resolveSenderLabel({
-      name: safeTrim(ctx.SenderName),
-      username: safeTrim(ctx.SenderUsername),
-      tag: safeTrim(ctx.SenderTag),
-      e164: safeTrim(ctx.SenderE164),
-      id: safeTrim(ctx.SenderId),
+      name: normalizeOptionalString(ctx.SenderName),
+      username: normalizeOptionalString(ctx.SenderUsername),
+      tag: normalizeOptionalString(ctx.SenderTag),
+      e164: normalizeOptionalString(ctx.SenderE164),
+      id: normalizeOptionalString(ctx.SenderId),
     }),
-    id: safeTrim(ctx.SenderId),
-    name: safeTrim(ctx.SenderName),
-    username: safeTrim(ctx.SenderUsername),
-    tag: safeTrim(ctx.SenderTag),
-    e164: safeTrim(ctx.SenderE164),
+    id: normalizeOptionalString(ctx.SenderId),
+    name: normalizeOptionalString(ctx.SenderName),
+    username: normalizeOptionalString(ctx.SenderUsername),
+    tag: normalizeOptionalString(ctx.SenderTag),
+    e164: normalizeOptionalString(ctx.SenderE164),
   };
   if (senderInfo?.label) {
     blocks.push(
@@ -151,7 +171,7 @@ export function buildInboundUserContextPrefix(
     );
   }
 
-  if (safeTrim(ctx.ThreadStarterBody)) {
+  if (normalizeOptionalString(ctx.ThreadStarterBody)) {
     blocks.push(
       [
         "Thread starter (untrusted, for context):",
@@ -169,7 +189,7 @@ export function buildInboundUserContextPrefix(
         "```json",
         JSON.stringify(
           {
-            sender_label: safeTrim(ctx.ReplyToSender),
+            sender_label: normalizeOptionalString(ctx.ReplyToSender),
             is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
             body: ctx.ReplyToBody,
           },
@@ -188,12 +208,12 @@ export function buildInboundUserContextPrefix(
         "```json",
         JSON.stringify(
           {
-            from: safeTrim(ctx.ForwardedFrom),
-            type: safeTrim(ctx.ForwardedFromType),
-            username: safeTrim(ctx.ForwardedFromUsername),
-            title: safeTrim(ctx.ForwardedFromTitle),
-            signature: safeTrim(ctx.ForwardedFromSignature),
-            chat_type: safeTrim(ctx.ForwardedFromChatType),
+            from: normalizeOptionalString(ctx.ForwardedFrom),
+            type: normalizeOptionalString(ctx.ForwardedFromType),
+            username: normalizeOptionalString(ctx.ForwardedFromUsername),
+            title: normalizeOptionalString(ctx.ForwardedFromTitle),
+            signature: normalizeOptionalString(ctx.ForwardedFromSignature),
+            chat_type: normalizeOptionalString(ctx.ForwardedFromChatType),
             date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
           },
           null,

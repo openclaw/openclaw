@@ -38,12 +38,15 @@ describe("tryRouteCli", () => {
   // Capture the same reference that route.js uses.
   let loggingState: typeof import("../logging/state.js").loggingState;
   let originalDisableRouteFirst: string | undefined;
+  let originalHideBanner: string | undefined;
   let originalForceStderr: boolean;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     originalDisableRouteFirst = process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
+    originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
     delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
+    delete process.env.OPENCLAW_HIDE_BANNER;
     vi.resetModules();
     ({ tryRouteCli } = await import("./route.js"));
     ({ loggingState } = await import("../logging/state.js"));
@@ -64,17 +67,17 @@ describe("tryRouteCli", () => {
     } else {
       process.env.OPENCLAW_DISABLE_ROUTE_FIRST = originalDisableRouteFirst;
     }
+    if (originalHideBanner === undefined) {
+      delete process.env.OPENCLAW_HIDE_BANNER;
+    } else {
+      process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
+    }
   });
 
-  it("passes suppressDoctorStdout=true for routed --json commands", async () => {
+  it("skips config guard for routed status --json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandPath: ["status"],
-        suppressDoctorStdout: true,
-      }),
-    );
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
@@ -137,5 +140,13 @@ describe("tryRouteCli", () => {
       commandPath: ["status"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+  });
+
+  it("respects OPENCLAW_HIDE_BANNER for routed commands", async () => {
+    process.env.OPENCLAW_HIDE_BANNER = "1";
+
+    await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
+
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
   });
 });

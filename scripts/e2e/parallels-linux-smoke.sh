@@ -5,7 +5,11 @@ VM_NAME="Ubuntu 24.04.3 ARM64"
 VM_NAME_EXPLICIT=0
 SNAPSHOT_HINT="fresh"
 MODE="both"
-OPENAI_API_KEY_ENV="OPENAI_API_KEY"
+PROVIDER="openai"
+API_KEY_ENV=""
+AUTH_CHOICE=""
+AUTH_KEY_FLAG=""
+MODEL_ID=""
 INSTALL_URL="https://openclaw.ai/install.sh"
 HOST_PORT="18427"
 HOST_PORT_EXPLICIT=0
@@ -18,6 +22,7 @@ KEEP_SERVER=0
 SNAPSHOT_ID=""
 SNAPSHOT_STATE=""
 SNAPSHOT_NAME=""
+PACKED_MAIN_COMMIT_SHORT=""
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
@@ -31,6 +36,7 @@ TIMEOUT_INSTALL_S=1200
 TIMEOUT_VERIFY_S=90
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_AGENT_S=180
+TIMEOUT_GATEWAY_S=90
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -55,6 +61,10 @@ artifact_label() {
   printf 'current main tgz'
 }
 
+extract_package_build_commit_from_tgz() {
+  tar -xOf "$1" package/dist/build-info.json | python3 -c 'import json, sys; print(json.load(sys.stdin).get("commit", ""))'
+}
+
 warn() {
   printf 'warn: %s\n' "$*" >&2
 }
@@ -73,6 +83,11 @@ cleanup() {
 
 trap cleanup EXIT
 
+shell_quote() {
+  local value="$1"
+  printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\"'\"'/g")"
+}
+
 usage() {
   cat <<'EOF'
 Usage: bash scripts/e2e/parallels-linux-smoke.sh [options]
@@ -82,7 +97,11 @@ Options:
                              Falls back to the closest Ubuntu VM when omitted and unavailable.
   --snapshot-hint <name>     Snapshot name substring/fuzzy match. Default: "fresh"
   --mode <fresh|upgrade|both>
-  --openai-api-key-env <var> Host env var name for OpenAI API key. Default: OPENAI_API_KEY
+  --provider <openai|anthropic|minimax>
+                             Provider auth/model lane. Default: openai
+  --api-key-env <var>        Host env var name for provider API key.
+                             Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
+  --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.sh
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18427
   --host-ip <ip>             Override Parallels host IP.
@@ -99,6 +118,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --vm)
       VM_NAME="$2"
       VM_NAME_EXPLICIT=1
@@ -112,8 +134,12 @@ while [[ $# -gt 0 ]]; do
       MODE="$2"
       shift 2
       ;;
-    --openai-api-key-env)
-      OPENAI_API_KEY_ENV="$2"
+    --provider)
+      PROVIDER="$2"
+      shift 2
+      ;;
+    --api-key-env|--openai-api-key-env)
+      API_KEY_ENV="$2"
       shift 2
       ;;
     --install-url)
@@ -166,8 +192,32 @@ case "$MODE" in
     ;;
 esac
 
-OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
-[[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+case "$PROVIDER" in
+  openai)
+    AUTH_CHOICE="openai-api-key"
+    AUTH_KEY_FLAG="openai-api-key"
+    MODEL_ID="openai/gpt-5.4"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
+    ;;
+  anthropic)
+    AUTH_CHOICE="apiKey"
+    AUTH_KEY_FLAG="anthropic-api-key"
+    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  minimax)
+    AUTH_CHOICE="minimax-global-api"
+    AUTH_KEY_FLAG="minimax-api-key"
+    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
+    ;;
+  *)
+    die "invalid --provider: $PROVIDER"
+    ;;
+esac
+
+API_KEY_VALUE="${!API_KEY_ENV:-}"
+[[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
 
 resolve_vm_name() {
   local json requested explicit
@@ -178,6 +228,7 @@ resolve_vm_name() {
 import difflib
 import json
 import os
+import re
 import sys
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
@@ -185,6 +236,18 @@ requested = os.environ["REQUESTED_VM_NAME"].strip()
 requested_lower = requested.lower()
 explicit = os.environ["VM_NAME_EXPLICIT"] == "1"
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
+
+def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+    match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+def version_distance(version: tuple[int, ...], target: tuple[int, ...]) -> tuple[int, ...]:
+    width = max(len(version), len(target))
+    padded_version = version + (0,) * (width - len(version))
+    padded_target = target + (0,) * (width - len(target))
+    return tuple(abs(a - b) for a, b in zip(padded_version, padded_target))
 
 if requested in names:
     print(requested)
@@ -196,6 +259,27 @@ if explicit:
 ubuntu_names = [name for name in names if "ubuntu" in name.lower()]
 if not ubuntu_names:
     sys.exit(f"default vm not found and no Ubuntu fallback available: {requested}")
+
+requested_version = parse_ubuntu_version(requested) or (24,)
+ubuntu_with_versions = [
+    (name, parse_ubuntu_version(name)) for name in ubuntu_names
+]
+ubuntu_ge_24 = [
+    (name, version)
+    for name, version in ubuntu_with_versions
+    if version and version[0] >= 24
+]
+if ubuntu_ge_24:
+    best_name = min(
+        ubuntu_ge_24,
+        key=lambda item: (
+            version_distance(item[1], requested_version),
+            -len(item[1]),
+            item[0].lower(),
+        ),
+    )[0]
+    print(best_name)
+    raise SystemExit(0)
 
 best_name = max(
     ubuntu_names,
@@ -316,7 +400,7 @@ resolve_host_port() {
 }
 
 guest_exec() {
-  prlctl exec "$VM_NAME" "$@"
+  prlctl exec "$VM_NAME" /usr/bin/env HOME=/root "$@"
 }
 
 wait_for_vm_status() {
@@ -426,7 +510,7 @@ extract_package_version_from_tgz() {
 }
 
 pack_main_tgz() {
-  local short_head pkg
+  local short_head pkg packed_commit
   if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
     say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
     pkg="$(
@@ -448,6 +532,9 @@ pack_main_tgz() {
   )"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
+  packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
+  [[ -n "$packed_commit" ]] || die "failed to read packed build commit from $MAIN_TGZ_PATH"
+  PACKED_MAIN_COMMIT_SHORT="${packed_commit:0:7}"
   say "Packed $MAIN_TGZ_PATH"
   tar -xOf "$MAIN_TGZ_PATH" package/dist/build-info.json
 }
@@ -457,7 +544,8 @@ verify_target_version() {
     verify_version_contains "$TARGET_EXPECT_VERSION"
     return
   fi
-  verify_version_contains "$(git rev-parse --short=7 HEAD)"
+  [[ -n "$PACKED_MAIN_COMMIT_SHORT" ]] || die "packed main commit not captured"
+  verify_version_contains "$PACKED_MAIN_COMMIT_SHORT"
 }
 
 start_server() {
@@ -523,10 +611,10 @@ verify_version_contains() {
 }
 
 run_ref_onboard() {
-  guest_exec /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" openclaw onboard \
+  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw onboard \
     --non-interactive \
     --mode local \
-    --auth-choice openai-api-key \
+    --auth-choice "$AUTH_CHOICE" \
     --secret-input-mode ref \
     --gateway-port 18789 \
     --gateway-bind loopback \
@@ -536,8 +624,43 @@ run_ref_onboard() {
     --json
 }
 
+start_gateway_background() {
+  local cmd api_key_value_q
+  api_key_value_q="$(shell_quote "$API_KEY_VALUE")"
+  cmd="$(cat <<EOF
+pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
+rm -f /tmp/openclaw-parallels-linux-gateway.log
+setsid sh -lc 'exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json ${API_KEY_ENV}=${api_key_value_q} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1' >/dev/null 2>&1 < /dev/null &
+EOF
+)"
+  guest_exec bash -lc "$cmd"
+
+  # On the Ubuntu guest the backgrounded process can bind a few seconds after
+  # the launch command returns. Keep the race inside gateway-start instead of
+  # failing the next phase with a false-negative RPC probe.
+  local deadline
+  deadline=$((SECONDS + TIMEOUT_GATEWAY_S))
+  while (( SECONDS < deadline )); do
+    if show_gateway_status_compat >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  return 1
+}
+
+show_gateway_status_compat() {
+  if guest_exec openclaw gateway status --help | grep -Fq -- "--require-rpc"; then
+    guest_exec openclaw gateway status --deep --require-rpc
+    return
+  fi
+  guest_exec openclaw gateway status --deep
+}
+
 verify_local_turn() {
-  guest_exec /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" openclaw agent \
+  guest_exec openclaw models set "$MODEL_ID"
+  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw agent \
     --local \
     --agent main \
     --message ping \
@@ -627,6 +750,7 @@ summary = {
     "snapshotHint": os.environ["SUMMARY_SNAPSHOT_HINT"],
     "snapshotId": os.environ["SUMMARY_SNAPSHOT_ID"],
     "mode": os.environ["SUMMARY_MODE"],
+    "provider": os.environ["SUMMARY_PROVIDER"],
     "latestVersion": os.environ["SUMMARY_LATEST_VERSION"],
     "installVersion": os.environ["SUMMARY_INSTALL_VERSION"],
     "targetPackageSpec": os.environ["SUMMARY_TARGET_PACKAGE_SPEC"],
@@ -663,7 +787,9 @@ run_fresh_main_lane() {
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  FRESH_GATEWAY_STATUS="skipped-no-detached-linux-gateway"
+  phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
+  phase_run "fresh.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   FRESH_AGENT_STATUS="pass"
 }
@@ -680,7 +806,9 @@ run_upgrade_lane() {
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  UPGRADE_GATEWAY_STATUS="skipped-no-detached-linux-gateway"
+  phase_run "upgrade.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
+  phase_run "upgrade.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   UPGRADE_AGENT_STATUS="pass"
 }
@@ -742,10 +870,11 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_SNAPSHOT_HINT="$SNAPSHOT_HINT" \
   SUMMARY_SNAPSHOT_ID="$SNAPSHOT_ID" \
   SUMMARY_MODE="$MODE" \
+  SUMMARY_PROVIDER="$PROVIDER" \
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
   SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
   SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \
-  SUMMARY_CURRENT_HEAD="$(git rev-parse --short HEAD)" \
+  SUMMARY_CURRENT_HEAD="${PACKED_MAIN_COMMIT_SHORT:-$(git rev-parse --short HEAD)}" \
   SUMMARY_RUN_DIR="$RUN_DIR" \
   SUMMARY_DAEMON_STATUS="$DAEMON_STATUS" \
   SUMMARY_FRESH_MAIN_STATUS="$FRESH_MAIN_STATUS" \

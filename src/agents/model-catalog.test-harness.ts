@@ -12,6 +12,10 @@ vi.mock("./agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/openclaw",
 }));
 
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
+}));
+
 export function installModelCatalogTestHooks() {
   beforeEach(() => {
     resetModelCatalogCacheForTest();

@@ -5,6 +5,8 @@ import { createOpenClawTools } from "./openclaw-tools.js";
 
 vi.mock("../plugins/tools.js", () => ({
   resolvePluginTools: () => [],
+  copyPluginToolMeta: () => undefined,
+  getPluginToolMeta: () => undefined,
 }));
 
 function asConfig(value: unknown): OpenClawConfig {

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   evaluateMattermostMentionGate,
+  resolveMattermostReactionChannelId,
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
@@ -12,10 +13,15 @@ import {
 
 function resolveRequireMentionForTest(params: MattermostRequireMentionResolverInput): boolean {
   const root = params.cfg.channels?.mattermost;
-  const accountGroups = root?.accounts?.[params.accountId]?.groups;
+  const accountGroups = (
+    root?.accounts?.[params.accountId] as
+      | { groups?: Record<string, { requireMention?: boolean }> }
+      | undefined
+  )?.groups;
   const groups = accountGroups ?? root?.groups;
-  const groupConfig = params.groupId ? groups?.[params.groupId] : undefined;
-  const defaultGroupConfig = groups?.["*"];
+  const typedGroups = groups as Record<string, { requireMention?: boolean }> | undefined;
+  const groupConfig = params.groupId ? typedGroups?.[params.groupId] : undefined;
+  const defaultGroupConfig = typedGroups?.["*"];
   const configMention =
     typeof groupConfig?.requireMention === "boolean"
       ? groupConfig.requireMention
@@ -272,5 +278,28 @@ describe("resolveMattermostThreadSessionContext", () => {
       sessionKey: "agent:main:mattermost:default:user-1",
       parentSessionKey: undefined,
     });
+  });
+});
+
+describe("resolveMattermostReactionChannelId", () => {
+  it("prefers broadcast channel_id when present", () => {
+    expect(
+      resolveMattermostReactionChannelId({
+        broadcast: { channel_id: "chan-broadcast" },
+        data: { channel_id: "chan-data" },
+      }),
+    ).toBe("chan-broadcast");
+  });
+
+  it("falls back to data.channel_id when broadcast channel_id is missing", () => {
+    expect(
+      resolveMattermostReactionChannelId({
+        data: { channel_id: "chan-data" },
+      }),
+    ).toBe("chan-data");
+  });
+
+  it("returns undefined when neither payload location includes channel_id", () => {
+    expect(resolveMattermostReactionChannelId({})).toBeUndefined();
   });
 });

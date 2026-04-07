@@ -13,34 +13,34 @@ Local is doable, but OpenClaw expects large context + strong defenses against pr
 
 If you want the lowest-friction local setup, start with [Ollama](/providers/ollama) and `openclaw onboard`. This page is the opinionated guide for higher-end local stacks and custom OpenAI-compatible local servers.
 
-## Recommended: LM Studio + MiniMax M2.5 (Responses API, full-size)
+## Recommended: LM Studio + large local model (Responses API)
 
-Best current local stack. Load MiniMax M2.5 in LM Studio, enable the local server (default `http://127.0.0.1:1234`), and use Responses API to keep reasoning separate from final text.
+Best current local stack. Load a large model in LM Studio (for example, a full-size Qwen, DeepSeek, or Llama build), enable the local server (default `http://127.0.0.1:1234`), and use Responses API to keep reasoning separate from final text.
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "lmstudio/minimax-m2.5-gs32" },
+      model: { primary: “lmstudio/my-local-model” },
       models: {
-        "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "lmstudio/minimax-m2.5-gs32": { alias: "Minimax" },
+        “anthropic/claude-opus-4-6”: { alias: “Opus” },
+        “lmstudio/my-local-model”: { alias: “Local” },
       },
     },
   },
   models: {
-    mode: "merge",
+    mode: “merge”,
     providers: {
       lmstudio: {
-        baseUrl: "http://127.0.0.1:1234/v1",
-        apiKey: "lmstudio",
-        api: "openai-responses",
+        baseUrl: “http://127.0.0.1:1234/v1”,
+        apiKey: “lmstudio”,
+        api: “openai-responses”,
         models: [
           {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5 GS32",
+            id: “my-local-model”,
+            name: “Local Model”,
             reasoning: false,
-            input: ["text"],
+            input: [“text”],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 196608,
             maxTokens: 8192,
@@ -55,7 +55,8 @@ Best current local stack. Load MiniMax M2.5 in LM Studio, enable the local serve
 **Setup checklist**
 
 - Install LM Studio: [https://lmstudio.ai](https://lmstudio.ai)
-- In LM Studio, download the **largest MiniMax M2.5 build available** (avoid “small”/heavily quantized variants), start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
+- In LM Studio, download the **largest model build available** (avoid “small”/heavily quantized variants), start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
+- Replace `my-local-model` with the actual model ID shown in LM Studio.
 - Keep the model loaded; cold-load adds startup latency.
 - Adjust `contextWindow`/`maxTokens` if your LM Studio build differs.
 - For WhatsApp, stick to Responses API so only final text is sent.
@@ -70,11 +71,11 @@ Keep hosted models configured even when running local; use `models.mode: "merge"
     defaults: {
       model: {
         primary: "anthropic/claude-sonnet-4-6",
-        fallbacks: ["lmstudio/minimax-m2.5-gs32", "anthropic/claude-opus-4-6"],
+        fallbacks: ["lmstudio/my-local-model", "anthropic/claude-opus-4-6"],
       },
       models: {
         "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-        "lmstudio/minimax-m2.5-gs32": { alias: "MiniMax Local" },
+        "lmstudio/my-local-model": { alias: "Local" },
         "anthropic/claude-opus-4-6": { alias: "Opus" },
       },
     },
@@ -88,8 +89,8 @@ Keep hosted models configured even when running local; use `models.mode: "merge"
         api: "openai-responses",
         models: [
           {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5 GS32",
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -143,6 +144,16 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
 ```
 
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
+
+Behavior note for local/proxied `/v1` backends:
+
+- OpenClaw treats these as proxy-style OpenAI-compatible routes, not native
+  OpenAI endpoints
+- native OpenAI-only request shaping does not apply here: no
+  `service_tier`, no Responses `store`, no OpenAI reasoning-compat payload
+  shaping, and no prompt-cache hints
+- hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+  are not injected on these custom proxy URLs
 
 ## Troubleshooting
 

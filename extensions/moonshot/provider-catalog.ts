@@ -1,6 +1,11 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import {
+  applyProviderNativeStreamingUsageCompat,
+  supportsNativeStreamingUsageCompat,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 262144;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 262144;
@@ -49,6 +54,22 @@ const MOONSHOT_MODEL_CATALOG = [
     maxTokens: 16384,
   },
 ] as const;
+
+export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
+  return supportsNativeStreamingUsageCompat({
+    providerId: "moonshot",
+    baseUrl,
+  });
+}
+
+export function applyMoonshotNativeStreamingUsageCompat(
+  provider: ModelProviderConfig,
+): ModelProviderConfig {
+  return applyProviderNativeStreamingUsageCompat({
+    providerId: "moonshot",
+    providerConfig: provider,
+  });
+}
 
 export function buildMoonshotProvider(): ModelProviderConfig {
   return {

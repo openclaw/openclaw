@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
@@ -14,6 +14,18 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
+    validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
+  };
+});
+
 let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];
 let mockedHelpers: SanitizeSessionHistoryHarness["mockedHelpers"];
 
@@ -21,10 +33,15 @@ describe("sanitizeSessionHistory e2e smoke", () => {
   const mockSessionManager = makeMockSessionManager();
   const mockMessages = makeSimpleUserMessages();
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
     mockedHelpers = harness.mockedHelpers;
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
   });
 
   it("passes simple user-only history through for google model APIs", async () => {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -26,6 +27,8 @@ export type ApiKeyStorageOptions = {
 
 export type WriteOAuthCredentialsOptions = {
   syncSiblingAgents?: boolean;
+  profileName?: string;
+  displayName?: string;
 };
 
 function buildEnvSecretRef(id: string): SecretRef {
@@ -100,6 +103,28 @@ export function buildApiKeyCredential(
   };
 }
 
+export function upsertApiKeyProfile(params: {
+  provider: string;
+  input: SecretInput;
+  agentDir?: string;
+  options?: ApiKeyStorageOptions;
+  profileId?: string;
+  metadata?: Record<string, string>;
+}): string {
+  const profileId = params.profileId ?? buildAuthProfileId({ providerId: params.provider });
+  upsertAuthProfile({
+    profileId,
+    credential: buildApiKeyCredential(
+      params.provider,
+      params.input,
+      params.metadata,
+      params.options,
+    ),
+    agentDir: resolveAuthAgentDir(params.agentDir),
+  });
+  return profileId;
+}
+
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {
@@ -107,6 +132,7 @@ export function applyAuthProfileConfig(
     provider: string;
     mode: "api_key" | "oauth" | "token";
     email?: string;
+    displayName?: string;
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
@@ -117,6 +143,7 @@ export function applyAuthProfileConfig(
       provider: params.provider,
       mode: params.mode,
       ...(params.email ? { email: params.email } : {}),
+      ...(params.displayName ? { displayName: params.displayName } : {}),
     },
   };
 
@@ -126,7 +153,13 @@ export function applyAuthProfileConfig(
 
   // Maintain `auth.order` when it already exists. Additionally, if we detect
   // mixed auth modes for the same provider, keep the newly selected profile first.
-  const existingProviderOrder = cfg.auth?.order?.[params.provider];
+  const matchingProviderOrderEntries = Object.entries(cfg.auth?.order ?? {}).filter(
+    ([providerId]) => normalizeProviderIdForAuth(providerId) === normalizedProvider,
+  );
+  const existingProviderOrder =
+    matchingProviderOrderEntries.length > 0
+      ? [...new Set(matchingProviderOrderEntries.flatMap(([, order]) => order))]
+      : undefined;
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
     existingProviderOrder && preferProfileFirst
@@ -147,20 +180,28 @@ export function applyAuthProfileConfig(
             .filter((profileId) => profileId !== params.profileId),
         ]
       : undefined;
+  const baseOrder =
+    matchingProviderOrderEntries.length > 0
+      ? Object.fromEntries(
+          Object.entries(cfg.auth?.order ?? {}).filter(
+            ([providerId]) => normalizeProviderIdForAuth(providerId) !== normalizedProvider,
+          ),
+        )
+      : cfg.auth?.order;
   const order =
     existingProviderOrder !== undefined
       ? {
-          ...cfg.auth?.order,
-          [params.provider]: reorderedProviderOrder?.includes(params.profileId)
+          ...baseOrder,
+          [normalizedProvider]: reorderedProviderOrder?.includes(params.profileId)
             ? reorderedProviderOrder
             : [...(reorderedProviderOrder ?? []), params.profileId],
         }
       : derivedProviderOrder
         ? {
-            ...cfg.auth?.order,
-            [params.provider]: derivedProviderOrder,
+            ...baseOrder,
+            [normalizedProvider]: derivedProviderOrder,
           }
-        : cfg.auth?.order;
+        : baseOrder;
   return {
     ...cfg,
     auth: {
@@ -222,7 +263,10 @@ export async function writeOAuthCredentials(
 ): Promise<string> {
   const email =
     typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
-  const profileId = `${provider}:${email}`;
+  const profileId = buildAuthProfileId({
+    providerId: provider,
+    profileName: options?.profileName ?? email,
+  });
   const resolvedAgentDir = path.resolve(resolveAuthAgentDir(agentDir));
   const targetAgentDirs = options?.syncSiblingAgents
     ? resolveSiblingAgentDirs(resolvedAgentDir)
@@ -232,6 +276,7 @@ export async function writeOAuthCredentials(
     type: "oauth" as const,
     provider,
     ...creds,
+    ...(options?.displayName ? { displayName: options.displayName } : {}),
   };
 
   upsertAuthProfile({

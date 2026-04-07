@@ -1,138 +1,57 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import { monitorSingleAccount } from "./monitor.account.js";
-import { setFeishuRuntime } from "./runtime.js";
-import type { ResolvedFeishuAccount } from "./types.js";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import type { RuntimeEnv } from "../runtime-api.js";
+import "./lifecycle.test-support.js";
+import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
+import {
+  createFeishuLifecycleConfig,
+  createFeishuLifecycleReplyDispatcher,
+  createResolvedFeishuLifecycleAccount,
+  expectFeishuReplyDispatcherSentFinalReplyOnce,
+  expectFeishuReplyPipelineDedupedAcrossReplay,
+  expectFeishuSingleEffectAcrossReplay,
+  installFeishuLifecycleReplyRuntime,
+  mockFeishuReplyOnceDispatch,
+  restoreFeishuLifecycleStateDir,
+  setFeishuLifecycleStateDir,
+  setupFeishuLifecycleHandler,
+} from "./test-support/lifecycle-test-support.js";
 
-type BoundConversation = {
-  bindingId: string;
-  targetSessionKey: string;
-};
+const {
+  createEventDispatcherMock,
+  createFeishuReplyDispatcherMock,
+  dispatchReplyFromConfigMock,
+  finalizeInboundContextMock,
+  resolveAgentRouteMock,
+  resolveBoundConversationMock,
+  sendCardFeishuMock,
+  touchBindingMock,
+  withReplyDispatcherMock,
+} = getFeishuLifecycleTestMocks();
 
-const createEventDispatcherMock = vi.hoisted(() => vi.fn());
-const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
-const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
-const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
-const createFeishuReplyDispatcherMock = vi.hoisted(() => vi.fn());
-const resolveBoundConversationMock = vi.hoisted(() =>
-  vi.fn<() => BoundConversation | null>(() => null),
-);
-const touchBindingMock = vi.hoisted(() => vi.fn());
-const resolveAgentRouteMock = vi.hoisted(() => vi.fn());
-const dispatchReplyFromConfigMock = vi.hoisted(() => vi.fn());
-const withReplyDispatcherMock = vi.hoisted(() => vi.fn());
-const finalizeInboundContextMock = vi.hoisted(() => vi.fn((ctx) => ctx));
-const sendCardFeishuMock = vi.hoisted(() =>
-  vi.fn(async () => ({ messageId: "om_card_sent", chatId: "p2p:ou_user1" })),
-);
-const getMessageFeishuMock = vi.hoisted(() => vi.fn(async () => null));
-const listFeishuThreadMessagesMock = vi.hoisted(() => vi.fn(async () => []));
-const sendMessageFeishuMock = vi.hoisted(() =>
-  vi.fn(async () => ({ messageId: "om_sent", chatId: "p2p:ou_user1" })),
-);
-
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
+let _handlers: Record<string, (data: unknown) => Promise<void>> = {};
 let lastRuntime: RuntimeEnv | null = null;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-
-vi.mock("./client.js", async () => {
-  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
-  return {
-    ...actual,
-    createEventDispatcher: createEventDispatcherMock,
-  };
+const lifecycleConfig = createFeishuLifecycleConfig({
+  accountId: "acct-menu",
+  appId: "cli_test",
+  appSecret: "secret_test",
+  channelConfig: {
+    dmPolicy: "open",
+  },
+  accountConfig: {
+    dmPolicy: "open",
+  },
 });
 
-vi.mock("./monitor.transport.js", () => ({
-  monitorWebSocket: monitorWebSocketMock,
-  monitorWebhook: monitorWebhookMock,
-}));
-
-vi.mock("./thread-bindings.js", () => ({
-  createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
-}));
-
-vi.mock("./reply-dispatcher.js", () => ({
-  createFeishuReplyDispatcher: createFeishuReplyDispatcherMock,
-}));
-
-vi.mock("./send.js", () => ({
-  sendCardFeishu: sendCardFeishuMock,
-  getMessageFeishu: getMessageFeishuMock,
-  listFeishuThreadMessages: listFeishuThreadMessagesMock,
-  sendMessageFeishu: sendMessageFeishuMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    getSessionBindingService: () => ({
-      resolveByConversation: resolveBoundConversationMock,
-      touch: touchBindingMock,
-    }),
-  };
+const lifecycleAccount = createResolvedFeishuLifecycleAccount({
+  accountId: "acct-menu",
+  appId: "cli_test",
+  appSecret: "secret_test",
+  config: {
+    dmPolicy: "open",
+  },
 });
-
-vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => ({
-    resolveByConversation: resolveBoundConversationMock,
-    touch: touchBindingMock,
-  }),
-}));
-
-function createLifecycleConfig(): ClawdbotConfig {
-  return {
-    channels: {
-      feishu: {
-        enabled: true,
-        dmPolicy: "open",
-        requireMention: false,
-        resolveSenderNames: false,
-        accounts: {
-          "acct-menu": {
-            enabled: true,
-            appId: "cli_test",
-            appSecret: "secret_test", // pragma: allowlist secret
-            connectionMode: "websocket",
-            dmPolicy: "open",
-            requireMention: false,
-            resolveSenderNames: false,
-          },
-        },
-      },
-    },
-    messages: {
-      inbound: {
-        debounceMs: 0,
-        byChannel: {
-          feishu: 0,
-        },
-      },
-    },
-  } as ClawdbotConfig;
-}
-
-function createLifecycleAccount(): ResolvedFeishuAccount {
-  return {
-    accountId: "acct-menu",
-    selectionSource: "explicit",
-    enabled: true,
-    configured: true,
-    appId: "cli_test",
-    appSecret: "secret_test", // pragma: allowlist secret
-    domain: "feishu",
-    config: {
-      enabled: true,
-      connectionMode: "websocket",
-      dmPolicy: "open",
-      requireMention: false,
-      resolveSenderNames: false,
-    },
-  } as unknown as ResolvedFeishuAccount;
-}
 
 function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
   return {
@@ -149,53 +68,29 @@ function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
 }
 
 async function setupLifecycleMonitor() {
-  const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
-    handlers = registered;
-  });
-  createEventDispatcherMock.mockReturnValue({ register });
-
   lastRuntime = createRuntimeEnv();
-
-  await monitorSingleAccount({
-    cfg: createLifecycleConfig(),
-    account: createLifecycleAccount(),
-    runtime: lastRuntime,
-    botOpenIdSource: {
-      kind: "prefetched",
-      botOpenId: "ou_bot_1",
-      botName: "Bot",
+  return setupFeishuLifecycleHandler({
+    createEventDispatcherMock,
+    onRegister: (registered) => {
+      _handlers = registered;
     },
+    runtime: lastRuntime,
+    cfg: lifecycleConfig,
+    account: lifecycleAccount,
+    handlerKey: "application.bot.menu_v6",
+    missingHandlerMessage: "missing application.bot.menu_v6 handler",
   });
-
-  const onBotMenu = handlers["application.bot.menu_v6"];
-  if (!onBotMenu) {
-    throw new Error("missing application.bot.menu_v6 handler");
-  }
-  return onBotMenu;
 }
 
 describe("Feishu bot-menu lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
-    handlers = {};
+    _handlers = {};
     lastRuntime = null;
-    process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-bot-menu-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setFeishuLifecycleStateDir("openclaw-feishu-bot-menu");
 
-    const dispatcher = {
-      sendToolResult: vi.fn(() => false),
-      sendBlockReply: vi.fn(() => false),
-      sendFinalReply: vi.fn(async () => true),
-      waitForIdle: vi.fn(async () => {}),
-      getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-      markComplete: vi.fn(),
-    };
-
-    createFeishuReplyDispatcherMock.mockReturnValue({
-      dispatcher,
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-    });
+    createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
 
     resolveBoundConversationMock.mockImplementation(() => ({
       bindingId: "binding-menu",
@@ -211,80 +106,25 @@ describe("Feishu bot-menu lifecycle", () => {
       matchedBy: "default",
     });
 
-    dispatchReplyFromConfigMock.mockImplementation(async ({ dispatcher }) => {
-      await dispatcher.sendFinalReply({ text: "menu reply once" });
-      return {
-        queuedFinal: false,
-        counts: { final: 1 },
-      };
+    mockFeishuReplyOnceDispatch({
+      dispatchReplyFromConfigMock,
+      replyText: "menu reply once",
     });
 
     withReplyDispatcherMock.mockImplementation(async ({ run }) => await run());
 
-    setFeishuRuntime(
-      createPluginRuntimeMock({
-        channel: {
-          debounce: {
-            resolveInboundDebounceMs: vi.fn(() => 0),
-            createInboundDebouncer: <T>(params: {
-              onFlush?: (items: T[]) => Promise<void>;
-              onError?: (err: unknown, items: T[]) => void;
-            }) => ({
-              enqueue: async (item: T) => {
-                try {
-                  await params.onFlush?.([item]);
-                } catch (err) {
-                  params.onError?.(err, [item]);
-                }
-              },
-              flushKey: async () => {},
-            }),
-          },
-          text: {
-            hasControlCommand: vi.fn(() => false),
-          },
-          routing: {
-            resolveAgentRoute:
-              resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
-          },
-          reply: {
-            resolveEnvelopeFormatOptions: vi.fn(() => ({})),
-            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext:
-              finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-            dispatchReplyFromConfig:
-              dispatchReplyFromConfigMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
-            withReplyDispatcher:
-              withReplyDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
-          },
-          commands: {
-            shouldComputeCommandAuthorized: vi.fn(() => false),
-            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
-          },
-          session: {
-            readSessionUpdatedAt: vi.fn(),
-            resolveStorePath: vi.fn(() => "/tmp/feishu-bot-menu-sessions.json"),
-          },
-          pairing: {
-            readAllowFromStore: vi.fn().mockResolvedValue([]),
-            upsertPairingRequest: vi.fn(),
-            buildPairingReply: vi.fn(),
-          },
-        },
-        media: {
-          detectMime: vi.fn(async () => "text/plain"),
-        },
-      }) as unknown as PluginRuntime,
-    );
+    installFeishuLifecycleReplyRuntime({
+      resolveAgentRouteMock,
+      finalizeInboundContextMock,
+      dispatchReplyFromConfigMock,
+      withReplyDispatcherMock,
+      storePath: "/tmp/feishu-bot-menu-sessions.json",
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-      return;
-    }
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    restoreFeishuLifecycleStateDir(originalStateDir);
   });
 
   it("opens one launcher card across duplicate quick-actions replay", async () => {
@@ -294,13 +134,10 @@ describe("Feishu bot-menu lifecycle", () => {
       timestamp: "1700000000000",
     });
 
-    await onBotMenu(event);
-    await vi.waitFor(() => {
-      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
-    });
-    await onBotMenu(event);
-    await vi.waitFor(() => {
-      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    await expectFeishuSingleEffectAcrossReplay({
+      handler: onBotMenu,
+      event,
+      effectMock: sendCardFeishuMock,
     });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
@@ -323,16 +160,12 @@ describe("Feishu bot-menu lifecycle", () => {
     });
     sendCardFeishuMock.mockRejectedValueOnce(new Error("boom"));
 
-    await onBotMenu(event);
-    await vi.waitFor(() => {
-      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
-      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    });
-    await onBotMenu(event);
-    await vi.waitFor(() => {
-      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
-      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-      expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
+    await expectFeishuReplyPipelineDedupedAcrossReplay({
+      handler: onBotMenu,
+      event,
+      dispatchReplyFromConfigMock,
+      createFeishuReplyDispatcherMock,
+      waitTimeoutMs: 5_000,
     });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
@@ -355,9 +188,6 @@ describe("Feishu bot-menu lifecycle", () => {
     );
     expect(touchBindingMock).toHaveBeenCalledWith("binding-menu");
 
-    const dispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
-      sendFinalReply: ReturnType<typeof vi.fn>;
-    };
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
   });
 });

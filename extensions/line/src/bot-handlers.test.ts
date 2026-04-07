@@ -1,19 +1,186 @@
-import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
+type MessageEvent = webhook.MessageEvent;
+type PostbackEvent = webhook.PostbackEvent;
+
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    danger: (text: string) => text,
-    logVerbose: () => {},
-    shouldLogVerbose: () => false,
-  };
-});
+vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+  buildMentionRegexes: () => [],
+  matchesMentionPatterns: () => false,
+  resolveInboundMentionDecision: (params: {
+    facts?: {
+      canDetectMention: boolean;
+      wasMentioned: boolean;
+      hasAnyMention?: boolean;
+    };
+    policy?: {
+      isGroup: boolean;
+      requireMention: boolean;
+      allowTextCommands: boolean;
+      hasControlCommand: boolean;
+      commandAuthorized: boolean;
+    };
+    isGroup?: boolean;
+    requireMention?: boolean;
+    canDetectMention?: boolean;
+    wasMentioned?: boolean;
+    hasAnyMention?: boolean;
+    allowTextCommands?: boolean;
+    hasControlCommand?: boolean;
+    commandAuthorized?: boolean;
+  }) => {
+    const facts =
+      "facts" in params && params.facts
+        ? params.facts
+        : {
+            canDetectMention: Boolean(params.canDetectMention),
+            wasMentioned: Boolean(params.wasMentioned),
+            hasAnyMention: params.hasAnyMention,
+          };
+    const policy =
+      "policy" in params && params.policy
+        ? params.policy
+        : {
+            isGroup: Boolean(params.isGroup),
+            requireMention: Boolean(params.requireMention),
+            allowTextCommands: Boolean(params.allowTextCommands),
+            hasControlCommand: Boolean(params.hasControlCommand),
+            commandAuthorized: Boolean(params.commandAuthorized),
+          };
+    return {
+      effectiveWasMentioned:
+        facts.wasMentioned ||
+        (policy.allowTextCommands &&
+          policy.hasControlCommand &&
+          policy.commandAuthorized &&
+          !facts.hasAnyMention),
+      shouldSkip:
+        policy.isGroup &&
+        policy.requireMention &&
+        facts.canDetectMention &&
+        !facts.wasMentioned &&
+        !(
+          policy.allowTextCommands &&
+          policy.hasControlCommand &&
+          policy.commandAuthorized &&
+          !facts.hasAnyMention
+        ),
+      shouldBypassMention:
+        policy.isGroup &&
+        policy.requireMention &&
+        !facts.wasMentioned &&
+        !facts.hasAnyMention &&
+        policy.allowTextCommands &&
+        policy.hasControlCommand &&
+        policy.commandAuthorized,
+      implicitMention: false,
+      matchedImplicitMentionKinds: [],
+    };
+  },
+}));
+vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
+  createChannelPairingChallengeIssuer:
+    ({ upsertPairingRequest }: { upsertPairingRequest: (args: unknown) => Promise<unknown> }) =>
+    async ({ senderId, onCreated }: { senderId: string; onCreated?: () => void }) => {
+      await upsertPairingRequest({ id: senderId, meta: {} });
+      onCreated?.();
+    },
+}));
+vi.mock("openclaw/plugin-sdk/command-auth", () => ({
+  hasControlCommand: (text: string) => text.trim().startsWith("!"),
+  resolveControlCommandGate: ({
+    hasControlCommand,
+    authorizers,
+  }: {
+    hasControlCommand: boolean;
+    authorizers: Array<{ configured: boolean; allowed: boolean }>;
+  }) => ({
+    commandAuthorized:
+      hasControlCommand && authorizers.some((entry) => entry.allowed || !entry.configured),
+  }),
+}));
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+  resolveAllowlistProviderRuntimeGroupPolicy: ({
+    groupPolicy,
+    defaultGroupPolicy,
+  }: {
+    groupPolicy?: string;
+    defaultGroupPolicy: string;
+  }) => ({
+    groupPolicy: groupPolicy ?? defaultGroupPolicy,
+    providerMissingFallbackApplied: false,
+  }),
+  resolveDefaultGroupPolicy: (cfg: { channels?: { line?: { groupPolicy?: string } } }) =>
+    cfg.channels?.line?.groupPolicy ?? "open",
+  warnMissingProviderGroupPolicyFallbackOnce: () => {},
+}));
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  danger: (text: string) => text,
+  logVerbose: () => {},
+}));
+vi.mock("openclaw/plugin-sdk/group-access", () => ({
+  evaluateMatchedGroupAccessForPolicy: ({
+    groupPolicy,
+    hasMatchInput,
+    allowlistConfigured,
+    allowlistMatched,
+  }: {
+    groupPolicy: string;
+    hasMatchInput: boolean;
+    allowlistConfigured: boolean;
+    allowlistMatched: boolean;
+  }) => {
+    if (groupPolicy === "disabled") {
+      return { allowed: false, reason: "disabled" };
+    }
+    if (groupPolicy !== "allowlist") {
+      return { allowed: true, reason: null };
+    }
+    if (!hasMatchInput) {
+      return { allowed: false, reason: "missing_match_input" };
+    }
+    if (!allowlistConfigured) {
+      return { allowed: false, reason: "empty_allowlist" };
+    }
+    if (!allowlistMatched) {
+      return { allowed: false, reason: "not_allowlisted" };
+    }
+    return { allowed: true, reason: null };
+  },
+}));
+vi.mock("openclaw/plugin-sdk/reply-history", () => ({
+  DEFAULT_GROUP_HISTORY_LIMIT: 20,
+  clearHistoryEntriesIfEnabled: ({
+    historyMap,
+    historyKey,
+  }: {
+    historyMap: Map<string, HistoryEntry[]>;
+    historyKey: string;
+  }) => {
+    historyMap.delete(historyKey);
+  },
+  recordPendingHistoryEntryIfEnabled: ({
+    historyMap,
+    historyKey,
+    limit,
+    entry,
+  }: {
+    historyMap: Map<string, HistoryEntry[]>;
+    historyKey: string;
+    limit: number;
+    entry: HistoryEntry;
+  }) => {
+    const existing = historyMap.get(historyKey) ?? [];
+    historyMap.set(historyKey, [...existing, entry].slice(-limit));
+  },
+}));
+vi.mock("openclaw/plugin-sdk/routing", () => ({
+  resolveAgentRoute: () => ({ agentId: "default" }),
+}));
 
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
@@ -204,12 +371,21 @@ describe("handleLineWebhookEvents", () => {
   });
 
   beforeEach(() => {
-    buildLineMessageContextMock.mockClear();
-    buildLinePostbackContextMock.mockClear();
-    readAllowFromStoreMock.mockClear();
-    upsertPairingRequestMock.mockClear();
+    buildLineMessageContextMock.mockReset();
+    buildLineMessageContextMock.mockImplementation(async () => ({
+      ctxPayload: { From: "line:group:group-1" },
+      replyToken: "reply-token",
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    }));
+    buildLinePostbackContextMock.mockReset();
+    buildLinePostbackContextMock.mockImplementation(async () => null as unknown);
+    readAllowFromStoreMock.mockReset();
+    readAllowFromStoreMock.mockImplementation(async () => [] as string[]);
+    upsertPairingRequestMock.mockReset();
+    upsertPairingRequestMock.mockImplementation(async () => ({ code: "CODE", created: true }));
   });
-
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
     const event = {
@@ -573,10 +749,11 @@ describe("handleLineWebhookEvents", () => {
       isRedelivery: true,
     });
     const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
+    const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
+    const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
     rejectFirst?.(new Error("transient inflight failure"));
 
-    await expect(firstRun).rejects.toThrow("transient inflight failure");
-    await expect(secondRun).rejects.toThrow("transient inflight failure");
+    await Promise.all([firstFailure, secondFailure]);
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
