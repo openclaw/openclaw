@@ -306,6 +306,8 @@ export function createImageTool(options?: {
   const runtimeModelId = options?.modelId?.trim();
   // Keep the config-driven fallback path authoritative. Only fall back to the
   // active runtime model when this run has already proven the model can see images.
+  // This synthetic fallback intentionally keeps only the active model ref;
+  // retry/fallback policy still belongs to explicit config-driven image models.
   const effectiveImageModelConfig =
     imageModelConfig ??
     (options?.modelHasVision && runtimeProvider && runtimeModelId

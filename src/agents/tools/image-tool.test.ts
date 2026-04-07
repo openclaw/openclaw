@@ -647,6 +647,38 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("executes through the generic image runtime for runtime-only opencode-go fallbacks", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const fetch = stubOpenAiCompletionsOkFetch("ok");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "opencode-go/minimax-m2.7" } } },
+        models: {
+          providers: {
+            "opencode-go": {
+              api: "openai-completions",
+              baseUrl: "https://api.opencode-go.example/v1",
+              apiKey: "opencode-go-test",
+              models: [makeModelDefinition("minimax-m2.7", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(
+        createImageTool({
+          config: cfg,
+          agentDir,
+          modelHasVision: true,
+          modelProvider: "opencode-go",
+          modelId: "minimax-m2.7",
+        }),
+      );
+
+      await expectImageToolExecOk(tool, `data:image/png;base64,${ONE_PIXEL_PNG_B64}`);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("keeps the runtime model fallback disabled until vision support is confirmed", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {

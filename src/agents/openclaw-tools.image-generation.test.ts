@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as imageGenerationRuntime from "../image-generation/runtime.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { resolveImageModelConfigForTool } from "./tools/image-tool.js";
 
 vi.mock("../plugins/tools.js", () => ({
   resolvePluginTools: () => [],
@@ -92,18 +93,37 @@ describe("openclaw tools image generation registration", () => {
 });
 
 describe("openclaw tools image registration", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("MINIMAX_OAUTH_TOKEN", "");
+    vi.stubEnv("ZAI_API_KEY", "");
+    vi.stubEnv("Z_AI_API_KEY", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("registers image when the current runtime model is vision-capable", () => {
-    const tools = createOpenClawTools({
-      config: asConfig({
-        agents: {
-          defaults: {
-            model: {
-              primary: "opencode-go/minimax-m2.7",
-            },
+    const agentDir = "/tmp/openclaw-agent-main";
+    const config = asConfig({
+      agents: {
+        defaults: {
+          model: {
+            primary: "opencode-go/minimax-m2.7",
           },
         },
-      }),
-      agentDir: "/tmp/openclaw-agent-main",
+      },
+    });
+
+    expect(resolveImageModelConfigForTool({ cfg: config, agentDir })).toBeNull();
+
+    const tools = createOpenClawTools({
+      config,
+      agentDir,
       modelHasVision: true,
       modelProvider: "opencode-go",
       modelId: "minimax-m2.7",
