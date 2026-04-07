@@ -25,6 +25,7 @@ import {
   handleSendPolicyCommand,
   handleSessionCommand,
   handleStopCommand,
+  handleTotalUsageCommand,
   handleUsageCommand,
 } from "./commands-session.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
@@ -42,6 +43,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleSendPolicyCommand,
     handleFastCommand,
     handleUsageCommand,
+    handleTotalUsageCommand,
     handleSessionCommand,
     handleRestartCommand,
     handleTtsCommands,

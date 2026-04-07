@@ -31,6 +31,25 @@ let cachedNativeRegistry: ReturnType<typeof getActivePluginRegistry> | null = nu
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
     ...buildBuiltinChatCommands(),
+    defineChatCommand({
+      key: "total_usage",
+      nativeName: "total_usage",
+      description: "Summary of usage and cost across all sessions.",
+      textAlias: "/total_usage",
+      category: "status",
+      args: [
+        {
+          name: "range",
+          description: "Time range (for example 24h, 7d, 30d, all) or by-model",
+          type: "string",
+        },
+        {
+          name: "subcommand",
+          description: "Additional options like by-model",
+          type: "string",
+        },
+      ],
+    }),
     ...listChannelPlugins()
       .filter(supportsNativeCommands)
       .map((plugin) => defineDockCommand(plugin)),

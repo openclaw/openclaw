@@ -103,6 +103,7 @@ Text + native (when enabled):
   - Enable/disable writes still reply with a restart hint. On a watched foreground gateway, OpenClaw may perform that restart automatically right after the write.
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
+- `/total_usage [range]` (show token usage statistics and costs across all sessions)
 - `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tools/tts))
   - Discord: native command is `/voice` (Discord reserves `/tts`); text `/tts` still works.
 - `/stop`
