@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-06 17:06 UTC (run 10)
+**Date:** 2026-04-07 (run 11)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -121,15 +121,18 @@ The actual PR fix commits are:
 
 ---
 
-## Actions Taken This Run
+## Actions Taken This Run (run 11 — 2026-04-07)
 
-None. No new review comments, no new maintainer feedback, and no code changes were required
-since run 9.
+**None — blocked by missing GitHub access.**
 
-**Note:** GitHub REST API was unauthenticated and rate-limited during this check (60 req/hr per
-IP). PR state, review lists, and check-run data were gathered across multiple IP rotations before
-exhausting quota. Mergeable state for both open PRs returned `unknown` (GitHub still computing at
-check time).
+This run could not query any PR data:
+
+- `gh` CLI: not installed in this environment
+- GitHub MCP server tools (`mcp__github__*`): not loaded (ToolSearch returned no matches)
+- Unauthenticated GitHub REST API: not attempted (no auth token; system instructions prohibit direct API access)
+
+PR statuses, CI, reviews, and merge-conflict state below are carried over from run 10 (2026-04-06).
+They may be stale. Human review is required to confirm current state.
 
 ---
 
