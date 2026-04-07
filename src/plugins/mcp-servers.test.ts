@@ -150,6 +150,30 @@ describe("loadEnabledPluginMcpServerConfig", () => {
     });
   });
 
+  it("treats an explicit null registry as no registry", () => {
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));
+    activeRegistry.mcpServers.push({
+      pluginId: "plugin-a",
+      name: "helloWorld",
+      server: { command: "node", args: ["hello.mjs"] },
+      source: "/tmp/plugin-a/index.cjs",
+      rootDir: "/tmp/plugin-a",
+    });
+    setActivePluginRegistry(activeRegistry, "mcp-server-test", "default", "/tmp/workspace-a");
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        registry: null,
+        workspaceDir: "/tmp/workspace-a",
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {},
+      },
+    });
+  });
+
   it("honors plugins.entries.<id>.enabled=false from runtime config", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(createPluginRecord({ id: "plugin-a", rootDir: "/tmp/plugin-a" }));

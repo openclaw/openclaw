@@ -122,8 +122,9 @@ export function loadEnabledPluginMcpServerConfig(params?: {
   cfg?: OpenClawConfig;
   registry?: PluginRegistry | null;
 }): PluginMcpServerConfigResult {
-  const usingActiveRegistry = params?.registry === undefined;
-  const registry = params?.registry ?? getActivePluginRegistry();
+  const explicitRegistryProvided = params !== undefined && Object.hasOwn(params, "registry");
+  const usingActiveRegistry = !explicitRegistryProvided;
+  const registry = explicitRegistryProvided ? params.registry : getActivePluginRegistry();
   if (!registry) {
     return { config: { mcpServers: {} } };
   }
