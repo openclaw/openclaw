@@ -680,6 +680,15 @@ export async function startGatewayServer(
     );
   const resolveCurrentSharedGatewaySessionGeneration = () =>
     resolveSharedGatewaySessionGeneration(getResolvedAuth());
+  const resolveSharedGatewaySessionGenerationForRuntimeSnapshot = () =>
+    resolveSharedGatewaySessionGeneration(
+      resolveGatewayAuth({
+        authConfig: getRuntimeConfig().gateway?.auth,
+        authOverride: opts.auth,
+        env: process.env,
+        tailscaleMode,
+      }),
+    );
   let currentSharedGatewaySessionGeneration = resolveCurrentSharedGatewaySessionGeneration();
   let requiredSharedGatewaySessionGeneration: string | undefined | null = null;
   const getRequiredSharedGatewaySessionGeneration = () =>
@@ -837,7 +846,7 @@ export async function startGatewayServer(
       return;
     }
     const nextSharedGatewaySessionGeneration =
-      resolveSharedGatewaySessionGenerationForConfig(nextConfig);
+      resolveSharedGatewaySessionGenerationForRuntimeSnapshot();
     requiredSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
     disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
   };
@@ -1596,6 +1605,12 @@ export async function startGatewayServer(
                 });
                 const nextSharedGatewaySessionGeneration =
                   resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+                const restartQueued = requestGatewayRestart(plan, nextConfig);
+                if (!restartQueued) {
+                  requiredSharedGatewaySessionGeneration =
+                    previousRequiredSharedGatewaySessionGeneration;
+                  return;
+                }
                 if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
                   requiredSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
                   disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
@@ -1603,7 +1618,6 @@ export async function startGatewayServer(
                   requiredSharedGatewaySessionGeneration =
                     previousRequiredSharedGatewaySessionGeneration;
                 }
-                requestGatewayRestart(plan, nextConfig);
               } catch (error) {
                 requiredSharedGatewaySessionGeneration =
                   previousRequiredSharedGatewaySessionGeneration;
