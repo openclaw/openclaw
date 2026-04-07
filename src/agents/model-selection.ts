@@ -8,6 +8,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -43,10 +44,6 @@ export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
 };
-
-function normalizeAliasKey(value: string): string {
-  return value.trim().toLowerCase();
-}
 
 function sanitizeModelWarningValue(value: string): string {
   const stripped = value ? stripAnsi(value) : "";
@@ -280,7 +277,7 @@ export function buildModelAliasIndex(params: {
     if (!alias) {
       continue;
     }
-    const aliasKey = normalizeAliasKey(alias);
+    const aliasKey = normalizeLowercaseStringOrEmpty(alias);
     byAlias.set(aliasKey, { alias, ref: parsed });
     const key = modelKey(parsed.provider, parsed.model);
     const existing = byKey.get(key) ?? [];
@@ -302,7 +299,7 @@ export function resolveModelRefFromString(params: {
     return null;
   }
   if (!model.includes("/")) {
-    const aliasKey = normalizeAliasKey(model);
+    const aliasKey = normalizeLowercaseStringOrEmpty(model);
     const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
     if (aliasMatch) {
       return { ref: aliasMatch.ref, alias: aliasMatch.alias };
@@ -332,7 +329,7 @@ export function resolveConfiguredModelRef(params: {
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!trimmed.includes("/")) {
-      const aliasKey = normalizeAliasKey(trimmed);
+      const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
       const aliasMatch = aliasIndex.byAlias.get(aliasKey);
       if (aliasMatch) {
         return aliasMatch.ref;

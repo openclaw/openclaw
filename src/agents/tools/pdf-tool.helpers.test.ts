@@ -1,10 +1,11 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
   parsePageRange,
   providerSupportsNativePdf,
+  resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
 
@@ -76,6 +77,19 @@ describe("providerSupportsNativePdf", () => {
 });
 
 describe("pdf-tool.helpers", () => {
+  it("resolvePdfInputs requires at least one pdf reference", () => {
+    expect(() => resolvePdfInputs({ prompt: "test" })).toThrow("pdf required");
+  });
+
+  it("resolvePdfInputs deduplicates pdf and pdfs entries", () => {
+    expect(
+      resolvePdfInputs({
+        pdf: " /tmp/nonexistent.pdf ",
+        pdfs: ["/tmp/nonexistent.pdf", "  ", "/tmp/other.pdf"],
+      }),
+    ).toEqual(["/tmp/nonexistent.pdf", "/tmp/other.pdf"]);
+  });
+
   it("resolvePdfToolMaxTokens respects model limit", () => {
     expect(resolvePdfToolMaxTokens(2048, 4096)).toBe(2048);
     expect(resolvePdfToolMaxTokens(8192, 4096)).toBe(4096);

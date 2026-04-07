@@ -19,10 +19,14 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: mocks.loadPluginManifestRegistry,
 }));
 
-vi.mock("../plugins/bundled-compat.js", () => ({
-  withBundledPluginEnablementCompat: mocks.withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat: mocks.withBundledPluginVitestCompat,
-}));
+vi.mock("../plugins/bundled-compat.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/bundled-compat.js")>();
+  return {
+    ...actual,
+    withBundledPluginEnablementCompat: mocks.withBundledPluginEnablementCompat,
+    withBundledPluginVitestCompat: mocks.withBundledPluginVitestCompat,
+  };
+});
 
 let getImageGenerationProvider: typeof import("./provider-registry.js").getImageGenerationProvider;
 let listImageGenerationProviders: typeof import("./provider-registry.js").listImageGenerationProviders;
@@ -44,11 +48,11 @@ describe("image-generation provider registry allowlist fallback", () => {
     mocks.withBundledPluginVitestCompat.mockImplementation(({ config }) => config);
   });
 
-  it("honors explicit allowlists when fallback loading bundled providers", () => {
+  it("adds bundled capability plugin ids to plugins.allow before fallback registry load", () => {
     const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
     const compatConfig = {
       plugins: {
-        allow: ["custom-plugin"],
+        allow: ["custom-plugin", "openai"],
         entries: { openai: { enabled: true } },
       },
     };

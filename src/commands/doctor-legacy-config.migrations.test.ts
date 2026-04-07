@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
+
+let normalizeCompatibilityConfigValues: typeof import("./doctor-legacy-config.js").normalizeCompatibilityConfigValues;
+let clearPluginSetupRegistryCache: typeof import("../plugins/setup-registry.js").clearPluginSetupRegistryCache;
 
 function asLegacyConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -34,9 +36,18 @@ describe("normalizeCompatibilityConfigValues", () => {
   };
 
   beforeEach(() => {
+    vi.doUnmock("./doctor-legacy-config.js");
+    vi.doUnmock("openclaw/plugin-sdk/text-runtime");
+    vi.resetModules();
     previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
     tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
     process.env.OPENCLAW_OAUTH_DIR = tempOauthDir;
+  });
+
+  beforeEach(async () => {
+    ({ normalizeCompatibilityConfigValues } = await import("./doctor-legacy-config.js"));
+    ({ clearPluginSetupRegistryCache } = await import("../plugins/setup-registry.js"));
+    clearPluginSetupRegistryCache();
   });
 
   afterEach(() => {

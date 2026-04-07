@@ -9,6 +9,9 @@
     "@grammyjs/transformer-throttler": "^1.2.1",
     "grammy": "^1.42.0"
   },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

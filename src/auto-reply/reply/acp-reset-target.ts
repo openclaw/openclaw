@@ -1,4 +1,3 @@
-import { normalizeText } from "../../acp/normalize-text.js";
 import {
   buildConfiguredAcpSessionKey,
   normalizeBindingConfig,
@@ -58,7 +57,7 @@ function resolveRawConfiguredAcpSessionKey(params: {
   parentConversationId?: string;
 }): string | undefined {
   for (const binding of acpResetTargetDeps.listAcpBindings(params.cfg)) {
-    const bindingChannel = normalizeText(binding.match.channel)?.toLowerCase() ?? "";
+    const bindingChannel = (normalizeOptionalString(binding.match.channel) ?? "").toLowerCase();
     if (!bindingChannel || bindingChannel !== params.channel) {
       continue;
     }
@@ -107,13 +106,13 @@ export function resolveEffectiveResetTargetSessionKey(params: {
   skipConfiguredFallbackWhenActiveSessionNonAcp?: boolean;
   fallbackToActiveAcpWhenUnbound?: boolean;
 }): string | undefined {
-  const activeSessionKey = normalizeOptionalString(params.activeSessionKey) ?? "";
+  const activeSessionKey = normalizeOptionalString(params.activeSessionKey);
   const activeAcpSessionKey =
     activeSessionKey && isAcpSessionKey(activeSessionKey) ? activeSessionKey : undefined;
   const activeIsNonAcp = Boolean(activeSessionKey) && !activeAcpSessionKey;
 
-  const channel = normalizeText(params.channel)?.toLowerCase() ?? "";
-  const conversationId = normalizeText(params.conversationId);
+  const channel = (normalizeOptionalString(params.channel) ?? "").toLowerCase();
+  const conversationId = normalizeOptionalString(params.conversationId) ?? "";
   if (!channel || !conversationId) {
     return activeAcpSessionKey;
   }

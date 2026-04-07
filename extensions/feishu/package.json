@@ -8,6 +8,7 @@
     "@sinclair/typebox": "0.34.49"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

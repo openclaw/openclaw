@@ -414,6 +414,11 @@ const BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string
   telegram: ["streaming"],
 };
 
+const BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
+  // Keep top-level Telegram policy fallback intact when only auth needs seeding.
+  telegram: ["botToken", "tokenFile"],
+};
+
 type ChannelSetupPromotionSurface = {
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];
@@ -455,9 +460,9 @@ export function resolveSingleAccountKeysToMove(params: {
   const hasNamedAccounts =
     Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
     0;
-  const namedAccountPromotionKeys = getChannelSetupPromotionSurface(
-    params.channelKey,
-  )?.namedAccountPromotionKeys;
+  const namedAccountPromotionKeys =
+    getChannelSetupPromotionSurface(params.channelKey)?.namedAccountPromotionKeys ??
+    BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
   return Object.entries(params.channel)
     .filter(([key, value]) => {
       if (key === "accounts" || key === "enabled" || value === undefined) {

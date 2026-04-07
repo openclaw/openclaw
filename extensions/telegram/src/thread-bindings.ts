@@ -17,6 +17,7 @@ import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createForumTopicTelegram } from "./send.js";
 import { resolveTelegramToken } from "./token.js";
 
@@ -102,14 +103,6 @@ function normalizeDurationMs(raw: unknown, fallback: number): number {
     return fallback;
   }
   return Math.max(0, Math.floor(raw));
-}
-
-function normalizeConversationId(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed || undefined;
 }
 
 function resolveBindingKey(params: { accountId: string; conversationId: string }): string {
@@ -253,7 +246,7 @@ function loadBindingsFromDisk(accountId: string): TelegramThreadBindingRecord[] 
     }
     const bindings: TelegramThreadBindingRecord[] = [];
     for (const entry of parsed.bindings) {
-      const conversationId = normalizeConversationId(entry?.conversationId);
+      const conversationId = normalizeOptionalString(entry?.conversationId);
       const targetSessionKey =
         typeof entry?.targetSessionKey === "string" ? entry.targetSessionKey.trim() : "";
       const targetKind = entry?.targetKind === "subagent" ? "subagent" : "acp";
@@ -449,7 +442,7 @@ export function createTelegramThreadBindingManager(
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
     getByConversationId: (conversationIdRaw) => {
-      const conversationId = normalizeConversationId(conversationIdRaw);
+      const conversationId = normalizeOptionalString(conversationIdRaw);
       if (!conversationId) {
         return undefined;
       }
@@ -471,7 +464,7 @@ export function createTelegramThreadBindingManager(
     },
     listBindings: () => listBindingsForAccount(accountId),
     touchConversation: (conversationIdRaw, at) => {
-      const conversationId = normalizeConversationId(conversationIdRaw);
+      const conversationId = normalizeOptionalString(conversationIdRaw);
       if (!conversationId) {
         return null;
       }
@@ -494,7 +487,7 @@ export function createTelegramThreadBindingManager(
       return nextRecord;
     },
     unbindConversation: (unbindParams) => {
-      const conversationId = normalizeConversationId(unbindParams.conversationId);
+      const conversationId = normalizeOptionalString(unbindParams.conversationId);
       if (!conversationId) {
         return null;
       }
@@ -613,7 +606,7 @@ export function createTelegramThreadBindingManager(
           return null;
         }
       } else {
-        conversationId = normalizeConversationId(input.conversation.conversationId);
+        conversationId = normalizeOptionalString(input.conversation.conversationId);
       }
 
       if (!conversationId) {
@@ -667,7 +660,7 @@ export function createTelegramThreadBindingManager(
       if (ref.channel !== "telegram") {
         return null;
       }
-      const conversationId = normalizeConversationId(ref.conversationId);
+      const conversationId = normalizeOptionalString(ref.conversationId);
       if (!conversationId) {
         return null;
       }

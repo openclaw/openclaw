@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -259,7 +260,7 @@ function formatHelp(): string {
 }
 
 function parseGroup(raw: string | undefined): ArmGroup | null {
-  const value = (raw ?? "").trim().toLowerCase();
+  const value = normalizeOptionalString(raw)?.toLowerCase() ?? "";
   if (!value) {
     return null;
   }

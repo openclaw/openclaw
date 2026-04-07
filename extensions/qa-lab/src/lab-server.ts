@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import {
   createServer,
@@ -178,6 +179,45 @@ function resolveUiDistDir(overrideDir?: string | null) {
       return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
     }) ?? candidates[0]
   );
+}
+
+function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
+  const entries = fs
+    .readdirSync(currentDir, { withFileTypes: true })
+    .toSorted((left, right) => left.name.localeCompare(right.name));
+  const files: string[] = [];
+  for (const entry of entries) {
+    const resolved = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listUiAssetFiles(rootDir, resolved));
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    files.push(path.relative(rootDir, resolved));
+  }
+  return files;
+}
+
+function resolveUiAssetVersion(overrideDir?: string | null): string | null {
+  try {
+    const distDir = resolveUiDistDir(overrideDir);
+    const indexPath = path.join(distDir, "index.html");
+    if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
+      return null;
+    }
+    const hash = createHash("sha1");
+    for (const relativeFile of listUiAssetFiles(distDir)) {
+      hash.update(relativeFile);
+      hash.update("\0");
+      hash.update(fs.readFileSync(path.join(distDir, relativeFile)));
+      hash.update("\0");
+    }
+    return hash.digest("hex").slice(0, 12);
+  } catch {
+    return null;
+  }
 }
 
 function resolveAdvertisedBaseUrl(params: {
@@ -536,6 +576,14 @@ export async function startQaLabServer(params?: {
         writeJson(res, 200, { report: latestReport });
         return;
       }
+      if (req.method === "GET" && url.pathname === "/api/ui-version") {
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        res.end(JSON.stringify({ version: resolveUiAssetVersion(params?.uiDistDir) }));
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/outcomes") {
         writeJson(res, 200, { run: latestScenarioRun });
         return;
@@ -648,7 +696,6 @@ export async function startQaLabServer(params?: {
               providerMode: selection.providerMode,
               primaryModel: selection.primaryModel,
               alternateModel: selection.alternateModel,
-              fastMode: selection.fastMode,
               scenarioIds: selection.scenarioIds,
             });
             runnerSnapshot = {

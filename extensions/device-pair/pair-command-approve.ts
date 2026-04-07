@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { approveDevicePairing, listDevicePairing } from "./api.js";
 import { formatPendingRequests } from "./notify.js";
 
@@ -43,8 +44,8 @@ export function selectPendingApprovalRequest(params: {
 }
 
 function formatApprovedPairingReply(approved: ApprovedPairingEntry): { text: string } {
-  const label = approved.device.displayName?.trim() || approved.device.deviceId;
-  const platform = approved.device.platform?.trim();
+  const label = normalizeOptionalString(approved.device.displayName) || approved.device.deviceId;
+  const platform = normalizeOptionalString(approved.device.platform);
   const platformLabel = platform ? ` (${platform})` : "";
   return { text: `✅ Paired ${label}${platformLabel}.` };
 }

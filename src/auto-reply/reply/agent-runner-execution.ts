@@ -34,7 +34,11 @@ import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-event
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
-import { readStringValue } from "../../shared/string-coerce.js";
+import {
+  hasNonEmptyString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -383,28 +387,29 @@ function applyOpenAIGptChatReplyGuard(params: {
     );
 
   for (const payload of params.payloads) {
+    const text = normalizeOptionalString(payload.text);
     if (
-      !payload.text?.trim() ||
+      !text ||
       payload.isError ||
       payload.isReasoning ||
       payload.mediaUrl ||
       (payload.mediaUrls?.length ?? 0) > 0 ||
       payload.interactive ||
-      payload.text.includes("```")
+      text.includes("```")
     ) {
       continue;
     }
 
     if (isAckTurn) {
-      payload.text = shortenChattyFinalReplyText(payload.text, {
+      payload.text = shortenChattyFinalReplyText(text, {
         maxChars: GPT_CHAT_BREVITY_ACK_MAX_CHARS,
         maxSentences: GPT_CHAT_BREVITY_ACK_MAX_SENTENCES,
       });
       continue;
     }
 
-    if (allowSoftCap && scoreChattyFinalReplyText(payload.text) >= 4) {
-      payload.text = shortenChattyFinalReplyText(payload.text, {
+    if (allowSoftCap && scoreChattyFinalReplyText(text) >= 4) {
+      payload.text = shortenChattyFinalReplyText(text, {
         maxChars: GPT_CHAT_BREVITY_SOFT_MAX_CHARS,
         maxSentences: GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES,
       });
@@ -758,7 +763,7 @@ export async function runAgentTurnWithFallback(params: {
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
                 // and send the response to TUI/WebSocket clients.
-                const cliText = result.payloads?.[0]?.text?.trim();
+                const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
                 if (cliText) {
                   emitAgentEvent({
                     runId,
@@ -839,8 +844,9 @@ export async function runAgentTurnWithFallback(params: {
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:
-                  params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
-                groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
+                  normalizeOptionalString(params.sessionCtx.GroupChannel) ??
+                  normalizeOptionalString(params.sessionCtx.GroupSubject),
+                groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                 ...senderContext,
                 ...runBaseParams,
                 prompt: params.commandBody,
@@ -1369,7 +1375,7 @@ export async function runAgentTurnWithFallback(params: {
   // See #26905: Slack DM sessions silently swallowed messages when context
   // overflow errors were returned as embedded error payloads.
   const finalEmbeddedError = runResult?.meta?.error;
-  const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
+  const hasPayloadText = runResult?.payloads?.some((p) => normalizeOptionalString(p.text));
   if (finalEmbeddedError && !hasPayloadText) {
     const errorMsg = finalEmbeddedError.message ?? "";
     if (isContextOverflowError(errorMsg)) {
@@ -1404,8 +1410,9 @@ export async function runAgentTurnWithFallback(params: {
     if (!hasNonErrorContent) {
       const metaErrorMsg = finalEmbeddedError?.message ?? "";
       const rawErrorPayloadText =
-        runResult.payloads?.find((p) => p.isError && p.text?.trim() && !p.text.startsWith("⚠️"))
-          ?.text ?? "";
+        runResult.payloads?.find(
+          (p) => p.isError && hasNonEmptyString(p.text) && !p.text.startsWith("⚠️"),
+        )?.text ?? "";
       const errorCandidate = metaErrorMsg || rawErrorPayloadText;
       if (
         errorCandidate &&

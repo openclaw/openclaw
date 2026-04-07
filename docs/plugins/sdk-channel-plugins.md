@@ -152,6 +152,87 @@ surfaces:
 
 Auth-only channels can usually stop at the default path: core handles approvals and the plugin just exposes outbound/auth capabilities. Native approval channels such as Matrix, Slack, Telegram, and custom chat transports should use the shared native helpers instead of rolling their own approval lifecycle.
 
+## Inbound mention policy
+
+Keep inbound mention handling split in two layers:
+
+- plugin-owned evidence gathering
+- shared policy evaluation
+
+Use `openclaw/plugin-sdk/channel-inbound` for the shared layer.
+
+Good fit for plugin-local logic:
+
+- reply-to-bot detection
+- quoted-bot detection
+- thread-participation checks
+- service/system-message exclusions
+- platform-native caches needed to prove bot participation
+
+Good fit for the shared helper:
+
+- `requireMention`
+- explicit mention result
+- implicit mention allowlist
+- command bypass
+- final skip decision
+
+Preferred flow:
+
+1. Compute local mention facts.
+2. Pass those facts into `resolveInboundMentionDecision({ facts, policy })`.
+3. Use `decision.effectiveWasMentioned`, `decision.shouldBypassMention`, and `decision.shouldSkip` in your inbound gate.
+
+```typescript
+import {
+  implicitMentionKindWhen,
+  matchesMentionWithExplicit,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+
+const mentionMatch = matchesMentionWithExplicit(text, {
+  mentionRegexes,
+  mentionPatterns,
+});
+
+const facts = {
+  canDetectMention: true,
+  wasMentioned: mentionMatch.matched,
+  hasAnyMention: mentionMatch.hasExplicitMention,
+  implicitMentionKinds: [
+    ...implicitMentionKindWhen("reply_to_bot", isReplyToBot),
+    ...implicitMentionKindWhen("quoted_bot", isQuoteOfBot),
+  ],
+};
+
+const decision = resolveInboundMentionDecision({
+  facts,
+  policy: {
+    isGroup,
+    requireMention,
+    allowedImplicitMentionKinds: requireExplicitMention ? [] : ["reply_to_bot", "quoted_bot"],
+    allowTextCommands,
+    hasControlCommand,
+    commandAuthorized,
+  },
+});
+
+if (decision.shouldSkip) return;
+```
+
+`api.runtime.channel.mentions` exposes the same shared mention helpers for
+bundled channel plugins that already depend on runtime injection:
+
+- `buildMentionRegexes`
+- `matchesMentionPatterns`
+- `matchesMentionWithExplicit`
+- `implicitMentionKindWhen`
+- `resolveInboundMentionDecision`
+
+The older `resolveMentionGating*` helpers remain on
+`openclaw/plugin-sdk/channel-inbound` as compatibility exports only. New code
+should use `resolveInboundMentionDecision({ facts, policy })`.
+
 ## Walkthrough
 
 <Steps>

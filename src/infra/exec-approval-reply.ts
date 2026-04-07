@@ -263,8 +263,8 @@ export function getExecApprovalReplyMetadata(
     return null;
   }
   const record = execApproval as Record<string, unknown>;
-  const approvalId = typeof record.approvalId === "string" ? record.approvalId.trim() : "";
-  const approvalSlug = typeof record.approvalSlug === "string" ? record.approvalSlug.trim() : "";
+  const approvalId = normalizeOptionalString(record.approvalId) ?? "";
+  const approvalSlug = normalizeOptionalString(record.approvalSlug) ?? "";
   if (!approvalId || !approvalSlug) {
     return null;
   }
@@ -275,10 +275,8 @@ export function getExecApprovalReplyMetadata(
           value === "allow-once" || value === "allow-always" || value === "deny",
       )
     : undefined;
-  const agentId =
-    typeof record.agentId === "string" ? record.agentId.trim() || undefined : undefined;
-  const sessionKey =
-    typeof record.sessionKey === "string" ? record.sessionKey.trim() || undefined : undefined;
+  const agentId = normalizeOptionalString(record.agentId);
+  const sessionKey = normalizeOptionalString(record.sessionKey);
   return {
     approvalId,
     approvalSlug,

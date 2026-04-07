@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
 
@@ -16,7 +17,7 @@ function resolveScopedSessionKey(
   cfg: ReturnType<typeof loadConfig>,
   rawSessionKey: string | undefined,
 ): string {
-  const trimmed = rawSessionKey?.trim();
+  const trimmed = normalizeOptionalString(rawSessionKey);
   return !trimmed || trimmed === "main" ? resolveMainSessionKey(cfg) : trimmed;
 }
 
@@ -95,6 +96,6 @@ export function resolveMcpRequestContext(
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
-    accountId: getHeader(req, "x-openclaw-account-id")?.trim() || undefined,
+    accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
   };
 }

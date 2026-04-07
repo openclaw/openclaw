@@ -7,7 +7,7 @@ import {
   hasLegacyAccountStreamingAliases,
   normalizeLegacyDmAliases,
   normalizeLegacyStreamingAliases,
-} from "../../../src/config/channel-compat-normalization.js";
+} from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {

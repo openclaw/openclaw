@@ -49,7 +49,7 @@ describe("qa run config", () => {
       providerMode: "live-openai",
       primaryModel: "openai/gpt-5.4",
       alternateModel: "openai/gpt-5.4",
-      fastMode: false,
+      fastMode: true,
       scenarioIds: ["thread-lifecycle"],
     });
   });

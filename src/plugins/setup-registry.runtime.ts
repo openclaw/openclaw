@@ -24,7 +24,7 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
   if (bundledSetupCliBackendsCache) {
     return bundledSetupCliBackendsCache;
   }
-  bundledSetupCliBackendsCache = loadPluginManifestRegistry({})
+  bundledSetupCliBackendsCache = loadPluginManifestRegistry({ cache: true })
     .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.cliBackends.length > 0)
     .flatMap((plugin) =>
       plugin.cliBackends.map(

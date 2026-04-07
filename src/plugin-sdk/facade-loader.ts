@@ -1,7 +1,7 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { resolveBundledPluginPublicSurfacePath } from "../plugins/public-surface-runtime.js";
@@ -12,14 +12,12 @@ import {
   shouldPreferNativeJiti,
 } from "../plugins/sdk-alias.js";
 
-const OPENCLAW_PACKAGE_ROOT =
-  resolveLoaderPackageRoot({
-    modulePath: fileURLToPath(import.meta.url),
-    moduleUrl: import.meta.url,
-  }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
-const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+type JitiLoader = ReturnType<(typeof import("jiti"))["createJiti"]>;
+
+const nodeRequire = createRequire(import.meta.url);
+const jitiLoaders = new Map<string, JitiLoader>();
 const loadedFacadeModules = new Map<string, unknown>();
 const loadedFacadePluginIds = new Set<string>();
 const cachedFacadeModuleLocationsByKey = new Map<
@@ -29,6 +27,31 @@ const cachedFacadeModuleLocationsByKey = new Map<
     boundaryRoot: string;
   } | null
 >();
+let facadeLoaderJitiFactory:
+  | ((...args: Parameters<(typeof import("jiti"))["createJiti"]>) => JitiLoader)
+  | undefined;
+let cachedOpenClawPackageRoot: string | undefined;
+
+function getJitiFactory() {
+  if (facadeLoaderJitiFactory) {
+    return facadeLoaderJitiFactory;
+  }
+  const { createJiti } = nodeRequire("jiti") as typeof import("jiti");
+  facadeLoaderJitiFactory = createJiti;
+  return facadeLoaderJitiFactory;
+}
+
+function getOpenClawPackageRoot() {
+  if (cachedOpenClawPackageRoot) {
+    return cachedOpenClawPackageRoot;
+  }
+  cachedOpenClawPackageRoot =
+    resolveLoaderPackageRoot({
+      modulePath: fileURLToPath(import.meta.url),
+      moduleUrl: import.meta.url,
+    }) ?? fileURLToPath(new URL("../..", import.meta.url));
+  return cachedOpenClawPackageRoot;
+}
 
 function createFacadeResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
@@ -41,7 +64,8 @@ function resolveSourceFirstPublicSurfacePath(params: {
   artifactBasename: string;
 }): string | null {
   const sourceBaseName = params.artifactBasename.replace(/\.js$/u, "");
-  const sourceRoot = params.bundledPluginsDir ?? path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
+  const sourceRoot =
+    params.bundledPluginsDir ?? path.resolve(getOpenClawPackageRoot(), "extensions");
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
     const candidate = path.resolve(sourceRoot, params.dirName, `${sourceBaseName}${ext}`);
     if (fs.existsSync(candidate)) {
@@ -65,7 +89,7 @@ function resolveFacadeModuleLocationUncached(params: {
       }) ??
       resolveSourceFirstPublicSurfacePath(params) ??
       resolveBundledPluginPublicSurfacePath({
-        rootDir: OPENCLAW_PACKAGE_ROOT,
+        rootDir: getOpenClawPackageRoot(),
         ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
         dirName: params.dirName,
         artifactBasename: params.artifactBasename,
@@ -76,13 +100,13 @@ function resolveFacadeModuleLocationUncached(params: {
         boundaryRoot:
           bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
             ? path.resolve(bundledPluginsDir)
-            : OPENCLAW_PACKAGE_ROOT,
+            : getOpenClawPackageRoot(),
       };
     }
     return null;
   }
   const modulePath = resolveBundledPluginPublicSurfacePath({
-    rootDir: OPENCLAW_PACKAGE_ROOT,
+    rootDir: getOpenClawPackageRoot(),
     ...(bundledPluginsDir ? { bundledPluginsDir } : {}),
     dirName: params.dirName,
     artifactBasename: params.artifactBasename,
@@ -95,7 +119,7 @@ function resolveFacadeModuleLocationUncached(params: {
     boundaryRoot:
       bundledPluginsDir && modulePath.startsWith(path.resolve(bundledPluginsDir) + path.sep)
         ? path.resolve(bundledPluginsDir)
-        : OPENCLAW_PACKAGE_ROOT,
+        : getOpenClawPackageRoot(),
   };
 }
 
@@ -124,7 +148,7 @@ function getJiti(modulePath: string) {
   if (cached) {
     return cached;
   }
-  const loader = createJiti(import.meta.url, {
+  const loader = getJitiFactory()(import.meta.url, {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });
@@ -213,7 +237,7 @@ export function loadFacadeModuleAtLocationSync<T extends object>(params: {
     absolutePath: params.location.modulePath,
     rootPath: params.location.boundaryRoot,
     boundaryLabel:
-      params.location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
+      params.location.boundaryRoot === getOpenClawPackageRoot()
         ? "OpenClaw package root"
         : (() => {
             const bundledDir = resolveBundledPluginsDir();
@@ -279,4 +303,6 @@ export function resetFacadeLoaderStateForTest(): void {
   loadedFacadePluginIds.clear();
   jitiLoaders.clear();
   cachedFacadeModuleLocationsByKey.clear();
+  facadeLoaderJitiFactory = undefined;
+  cachedOpenClawPackageRoot = undefined;
 }

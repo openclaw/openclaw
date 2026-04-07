@@ -9,7 +9,7 @@ import {
   type SecretDefaults,
   type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-runtime";
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
 
 type GoogleChatAccountLike = {
   serviceAccount?: unknown;

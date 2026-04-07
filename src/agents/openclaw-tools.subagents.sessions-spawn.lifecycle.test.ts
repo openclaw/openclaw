@@ -13,11 +13,11 @@ import {
   setupSessionsSpawnGatewayMock,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import { resolveRequesterStoreKey } from "./subagent-announce-delivery.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
+import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 const fastModeEnv = vi.hoisted(() => {
   const previous = process.env.OPENCLAW_TEST_FAST;

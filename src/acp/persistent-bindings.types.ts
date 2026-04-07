@@ -117,7 +117,7 @@ export function parseConfiguredAcpSessionKey(
   if (tokens.length !== 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
     return null;
   }
-  const channel = tokens[2]?.trim().toLowerCase();
+  const channel = normalizeText(tokens[2])?.toLowerCase();
   if (!channel) {
     return null;
   }

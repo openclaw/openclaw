@@ -6,7 +6,6 @@ import { loadWebMediaRaw } from "../../media/web-media.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { type ImageModelConfig } from "./image-tool.helpers.js";
-import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
@@ -21,8 +20,10 @@ import {
   coercePdfModelConfig,
   parsePageRange,
   providerSupportsNativePdf,
+  resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
+import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   createSandboxBridgeReadFile,
   discoverAuthStorage,
@@ -43,6 +44,23 @@ const DEFAULT_MAX_PAGES = 20;
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
+
+export const PdfToolSchema = Type.Object({
+  prompt: Type.Optional(Type.String()),
+  pdf: Type.Optional(Type.String({ description: "Single PDF path or URL." })),
+  pdfs: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Multiple PDF paths or URLs (up to 10).",
+    }),
+  ),
+  pages: Type.Optional(
+    Type.String({
+      description: 'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
+    }),
+  ),
+  model: Type.Optional(Type.String()),
+  maxBytesMb: Type.Optional(Type.Number()),
+});
 
 // ---------------------------------------------------------------------------
 // Model resolution (mirrors image tool pattern)
@@ -257,47 +275,12 @@ export function createPdfTool(options?: {
     label: "PDF",
     name: "pdf",
     description,
-    parameters: Type.Object({
-      prompt: Type.Optional(Type.String()),
-      pdf: Type.Optional(Type.String({ description: "Single PDF path or URL." })),
-      pdfs: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Multiple PDF paths or URLs (up to 10).",
-        }),
-      ),
-      pages: Type.Optional(
-        Type.String({
-          description: 'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
-        }),
-      ),
-      model: Type.Optional(Type.String()),
-      maxBytesMb: Type.Optional(Type.Number()),
-    }),
+    parameters: PdfToolSchema,
     execute: async (_toolCallId, args) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 
       // MARK: - Normalize pdf + pdfs input
-      const pdfCandidates: string[] = [];
-      if (typeof record.pdf === "string") {
-        pdfCandidates.push(record.pdf);
-      }
-      if (Array.isArray(record.pdfs)) {
-        pdfCandidates.push(...record.pdfs.filter((v): v is string => typeof v === "string"));
-      }
-
-      const seenPdfs = new Set<string>();
-      const pdfInputs: string[] = [];
-      for (const candidate of pdfCandidates) {
-        const trimmed = candidate.trim();
-        if (!trimmed || seenPdfs.has(trimmed)) {
-          continue;
-        }
-        seenPdfs.add(trimmed);
-        pdfInputs.push(trimmed);
-      }
-      if (pdfInputs.length === 0) {
-        throw new Error("pdf required: provide a path or URL to a PDF document");
-      }
+      const pdfInputs = resolvePdfInputs(record);
 
       // Enforce max PDFs cap
       if (pdfInputs.length > DEFAULT_MAX_PDFS) {

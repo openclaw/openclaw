@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
 
@@ -180,6 +181,10 @@ export interface ContextEngine {
     sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    /** Tool names available for this run so engines can align prompt guidance with runtime tool access. */
+    availableTools?: Set<string>;
+    /** Active memory citation mode when engines want to mirror memory prompt guidance. */
+    citationsMode?: MemoryCitationsMode;
     /** Current model identifier (e.g. "claude-opus-4", "gpt-4o", "qwen2.5-7b").
      *  Allows context engine plugins to adapt formatting per model. */
     model?: string;

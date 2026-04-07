@@ -122,7 +122,6 @@ export async function startQaGatewayChild(params: {
   providerMode?: "mock-openai" | "live-openai";
   primaryModel?: string;
   alternateModel?: string;
-  fastMode?: boolean;
   controlUiEnabled?: boolean;
 }) {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-suite-"));
@@ -156,7 +155,6 @@ export async function startQaGatewayChild(params: {
     providerMode: params.providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
-    fastMode: params.fastMode,
     controlUiEnabled: params.controlUiEnabled,
   });
   await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");

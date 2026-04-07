@@ -29,6 +29,7 @@ import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
@@ -303,7 +304,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   // default is deferred until after Tailscale mode is known (see below)
   // so that Tailscale's loopback constraint is respected.
   const VALID_BIND_MODES = new Set<string>(["loopback", "lan", "auto", "custom", "tailnet"]);
-  const bindExplicitRawStr = (toOptionString(opts.bind) ?? cfg.gateway?.bind)?.trim() || undefined;
+  const bindExplicitRawStr = normalizeOptionalString(
+    toOptionString(opts.bind) ?? cfg.gateway?.bind,
+  );
   if (bindExplicitRawStr !== undefined && !VALID_BIND_MODES.has(bindExplicitRawStr)) {
     defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
     defaultRuntime.exit(1);

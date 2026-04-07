@@ -17,7 +17,7 @@ import {
   type RetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { isLikelyDiscordVideoMedia } from "../media-detection.js";
@@ -228,7 +228,7 @@ function createPayloadReplyToResolver(params: {
   replyToMode: ReplyToMode;
   resolveFallbackReplyTo: () => string | undefined;
 }): () => string | undefined {
-  const payloadReplyTo = params.payload.replyToId?.trim() || undefined;
+  const payloadReplyTo = normalizeOptionalString(params.payload.replyToId);
   const allowExplicitReplyWhenOff = Boolean(
     payloadReplyTo && (params.payload.replyToTag || params.payload.replyToCurrent),
   );
@@ -370,7 +370,7 @@ export async function deliverDiscordReply(params: {
   threadBindings?: DiscordThreadBindingLookup;
   mediaLocalRoots?: readonly string[];
 }) {
-  const replyTo = params.replyToId?.trim() || undefined;
+  const replyTo = normalizeOptionalString(params.replyToId);
   const replyToMode = params.replyToMode ?? "all";
   const replyOnce = isSingleUseReplyToMode(replyToMode);
   let replyUsed = false;

@@ -70,7 +70,7 @@ function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefin
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = readStringValue(value)?.toLowerCase();
   if (
     normalized === "auto" ||
     normalized === "default" ||
@@ -98,7 +98,7 @@ function normalizeOpenAITextVerbosity(value: unknown): OpenAITextVerbosity | und
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = readStringValue(value)?.toLowerCase();
   if (normalized === "low" || normalized === "medium" || normalized === "high") {
     return normalized;
   }

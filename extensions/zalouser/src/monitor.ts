@@ -1,5 +1,8 @@
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
-import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   DM_GROUP_ACCESS_REASON,
@@ -488,28 +491,32 @@ async function processMessage(
       })
     : true;
   const canDetectMention = mentionRegexes.length > 0 || explicitMention.canResolveExplicit;
-  const mentionGate = resolveMentionGatingWithBypass({
-    isGroup,
-    requireMention,
-    canDetectMention,
-    wasMentioned,
-    implicitMention: message.implicitMention === true,
-    hasAnyMention: explicitMention.hasAnyMention,
-    allowTextCommands: core.channel.commands.shouldHandleTextCommands({
-      cfg: config,
-      surface: "zalouser",
-    }),
-    hasControlCommand,
-    commandAuthorized: commandAuthorized === true,
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention,
+      wasMentioned,
+      hasAnyMention: explicitMention.hasAnyMention,
+      implicitMentionKinds: implicitMentionKindWhen("quoted_bot", message.implicitMention === true),
+    },
+    policy: {
+      isGroup,
+      requireMention,
+      allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+        cfg: config,
+        surface: "zalouser",
+      }),
+      hasControlCommand,
+      commandAuthorized: commandAuthorized === true,
+    },
   });
-  if (isGroup && requireMention && !canDetectMention && !mentionGate.effectiveWasMentioned) {
+  if (isGroup && requireMention && !canDetectMention && !mentionDecision.effectiveWasMentioned) {
     runtime.error?.(
       `[${account.accountId}] zalouser mention required but detection unavailable ` +
         `(missing mention regexes and bot self id); dropping group ${chatId}`,
     );
     return;
   }
-  if (isGroup && mentionGate.shouldSkip) {
+  if (isGroup && mentionDecision.shouldSkip) {
     recordPendingHistoryEntryIfEnabled({
       historyMap: historyState.groupHistories,
       historyKey: historyKey ?? "",
@@ -605,7 +612,7 @@ async function processMessage(
     GroupMembers: isGroup ? groupMembers : undefined,
     SenderName: senderName || undefined,
     SenderId: senderId,
-    WasMentioned: isGroup ? mentionGate.effectiveWasMentioned : undefined,
+    WasMentioned: isGroup ? mentionDecision.effectiveWasMentioned : undefined,
     CommandAuthorized: commandAuthorized,
     Provider: "zalouser",
     Surface: "zalouser",

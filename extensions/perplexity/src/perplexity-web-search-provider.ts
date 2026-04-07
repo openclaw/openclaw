@@ -693,10 +693,10 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
     resolveRuntimeMetadata: (ctx) => ({
       perplexityTransport: resolveRuntimeTransport({
         searchConfig: mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "perplexity",
           resolveProviderWebSearchPluginConfig(ctx.config, "perplexity"),
-        ) as SearchConfigRecord | undefined,
+        ),
         resolvedKey: ctx.resolvedCredential?.value,
         keySource: ctx.resolvedCredential?.source ?? "missing",
         fallbackEnvVar: ctx.resolvedCredential?.fallbackEnvVar,
@@ -705,11 +705,11 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) =>
       createPerplexityToolDefinition(
         mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "perplexity",
           resolveProviderWebSearchPluginConfig(ctx.config, "perplexity"),
-        ) as SearchConfigRecord | undefined,
-        ctx.runtimeMetadata?.perplexityTransport as PerplexityTransport | undefined,
+        ),
+        ctx.runtimeMetadata?.perplexityTransport,
       ),
   };
 }

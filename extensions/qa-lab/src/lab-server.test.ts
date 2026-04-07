@@ -206,6 +206,23 @@ describe("qa-lab server", () => {
     const html = await rootResponse.text();
     expect(html).not.toContain("QA Lab UI not built");
     expect(html).toContain("<title>");
+
+    const version1 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
+      version: string | null;
+    };
+    expect(version1.version).toMatch(/^[0-9a-f]{12}$/);
+
+    await writeFile(
+      path.join(uiDistDir, "index.html"),
+      "<!doctype html><html><head><title>QA Lab Updated</title></head><body><div id='app'></div></body></html>",
+      "utf8",
+    );
+
+    const version2 = (await (await fetch(`${lab.baseUrl}/api/ui-version`)).json()) as {
+      version: string | null;
+    };
+    expect(version2.version).toMatch(/^[0-9a-f]{12}$/);
+    expect(version2.version).not.toBe(version1.version);
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {

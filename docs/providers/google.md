@@ -52,7 +52,7 @@ An alternative provider `google-gemini-cli` uses PKCE OAuth instead of an API
 key. This is an unofficial integration; some users report account
 restrictions. Use at your own risk.
 
-- Default model: `google-gemini-cli/gemini-3.1-pro-preview`
+- Default model: `google-gemini-cli/gemini-3-flash-preview`
 - Alias: `gemini-cli`
 - Install prerequisite: local Gemini CLI available as `gemini`
   - Homebrew: `brew install gemini-cli`

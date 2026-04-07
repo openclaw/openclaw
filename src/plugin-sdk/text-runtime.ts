@@ -28,6 +28,14 @@ export * from "../utils/fetch-timeout.js";
 export * from "../utils/reaction-level.js";
 export * from "../utils/with-timeout.js";
 export {
+  hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
+export {
   CONFIG_DIR,
   clamp,
   clampInt,

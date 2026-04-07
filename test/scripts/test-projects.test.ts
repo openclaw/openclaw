@@ -55,9 +55,9 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.shared-core.config.ts",
+        config: "vitest.unit-fast.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/shared/**/*.test.ts"],
+        includePatterns: ["src/shared/string-normalization.test.ts"],
         watchMode: false,
       },
       {
@@ -83,13 +83,29 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("routes explicit commands light tests to the lighter commands lane", () => {
-    const plans = buildVitestRunPlans(["src/commands/cleanup-utils.test.ts"], process.cwd());
+    const plans = buildVitestRunPlans(["src/commands/status-json-runtime.test.ts"], process.cwd());
 
     expect(plans).toEqual([
       {
         config: "vitest.commands-light.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/commands/cleanup-utils.test.ts"],
+        includePatterns: ["src/commands/status-json-runtime.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes unit-fast light tests to the cache-friendly unit-fast lane", () => {
+    const plans = buildVitestRunPlans(
+      ["src/commands/status-overview-values.test.ts"],
+      process.cwd(),
+    );
+
+    expect(plans).toEqual([
+      {
+        config: "vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/commands/status-overview-values.test.ts"],
         watchMode: false,
       },
     ]);
@@ -97,14 +113,14 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes changed plugin-sdk source allowlist files to sibling light tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "src/plugin-sdk/lazy-value.ts",
+      "src/plugin-sdk/provider-entry.ts",
     ]);
 
     expect(plans).toEqual([
       {
-        config: "vitest.plugin-sdk-light.config.ts",
+        config: "vitest.unit-fast.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/plugin-sdk/lazy-value.test.ts"],
+        includePatterns: ["src/plugin-sdk/provider-entry.test.ts"],
         watchMode: false,
       },
     ]);
@@ -118,7 +134,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
     expect(plans).toEqual([
       {
-        config: "vitest.commands-light.config.ts",
+        config: "vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: [
           "src/commands/status-overview-values.test.ts",
@@ -164,6 +180,12 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("splits untargeted runs into fixed shard configs", () => {
     expect(buildFullSuiteVitestRunPlans([], process.cwd())).toEqual([
       {
+        config: "vitest.full-core-unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
         config: "vitest.full-core-unit-src.config.ts",
         forwardedArgs: [],
         includePatterns: null,
@@ -183,6 +205,12 @@ describe("scripts/test-projects full-suite sharding", () => {
       },
       {
         config: "vitest.full-core-unit-support.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "vitest.full-core-support-boundary.config.ts",
         forwardedArgs: [],
         includePatterns: null,
         watchMode: false,

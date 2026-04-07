@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
+
 export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
   return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
@@ -10,9 +12,10 @@ export function normalizeTrimmedStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.flatMap((entry) =>
-    typeof entry === "string" && entry.trim() ? [entry.trim()] : [],
-  );
+  return value.flatMap((entry) => {
+    const normalized = normalizeOptionalString(entry);
+    return normalized ? [normalized] : [];
+  });
 }
 
 export function normalizeOptionalTrimmedStringList(value: unknown): string[] | undefined {
@@ -31,10 +34,8 @@ export function normalizeSingleOrTrimmedStringList(value: unknown): string[] {
   if (Array.isArray(value)) {
     return normalizeTrimmedStringList(value);
   }
-  if (typeof value === "string" && value.trim()) {
-    return [value.trim()];
-  }
-  return [];
+  const normalized = normalizeOptionalString(value);
+  return normalized ? [normalized] : [];
 }
 
 export function normalizeCsvOrLooseStringList(value: unknown): string[] {
@@ -51,7 +52,7 @@ export function normalizeCsvOrLooseStringList(value: unknown): string[] {
 }
 
 export function normalizeHyphenSlug(raw?: string | null) {
-  const trimmed = raw?.trim().toLowerCase() ?? "";
+  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
@@ -61,7 +62,7 @@ export function normalizeHyphenSlug(raw?: string | null) {
 }
 
 export function normalizeAtHashSlug(raw?: string | null) {
-  const trimmed = raw?.trim().toLowerCase() ?? "";
+  const trimmed = normalizeOptionalLowercaseString(raw) ?? "";
   if (!trimmed) {
     return "";
   }
