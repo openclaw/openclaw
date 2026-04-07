@@ -36,6 +36,7 @@ export type RestartOutboxTask =
         channel?: string;
         to?: string;
         accountId?: string;
+        threadId?: string;
       };
       restartId?: string;
       correlationId?: string;

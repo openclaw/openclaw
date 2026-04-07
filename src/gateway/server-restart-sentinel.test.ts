@@ -285,8 +285,44 @@ describe("scheduleRestartSentinelWake", () => {
     );
     expect(mocks.requestHeartbeatNow).toHaveBeenCalledWith(
       expect.objectContaining({
-        reason: "gateway.restart.outbox",
+        reason: "hook:gateway.restart.outbox",
         sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
+  it("preserves nested deliveryContext threadId for persisted message outbox", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        suppressPrimaryNotice: true,
+        outbox: [
+          {
+            kind: "message",
+            message: "outbox message",
+            deliveryContext: {
+              channel: "telegram",
+              to: "telegram:119707338",
+              accountId: "default",
+              threadId: "20",
+            },
+          },
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "outbox message",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliveryContext: expect.objectContaining({
+          channel: "telegram",
+          to: "telegram:119707338",
+          accountId: "default",
+          threadId: "20",
+        }),
       }),
     );
   });

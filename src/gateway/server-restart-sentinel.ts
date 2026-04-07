@@ -141,7 +141,12 @@ function executePersistedRestartOutbox(params: {
     const deliveryContextRaw = "deliveryContext" in task ? task.deliveryContext : undefined;
     const deliveryContext =
       deliveryContextRaw && typeof deliveryContextRaw === "object"
-        ? (deliveryContextRaw as { channel?: unknown; to?: unknown; accountId?: unknown })
+        ? (deliveryContextRaw as {
+            channel?: unknown;
+            to?: unknown;
+            accountId?: unknown;
+            threadId?: unknown;
+          })
         : undefined;
     const dcChannel =
       deliveryContext && typeof deliveryContext.channel === "string"
@@ -153,6 +158,10 @@ function executePersistedRestartOutbox(params: {
       deliveryContext && typeof deliveryContext.accountId === "string"
         ? deliveryContext.accountId
         : undefined;
+    const dcThreadId =
+      deliveryContext && typeof deliveryContext.threadId === "string"
+        ? deliveryContext.threadId
+        : undefined;
     const taskChannel =
       "channel" in task && typeof task.channel === "string" ? task.channel : undefined;
     const taskTo = "to" in task && typeof task.to === "string" ? task.to : undefined;
@@ -161,14 +170,18 @@ function executePersistedRestartOutbox(params: {
     const taskThreadId =
       "threadId" in task && typeof task.threadId === "string" ? task.threadId : undefined;
 
+    const hasDeliveryContext =
+      dcChannel || dcTo || dcAccountId || dcThreadId || taskChannel || taskTo || taskAccountId || taskThreadId;
+
     enqueueSystemEvent(message, {
       sessionKey: sessionKeyRaw,
-      ...(dcChannel || dcTo || dcAccountId || taskChannel || taskTo || taskAccountId || taskThreadId
+      ...(hasDeliveryContext
         ? {
             deliveryContext: {
               ...(dcChannel ? { channel: dcChannel } : {}),
               ...(dcTo ? { to: dcTo } : {}),
               ...(dcAccountId ? { accountId: dcAccountId } : {}),
+              ...(dcThreadId ? { threadId: dcThreadId } : {}),
               ...(taskChannel ? { channel: taskChannel } : {}),
               ...(taskTo ? { to: taskTo } : {}),
               ...(taskAccountId ? { accountId: taskAccountId } : {}),
@@ -177,7 +190,7 @@ function executePersistedRestartOutbox(params: {
           }
         : {}),
     });
-    requestHeartbeatNow({ reason: "gateway.restart.outbox", sessionKey: sessionKeyRaw });
+    requestHeartbeatNow({ reason: "hook:gateway.restart.outbox", sessionKey: sessionKeyRaw });
   }
 }
 
