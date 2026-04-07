@@ -59,6 +59,17 @@ export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[num
 
 export { decodeStrictBase64 };
 
+const DEFAULT_SUBAGENT_STARTUP_TIMEOUT_MS = 60_000;
+const SUBAGENT_MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
+
+export function resolveSubagentStartupWaitTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
+  const configured = cfg.agents?.defaults?.subagents?.startupWaitTimeoutMs;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return DEFAULT_SUBAGENT_STARTUP_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(1, Math.floor(configured)), SUBAGENT_MAX_SAFE_TIMEOUT_MS);
+}
+
 type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
@@ -399,6 +410,7 @@ export async function spawnSubagentDirect(
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
+  const startupWaitTimeoutMs = resolveSubagentStartupWaitTimeoutMs(cfg);
   let modelApplied = false;
   let threadBindingReady = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -729,7 +741,7 @@ export async function spawnSubagentDirect(
           : {}),
         ...publicSpawnedMetadata,
       },
-      timeoutMs: 10_000,
+      timeoutMs: startupWaitTimeoutMs,
     });
     const runId = readGatewayRunId(response);
     if (runId) {

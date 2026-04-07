@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
@@ -49,6 +49,12 @@ function findSessionsDeleteCall(
 
 describe("sessions_spawn subagent startup wait timeout", () => {
   beforeEach(() => {
+    resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
+    getCallGatewayMock().mockClear();
+  });
+
+  afterEach(() => {
     resetSessionsSpawnConfigOverride();
     resetSubagentRegistryForTests();
     getCallGatewayMock().mockClear();

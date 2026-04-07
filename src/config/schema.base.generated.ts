@@ -4838,6 +4838,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     minimum: 0,
                     maximum: 9007199254740991,
                   },
+                  startupWaitTimeoutMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  completionAnnounceTimeoutMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
                   announceTimeoutMs: {
                     type: "integer",
                     exclusiveMinimum: 0,

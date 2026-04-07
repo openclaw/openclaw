@@ -213,6 +213,8 @@ export const AgentDefaultsSchema = z
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
+        startupWaitTimeoutMs: z.number().int().positive().optional(),
+        completionAnnounceTimeoutMs: z.number().int().positive().optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
         requireAgentId: z.boolean().optional(),
       })

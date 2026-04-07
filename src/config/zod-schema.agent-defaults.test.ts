@@ -31,6 +31,37 @@ describe("agent defaults schema", () => {
     ).not.toThrow();
   });
 
+  it("accepts positive subagent startupWaitTimeoutMs", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        subagents: {
+          startupWaitTimeoutMs: 60_000,
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects invalid subagent startupWaitTimeoutMs", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        subagents: {
+          startupWaitTimeoutMs: 0,
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts both completionAnnounceTimeoutMs and announceTimeoutMs during the alias window", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        subagents: {
+          completionAnnounceTimeoutMs: 90_000,
+          announceTimeoutMs: 45_000,
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");
