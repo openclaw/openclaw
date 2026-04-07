@@ -9,6 +9,7 @@ import {
 } from "../infra/device-pairing.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -100,7 +101,7 @@ function normalizeErrorMessage(error: unknown): string {
 }
 
 function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
-  const message = normalizeErrorMessage(error).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   if (!message.includes("pairing required")) {
     return false;
   }
@@ -159,9 +160,16 @@ async function approvePairingWithFallback(
     if (opts.json !== true) {
       defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
     }
-    const approved = await approveDevicePairing(requestId);
+    const approved = await approveDevicePairing(requestId, {
+      // Local CLI fallback already assumes direct machine access; treat it as an
+      // explicit admin approval path instead of relying on missing caller scopes.
+      callerScopes: ["operator.admin"],
+    });
     if (!approved) {
       return null;
+    }
+    if (approved.status === "forbidden") {
+      throw new Error(`missing scope: ${approved.missingScope}`, { cause: error });
     }
     return {
       requestId,

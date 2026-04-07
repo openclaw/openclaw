@@ -1,25 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 
-vi.mock("./session-lifecycle-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-lifecycle-state.js")>();
-  return {
-    ...actual,
-    persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
-      persistGatewaySessionLifecycleEventMock(...args),
-  };
-});
-
-import {
-  createAgentEventHandler,
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createToolEventRecipientRegistry,
-} from "./server-chat.js";
+vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
+  persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
+    persistGatewaySessionLifecycleEventMock(...args),
+}));
 
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({})),
@@ -33,6 +20,20 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
   })),
 }));
 
+vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
+  loadGatewaySessionRow: vi.fn(),
+}));
+
+import { loadConfig } from "../config/config.js";
+import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import {
+  createAgentEventHandler,
+  createChatRunState,
+  createSessionEventSubscriberRegistry,
+  createToolEventRecipientRegistry,
+} from "./server-chat.js";
+import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+
 describe("agent event handler", () => {
   beforeEach(() => {
     vi.mocked(loadConfig).mockReturnValue({});
@@ -41,23 +42,28 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
+    vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetAgentRunContextForTest();
   });
 
   function createHarness(params?: {
     now?: number;
     resolveSessionKeyForRun?: (runId: string) => string | undefined;
+    lifecycleErrorRetryGraceMs?: number;
+    isChatSendRunActive?: (runId: string) => boolean;
   }) {
     const nowSpy =
       params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
     const nodeSendToSession = vi.fn();
+    const clearAgentRunContext = vi.fn();
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
@@ -70,9 +76,11 @@ describe("agent event handler", () => {
       agentRunSeq,
       chatRunState,
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
-      clearAgentRunContext: vi.fn(),
+      clearAgentRunContext,
       toolEventRecipients,
       sessionEventSubscribers,
+      lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
+      isChatSendRunActive: params?.isChatSendRunActive,
     });
 
     return {
@@ -80,6 +88,7 @@ describe("agent event handler", () => {
       broadcast,
       broadcastToConnIds,
       nodeSendToSession,
+      clearAgentRunContext,
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
@@ -117,7 +126,7 @@ describe("agent event handler", () => {
   const FALLBACK_LIFECYCLE_DATA = {
     phase: "fallback",
     selectedProvider: "fireworks",
-    selectedModel: "fireworks/minimax-m2p5",
+    selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
     activeProvider: "deepinfra",
     activeModel: "moonshotai/Kimi-K2.5",
   } as const;
@@ -645,6 +654,21 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: () => "session-1",
     });
 
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-1",
+      kind: "direct",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      lastThreadId: 42,
+      fastMode: true,
+      verboseLevel: "on",
+      updatedAt: 1_200,
+    });
+
     registerAgentRunContext("run-session-tool", { sessionKey: "session-1", verboseLevel: "off" });
     sessionEventSubscribers.subscribe("conn-session");
 
@@ -667,6 +691,15 @@ describe("agent event handler", () => {
       expect.objectContaining({
         runId: "run-session-tool",
         sessionKey: "session-1",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        lastThreadId: 42,
+        fastMode: true,
+        verboseLevel: "on",
         stream: "tool",
         ts: 1_234,
         data: expect.objectContaining({
@@ -678,6 +711,134 @@ describe("agent event handler", () => {
       }),
       new Set(["conn-session"]),
       { dropIfSlow: true },
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("hydrates run-scoped tool events with session ownership metadata", () => {
+    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-1",
+      kind: "direct",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      lastThreadId: 42,
+      fastMode: true,
+      verboseLevel: "on",
+      updatedAt: 1_200,
+    });
+
+    registerAgentRunContext("run-tool-owner", { sessionKey: "session-1", verboseLevel: "off" });
+    toolEventRecipients.add("run-tool-owner", "conn-run");
+
+    handler({
+      runId: "run-tool-owner",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-run-1",
+        args: { command: "echo hi" },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        runId: "run-tool-owner",
+        sessionKey: "session-1",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        lastThreadId: 42,
+        fastMode: true,
+        verboseLevel: "on",
+        stream: "tool",
+        ts: 1_234,
+        data: expect.objectContaining({
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-run-1",
+          args: { command: "echo hi" },
+        }),
+      }),
+      new Set(["conn-run"]),
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("hydrates node session tool events with session ownership metadata", () => {
+    const { nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-1",
+      kind: "direct",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      lastThreadId: 42,
+      fastMode: true,
+      verboseLevel: "on",
+      updatedAt: 1_200,
+    });
+
+    registerAgentRunContext("run-tool-node", { sessionKey: "session-1", verboseLevel: "on" });
+
+    handler({
+      runId: "run-tool-node",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-node-1",
+        args: { command: "echo hi" },
+      },
+    });
+
+    expect(nodeSendToSession).toHaveBeenCalledWith(
+      "session-1",
+      "agent",
+      expect.objectContaining({
+        runId: "run-tool-node",
+        sessionKey: "session-1",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        lastThreadId: 42,
+        fastMode: true,
+        verboseLevel: "on",
+        stream: "tool",
+        ts: 1_234,
+        data: expect.objectContaining({
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-node-1",
+          args: { command: "echo hi" },
+        }),
+      }),
     );
     resetAgentRunContextForTest();
   });
@@ -739,6 +900,80 @@ describe("agent event handler", () => {
       }),
     });
     resetAgentRunContextForTest();
+  });
+
+  it("keeps live session setting metadata at the top level for lifecycle updates", () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-finished",
+      kind: "direct",
+      updatedAt: 1_650,
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      fastMode: true,
+      sendPolicy: "deny",
+      verboseLevel: "on",
+      responseUsage: "full",
+      totalTokens: 42,
+      totalTokensFresh: true,
+      contextTokens: 21,
+      estimatedCostUsd: 0.12,
+      lastThreadId: 42,
+      status: "running",
+      startedAt: 900,
+      runtimeMs: 750,
+      abortedLastRun: false,
+    });
+
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-finished",
+    });
+
+    sessionEventSubscribers.subscribe("conn-session");
+    registerAgentRunContext("run-finished", {
+      sessionKey: "session-finished",
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-finished",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_800,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "session-finished",
+        phase: "end",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        fastMode: true,
+        sendPolicy: "deny",
+        verboseLevel: "on",
+        responseUsage: "full",
+        totalTokens: 42,
+        totalTokensFresh: true,
+        contextTokens: 21,
+        estimatedCostUsd: 0.12,
+        lastThreadId: 42,
+      }),
+      new Set(["conn-session"]),
+      { dropIfSlow: true },
+    );
   });
 
   it("strips tool output when verbose is on", () => {
@@ -836,6 +1071,148 @@ describe("agent event handler", () => {
     expect(nodeCalls).toHaveLength(1);
     const nodePayload = nodeCalls[0]?.[2] as { runId?: string };
     expect(nodePayload.runId).toBe("run-fallback-client");
+  });
+
+  it("keeps chat-linked run remapping alive across per-attempt lifecycle errors", () => {
+    vi.useFakeTimers();
+    const { broadcast, chatRunState, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-fallback",
+      lifecycleErrorRetryGraceMs: 100,
+    });
+    chatRunState.registry.add("run-fallback-retry", {
+      sessionKey: "session-fallback",
+      clientRunId: "run-fallback-client",
+    });
+
+    handler({
+      runId: "run-fallback-retry",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "draft" },
+    });
+    handler({
+      runId: "run-fallback-retry",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "error", error: "provider failed" },
+    });
+
+    expect(chatRunState.registry.peek("run-fallback-retry")).toEqual({
+      sessionKey: "session-fallback",
+      clientRunId: "run-fallback-client",
+    });
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
+    expect(agentRunSeq.get("run-fallback-retry")).toBe(2);
+
+    emitFallbackLifecycle({
+      handler,
+      runId: "run-fallback-retry",
+      seq: 3,
+      sessionKey: "session-fallback",
+    });
+    const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    const fallbackPayload = agentCalls.at(-1)?.[1] as {
+      runId?: string;
+      data?: Record<string, unknown>;
+    };
+    expect(fallbackPayload.runId).toBe("run-fallback-client");
+    expect(fallbackPayload.data?.phase).toBe("fallback");
+
+    emitLifecycleEnd(handler, "run-fallback-retry", 4);
+
+    expect(
+      chatBroadcastCalls(broadcast).some(
+        ([, payload]) => (payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      runId?: string;
+    };
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.runId).toBe("run-fallback-client");
+    expect(clearAgentRunContext).toHaveBeenCalledWith("run-fallback-retry");
+    expect(agentRunSeq.has("run-fallback-retry")).toBe(false);
+  });
+
+  it("defers terminal lifecycle-error cleanup for non-chat-send runs until the retry grace expires", () => {
+    vi.useFakeTimers();
+    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-terminal-error",
+      lifecycleErrorRetryGraceMs: 100,
+    });
+    registerAgentRunContext("run-terminal-error", { sessionKey: "session-terminal-error" });
+
+    handler({
+      runId: "run-terminal-error",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "partial" },
+    });
+    handler({
+      runId: "run-terminal-error",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "error", error: "still broken" },
+    });
+
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
+    expect(agentRunSeq.get("run-terminal-error")).toBe(2);
+    expect(
+      chatBroadcastCalls(broadcast).some(
+        ([, payload]) => (payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+
+    vi.advanceTimersByTime(100);
+
+    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+      state?: string;
+      runId?: string;
+    };
+    expect(finalPayload.state).toBe("error");
+    expect(finalPayload.runId).toBe("run-terminal-error");
+    expect(clearAgentRunContext).toHaveBeenCalledWith("run-terminal-error");
+    expect(agentRunSeq.has("run-terminal-error")).toBe(false);
+  });
+
+  it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {
+    vi.useFakeTimers();
+    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-chat-send",
+      lifecycleErrorRetryGraceMs: 100,
+      isChatSendRunActive: (runId) => runId === "run-chat-send",
+    });
+    registerAgentRunContext("run-chat-send", { sessionKey: "session-chat-send" });
+
+    handler({
+      runId: "run-chat-send",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "partial" },
+    });
+    handler({
+      runId: "run-chat-send",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "error", error: "chat.send failed" },
+    });
+
+    vi.advanceTimersByTime(100);
+
+    expect(
+      chatBroadcastCalls(broadcast).some(
+        ([, payload]) => (payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+    expect(clearAgentRunContext).toHaveBeenCalledWith("run-chat-send");
+    expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });
 
   it("suppresses chat and node session events for non-control-UI-visible runs", () => {

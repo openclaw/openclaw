@@ -1,12 +1,10 @@
 import type { EventEmitter } from "node:events";
-import type {
+import type { DiscordGatewayHandle } from "./monitor/gateway-handle.js";
+import {
   DiscordGatewayEvent,
+  DiscordGatewayLifecycleError,
   DiscordGatewaySupervisor,
 } from "./monitor/gateway-supervisor.js";
-
-export type DiscordGatewayHandle = {
-  disconnect?: () => void;
-};
 
 export type WaitForDiscordGatewayStopParams = {
   gateway?: DiscordGatewayHandle;
@@ -62,13 +60,12 @@ export async function waitForDiscordGatewayStop(
     const onGatewayEvent = (event: DiscordGatewayEvent) => {
       const shouldStop = (params.onGatewayEvent?.(event) ?? "stop") === "stop";
       if (shouldStop) {
-        finishReject(event.err);
+        finishReject(new DiscordGatewayLifecycleError(event));
       }
     };
     const onForceStop = (err: unknown) => {
       finishReject(err);
     };
-
     if (abortSignal?.aborted) {
       onAbort();
       return;

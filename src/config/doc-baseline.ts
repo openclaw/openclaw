@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,14 +26,6 @@ type JsonSchemaObject = JsonSchemaNode & {
   oneOf?: JsonSchemaObject[];
 };
 
-type ChannelSurfaceMetadata = {
-  id: string;
-  label: string;
-  description?: string;
-  configSchema?: Record<string, unknown>;
-  configUiHints?: ConfigSchemaResponse["uiHints"];
-};
-
 export type ConfigDocBaselineKind = "core" | "channel" | "plugin";
 
 export type ConfigDocBaselineEntry = {
@@ -52,26 +45,52 @@ export type ConfigDocBaselineEntry = {
 
 export type ConfigDocBaseline = {
   generatedBy: "scripts/generate-config-doc-baseline.ts";
+  coreEntries: ConfigDocBaselineEntry[];
+  channelEntries: ConfigDocBaselineEntry[];
+  pluginEntries: ConfigDocBaselineEntry[];
+};
+
+export type ConfigDocBaselineKindBaseline = {
+  generatedBy: "scripts/generate-config-doc-baseline.ts";
+  kind: ConfigDocBaselineKind;
   entries: ConfigDocBaselineEntry[];
 };
 
-export type ConfigDocBaselineStatefileRender = {
-  json: string;
-  jsonl: string;
-  baseline: ConfigDocBaseline;
+export type ConfigDocBaselineArtifacts = {
+  combined: string;
+  core: string;
+  channel: string;
+  plugin: string;
 };
 
-export type ConfigDocBaselineStatefileWriteResult = {
+export type ConfigDocBaselineArtifactsRender = {
+  baseline: ConfigDocBaseline;
+  json: ConfigDocBaselineArtifacts;
+};
+
+export type ConfigDocBaselineArtifactPaths = {
+  combined: string;
+  core: string;
+  channel: string;
+  plugin: string;
+};
+
+export type ConfigDocBaselineArtifactsWriteResult = {
   changed: boolean;
   wrote: boolean;
-  jsonPath: string;
-  statefilePath: string;
+  jsonPaths: ConfigDocBaselineArtifactPaths;
+  hashPath: string;
 };
 
 const GENERATED_BY = "scripts/generate-config-doc-baseline.ts" as const;
-const DEFAULT_JSON_OUTPUT = "docs/.generated/config-baseline.json";
-const DEFAULT_STATEFILE_OUTPUT = "docs/.generated/config-baseline.jsonl";
+const DEFAULT_COMBINED_OUTPUT = "docs/.generated/config-baseline.json";
+const DEFAULT_CORE_OUTPUT = "docs/.generated/config-baseline.core.json";
+const DEFAULT_CHANNEL_OUTPUT = "docs/.generated/config-baseline.channel.json";
+const DEFAULT_PLUGIN_OUTPUT = "docs/.generated/config-baseline.plugin.json";
+const DEFAULT_HASH_OUTPUT = "docs/.generated/config-baseline.sha256";
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
+let cachedDocBaselineRuntimePromise: Promise<typeof import("./doc-baseline.runtime.js")> | null =
+  null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],
   Map<
@@ -96,6 +115,11 @@ function resolveRepoRoot(): string {
     return fromPackage;
   }
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+}
+
+async function loadDocBaselineRuntime() {
+  cachedDocBaselineRuntimePromise ??= import("./doc-baseline.runtime.js");
+  return await cachedDocBaselineRuntimePromise;
 }
 
 function normalizeBaselinePath(rawPath: string): string {
@@ -330,29 +354,9 @@ function resolveEntryKind(configPath: string): ConfigDocBaselineKind {
   return "core";
 }
 
-function resolveFirstExistingPath(candidates: string[]): string | null {
-  for (const candidate of candidates) {
-    try {
-      fsSync.accessSync(candidate);
-      return candidate;
-    } catch {
-      // Keep scanning for other source file variants.
-    }
-  }
-  return null;
-}
-
 async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> {
-  const [
-    { listChannelPluginCatalogEntries },
-    { loadPluginManifestRegistry },
-    { buildConfigSchema },
-  ] = await Promise.all([
-    import("../channels/plugins/catalog.js"),
-    import("../plugins/manifest-registry.js"),
-    import("./schema.js"),
-  ]);
   const repoRoot = resolveRepoRoot();
+  const runtime = await loadDocBaselineRuntime();
   const env = {
     ...process.env,
     HOME: os.tmpdir(),
@@ -360,137 +364,26 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
   };
 
-  const manifestRegistry = loadPluginManifestRegistry({
+  const manifestRegistry = runtime.loadPluginManifestRegistry({
     cache: false,
     env,
     config: {},
   });
-  const channelCatalogById = new Map(
-    listChannelPluginCatalogEntries({
-      workspaceDir: repoRoot,
-      env,
-    }).map((entry) => [entry.id, entry.meta] as const),
-  );
   logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
-  const bundledChannelPlugins = manifestRegistry.plugins.filter(
-    (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
-  );
-  const channelPlugins =
-    process.env.OPENCLAW_CONFIG_DOC_BASELINE_DEBUG === "1"
-      ? await bundledChannelPlugins.reduce<Promise<ChannelSurfaceMetadata[]>>(
-          async (promise, plugin) => {
-            const loaded = await promise;
-            const catalogMeta = channelCatalogById.get(plugin.id);
-            const label = catalogMeta?.label ?? plugin.name ?? plugin.id;
-            const description = catalogMeta?.blurb ?? plugin.description;
-            loaded.push(
-              (await loadChannelSurfaceMetadata(
-                plugin.rootDir,
-                plugin.id,
-                label,
-                description,
-                repoRoot,
-              )) ?? {
-                id: plugin.id,
-                label,
-                description,
-                configSchema: plugin.configSchema,
-                configUiHints: plugin.configUiHints,
-              },
-            );
-            return loaded;
-          },
-          Promise.resolve([]),
-        )
-      : await Promise.all(
-          bundledChannelPlugins.map(async (plugin) => {
-            const catalogMeta = channelCatalogById.get(plugin.id);
-            const label = catalogMeta?.label ?? plugin.name ?? plugin.id;
-            const description = catalogMeta?.blurb ?? plugin.description;
-            return (
-              (await loadChannelSurfaceMetadata(
-                plugin.rootDir,
-                plugin.id,
-                label,
-                description,
-                repoRoot,
-              )) ?? {
-                id: plugin.id,
-                label,
-                description,
-                configSchema: plugin.configSchema,
-                configUiHints: plugin.configUiHints,
-              }
-            );
-          }),
-        );
+  const bundledRegistry = {
+    ...manifestRegistry,
+    plugins: manifestRegistry.plugins.filter((plugin) => plugin.origin === "bundled"),
+  };
+  const channelPlugins = runtime.collectChannelSchemaMetadata(bundledRegistry);
   logConfigDocBaselineDebug(
-    `loaded ${channelPlugins.length} bundled channel entries from channel surfaces`,
+    `loaded ${channelPlugins.length} bundled channel entries from metadata`,
   );
 
-  return buildConfigSchema({
+  return runtime.buildConfigSchema({
     cache: false,
-    plugins: manifestRegistry.plugins
-      .filter((plugin) => plugin.origin === "bundled")
-      .map((plugin) => ({
-        id: plugin.id,
-        name: plugin.name,
-        description: plugin.description,
-        configUiHints: plugin.configUiHints,
-        configSchema: plugin.configSchema,
-      })),
-    channels: channelPlugins.map((entry) => ({
-      id: entry.id,
-      label: entry.label,
-      description: entry.description,
-      configSchema: entry.configSchema,
-      configUiHints: entry.configUiHints,
-    })),
+    plugins: runtime.collectPluginSchemaMetadata(bundledRegistry),
+    channels: channelPlugins,
   });
-}
-
-async function loadChannelSurfaceMetadata(
-  rootDir: string,
-  id: string,
-  label: string,
-  description: string | undefined,
-  repoRoot: string,
-): Promise<ChannelSurfaceMetadata | null> {
-  logConfigDocBaselineDebug(`resolve channel config surface ${rootDir}`);
-  const modulePath = resolveFirstExistingPath([
-    path.join(rootDir, "src", "config-schema.ts"),
-    path.join(rootDir, "src", "config-schema.js"),
-    path.join(rootDir, "src", "config-schema.mts"),
-    path.join(rootDir, "src", "config-schema.mjs"),
-  ]);
-  if (!modulePath) {
-    logConfigDocBaselineDebug(`missing channel config schema module ${rootDir}`);
-    return null;
-  }
-
-  logConfigDocBaselineDebug(`import channel config schema ${modulePath}`);
-  try {
-    const { loadChannelConfigSurfaceModule } =
-      await import("../../scripts/load-channel-config-surface.ts");
-    const configSurface = await loadChannelConfigSurfaceModule(modulePath, { repoRoot });
-    if (!configSurface) {
-      logConfigDocBaselineDebug(`channel config schema export missing ${modulePath}`);
-      return null;
-    }
-    logConfigDocBaselineDebug(`completed channel config schema import ${modulePath}`);
-    return {
-      id,
-      label,
-      description,
-      configSchema: configSurface.schema,
-      configUiHints: configSurface.uiHints as ConfigSchemaResponse["uiHints"] | undefined,
-    };
-  } catch (error) {
-    logConfigDocBaselineDebug(
-      `channel config schema import failed for ${modulePath}: ${String(error)}`,
-    );
-    return null;
-  }
 }
 
 export function collectConfigDocBaselineEntries(
@@ -599,6 +492,36 @@ export function dedupeConfigDocBaselineEntries(
   return [...byPath.values()].toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
+export function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
+  coreEntries: ConfigDocBaselineEntry[];
+  channelEntries: ConfigDocBaselineEntry[];
+  pluginEntries: ConfigDocBaselineEntry[];
+} {
+  const coreEntries: ConfigDocBaselineEntry[] = [];
+  const channelEntries: ConfigDocBaselineEntry[] = [];
+  const pluginEntries: ConfigDocBaselineEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.kind === "channel") {
+      channelEntries.push(entry);
+      continue;
+    }
+    if (entry.kind === "plugin") {
+      pluginEntries.push(entry);
+      continue;
+    }
+    coreEntries.push(entry);
+  }
+
+  return { coreEntries, channelEntries, pluginEntries };
+}
+
+export function flattenConfigDocBaselineEntries(
+  baseline: ConfigDocBaseline,
+): ConfigDocBaselineEntry[] {
+  return [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries];
+}
+
 export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
   if (cachedConfigDocBaselinePromise) {
     return await cachedConfigDocBaselinePromise;
@@ -616,13 +539,16 @@ export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
     const entries = dedupeConfigDocBaselineEntries(
       collectConfigDocBaselineEntries(schemaRoot, response.uiHints),
     );
+    const { coreEntries, channelEntries, pluginEntries } = splitConfigDocBaselineEntries(entries);
     logConfigDocBaselineDebug(
       `collect baseline entries done count=${entries.length} elapsedMs=${Date.now() - collectStart}`,
     );
     logConfigDocBaselineDebug(`build baseline done elapsedMs=${Date.now() - start}`);
     return {
       generatedBy: GENERATED_BY,
-      entries,
+      coreEntries,
+      channelEntries,
+      pluginEntries,
     };
   })();
   try {
@@ -633,33 +559,38 @@ export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
   }
 }
 
-export async function renderConfigDocBaselineStatefile(
-  baseline?: ConfigDocBaseline | Promise<ConfigDocBaseline>,
-): Promise<ConfigDocBaselineStatefileRender> {
-  const start = Date.now();
-  logConfigDocBaselineDebug("render statefile start");
-  const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
-  const json = `${JSON.stringify(resolvedBaseline, null, 2)}\n`;
-  const metadataLine = JSON.stringify({
+function renderKindBaseline(
+  kind: ConfigDocBaselineKind,
+  entries: ConfigDocBaselineEntry[],
+): string {
+  const baseline: ConfigDocBaselineKindBaseline = {
     generatedBy: GENERATED_BY,
-    recordType: "meta",
-    totalPaths: resolvedBaseline.entries.length,
-  });
-  const entryLines = resolvedBaseline.entries.map((entry) =>
-    JSON.stringify({
-      recordType: "path",
-      ...entry,
-    }),
-  );
-  logConfigDocBaselineDebug(`render statefile done elapsedMs=${Date.now() - start}`);
+    kind,
+    entries,
+  };
+  return `${JSON.stringify(baseline, null, 2)}\n`;
+}
+
+export async function renderConfigDocBaselineArtifacts(
+  baseline?: ConfigDocBaseline | Promise<ConfigDocBaseline>,
+): Promise<ConfigDocBaselineArtifactsRender> {
+  const start = Date.now();
+  logConfigDocBaselineDebug("render artifacts start");
+  const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
+  const json: ConfigDocBaselineArtifacts = {
+    combined: `${JSON.stringify(resolvedBaseline, null, 2)}\n`,
+    core: renderKindBaseline("core", resolvedBaseline.coreEntries),
+    channel: renderKindBaseline("channel", resolvedBaseline.channelEntries),
+    plugin: renderKindBaseline("plugin", resolvedBaseline.pluginEntries),
+  };
+  logConfigDocBaselineDebug(`render artifacts done elapsedMs=${Date.now() - start}`);
   return {
     json,
-    jsonl: `${[metadataLine, ...entryLines].join("\n")}\n`,
     baseline: resolvedBaseline,
   };
 }
 
-async function readIfExists(filePath: string): Promise<string | null> {
+function readFileIfExists(filePath: string): string | null {
   try {
     return fsSync.readFileSync(filePath, "utf8");
   } catch {
@@ -667,59 +598,92 @@ async function readIfExists(filePath: string): Promise<string | null> {
   }
 }
 
-async function writeIfChanged(filePath: string, next: string): Promise<boolean> {
-  const current = await readIfExists(filePath);
-  if (current === next) {
-    return false;
-  }
+function writeFileAtomic(filePath: string, content: string): void {
   fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
-  fsSync.writeFileSync(filePath, next, "utf8");
-  return true;
+  fsSync.writeFileSync(filePath, content, "utf8");
 }
 
-export async function writeConfigDocBaselineStatefile(params?: {
+function sha256(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+/** Build the sha256 hash file content for all config baseline artifacts. */
+export function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts): string {
+  const lines = [
+    `${sha256(json.combined)}  config-baseline.json`,
+    `${sha256(json.core)}  config-baseline.core.json`,
+    `${sha256(json.channel)}  config-baseline.channel.json`,
+    `${sha256(json.plugin)}  config-baseline.plugin.json`,
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+function resolveBaselineArtifactPaths(
+  repoRoot: string,
+  params?: {
+    combinedPath?: string;
+    corePath?: string;
+    channelPath?: string;
+    pluginPath?: string;
+  },
+): ConfigDocBaselineArtifactPaths {
+  return {
+    combined: path.resolve(repoRoot, params?.combinedPath ?? DEFAULT_COMBINED_OUTPUT),
+    core: path.resolve(repoRoot, params?.corePath ?? DEFAULT_CORE_OUTPUT),
+    channel: path.resolve(repoRoot, params?.channelPath ?? DEFAULT_CHANNEL_OUTPUT),
+    plugin: path.resolve(repoRoot, params?.pluginPath ?? DEFAULT_PLUGIN_OUTPUT),
+  };
+}
+
+export async function writeConfigDocBaselineArtifacts(params?: {
   repoRoot?: string;
   check?: boolean;
-  jsonPath?: string;
-  statefilePath?: string;
-  rendered?: ConfigDocBaselineStatefileRender | Promise<ConfigDocBaselineStatefileRender>;
-}): Promise<ConfigDocBaselineStatefileWriteResult> {
+  combinedPath?: string;
+  corePath?: string;
+  channelPath?: string;
+  pluginPath?: string;
+  hashPath?: string;
+  rendered?: ConfigDocBaselineArtifactsRender | Promise<ConfigDocBaselineArtifactsRender>;
+}): Promise<ConfigDocBaselineArtifactsWriteResult> {
   const start = Date.now();
-  logConfigDocBaselineDebug("write statefile start");
+  logConfigDocBaselineDebug("write artifacts start");
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
-  const jsonPath = path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT);
-  const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
+  const jsonPaths = resolveBaselineArtifactPaths(repoRoot, params);
+  const hashPath = path.resolve(repoRoot, params?.hashPath ?? DEFAULT_HASH_OUTPUT);
   const rendered = params?.rendered
     ? await params.rendered
-    : await renderConfigDocBaselineStatefile();
-  logConfigDocBaselineDebug(`render statefile done elapsedMs=${Date.now() - start}`);
-  logConfigDocBaselineDebug(`read current json start ${jsonPath}`);
-  const currentJson = await readIfExists(jsonPath);
-  logConfigDocBaselineDebug(`read current json done elapsedMs=${Date.now() - start}`);
-  logConfigDocBaselineDebug(`read current statefile start ${statefilePath}`);
-  const currentStatefile = await readIfExists(statefilePath);
-  logConfigDocBaselineDebug(`read current statefile done elapsedMs=${Date.now() - start}`);
-  const changed = currentJson !== rendered.json || currentStatefile !== rendered.jsonl;
+    : await renderConfigDocBaselineArtifacts();
+  logConfigDocBaselineDebug(`render artifacts done elapsedMs=${Date.now() - start}`);
+
+  const nextHashContent = computeConfigBaselineHashFileContent(rendered.json);
+  const currentHashContent = readFileIfExists(hashPath);
+  const changed = currentHashContent !== nextHashContent;
   logConfigDocBaselineDebug(
-    `compare statefile done changed=${changed} elapsedMs=${Date.now() - start}`,
+    `compare hashes done changed=${changed} elapsedMs=${Date.now() - start}`,
   );
 
   if (params?.check) {
     return {
       changed,
       wrote: false,
-      jsonPath,
-      statefilePath,
+      jsonPaths,
+      hashPath,
     };
   }
 
-  const wroteJson = await writeIfChanged(jsonPath, rendered.json);
-  const wroteStatefile = await writeIfChanged(statefilePath, rendered.jsonl);
+  // Write the hash file (tracked in git)
+  writeFileAtomic(hashPath, nextHashContent);
+
+  // Write full JSON artifacts locally (gitignored, useful for inspection)
+  for (const key of Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>) {
+    writeFileAtomic(jsonPaths[key], rendered.json[key]);
+  }
+
   return {
     changed,
-    wrote: wroteJson || wroteStatefile,
-    jsonPath,
-    statefilePath,
+    wrote: true,
+    jsonPaths,
+    hashPath,
   };
 }
 

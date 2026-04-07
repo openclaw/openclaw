@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { getSkillsSnapshotVersion, resetSkillsRefreshForTest } from "../agents/skills/refresh.js";
 import {
   getRemoteSkillEligibility,
   recordRemoteNodeBins,
@@ -32,6 +33,24 @@ describe("skills-remote", () => {
       removeRemoteNodeInfo(nodeId);
       removeRemoteNodeInfo(nodeId);
     }).not.toThrow();
+  });
+
+  it("bumps the skills snapshot version when an eligible remote node disconnects", async () => {
+    await resetSkillsRefreshForTest();
+    const workspaceDir = `/tmp/ws-${randomUUID()}`;
+    const nodeId = `node-${randomUUID()}`;
+    recordRemoteNodeInfo({
+      nodeId,
+      displayName: "Remote Mac",
+      platform: "darwin",
+      commands: ["system.run"],
+    });
+
+    const before = getSkillsSnapshotVersion(workspaceDir);
+    removeRemoteNodeInfo(nodeId);
+    const after = getSkillsSnapshotVersion(workspaceDir);
+
+    expect(after).toBeGreaterThan(before);
   });
 
   it("ignores non-mac and non-system.run nodes for eligibility", () => {
@@ -92,6 +111,27 @@ describe("skills-remote", () => {
     } finally {
       removeRemoteNodeInfo(nodeA);
       removeRemoteNodeInfo(nodeB);
+    }
+  });
+
+  it("suppresses the exec host=node note when routing is not allowed", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    try {
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Mac Studio",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      recordRemoteNodeBins(nodeId, [bin]);
+
+      const eligibility = getRemoteSkillEligibility({ advertiseExecNode: false });
+
+      expect(eligibility?.hasBin(bin)).toBe(true);
+      expect(eligibility?.note).toBeUndefined();
+    } finally {
+      removeRemoteNodeInfo(nodeId);
     }
   });
 });

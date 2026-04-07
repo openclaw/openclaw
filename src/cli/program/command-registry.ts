@@ -1,13 +1,23 @@
 import type { Command } from "commander";
-import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { reparseProgramFromActionArgs } from "./action-reparse.js";
-import { removeCommandByName } from "./command-tree.js";
+import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import { shouldRegisterPrimaryCommandOnly } from "../command-registration-policy.js";
+import {
+  buildCommandGroupEntries,
+  defineImportedCommandGroupSpec,
+  defineImportedProgramCommandGroupSpecs,
+  type CommandGroupDescriptorSpec,
+} from "./command-group-descriptors.js";
 import type { ProgramContext } from "./context.js";
 import {
-  type CoreCliCommandDescriptor,
   getCoreCliCommandDescriptors,
+  getCoreCliCommandNames as getCoreDescriptorNames,
   getCoreCliCommandsWithSubcommands,
 } from "./core-command-descriptors.js";
+import {
+  registerCommandGroupByName,
+  registerCommandGroups,
+  type CommandGroupEntry,
+} from "./register-command-groups.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
 export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
@@ -23,240 +33,105 @@ export type CommandRegistration = {
   register: (params: CommandRegisterParams) => void;
 };
 
-type CoreCliEntry = {
-  commands: CoreCliCommandDescriptor[];
-  register: (params: CommandRegisterParams) => Promise<void> | void;
-};
-
-const shouldRegisterCorePrimaryOnly = (argv: string[]) => {
-  if (hasHelpOrVersion(argv)) {
-    return false;
-  }
-  return true;
-};
+function withProgramOnlySpecs(
+  specs: readonly CommandGroupDescriptorSpec<(program: Command) => Promise<void> | void>[],
+): CommandGroupDescriptorSpec<(params: CommandRegisterParams) => Promise<void>>[] {
+  return specs.map((spec) => ({
+    commandNames: spec.commandNames,
+    register: async ({ program }) => {
+      await spec.register(program);
+    },
+  }));
+}
 
 // Note for humans and agents:
 // If you update the list of commands, also check whether they have subcommands
 // and set the flag accordingly.
-const coreEntries: CoreCliEntry[] = [
-  {
-    commands: [
+const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
+  (params: CommandRegisterParams) => Promise<void> | void
+>[] = [
+  ...withProgramOnlySpecs(
+    defineImportedProgramCommandGroupSpecs([
       {
-        name: "setup",
-        description: "Initialize local config and agent workspace",
-        hasSubcommands: false,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("./register.setup.js");
-      mod.registerSetupCommand(program);
-    },
-  },
-  {
-    commands: [
-      {
-        name: "onboard",
-        description: "Interactive onboarding for gateway, workspace, and skills",
-        hasSubcommands: false,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("./register.onboard.js");
-      mod.registerOnboardCommand(program);
-    },
-  },
-  {
-    commands: [
-      {
-        name: "configure",
-        description:
-          "Interactive configuration for credentials, channels, gateway, and agent defaults",
-        hasSubcommands: false,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("./register.configure.js");
-      mod.registerConfigureCommand(program);
-    },
-  },
-  {
-    commands: [
-      {
-        name: "config",
-        description:
-          "Non-interactive config helpers (get/set/unset/file/validate). Default: starts guided setup.",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("../config-cli.js");
-      mod.registerConfigCli(program);
-    },
-  },
-  {
-    commands: [
-      {
-        name: "backup",
-        description: "Create and verify local backup archives for OpenClaw state",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("./register.backup.js");
-      mod.registerBackupCommand(program);
-    },
-  },
-  {
-    commands: [
-      {
-        name: "doctor",
-        description: "Health checks + quick fixes for the gateway and channels",
-        hasSubcommands: false,
+        commandNames: ["setup"],
+        loadModule: () => import("./register.setup.js"),
+        exportName: "registerSetupCommand",
       },
       {
-        name: "dashboard",
-        description: "Open the Control UI with your current token",
-        hasSubcommands: false,
+        commandNames: ["onboard"],
+        loadModule: () => import("./register.onboard.js"),
+        exportName: "registerOnboardCommand",
       },
       {
-        name: "reset",
-        description: "Reset local config/state (keeps the CLI installed)",
-        hasSubcommands: false,
+        commandNames: ["configure"],
+        loadModule: () => import("./register.configure.js"),
+        exportName: "registerConfigureCommand",
       },
       {
-        name: "uninstall",
-        description: "Uninstall the gateway service + local data (CLI remains)",
-        hasSubcommands: false,
+        commandNames: ["config"],
+        loadModule: () => import("../config-cli.js"),
+        exportName: "registerConfigCli",
       },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("./register.maintenance.js");
-      mod.registerMaintenanceCommands(program);
-    },
-  },
-  {
-    commands: [
       {
-        name: "message",
-        description: "Send, read, and manage messages",
-        hasSubcommands: true,
+        commandNames: ["backup"],
+        loadModule: () => import("./register.backup.js"),
+        exportName: "registerBackupCommand",
       },
-    ],
-    register: async ({ program, ctx }) => {
-      const mod = await import("./register.message.js");
+      {
+        commandNames: ["doctor", "dashboard", "reset", "uninstall"],
+        loadModule: () => import("./register.maintenance.js"),
+        exportName: "registerMaintenanceCommands",
+      },
+    ]),
+  ),
+  defineImportedCommandGroupSpec(
+    ["message"],
+    () => import("./register.message.js"),
+    (mod, { program, ctx }) => {
       mod.registerMessageCommands(program, ctx);
     },
-  },
-  {
-    commands: [
+  ),
+  ...withProgramOnlySpecs(
+    defineImportedProgramCommandGroupSpecs([
       {
-        name: "memory",
-        description: "Search and reindex memory files",
-        hasSubcommands: true,
+        commandNames: ["mcp"],
+        loadModule: () => import("../mcp-cli.js"),
+        exportName: "registerMcpCli",
       },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("../memory-cli.js");
-      mod.registerMemoryCli(program);
-    },
-  },
-  {
-    commands: [
-      {
-        name: "mcp",
-        description: "Manage embedded Pi MCP servers",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("../mcp-cli.js");
-      mod.registerMcpCli(program);
-    },
-  },
-  {
-    commands: [
-      {
-        name: "agent",
-        description: "Run one agent turn via the Gateway",
-        hasSubcommands: false,
-      },
-      {
-        name: "agents",
-        description: "Manage isolated agents (workspaces, auth, routing)",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program, ctx }) => {
-      const mod = await import("./register.agent.js");
+    ]),
+  ),
+  defineImportedCommandGroupSpec(
+    ["agent", "agents"],
+    () => import("./register.agent.js"),
+    (mod, { program, ctx }) => {
       mod.registerAgentCommands(program, {
         agentChannelOptions: ctx.agentChannelOptions,
       });
     },
-  },
-  {
-    commands: [
+  ),
+  ...withProgramOnlySpecs(
+    defineImportedProgramCommandGroupSpecs([
       {
-        name: "status",
-        description: "Show channel health and recent session recipients",
-        hasSubcommands: false,
+        commandNames: ["status", "health", "sessions", "tasks"],
+        loadModule: () => import("./register.status-health-sessions.js"),
+        exportName: "registerStatusHealthSessionsCommands",
       },
-      {
-        name: "health",
-        description: "Fetch health from the running gateway",
-        hasSubcommands: false,
-      },
-      {
-        name: "sessions",
-        description: "List stored conversation sessions",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("./register.status-health-sessions.js");
-      mod.registerStatusHealthSessionsCommands(program);
-    },
-  },
-  {
-    commands: [
-      {
-        name: "browser",
-        description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("../browser-cli.js");
-      mod.registerBrowserCli(program);
-    },
-  },
+    ]),
+  ),
 ];
 
+function resolveCoreCommandGroups(ctx: ProgramContext, argv: string[]): CommandGroupEntry[] {
+  return buildCommandGroupEntries(
+    getCoreCliCommandDescriptors(),
+    coreEntrySpecs,
+    (register) => async (program) => {
+      await register({ program, ctx, argv });
+    },
+  );
+}
+
 export function getCoreCliCommandNames(): string[] {
-  return getCoreCliCommandDescriptors().map((command) => command.name);
-}
-
-function removeEntryCommands(program: Command, entry: CoreCliEntry) {
-  // Some registrars install multiple top-level commands (e.g. status/health/sessions).
-  // Remove placeholders/old registrations for all names in the entry before re-registering.
-  for (const cmd of entry.commands) {
-    removeCommandByName(program, cmd.name);
-  }
-}
-
-function registerLazyCoreCommand(
-  program: Command,
-  ctx: ProgramContext,
-  entry: CoreCliEntry,
-  command: CoreCliCommandDescriptor,
-) {
-  const placeholder = program.command(command.name).description(command.description);
-  placeholder.allowUnknownOption(true);
-  placeholder.allowExcessArguments(true);
-  placeholder.action(async (...actionArgs) => {
-    removeEntryCommands(program, entry);
-    await entry.register({ program, ctx, argv: process.argv });
-    await reparseProgramFromActionArgs(program, actionArgs);
-  });
+  return getCoreDescriptorNames();
 }
 
 export async function registerCoreCliByName(
@@ -265,38 +140,16 @@ export async function registerCoreCliByName(
   name: string,
   argv: string[] = process.argv,
 ): Promise<boolean> {
-  const entry = coreEntries.find((candidate) =>
-    candidate.commands.some((cmd) => cmd.name === name),
-  );
-  if (!entry) {
-    return false;
-  }
-
-  removeEntryCommands(program, entry);
-  await entry.register({ program, ctx, argv });
-  return true;
+  return registerCommandGroupByName(program, resolveCoreCommandGroups(ctx, argv), name);
 }
 
 export function registerCoreCliCommands(program: Command, ctx: ProgramContext, argv: string[]) {
-  const primary = getPrimaryCommand(argv);
-  if (primary && shouldRegisterCorePrimaryOnly(argv)) {
-    const entry = coreEntries.find((candidate) =>
-      candidate.commands.some((cmd) => cmd.name === primary),
-    );
-    if (entry) {
-      const cmd = entry.commands.find((c) => c.name === primary);
-      if (cmd) {
-        registerLazyCoreCommand(program, ctx, entry, cmd);
-      }
-      return;
-    }
-  }
-
-  for (const entry of coreEntries) {
-    for (const cmd of entry.commands) {
-      registerLazyCoreCommand(program, ctx, entry, cmd);
-    }
-  }
+  const { primary } = resolveCliArgvInvocation(argv);
+  registerCommandGroups(program, resolveCoreCommandGroups(ctx, argv), {
+    eager: false,
+    primary,
+    registerPrimaryOnly: Boolean(primary && shouldRegisterPrimaryCommandOnly(argv)),
+  });
 }
 
 export function registerProgramCommands(

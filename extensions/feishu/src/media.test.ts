@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
@@ -17,6 +18,7 @@ const messageResourceGetMock = vi.hoisted(() => vi.fn());
 const messageReplyMock = vi.hoisted(() => vi.fn());
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
+const emptyConfig: ClawdbotConfig = {};
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -40,12 +42,15 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import {
-  downloadImageFeishu,
-  downloadMessageResourceFeishu,
-  sanitizeFileNameForUpload,
-  sendMediaFeishu,
-} from "./media.js";
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
+let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
+let downloadMessageResourceFeishu: typeof import("./media.js").downloadMessageResourceFeishu;
+let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
+let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 
 function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
   expect(pathValue).not.toContain(key);
@@ -77,6 +82,15 @@ function mockResolvedFeishuAccount() {
 }
 
 describe("sendMediaFeishu msg_type routing", () => {
+  beforeAll(async () => {
+    ({
+      downloadImageFeishu,
+      downloadMessageResourceFeishu,
+      sanitizeFileNameForUpload,
+      sendMediaFeishu,
+    } = await import("./media.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolvedFeishuAccount();
@@ -135,7 +149,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("uses msg_type=media for mp4 video", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("video"),
       fileName: "clip.mp4",
@@ -156,7 +170,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("uses msg_type=audio for opus", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("audio"),
       fileName: "voice.opus",
@@ -177,7 +191,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("uses msg_type=file for documents", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("doc"),
       fileName: "paper.pdf",
@@ -205,7 +219,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaUrl: "https://example.com/video",
     });
@@ -231,7 +245,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaUrl: "https://example.com/song.mp3",
     });
@@ -250,7 +264,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("configures the media client timeout for image uploads", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("image"),
       fileName: "photo.png",
@@ -266,7 +280,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("uses msg_type=media when replying with mp4", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("video"),
       fileName: "reply.mp4",
@@ -285,7 +299,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("passes reply_in_thread when replyInThread is true", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("video"),
       fileName: "reply.mp4",
@@ -306,7 +320,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("omits reply_in_thread when replyInThread is false", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("video"),
       fileName: "reply.mp4",
@@ -328,7 +342,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     const roots = ["/allowed/workspace", "/tmp/openclaw"];
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaUrl: "/allowed/workspace/file.pdf",
       mediaLocalRoots: roots,
@@ -351,7 +365,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     await expect(
       sendMediaFeishu({
-        cfg: {} as any,
+        cfg: emptyConfig,
         to: "user:ou_target",
         mediaUrl: "https://x/img",
         fileName: "voice.opus",
@@ -375,7 +389,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const result = await downloadImageFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       imageKey,
     });
 
@@ -402,7 +416,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     const result = await downloadMessageResourceFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       messageId: "om_123",
       fileKey,
       type: "image",
@@ -416,7 +430,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   it("rejects invalid image keys before calling feishu api", async () => {
     await expect(
       downloadImageFeishu({
-        cfg: {} as any,
+        cfg: emptyConfig,
         imageKey: "a/../../bad",
       }),
     ).rejects.toThrow("invalid image_key");
@@ -427,7 +441,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   it("rejects invalid file keys before calling feishu api", async () => {
     await expect(
       downloadMessageResourceFeishu({
-        cfg: {} as any,
+        cfg: emptyConfig,
         messageId: "om_123",
         fileKey: "x/../../bad",
         type: "file",
@@ -439,7 +453,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("preserves Chinese filenames for file uploads", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("doc"),
       fileName: "测试文档.pdf",
@@ -451,7 +465,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("preserves ASCII filenames unchanged for file uploads", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("doc"),
       fileName: "report-2026.pdf",
@@ -463,7 +477,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("preserves special Unicode characters (em-dash, full-width brackets) in filenames", async () => {
     await sendMediaFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       to: "user:ou_target",
       mediaBuffer: Buffer.from("doc"),
       fileName: "报告—详情（2026）.md",
@@ -538,7 +552,7 @@ describe("downloadMessageResourceFeishu", () => {
   // Audio/video resources must use type=file, not type=audio (#8746).
   it("forwards provided type=file for non-image resources", async () => {
     const result = await downloadMessageResourceFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       messageId: "om_audio_msg",
       fileKey: "file_key_audio",
       type: "file",
@@ -558,7 +572,7 @@ describe("downloadMessageResourceFeishu", () => {
     messageResourceGetMock.mockResolvedValue(Buffer.from("fake-image-data"));
 
     const result = await downloadMessageResourceFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       messageId: "om_img_msg",
       fileKey: "img_key_1",
       type: "image",
@@ -584,7 +598,7 @@ describe("downloadMessageResourceFeishu", () => {
     });
 
     const result = await downloadMessageResourceFeishu({
-      cfg: {} as any,
+      cfg: emptyConfig,
       messageId: "om_video_msg",
       fileKey: "file_key_video",
       type: "file",

@@ -3,6 +3,7 @@
 // events ephemeral. Events are session-scoped and require an explicit key.
 
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -14,6 +15,7 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  trusted?: boolean;
 };
 
 const MAX_EVENTS = 20;
@@ -32,6 +34,7 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  trusted?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -43,14 +46,7 @@ function requireSessionKey(key?: string | null): string {
 }
 
 function normalizeContextKey(key?: string | null): string | null {
-  if (!key) {
-    return null;
-  }
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.toLowerCase();
+  return normalizeOptionalLowercaseString(key) ?? null;
 }
 
 function getSessionQueue(sessionKey: string): SessionQueue | undefined {
@@ -107,6 +103,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    trusted: options.trusted !== false,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();

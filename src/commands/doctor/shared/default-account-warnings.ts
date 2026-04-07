@@ -1,4 +1,4 @@
-import { normalizeChatChannelId } from "../../../channels/registry.js";
+import { normalizeChatChannelId } from "../../../channels/ids.js";
 import { listRouteBindings } from "../../../config/bindings.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -11,6 +11,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { asObjectRecord } from "./object.js";
 
 type ChannelMissingDefaultAccountContext = {
@@ -24,7 +25,7 @@ function normalizeBindingChannelKey(raw?: string | null): string {
   if (normalized) {
     return normalized;
   }
-  return (raw ?? "").trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(raw);
 }
 
 function collectChannelsMissingDefaultAccount(

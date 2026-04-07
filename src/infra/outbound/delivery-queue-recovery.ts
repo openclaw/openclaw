@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../errors.js";
 import {
   ackDelivery,
   failDelivery,
@@ -49,7 +50,8 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /chat_id is empty/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
-  /ambiguous discord recipient/i,
+  /ambiguous .* recipient/i,
+  /User .* not in room/i,
 ];
 
 function createEmptyRecoverySummary(): RecoverySummary {
@@ -75,6 +77,7 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) 
     forceDocument: entry.forceDocument,
     silent: entry.silent,
     mirror: entry.mirror,
+    gatewayClientScopes: entry.gatewayClientScopes,
     skipQueue: true, // Prevent re-enqueueing during recovery.
   } satisfies Parameters<DeliverFn>[0];
 }
@@ -195,7 +198,7 @@ export async function recoverPendingDeliveries(opts: {
       summary.recovered += 1;
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
+      const errMsg = formatErrorMessage(err);
       if (isPermanentDeliveryError(errMsg)) {
         opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
         await moveEntryToFailedWithLogging(entry.id, opts.log, opts.stateDir);

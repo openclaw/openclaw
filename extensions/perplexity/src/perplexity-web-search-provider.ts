@@ -32,6 +32,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
@@ -85,7 +86,7 @@ function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHin
   if (!apiKey) {
     return undefined;
   }
-  const normalized = apiKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(apiKey);
   if (PERPLEXITY_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
     return "direct";
   }
@@ -147,7 +148,9 @@ function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
 
 function isDirectPerplexityBaseUrl(baseUrl: string): boolean {
   try {
-    return new URL(baseUrl.trim()).hostname.toLowerCase() === "api.perplexity.ai";
+    return (
+      normalizeLowercaseStringOrEmpty(new URL(baseUrl.trim()).hostname) === "api.perplexity.ai"
+    );
   } catch {
     return false;
   }
@@ -228,15 +231,30 @@ async function runPerplexitySearchApi(params: {
     query: params.query,
     max_results: params.count,
   };
-  if (params.country) body.country = params.country;
-  if (params.searchDomainFilter?.length) body.search_domain_filter = params.searchDomainFilter;
-  if (params.searchRecencyFilter) body.search_recency_filter = params.searchRecencyFilter;
-  if (params.searchLanguageFilter?.length)
+  if (params.country) {
+    body.country = params.country;
+  }
+  if (params.searchDomainFilter?.length) {
+    body.search_domain_filter = params.searchDomainFilter;
+  }
+  if (params.searchRecencyFilter) {
+    body.search_recency_filter = params.searchRecencyFilter;
+  }
+  if (params.searchLanguageFilter?.length) {
     body.search_language_filter = params.searchLanguageFilter;
-  if (params.searchAfterDate) body.search_after_date = params.searchAfterDate;
-  if (params.searchBeforeDate) body.search_before_date = params.searchBeforeDate;
-  if (params.maxTokens !== undefined) body.max_tokens = params.maxTokens;
-  if (params.maxTokensPerPage !== undefined) body.max_tokens_per_page = params.maxTokensPerPage;
+  }
+  if (params.searchAfterDate) {
+    body.search_after_date = params.searchAfterDate;
+  }
+  if (params.searchBeforeDate) {
+    body.search_before_date = params.searchBeforeDate;
+  }
+  if (params.maxTokens !== undefined) {
+    body.max_tokens = params.maxTokens;
+  }
+  if (params.maxTokensPerPage !== undefined) {
+    body.max_tokens_per_page = params.maxTokensPerPage;
+  }
 
   return withTrustedWebSearchEndpoint(
     {
@@ -333,8 +351,12 @@ function resolveRuntimeTransport(params: {
       return configuredBaseUrl;
     }
     if (params.keySource === "env") {
-      if (params.fallbackEnvVar === "PERPLEXITY_API_KEY") return PERPLEXITY_DIRECT_BASE_URL;
-      if (params.fallbackEnvVar === "OPENROUTER_API_KEY") return DEFAULT_PERPLEXITY_BASE_URL;
+      if (params.fallbackEnvVar === "PERPLEXITY_API_KEY") {
+        return PERPLEXITY_DIRECT_BASE_URL;
+      }
+      if (params.fallbackEnvVar === "OPENROUTER_API_KEY") {
+        return DEFAULT_PERPLEXITY_BASE_URL;
+      }
     }
     if ((params.keySource === "config" || params.keySource === "secretRef") && params.resolvedKey) {
       return inferPerplexityBaseUrlFromApiKey(params.resolvedKey) === "openrouter"
@@ -432,7 +454,7 @@ function createPerplexityToolDefinition(
         };
       }
 
-      const params = args as Record<string, unknown>;
+      const params = args;
       const query = readStringParam(params, "query", { required: true });
       const count =
         readNumberParam(params, "count", { integer: true }) ??
@@ -622,7 +644,7 @@ function createPerplexityToolDefinition(
               },
               results: await runPerplexitySearchApi({
                 query,
-                apiKey: runtime.apiKey!,
+                apiKey: runtime.apiKey,
                 count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
                 timeoutSeconds,
                 country: country ?? undefined,
@@ -654,6 +676,7 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
     id: "perplexity",
     label: "Perplexity Search",
     hint: "Requires Perplexity API key or OpenRouter API key · structured results",
+    onboardingScopes: ["text-inference"],
     credentialLabel: "Perplexity API key",
     envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
     placeholder: "pplx-...",
@@ -673,10 +696,10 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
     resolveRuntimeMetadata: (ctx) => ({
       perplexityTransport: resolveRuntimeTransport({
         searchConfig: mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "perplexity",
           resolveProviderWebSearchPluginConfig(ctx.config, "perplexity"),
-        ) as SearchConfigRecord | undefined,
+        ),
         resolvedKey: ctx.resolvedCredential?.value,
         keySource: ctx.resolvedCredential?.source ?? "missing",
         fallbackEnvVar: ctx.resolvedCredential?.fallbackEnvVar,
@@ -685,11 +708,11 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) =>
       createPerplexityToolDefinition(
         mergeScopedSearchConfig(
-          ctx.searchConfig as SearchConfigRecord | undefined,
+          ctx.searchConfig,
           "perplexity",
           resolveProviderWebSearchPluginConfig(ctx.config, "perplexity"),
-        ) as SearchConfigRecord | undefined,
-        ctx.runtimeMetadata?.perplexityTransport as PerplexityTransport | undefined,
+        ),
+        ctx.runtimeMetadata?.perplexityTransport,
       ),
   };
 }

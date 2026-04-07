@@ -19,6 +19,7 @@ function createConfig(): OpenClawConfig {
     },
     channels: {
       telegram: {
+        defaultAccount: "alpha",
         accounts: {
           beta: {},
           alpha: {},
@@ -35,41 +36,62 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
   };
 }
 
+async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
+  const root = await createTempDir();
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  const cfg = createConfig();
+
+  await fs.mkdir(path.join(stateDir, "sessions"), { recursive: true });
+  await fs.mkdir(path.join(stateDir, "agents", "worker-1", "sessions"), { recursive: true });
+  await fs.mkdir(path.join(stateDir, "agent"), { recursive: true });
+  await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true });
+
+  await fs.writeFile(
+    path.join(stateDir, "sessions", "sessions.json"),
+    `${JSON.stringify({ legacyDirect: { sessionId: "legacy-direct", updatedAt: 10 } }, null, 2)}\n`,
+    "utf8",
+  );
+  await fs.writeFile(path.join(stateDir, "sessions", "trace.jsonl"), "{}\n", "utf8");
+  await fs.writeFile(
+    path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
+    `${JSON.stringify(
+      {
+        "group:123@g.us": { sessionId: "group-session", updatedAt: 5 },
+        "group:legacy-room": { sessionId: "generic-group-session", updatedAt: 4 },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await fs.writeFile(path.join(stateDir, "agent", "settings.json"), '{"ok":true}\n', "utf8");
+  await fs.writeFile(path.join(stateDir, "credentials", "creds.json"), '{"auth":true}\n', "utf8");
+  if (params?.includePreKey) {
+    await fs.writeFile(
+      path.join(stateDir, "credentials", "pre-key-1.json"),
+      '{"preKey":true}\n',
+      "utf8",
+    );
+  }
+  await fs.writeFile(path.join(stateDir, "credentials", "oauth.json"), '{"oauth":true}\n', "utf8");
+  await fs.writeFile(resolveChannelAllowFromPath("telegram", env), '["123","456"]\n', "utf8");
+
+  return {
+    root,
+    stateDir,
+    env,
+    cfg,
+  };
+}
+
 afterEach(async () => {
   await tempDirs.cleanup();
 });
 
 describe("state migrations", () => {
   it("detects legacy sessions, agent files, whatsapp auth, and telegram allowFrom copies", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const cfg = createConfig();
-
-    await fs.mkdir(path.join(stateDir, "sessions"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "agents", "worker-1", "sessions"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "agent"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true });
-
-    await fs.writeFile(
-      path.join(stateDir, "sessions", "sessions.json"),
-      `${JSON.stringify({ legacyDirect: { sessionId: "legacy-direct", updatedAt: 10 } }, null, 2)}\n`,
-      "utf8",
-    );
-    await fs.writeFile(path.join(stateDir, "sessions", "trace.jsonl"), "{}\n", "utf8");
-    await fs.writeFile(
-      path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
-      `${JSON.stringify({ "group:123@g.us": { sessionId: "group-session", updatedAt: 5 } }, null, 2)}\n`,
-      "utf8",
-    );
-    await fs.writeFile(path.join(stateDir, "agent", "settings.json"), '{"ok":true}\n', "utf8");
-    await fs.writeFile(path.join(stateDir, "credentials", "creds.json"), '{"auth":true}\n', "utf8");
-    await fs.writeFile(
-      path.join(stateDir, "credentials", "oauth.json"),
-      '{"oauth":true}\n',
-      "utf8",
-    );
-    await fs.writeFile(resolveChannelAllowFromPath("telegram", env), '["123","456"]\n', "utf8");
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture();
 
     const detected = await detectLegacyStateMigrations({
       cfg,
@@ -80,59 +102,24 @@ describe("state migrations", () => {
     expect(detected.targetAgentId).toBe("worker-1");
     expect(detected.targetMainKey).toBe("desk");
     expect(detected.sessions.hasLegacy).toBe(true);
-    expect(detected.sessions.legacyKeys).toEqual(["group:123@g.us"]);
+    expect(detected.sessions.legacyKeys).toEqual(["group:123@g.us", "group:legacy-room"]);
     expect(detected.agentDir.hasLegacy).toBe(true);
-    expect(detected.whatsappAuth.hasLegacy).toBe(true);
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(detected.pairingAllowFrom.copyPlans.map((plan) => plan.targetPath)).toEqual([
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
       resolveChannelAllowFromPath("telegram", env, "alpha"),
-      resolveChannelAllowFromPath("telegram", env, "beta"),
+      path.join(stateDir, "credentials", "whatsapp", "default", "creds.json"),
     ]);
     expect(detected.preview).toEqual([
       `- Sessions: ${path.join(stateDir, "sessions")} → ${path.join(stateDir, "agents", "worker-1", "sessions")}`,
       `- Sessions: canonicalize legacy keys in ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       `- Agent dir: ${path.join(stateDir, "agent")} → ${path.join(stateDir, "agents", "worker-1", "agent")}`,
-      `- WhatsApp auth: ${path.join(stateDir, "credentials")} → ${path.join(stateDir, "credentials", "whatsapp", "default")} (keep oauth.json)`,
       `- Telegram pairing allowFrom: ${resolveChannelAllowFromPath("telegram", env)} → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
-      `- Telegram pairing allowFrom: ${resolveChannelAllowFromPath("telegram", env)} → ${resolveChannelAllowFromPath("telegram", env, "beta")}`,
+      `- WhatsApp auth creds.json: ${path.join(stateDir, "credentials", "creds.json")} → ${path.join(stateDir, "credentials", "whatsapp", "default", "creds.json")}`,
     ]);
   });
 
   it("runs legacy state migrations and canonicalizes the merged session store", async () => {
-    const root = await createTempDir();
-    const stateDir = path.join(root, ".openclaw");
-    const env = createEnv(stateDir);
-    const cfg = createConfig();
-
-    await fs.mkdir(path.join(stateDir, "sessions"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "agents", "worker-1", "sessions"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "agent"), { recursive: true });
-    await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true });
-
-    await fs.writeFile(
-      path.join(stateDir, "sessions", "sessions.json"),
-      `${JSON.stringify({ legacyDirect: { sessionId: "legacy-direct", updatedAt: 10 } }, null, 2)}\n`,
-      "utf8",
-    );
-    await fs.writeFile(path.join(stateDir, "sessions", "trace.jsonl"), "{}\n", "utf8");
-    await fs.writeFile(
-      path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
-      `${JSON.stringify({ "group:123@g.us": { sessionId: "group-session", updatedAt: 5 } }, null, 2)}\n`,
-      "utf8",
-    );
-    await fs.writeFile(path.join(stateDir, "agent", "settings.json"), '{"ok":true}\n', "utf8");
-    await fs.writeFile(path.join(stateDir, "credentials", "creds.json"), '{"auth":true}\n', "utf8");
-    await fs.writeFile(
-      path.join(stateDir, "credentials", "pre-key-1.json"),
-      '{"preKey":true}\n',
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(stateDir, "credentials", "oauth.json"),
-      '{"oauth":true}\n',
-      "utf8",
-    );
-    await fs.writeFile(resolveChannelAllowFromPath("telegram", env), '["123","456"]\n', "utf8");
+    const { root, stateDir, env, cfg } = await createLegacyStateFixture({ includePreKey: true });
 
     const detected = await detectLegacyStateMigrations({
       cfg,
@@ -148,13 +135,12 @@ describe("state migrations", () => {
     expect(result.changes).toEqual([
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
-      "Canonicalized 1 legacy session key(s)",
+      "Canonicalized 2 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Moved agent file settings.json → agents/worker-1/agent",
-      "Moved WhatsApp auth creds.json → whatsapp/default",
-      "Moved WhatsApp auth pre-key-1.json → whatsapp/default",
       `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
-      `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "beta")}`,
+      `Moved WhatsApp auth creds.json → ${path.join(stateDir, "credentials", "whatsapp", "default", "creds.json")}`,
+      `Moved WhatsApp auth pre-key-1.json → ${path.join(stateDir, "credentials", "whatsapp", "default", "pre-key-1.json")}`,
     ]);
 
     const mergedStore = JSON.parse(
@@ -165,6 +151,9 @@ describe("state migrations", () => {
     ) as Record<string, { sessionId: string }>;
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
     expect(mergedStore["agent:worker-1:whatsapp:group:123@g.us"]?.sessionId).toBe("group-session");
+    expect(mergedStore["agent:worker-1:unknown:group:legacy-room"]?.sessionId).toBe(
+      "generic-group-session",
+    );
 
     await expect(
       fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
@@ -195,7 +184,10 @@ describe("state migrations", () => {
       fs.readFile(resolveChannelAllowFromPath("telegram", env, "alpha"), "utf8"),
     ).resolves.toBe('["123","456"]\n');
     await expect(
-      fs.readFile(resolveChannelAllowFromPath("telegram", env, "beta"), "utf8"),
-    ).resolves.toBe('["123","456"]\n');
+      fs.stat(resolveChannelAllowFromPath("telegram", env, "default")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(resolveChannelAllowFromPath("telegram", env, "beta")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

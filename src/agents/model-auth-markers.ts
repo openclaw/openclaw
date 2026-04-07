@@ -3,7 +3,6 @@ import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
 export const OAUTH_API_KEY_MARKER_PREFIX = "oauth:";
-export const QWEN_OAUTH_MARKER = "qwen-oauth";
 export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
@@ -28,11 +27,13 @@ const LEGACY_ENV_API_KEY_MARKERS = [
   "MINIMAX_CODE_PLAN_KEY",
 ];
 
-const KNOWN_ENV_API_KEY_MARKERS = new Set([
-  ...listKnownProviderEnvApiKeyNames(),
-  ...LEGACY_ENV_API_KEY_MARKERS,
-  ...AWS_SDK_ENV_MARKERS,
-]);
+function listKnownEnvApiKeyMarkers(): Set<string> {
+  return new Set([
+    ...listKnownProviderEnvApiKeyNames(),
+    ...LEGACY_ENV_API_KEY_MARKERS,
+    ...AWS_SDK_ENV_MARKERS,
+  ]);
+}
 
 export function isAwsSdkAuthMarker(value: string): boolean {
   return AWS_SDK_ENV_MARKERS.has(value.trim());
@@ -40,7 +41,7 @@ export function isAwsSdkAuthMarker(value: string): boolean {
 
 export function isKnownEnvApiKeyMarker(value: string): boolean {
   const trimmed = value.trim();
-  return KNOWN_ENV_API_KEY_MARKERS.has(trimmed) && !isAwsSdkAuthMarker(trimmed);
+  return listKnownEnvApiKeyMarkers().has(trimmed) && !isAwsSdkAuthMarker(trimmed);
 }
 
 export function resolveOAuthApiKeyMarker(providerId: string): string {
@@ -80,7 +81,6 @@ export function isNonSecretApiKeyMarker(
   }
   const isKnownMarker =
     trimmed === MINIMAX_OAUTH_MARKER ||
-    trimmed === QWEN_OAUTH_MARKER ||
     isOAuthApiKeyMarker(trimmed) ||
     trimmed === OLLAMA_LOCAL_AUTH_MARKER ||
     trimmed === CUSTOM_LOCAL_AUTH_MARKER ||
@@ -95,5 +95,5 @@ export function isNonSecretApiKeyMarker(
   }
   // Do not treat arbitrary ALL_CAPS values as markers; only recognize the
   // known env-var markers we intentionally persist for compatibility.
-  return KNOWN_ENV_API_KEY_MARKERS.has(trimmed);
+  return listKnownEnvApiKeyMarkers().has(trimmed);
 }

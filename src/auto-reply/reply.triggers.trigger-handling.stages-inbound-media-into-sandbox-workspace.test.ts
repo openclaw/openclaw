@@ -22,9 +22,15 @@ let stageSandboxMedia: typeof import("./reply/stage-sandbox-media.js").stageSand
 async function loadFreshStageSandboxMediaModuleForTest() {
   vi.resetModules();
   vi.doMock(sandboxModuleId, () => sandboxMocks);
-  vi.doMock("node:child_process", () => childProcessMocks);
-  vi.doMock(fsSafeModuleId, async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../infra/fs-safe.js")>();
+  vi.doMock("node:child_process", async () => {
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    return {
+      ...actual,
+      spawn: childProcessMocks.spawn,
+    };
+  });
+  vi.doMock(fsSafeModuleId, async () => {
+    const actual = await vi.importActual<typeof import("../infra/fs-safe.js")>(fsSafeModuleId);
     return {
       ...actual,
       copyFileWithinRoot: vi.fn(async ({ sourcePath, rootDir, relativePath, maxBytes }) => {

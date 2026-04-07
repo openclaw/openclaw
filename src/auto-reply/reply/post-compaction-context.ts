@@ -4,6 +4,7 @@ import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const MAX_CONTEXT_CHARS = 3000;
 const DEFAULT_POST_COMPACTION_SECTIONS = ["Session Startup", "Red Lines"];
@@ -18,12 +19,12 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
 
   const counts = new Map<string, number>();
   for (const name of expectedSections) {
-    const normalized = name.trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(name);
     counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
   }
 
   for (const name of sectionNames) {
-    const normalized = name.trim().toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(name);
     const count = counts.get(normalized);
     if (!count) {
       return false;
@@ -136,7 +137,7 @@ export async function readPostCompactionContext(
     // would be misleading for deployments that use different section names.
     const prose = isDefaultSections
       ? "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-        "Run your Session Startup sequence — read the required files before responding to the user."
+        "Run your Session Startup sequence - read the required files before responding to the user."
       : `Session was just compacted. The conversation summary above is a hint, NOT a substitute for your full startup sequence. ` +
         `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
 
@@ -201,7 +202,9 @@ export function extractSections(
 
         if (!inSection) {
           // Check if this is our target section (case-insensitive)
-          if (headingText.toLowerCase() === name.toLowerCase()) {
+          if (
+            normalizeLowercaseStringOrEmpty(headingText) === normalizeLowercaseStringOrEmpty(name)
+          ) {
             inSection = true;
             sectionLevel = level;
             sectionLines = [line];

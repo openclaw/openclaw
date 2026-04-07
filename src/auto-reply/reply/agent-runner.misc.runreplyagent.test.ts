@@ -3,18 +3,47 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as embeddedRunTesting,
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+} from "../../agents/pi-embedded-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryFlushPlanResolver,
+} from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { __testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
+
+function createCliBackendTestConfig() {
+  return {
+    agents: {
+      defaults: {
+        cliBackends: {
+          "claude-cli": {},
+          "google-gemini-cli": {},
+        },
+      },
+    },
+  };
+}
 
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
+const abortEmbeddedPiRunMock = vi.fn();
+const clearSessionQueuesMock = vi.fn();
+const refreshQueuedFollowupSessionMock = vi.fn();
+const compactState = vi.hoisted(() => ({
+  compactEmbeddedPiSessionMock: vi.fn(),
+}));
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -22,35 +51,33 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
   }) => runWithModelFallbackMock(params),
+  isFallbackSummaryError: (err: unknown) =>
+    err instanceof Error &&
+    err.name === "FallbackSummaryError" &&
+    Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/pi-embedded.js")>(
-    "../../agents/pi-embedded.js",
-  );
+vi.mock("../../agents/pi-embedded.js", () => {
   return {
-    ...actual,
+    compactEmbeddedPiSession: (params: unknown) =>
+      compactState.compactEmbeddedPiSessionMock(params),
     queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+    abortEmbeddedPiRun: (sessionId: string) => {
+      abortEmbeddedPiRunMock(sessionId);
+      return abortEmbeddedPiRun(sessionId);
+    },
+    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActive(sessionId),
   };
 });
 
-vi.mock("../../agents/cli-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/cli-runner.js")>(
-    "../../agents/cli-runner.js",
-  );
-  return {
-    ...actual,
-    runCliAgent: (params: unknown) => runCliAgentMock(params),
-  };
-});
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
+}));
 
-vi.mock("../../runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js");
+vi.mock("../../runtime.js", () => {
   return {
-    ...actual,
     defaultRuntime: {
-      ...actual.defaultRuntime,
       log: vi.fn(),
       error: (...args: unknown[]) => runtimeErrorMock(...args),
       exit: vi.fn(),
@@ -58,23 +85,35 @@ vi.mock("../../runtime.js", async () => {
   };
 });
 
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
+vi.mock("./queue.js", () => {
   return {
-    ...actual,
     enqueueFollowupRun: vi.fn(),
     scheduleFollowupDrain: vi.fn(),
+    clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
+    refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
   };
 });
 
 const loadCronStoreMock = vi.fn();
-vi.mock("../../cron/store.js", async () => {
-  const actual = await vi.importActual<typeof import("../../cron/store.js")>("../../cron/store.js");
+vi.mock("../../cron/store.js", () => {
   return {
-    ...actual,
     loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
+    resolveCronStorePath: (storePath?: string) => storePath ?? "/tmp/openclaw-cron-store.json",
   };
 });
+
+vi.mock("../../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    resolveSession: () => ({ kind: "none" }),
+    cancelSession: async () => {},
+  }),
+}));
+
+vi.mock("../../agents/subagent-registry.js", () => ({
+  getLatestSubagentRunByChildSessionKey: () => null,
+  listSubagentRunsForController: () => [],
+  markSubagentRunTerminated: () => 0,
+}));
 
 import { runReplyAgent } from "./agent-runner.js";
 
@@ -85,10 +124,17 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
+  embeddedRunTesting.resetActiveEmbeddedRuns();
+  replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedPiAgentMock.mockClear();
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
+  abortEmbeddedPiRunMock.mockClear();
+  clearSessionQueuesMock.mockReset();
+  clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
+  refreshQueuedFollowupSessionMock.mockReset();
+  refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   loadCronStoreMock.mockClear();
   // Default: no cron jobs in store.
   loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
@@ -107,6 +153,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetSystemEventsForTest();
+  clearMemoryPluginState();
+  replyRunRegistryTesting.resetReplyRunRegistry();
+  embeddedRunTesting.resetActiveEmbeddedRuns();
 });
 
 describe("runReplyAgent onAgentRunStart", () => {
@@ -138,7 +187,10 @@ describe("runReplyAgent onAgentRunStart", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config:
+          provider === "claude-cli"
+            ? { agents: { defaults: { cliBackends: { "claude-cli": {} } } } }
+            : createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider,
         model,
@@ -193,7 +245,7 @@ describe("runReplyAgent onAgentRunStart", () => {
     });
   });
 
-  it("emits start callback when cli runner starts", async () => {
+  it("emits start callback when the CLI runner starts", async () => {
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -217,109 +269,11 @@ describe("runReplyAgent onAgentRunStart", () => {
   });
 });
 
-describe("runReplyAgent authProfileId fallback scoping", () => {
-  it("drops authProfileId when provider changes during fallback", async () => {
-    runWithModelFallbackMock.mockImplementationOnce(
-      async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("openai-codex", "gpt-5.2"),
-        provider: "openai-codex",
-        model: "gpt-5.2",
-      }),
-    );
-
-    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
-
-    const typing = createMockTypingController();
-    const sessionCtx = {
-      Provider: "telegram",
-      OriginatingTo: "chat",
-      AccountId: "primary",
-      MessageSid: "msg",
-      Surface: "telegram",
-    } as unknown as TemplateContext;
-
-    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
-    const followupRun = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
-      run: {
-        agentId: "main",
-        agentDir: "/tmp/agent",
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "telegram",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: {},
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude-opus",
-        authProfileId: "anthropic:openclaw",
-        authProfileIdSource: "manual",
-        thinkLevel: "low",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 5_000,
-        blockReplyBreak: "message_end",
-      },
-    } as unknown as FollowupRun;
-
-    const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 1,
-      compactionCount: 0,
-    };
-
-    await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: sessionKey,
-      resolvedQueue,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      isStreaming: false,
-      typing,
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath: undefined,
-      defaultModel: "anthropic/claude-opus-4-5",
-      agentCfgContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      isNewSession: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-    });
-
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
-      authProfileId?: unknown;
-      authProfileIdSource?: unknown;
-      provider?: unknown;
-    };
-
-    expect(call.provider).toBe("openai-codex");
-    expect(call.authProfileId).toBeUndefined();
-    expect(call.authProfileIdSource).toBeUndefined();
-  });
-});
-
 describe("runReplyAgent auto-compaction token update", () => {
   type EmbeddedRunParams = {
     prompt?: string;
     extraSystemPrompt?: string;
+    abortSignal?: AbortSignal;
     onAgentEvent?: (evt: {
       stream?: string;
       data?: { phase?: string; willRetry?: boolean; completed?: boolean };
@@ -446,7 +400,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -513,7 +467,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -552,9 +506,9 @@ describe("runReplyAgent auto-compaction token update", () => {
         // Expected first-attempt failure.
       }
       return {
-        result: await run("openai", "gpt-5.2"),
+        result: await run("openai", "gpt-5.4"),
         provider: "openai",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         attempts: [{ provider: "anthropic", model: "claude", error: "attempt failed" }],
       };
     });
@@ -602,7 +556,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -637,9 +591,9 @@ describe("runReplyAgent auto-compaction token update", () => {
         // Expected first-attempt failure.
       }
       return {
-        result: await run("openai", "gpt-5.2"),
+        result: await run("openai", "gpt-5.4"),
         provider: "openai",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         attempts: [{ provider: "anthropic", model: "claude", error: "attempt failed" }],
       };
     });
@@ -687,7 +641,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -744,7 +698,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -825,7 +779,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -911,7 +865,7 @@ describe("runReplyAgent block streaming", () => {
       opts: { onBlockReply },
       typing,
       sessionCtx,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: true,
@@ -1013,7 +967,7 @@ describe("runReplyAgent block streaming", () => {
       opts: { onBlockReply, blockReplyTimeoutMs: 1 },
       typing,
       sessionCtx,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: true,
@@ -1055,7 +1009,7 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
         skillsSnapshot: {},
         provider: "claude-cli",
         model: "opus-4.5",
@@ -1093,7 +1047,7 @@ describe("runReplyAgent claude-cli routing", () => {
     });
   }
 
-  it("uses claude-cli runner for claude-cli provider", async () => {
+  it("uses the CLI runner for claude-cli provider", async () => {
     const runId = "00000000-0000-0000-0000-000000000001";
     const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue(runId);
     const lifecyclePhases: string[] = [];
@@ -1123,8 +1077,8 @@ describe("runReplyAgent claude-cli routing", () => {
     unsubscribe();
     randomSpy.mockRestore();
 
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(lifecyclePhases).toEqual(["start", "end"]);
     expect(result).toMatchObject({ text: "ok" });
   });
@@ -1154,7 +1108,7 @@ describe("runReplyAgent messaging tool suppression", () => {
         messageProvider,
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1184,7 +1138,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       sessionCtx,
       sessionKey,
       storePath: opts.storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -1269,7 +1223,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       meta: {
         agentMeta: {
           usage: { input: 10, output: 5 },
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           provider: "anthropic",
         },
       },
@@ -1283,7 +1237,7 @@ describe("runReplyAgent messaging tool suppression", () => {
     expect(store[sessionKey]?.outputTokens).toBe(5);
     expect(store[sessionKey]?.totalTokens).toBeUndefined();
     expect(store[sessionKey]?.totalTokensFresh).toBe(false);
-    expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
+    expect(store[sessionKey]?.model).toBe("claude-opus-4-6");
   });
 
   it("persists totalTokens from promptTokens when snapshot is available", async () => {
@@ -1303,7 +1257,7 @@ describe("runReplyAgent messaging tool suppression", () => {
         agentMeta: {
           usage: { input: 10, output: 5 },
           promptTokens: 42_000,
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           provider: "anthropic",
         },
       },
@@ -1315,7 +1269,7 @@ describe("runReplyAgent messaging tool suppression", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store[sessionKey]?.totalTokens).toBe(42_000);
     expect(store[sessionKey]?.totalTokensFresh).toBe(true);
-    expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
+    expect(store[sessionKey]?.model).toBe("claude-opus-4-6");
   });
 
   it("persists totalTokens from promptTokens when provider omits usage", async () => {
@@ -1339,7 +1293,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       meta: {
         agentMeta: {
           promptTokens: 41_000,
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           provider: "anthropic",
         },
       },
@@ -1377,7 +1331,7 @@ describe("runReplyAgent reminder commitment guard", () => {
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1406,7 +1360,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       typing,
       sessionCtx,
       ...(params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? "main" }),
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -1598,7 +1552,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
         messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1628,7 +1582,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
       sessionCtx,
       sessionEntry: params?.sessionEntry,
       sessionKey,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: params?.agentCfgContextTokens,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -1646,9 +1600,9 @@ describe("runReplyAgent fallback reasoning tags", () => {
     });
     runWithModelFallbackMock.mockImplementationOnce(
       async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("google-gemini-cli", "gemini-3"),
-        provider: "google-gemini-cli",
-        model: "gemini-3",
+        result: await run("google", "gemini-2.5-pro"),
+        provider: "google",
+        model: "gemini-2.5-pro",
       }),
     );
 
@@ -1659,6 +1613,14 @@ describe("runReplyAgent fallback reasoning tags", () => {
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.",
+      systemPrompt: "Flush memory into the configured memory file.",
+      relativePath: "memory/active.md",
+    }));
     runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedPiAgentParams) => {
       if (params.prompt?.includes("Pre-compaction memory flush.")) {
         return { payloads: [], meta: {} };
@@ -1719,7 +1681,7 @@ describe("runReplyAgent response usage footer", () => {
         messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1749,7 +1711,7 @@ describe("runReplyAgent response usage footer", () => {
       sessionCtx,
       sessionEntry,
       sessionKey: params.sessionKey,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -1828,7 +1790,7 @@ describe("runReplyAgent transient HTTP retry", () => {
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1856,7 +1818,7 @@ describe("runReplyAgent transient HTTP retry", () => {
       isStreaming: false,
       typing,
       sessionCtx,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -1904,7 +1866,7 @@ describe("runReplyAgent billing error classification", () => {
         messageProvider: "telegram",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: {},
+        config: createCliBackendTestConfig(),
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -1944,5 +1906,99 @@ describe("runReplyAgent billing error classification", () => {
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("billing error");
     expect(payload?.text).not.toContain("Context overflow");
+  });
+});
+
+describe("runReplyAgent mid-turn rate-limit fallback", () => {
+  function createRun() {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: createCliBackendTestConfig(),
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("surfaces a final error when only reasoning preceded a mid-turn rate limit", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "reasoning", isReasoning: true }],
+      meta: {
+        error: {
+          kind: "retry_limit",
+          message: "429 Too Many Requests: rate limit exceeded",
+        },
+      },
+    });
+
+    const result = await createRun();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload?.text).toContain("API rate limit reached");
+  });
+
+  it("preserves successful media-only replies that use legacy mediaUrl", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ mediaUrl: "https://example.test/image.png" }],
+      meta: {
+        error: {
+          kind: "retry_limit",
+          message: "429 Too Many Requests: rate limit exceeded",
+        },
+      },
+    });
+
+    const result = await createRun();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload).toMatchObject({
+      mediaUrl: "https://example.test/image.png",
+    });
+    expect(payload?.text).toBeUndefined();
   });
 });

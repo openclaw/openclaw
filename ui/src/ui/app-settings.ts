@@ -8,6 +8,7 @@ import {
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import type { OpenClawApp } from "./app.ts";
+import { loadAgentFiles } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
@@ -16,6 +17,7 @@ import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
 import { loadCronJobs, loadCronRuns, loadCronStatus } from "./controllers/cron.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadDevices } from "./controllers/devices.ts";
+import { loadDreamDiary, loadDreamingStatus } from "./controllers/dreaming.ts";
 import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
@@ -58,6 +60,14 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
   systemThemeCleanup?: (() => void) | null;
   pendingGatewayToken?: string | null;
+  dreamingStatusLoading: boolean;
+  dreamingStatusError: string | null;
+  dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
+  dreamingModeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
 };
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
@@ -87,6 +97,9 @@ export function setLastActiveSessionKey(host: SettingsHost, next: string) {
   applySettings(host, { ...host.settings, lastActiveSessionKey: trimmed });
 }
 
+/** Set to true when the token is read from a query string (?token=) instead of a URL fragment. */
+export let warnQueryToken = false;
+
 export function applySettingsFromUrl(host: SettingsHost) {
   if (!window.location.search && !window.location.hash) {
     return;
@@ -101,7 +114,9 @@ export function applySettingsFromUrl(host: SettingsHost) {
   // Prefer fragment tokens over query tokens. Fragments avoid server-side request
   // logs and referrer leakage; query-param tokens remain a one-time legacy fallback
   // for compatibility with older deep links.
-  const tokenRaw = hashParams.get("token") ?? params.get("token");
+  const queryToken = params.get("token");
+  const hashToken = hashParams.get("token");
+  const tokenRaw = hashToken ?? queryToken;
   const passwordRaw = params.get("password") ?? hashParams.get("password");
   const sessionRaw = params.get("session") ?? hashParams.get("session");
   const shouldResetSessionForToken = Boolean(
@@ -115,6 +130,12 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (tokenRaw != null) {
+    if (queryToken != null) {
+      warnQueryToken = true;
+      console.warn(
+        "[openclaw] Auth token passed as query parameter (?token=). Use URL fragment instead: #token=<token>. Query parameters may appear in server logs.",
+      );
+    }
     const token = tokenRaw.trim();
     if (token && gatewayUrlChanged) {
       host.pendingGatewayToken = token;
@@ -246,6 +267,9 @@ export async function refreshActiveTab(host: SettingsHost) {
       host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
     if (agentId) {
       void loadAgentIdentity(host as unknown as OpenClawApp, agentId);
+      if (host.agentsPanel === "files") {
+        void loadAgentFiles(host as unknown as OpenClawApp, agentId);
+      }
       if (host.agentsPanel === "skills") {
         void loadAgentSkills(host as unknown as OpenClawApp, agentId);
       }
@@ -262,6 +286,13 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadDevices(host as unknown as OpenClawApp);
     await loadConfig(host as unknown as OpenClawApp);
     await loadExecApprovals(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "dreams") {
+    await loadConfig(host as unknown as OpenClawApp);
+    await Promise.all([
+      loadDreamingStatus(host as unknown as OpenClawApp),
+      loadDreamDiary(host as unknown as OpenClawApp),
+    ]);
   }
   if (host.tab === "chat") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);

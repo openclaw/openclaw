@@ -10,8 +10,9 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawPluginApi } from "../runtime-api.js";
+import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
+import type { OpenClawPluginApi } from "./runtime-api.js";
 import { resolveSlashCommandConfig, type MattermostRegisteredCommand } from "./slash-commands.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";
 
@@ -53,7 +54,7 @@ export function resolveSlashHandlerForToken(token: string): {
     return { kind: "none" };
   }
   if (matches.length === 1) {
-    return { kind: "single", handler: matches[0]!.handler, accountIds: [matches[0]!.accountId] };
+    return { kind: "single", handler: matches[0].handler, accountIds: [matches[0].accountId] };
   }
 
   return {
@@ -86,8 +87,8 @@ export function activateSlashCommands(params: {
   registeredCommands: MattermostRegisteredCommand[];
   triggerMap?: Map<string, string>;
   api: {
-    cfg: import("../runtime-api.js").OpenClawConfig;
-    runtime: import("../runtime-api.js").RuntimeEnv;
+    cfg: import("./runtime-api.js").OpenClawConfig;
+    runtime: import("./runtime-api.js").RuntimeEnv;
   };
   log?: (msg: string) => void;
 }) {
@@ -149,7 +150,7 @@ export function deactivateSlashCommands(accountId?: string) {
  * by matching the inbound token against each account's registered tokens.
  */
 export function registerSlashCommandRoute(api: OpenClawPluginApi) {
-  const mmConfig = api.config.channels?.mattermost as Record<string, unknown> | undefined;
+  const mmConfig = api.config.channels?.mattermost as MattermostConfig | undefined;
 
   // Collect callback paths from both top-level and per-account config.
   // Command registration uses account.config.commands, so the HTTP route
@@ -180,12 +181,9 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     | undefined;
   addCallbackPaths(commandsRaw);
 
-  const accountsRaw = (mmConfig?.accounts ?? {}) as Record<string, unknown>;
+  const accountsRaw = mmConfig?.accounts ?? {};
   for (const accountId of Object.keys(accountsRaw)) {
-    const accountCfg = accountsRaw[accountId] as Record<string, unknown> | undefined;
-    const accountCommandsRaw = accountCfg?.commands as
-      | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
-      | undefined;
+    const accountCommandsRaw = accountsRaw[accountId]?.commands;
     addCallbackPaths(accountCommandsRaw);
   }
 
@@ -208,7 +206,7 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
 
     // If there's only one active account (common case), route directly.
     if (accountStates.size === 1) {
-      const [, state] = [...accountStates.entries()][0]!;
+      const [, state] = [...accountStates.entries()][0];
       if (!state.handler) {
         res.statusCode = 503;
         res.setHeader("Content-Type", "application/json; charset=utf-8");

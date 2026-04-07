@@ -3,7 +3,7 @@ import * as sessions from "../config/sessions.js";
 import * as gateway from "../gateway/call.js";
 import * as sessionUtils from "../gateway/session-utils.fs.js";
 import { recoverOrphanedSubagentSessions } from "./subagent-orphan-recovery.js";
-import * as subagentRegistry from "./subagent-registry.js";
+import * as subagentRegistryRuntime from "./subagent-registry-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 // Mock dependencies before importing the module under test
@@ -28,7 +28,7 @@ vi.mock("../gateway/session-utils.fs.js", () => ({
   readSessionMessages: vi.fn(() => []),
 }));
 
-vi.mock("./subagent-registry.js", () => ({
+vi.mock("./subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: vi.fn(() => true),
 }));
 
@@ -44,6 +44,22 @@ function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): Subage
     startedAt: Date.now() - 55_000,
     ...overrides,
   };
+}
+
+function createActiveRuns(...runs: SubagentRunRecord[]) {
+  return new Map(runs.map((run) => [run.runId, run] satisfies [string, SubagentRunRecord]));
+}
+
+async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessionStore>) {
+  vi.mocked(sessions.loadSessionStore).mockReturnValue(store);
+
+  const result = await recoverOrphanedSubagentSessions({
+    getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+  });
+
+  expect(result.recovered).toBe(0);
+  expect(result.skipped).toBe(1);
+  expect(gateway.callGateway).not.toHaveBeenCalled();
 }
 
 describe("subagent-orphan-recovery", () => {
@@ -87,7 +103,7 @@ describe("subagent-orphan-recovery", () => {
     expect(params.sessionKey).toBe("agent:main:subagent:test-session-1");
     expect(params.message).toContain("gateway reload");
     expect(params.message).toContain("Test task: implement feature X");
-    expect(subagentRegistry.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+    expect(subagentRegistryRuntime.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
       expect.objectContaining({
         previousRunId: "run-1",
         nextRunId: "test-run-id",
@@ -97,24 +113,13 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("skips sessions that are not aborted", async () => {
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+    await expectSkippedRecovery({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
         updatedAt: Date.now(),
         abortedLastRun: false,
       },
     });
-
-    const activeRuns = new Map<string, SubagentRunRecord>();
-    activeRuns.set("run-1", createTestRunRecord());
-
-    const result = await recoverOrphanedSubagentSessions({
-      getActiveRuns: () => activeRuns,
-    });
-
-    expect(result.recovered).toBe(0);
-    expect(result.skipped).toBe(1);
-    expect(gateway.callGateway).not.toHaveBeenCalled();
   });
 
   it("skips runs that have already ended", async () => {
@@ -225,19 +230,7 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("skips sessions with missing session entry in store", async () => {
-    // Store has no matching entry
-    vi.mocked(sessions.loadSessionStore).mockReturnValue({});
-
-    const activeRuns = new Map<string, SubagentRunRecord>();
-    activeRuns.set("run-1", createTestRunRecord());
-
-    const result = await recoverOrphanedSubagentSessions({
-      getActiveRuns: () => activeRuns,
-    });
-
-    expect(result.recovered).toBe(0);
-    expect(result.skipped).toBe(1);
-    expect(gateway.callGateway).not.toHaveBeenCalled();
+    await expectSkippedRecovery({});
   });
 
   it("clears abortedLastRun flag after successful resume", async () => {
@@ -386,7 +379,7 @@ describe("subagent-orphan-recovery", () => {
 
   it("does not retry a session after the gateway accepted resume but run remap failed", async () => {
     vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "new-run" } as never);
-    vi.mocked(subagentRegistry.replaceSubagentRunAfterSteer).mockReturnValue(false);
+    vi.mocked(subagentRegistryRuntime.replaceSubagentRunAfterSteer).mockReturnValue(false);
 
     vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {

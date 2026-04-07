@@ -1,9 +1,11 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
-import { normalizeHostname } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
+import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
 import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackAttachment, SlackFile } from "../types.js";
 
 function isSlackHostname(hostname: string): boolean {
@@ -38,6 +40,13 @@ function assertSlackFileUrl(rawUrl: string): URL {
   return parsed;
 }
 
+function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
+  if (typeof fetchImpl !== "function") {
+    return false;
+  }
+  return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
+}
+
 function createSlackMediaFetch(token: string): FetchLike {
   let includeAuth = true;
   return async (input, init) => {
@@ -47,16 +56,20 @@ function createSlackMediaFetch(token: string): FetchLike {
     }
     const { headers: initHeaders, redirect: _redirect, ...rest } = init ?? {};
     const headers = new Headers(initHeaders);
+    const fetchImpl =
+      "dispatcher" in (init ?? {}) && !isMockedFetch(globalThis.fetch)
+        ? fetchWithRuntimeDispatcher
+        : globalThis.fetch;
 
     if (includeAuth) {
       includeAuth = false;
       const parsed = assertSlackFileUrl(url);
       headers.set("Authorization", `Bearer ${token}`);
-      return fetch(parsed.href, { ...rest, headers, redirect: "manual" });
+      return fetchImpl(parsed.href, { ...rest, headers, redirect: "manual" });
     }
 
     headers.delete("Authorization");
-    return fetch(url, { ...rest, headers, redirect: "manual" });
+    return fetchImpl(url, { ...rest, headers, redirect: "manual" });
   };
 }
 
@@ -227,7 +240,7 @@ export async function resolveSlackMedia(params: {
         const isExpectedHtml =
           fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
         if (!isExpectedHtml) {
-          const detectedMime = fetched.contentType?.split(";")[0]?.trim().toLowerCase();
+          const detectedMime = normalizeOptionalLowercaseString(fetched.contentType?.split(";")[0]);
           if (detectedMime === "text/html" || looksLikeHtmlBuffer(fetched.buffer)) {
             return null;
           }
@@ -337,6 +350,7 @@ export async function resolveSlackAttachmentContent(params: {
 export type SlackThreadStarter = {
   text: string;
   userId?: string;
+  botId?: string;
   ts?: string;
   files?: SlackFile[];
 };
@@ -391,7 +405,15 @@ export async function resolveSlackThreadStarter(params: {
       ts: params.threadTs,
       limit: 1,
       inclusive: true,
-    })) as { messages?: Array<{ text?: string; user?: string; ts?: string; files?: SlackFile[] }> };
+    })) as {
+      messages?: Array<{
+        text?: string;
+        user?: string;
+        bot_id?: string;
+        ts?: string;
+        files?: SlackFile[];
+      }>;
+    };
     const message = response?.messages?.[0];
     const text = (message?.text ?? "").trim();
     if (!message || !text) {
@@ -400,6 +422,7 @@ export async function resolveSlackThreadStarter(params: {
     const starter: SlackThreadStarter = {
       text,
       userId: message.user,
+      botId: message.bot_id,
       ts: message.ts,
       files: message.files,
     };

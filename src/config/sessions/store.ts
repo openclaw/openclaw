@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import {
-  archiveSessionTranscripts,
-  cleanupArchivedSessionTranscripts,
-} from "../../gateway/session-archive.fs.js";
+  acquireSessionWriteLock,
+  resolveSessionLockMaxHoldFromTimeout,
+} from "../../agents/session-write-lock.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -19,14 +19,21 @@ import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
-  clearSessionStoreCaches,
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
   isSessionStoreCacheEnabled,
-  readSessionStoreCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
+import {
+  clearSessionStoreCacheForTest,
+  drainSessionStoreLockQueuesForTest,
+  getSessionStoreLockQueueSizeForTest,
+  LOCK_QUEUES,
+  type SessionStoreLockQueue,
+  type SessionStoreLockTask,
+} from "./store-lock-state.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
@@ -36,51 +43,28 @@ import {
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
-import { applySessionStoreMigrations } from "./store-migrations.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
-  normalizeSessionRuntimeModelFields,
   type SessionEntry,
 } from "./types.js";
 
+export {
+  clearSessionStoreCacheForTest,
+  drainSessionStoreLockQueuesForTest,
+  getSessionStoreLockQueueSizeForTest,
+} from "./store-lock-state.js";
+export { loadSessionStore } from "./store-load.js";
+
 const log = createSubsystemLogger("sessions/store");
+let sessionArchiveRuntimePromise: Promise<
+  typeof import("../../gateway/session-archive.runtime.js")
+> | null = null;
+let sessionWriteLockAcquirerForTests: typeof acquireSessionWriteLock | null = null;
 
-function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
-  const normalized = normalizeSessionDeliveryFields({
-    channel: entry.channel,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
-    deliveryContext: entry.deliveryContext,
-  });
-  const nextDelivery = normalized.deliveryContext;
-  const sameDelivery =
-    (entry.deliveryContext?.channel ?? undefined) === nextDelivery?.channel &&
-    (entry.deliveryContext?.to ?? undefined) === nextDelivery?.to &&
-    (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
-    (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
-  const sameLast =
-    entry.lastChannel === normalized.lastChannel &&
-    entry.lastTo === normalized.lastTo &&
-    entry.lastAccountId === normalized.lastAccountId &&
-    entry.lastThreadId === normalized.lastThreadId;
-  if (sameDelivery && sameLast) {
-    return entry;
-  }
-  return {
-    ...entry,
-    deliveryContext: nextDelivery,
-    lastChannel: normalized.lastChannel,
-    lastTo: normalized.lastTo,
-    lastAccountId: normalized.lastAccountId,
-    lastThreadId: normalized.lastThreadId,
-  };
+function loadSessionArchiveRuntime() {
+  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
+  return sessionArchiveRuntimePromise;
 }
 
 function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
@@ -93,7 +77,7 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
 }
 
 export function normalizeStoreSessionKey(sessionKey: string): string {
-  return sessionKey.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(sessionKey);
 }
 
 export function resolveSessionStoreEntry(params: {
@@ -120,7 +104,7 @@ export function resolveSessionStoreEntry(params: {
     if (candidateKey === normalizedKey) {
       continue;
     }
-    if (candidateKey.toLowerCase() !== normalizedKey) {
+    if (normalizeStoreSessionKey(candidateKey) !== normalizedKey) {
       continue;
     }
     legacyKeySet.add(candidateKey);
@@ -137,31 +121,14 @@ export function resolveSessionStoreEntry(params: {
   };
 }
 
-function normalizeSessionStore(store: Record<string, SessionEntry>): void {
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
-      continue;
-    }
-    const normalized = normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry));
-    if (normalized !== entry) {
-      store[key] = normalized;
-    }
-  }
+export function setSessionWriteLockAcquirerForTests(
+  acquirer: typeof acquireSessionWriteLock | null,
+): void {
+  sessionWriteLockAcquirerForTests = acquirer;
 }
 
-export function clearSessionStoreCacheForTest(): void {
-  clearSessionStoreCaches();
-  for (const queue of LOCK_QUEUES.values()) {
-    for (const task of queue.pending) {
-      task.reject(new Error("session store queue cleared for test"));
-    }
-  }
-  LOCK_QUEUES.clear();
-}
-
-/** Expose lock queue size for tests. */
-export function getSessionStoreLockQueueSizeForTest(): number {
-  return LOCK_QUEUES.size;
+export function resetSessionStoreLockRuntimeForTests(): void {
+  sessionWriteLockAcquirerForTests = null;
 }
 
 export async function withSessionStoreLockForTest<T>(
@@ -170,86 +137,6 @@ export async function withSessionStoreLockForTest<T>(
   opts: SessionStoreLockOptions = {},
 ): Promise<T> {
   return await withSessionStoreLock(storePath, fn, opts);
-}
-
-type LoadSessionStoreOptions = {
-  skipCache?: boolean;
-};
-
-export function loadSessionStore(
-  storePath: string,
-  opts: LoadSessionStoreOptions = {},
-): Record<string, SessionEntry> {
-  // Check cache first if enabled
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
-    const currentFileStat = getFileStatSnapshot(storePath);
-    const cached = readSessionStoreCache({
-      storePath,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
-    });
-    if (cached) {
-      return cached;
-    }
-  }
-
-  // Cache miss or disabled - load from disk.
-  // Retry up to 3 times when the file is empty or unparseable.  On Windows the
-  // temp-file + rename write is not fully atomic: a concurrent reader can briefly
-  // observe a 0-byte file (between truncate and write) or a stale/locked state.
-  // A short synchronous backoff (50 ms via `Atomics.wait`) is enough for the
-  // writer to finish.
-  let store: Record<string, SessionEntry> = {};
-  let fileStat = getFileStatSnapshot(storePath);
-  let mtimeMs = fileStat?.mtimeMs;
-  let serializedFromDisk: string | undefined;
-  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
-  const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
-  for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
-    try {
-      const raw = fs.readFileSync(storePath, "utf-8");
-      if (raw.length === 0 && attempt < maxReadAttempts - 1) {
-        // File is empty — likely caught mid-write; retry after a brief pause.
-        Atomics.wait(retryBuf!, 0, 0, 50);
-        continue;
-      }
-      const parsed = JSON.parse(raw);
-      if (isSessionStoreRecord(parsed)) {
-        store = parsed;
-        serializedFromDisk = raw;
-      }
-      fileStat = getFileStatSnapshot(storePath) ?? fileStat;
-      mtimeMs = fileStat?.mtimeMs;
-      break;
-    } catch {
-      // File missing, locked, or transiently corrupt — retry on Windows.
-      if (attempt < maxReadAttempts - 1) {
-        Atomics.wait(retryBuf!, 0, 0, 50);
-        continue;
-      }
-      // Final attempt failed; proceed with an empty store.
-    }
-  }
-  if (serializedFromDisk !== undefined) {
-    setSerializedSessionStore(storePath, serializedFromDisk);
-  } else {
-    setSerializedSessionStore(storePath, undefined);
-  }
-
-  applySessionStoreMigrations(store);
-
-  // Cache the result if caching is enabled
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
-    writeSessionStoreCache({
-      storePath,
-      store,
-      mtimeMs,
-      sizeBytes: fileStat?.sizeBytes,
-      serialized: serializedFromDisk,
-    });
-  }
-
-  return structuredClone(store);
 }
 
 export function readSessionUpdatedAt(params: {
@@ -452,7 +339,7 @@ async function saveSessionStoreUnlocked(
           .map((entry) => entry?.sessionId)
           .filter((id): id is string => Boolean(id)),
       );
-      const archivedForDeletedSessions = archiveRemovedSessionTranscripts({
+      const archivedForDeletedSessions = await archiveRemovedSessionTranscripts({
         removedSessionFiles,
         referencedSessionIds,
         storePath,
@@ -463,6 +350,7 @@ async function saveSessionStoreUnlocked(
         archivedDirs.add(archivedDir);
       }
       if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
+        const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
         const targetDirs =
           archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
         await cleanupArchivedSessionTranscripts({
@@ -591,20 +479,8 @@ type SessionStoreLockOptions = {
   staleMs?: number;
 };
 
-type SessionStoreLockTask = {
-  fn: () => Promise<unknown>;
-  resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
-  timeoutMs?: number;
-  staleMs: number;
-};
-
-type SessionStoreLockQueue = {
-  running: boolean;
-  pending: SessionStoreLockTask[];
-};
-
-const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
+const SESSION_STORE_LOCK_MIN_HOLD_MS = 5_000;
+const SESSION_STORE_LOCK_TIMEOUT_GRACE_MS = 5_000;
 
 function getErrorCode(error: unknown): string | null {
   if (!error || typeof error !== "object" || !("code" in error)) {
@@ -622,13 +498,14 @@ function rememberRemovedSessionFile(
   }
 }
 
-export function archiveRemovedSessionTranscripts(params: {
+export async function archiveRemovedSessionTranscripts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;
   storePath: string;
   reason: "deleted" | "reset";
   restrictToStoreDir?: boolean;
-}): Set<string> {
+}): Promise<Set<string>> {
+  const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
   for (const [sessionId, sessionFile] of params.removedSessionFiles) {
     if (params.referencedSessionIds.has(sessionId)) {
@@ -681,68 +558,88 @@ function lockTimeoutError(storePath: string): Error {
   return new Error(`timeout waiting for session store lock: ${storePath}`);
 }
 
+function resolveSessionStoreLockMaxHoldMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs == null || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return undefined;
+  }
+  return resolveSessionLockMaxHoldFromTimeout({
+    timeoutMs,
+    graceMs: SESSION_STORE_LOCK_TIMEOUT_GRACE_MS,
+    minMs: SESSION_STORE_LOCK_MIN_HOLD_MS,
+  });
+}
+
 function getOrCreateLockQueue(storePath: string): SessionStoreLockQueue {
   const existing = LOCK_QUEUES.get(storePath);
   if (existing) {
     return existing;
   }
-  const created: SessionStoreLockQueue = { running: false, pending: [] };
+  const created: SessionStoreLockQueue = { running: false, pending: [], drainPromise: null };
   LOCK_QUEUES.set(storePath, created);
   return created;
 }
 
 async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
   const queue = LOCK_QUEUES.get(storePath);
-  if (!queue || queue.running) {
+  if (!queue) {
+    return;
+  }
+  if (queue.drainPromise) {
+    await queue.drainPromise;
     return;
   }
   queue.running = true;
-  try {
-    while (queue.pending.length > 0) {
-      const task = queue.pending.shift();
-      if (!task) {
-        continue;
-      }
+  queue.drainPromise = (async () => {
+    try {
+      while (queue.pending.length > 0) {
+        const task = queue.pending.shift();
+        if (!task) {
+          continue;
+        }
 
-      const remainingTimeoutMs = task.timeoutMs ?? Number.POSITIVE_INFINITY;
-      if (task.timeoutMs != null && remainingTimeoutMs <= 0) {
-        task.reject(lockTimeoutError(storePath));
-        continue;
-      }
+        const remainingTimeoutMs = task.timeoutMs ?? Number.POSITIVE_INFINITY;
+        if (task.timeoutMs != null && remainingTimeoutMs <= 0) {
+          task.reject(lockTimeoutError(storePath));
+          continue;
+        }
 
-      let lock: { release: () => Promise<void> } | undefined;
-      let result: unknown;
-      let failed: unknown;
-      let hasFailure = false;
-      try {
-        lock = await acquireSessionWriteLock({
-          sessionFile: storePath,
-          timeoutMs: remainingTimeoutMs,
-          staleMs: task.staleMs,
+        let lock: { release: () => Promise<void> } | undefined;
+        let result: unknown;
+        let failed: unknown;
+        let hasFailure = false;
+        try {
+          lock = await (sessionWriteLockAcquirerForTests ?? acquireSessionWriteLock)({
+            sessionFile: storePath,
+            timeoutMs: remainingTimeoutMs,
+            staleMs: task.staleMs,
+            maxHoldMs: resolveSessionStoreLockMaxHoldMs(task.timeoutMs),
+          });
+          result = await task.fn();
+        } catch (err) {
+          hasFailure = true;
+          failed = err;
+        } finally {
+          await lock?.release().catch(() => undefined);
+        }
+        if (hasFailure) {
+          task.reject(failed);
+          continue;
+        }
+        task.resolve(result);
+      }
+    } finally {
+      queue.running = false;
+      queue.drainPromise = null;
+      if (queue.pending.length === 0) {
+        LOCK_QUEUES.delete(storePath);
+      } else {
+        queueMicrotask(() => {
+          void drainSessionStoreLockQueue(storePath);
         });
-        result = await task.fn();
-      } catch (err) {
-        hasFailure = true;
-        failed = err;
-      } finally {
-        await lock?.release().catch(() => undefined);
       }
-      if (hasFailure) {
-        task.reject(failed);
-        continue;
-      }
-      task.resolve(result);
     }
-  } finally {
-    queue.running = false;
-    if (queue.pending.length === 0) {
-      LOCK_QUEUES.delete(storePath);
-    } else {
-      queueMicrotask(() => {
-        void drainSessionStoreLockQueue(storePath);
-      });
-    }
-  }
+  })();
+  await queue.drainPromise;
 }
 
 async function withSessionStoreLock<T>(

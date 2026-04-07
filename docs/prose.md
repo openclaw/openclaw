@@ -29,7 +29,7 @@ openclaw plugins enable open-prose
 
 Restart the Gateway after enabling the plugin.
 
-Dev/local checkout: `openclaw plugins install ./extensions/open-prose`
+Dev/local checkout: `openclaw plugins install ./path/to/local/open-prose-plugin`
 
 Related docs: [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
 

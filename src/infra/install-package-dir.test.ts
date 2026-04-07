@@ -1,9 +1,9 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { installPackageDir } from "./install-package-dir.js";
 
 vi.mock("../process/exec.js", async () => {
@@ -19,6 +19,11 @@ async function listMatchingDirs(root: string, prefix: string): Promise<string[]>
   return entries
     .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
     .map((entry) => entry.name);
+}
+
+async function listMatchingEntries(root: string, prefix: string): Promise<string[]> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  return entries.filter((entry) => entry.name.startsWith(prefix)).map((entry) => entry.name);
 }
 
 function normalizeDarwinTmpPath(filePath: string): string {
@@ -88,18 +93,18 @@ async function withInstallBaseReboundOnRealpathCall<T>(params: {
 }
 
 describe("installPackageDir", () => {
-  let fixtureRoot = "";
+  const fixtureRootTracker = createSuiteTempRootTracker({
+    prefix: "openclaw-install-package-dir-",
+  });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-      fixtureRoot = "";
-    }
+    await fixtureRootTracker.cleanup();
   });
 
   it("keeps the existing install in place when staged validation fails", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const installBaseDir = path.join(fixtureRoot, "plugins");
     const sourceDir = path.join(fixtureRoot, "source");
     const targetDir = path.join(installBaseDir, "demo");
@@ -139,7 +144,8 @@ describe("installPackageDir", () => {
   });
 
   it("restores the original install if publish rename fails", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const installBaseDir = path.join(fixtureRoot, "plugins");
     const sourceDir = path.join(fixtureRoot, "source");
     const targetDir = path.join(installBaseDir, "demo");
@@ -181,7 +187,8 @@ describe("installPackageDir", () => {
   });
 
   it("aborts without outside writes when the install base is rebound before publish", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
     const installBaseDir = path.join(fixtureRoot, "plugins");
     const preservedInstallRoot = path.join(fixtureRoot, "plugins-preserved");
@@ -228,7 +235,8 @@ describe("installPackageDir", () => {
   });
 
   it("warns and leaves the backup in place when the install base changes before backup cleanup", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
     const installBaseDir = path.join(fixtureRoot, "plugins");
     const preservedInstallRoot = path.join(fixtureRoot, "plugins-preserved");
@@ -274,7 +282,8 @@ describe("installPackageDir", () => {
   });
 
   it("installs peer dependencies for isolated plugin package installs", async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
     const targetDir = path.join(fixtureRoot, "plugins", "demo");
     await fs.mkdir(sourceDir, { recursive: true });
@@ -316,5 +325,61 @@ describe("installPackageDir", () => {
         cwd: expect.stringContaining(".openclaw-install-stage-"),
       }),
     );
+  });
+
+  it("hides the staged project .npmrc while npm install runs and restores it afterward", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    const npmrcContent = "git=calc.exe\n";
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "demo-plugin",
+        version: "1.0.0",
+        dependencies: {
+          zod: "^4.0.0",
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(sourceDir, ".npmrc"), npmrcContent, "utf-8");
+
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
+      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+      expect(cwd).toBeTruthy();
+      await expect(fs.stat(path.join(cwd ?? "", ".npmrc"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        listMatchingEntries(cwd ?? "", ".openclaw-install-hidden-npmrc-"),
+      ).resolves.toHaveLength(1);
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: true,
+      depsLogMessage: "Installing deps…",
+    });
+
+    expect(result).toEqual({ ok: true });
+    await expect(fs.readFile(path.join(targetDir, ".npmrc"), "utf8")).resolves.toBe(npmrcContent);
+    await expect(
+      listMatchingEntries(targetDir, ".openclaw-install-hidden-npmrc-"),
+    ).resolves.toHaveLength(0);
   });
 });

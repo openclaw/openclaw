@@ -1,5 +1,7 @@
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
 function mask(s: string, keep: number = 6): string {
@@ -78,11 +80,15 @@ function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOptio
   if (byId) {
     return byId;
   }
-  const exactName = voices.find((v) => (v.name ?? "").trim().toLowerCase() === lower);
+  const exactName = voices.find(
+    (v) => (normalizeOptionalString(v.name)?.toLowerCase() ?? "") === lower,
+  );
   if (exactName) {
     return exactName;
   }
-  const partial = voices.find((v) => (v.name ?? "").trim().toLowerCase().includes(lower));
+  const partial = voices.find((v) =>
+    (normalizeOptionalString(v.name)?.toLowerCase() ?? "").includes(lower),
+  );
   return partial ?? null;
 }
 
@@ -97,6 +103,18 @@ function resolveCommandLabel(channel: string): string {
 function asProviderBaseUrl(value: unknown): string | undefined {
   const trimmed = asTrimmedString(value);
   return trimmed || undefined;
+}
+
+const TALK_ADMIN_SCOPE = "operator.admin";
+
+function requiresAdminToSetVoice(
+  channel: string,
+  gatewayClientScopes?: readonly string[],
+): boolean {
+  if (Array.isArray(gatewayClientScopes)) {
+    return !gatewayClientScopes.includes(TALK_ADMIN_SCOPE);
+  }
+  return channel === "webchat";
 }
 
 export default definePluginEntry({
@@ -132,15 +150,14 @@ export default definePluginEntry({
         const apiKey = asTrimmedString(active.config.apiKey);
         const baseUrl = asProviderBaseUrl(active.config.baseUrl);
 
-        const currentVoiceId =
-          asTrimmedString(active.config.voiceId) || asTrimmedString(cfg.talk?.voiceId);
+        const currentVoiceId = asTrimmedString(active.config.voiceId);
 
         if (action === "status") {
           return {
             text:
               "Talk voice status:\n" +
               `- provider: ${providerId}\n` +
-              `- talk.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
+              `- talk.providers.${providerId}.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
               `- ${providerId}.apiKey: ${apiKey ? mask(apiKey) : "(unset)"}`,
           };
         }
@@ -158,12 +175,18 @@ export default definePluginEntry({
               text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12, providerId),
             };
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
+            const message = formatErrorMessage(error);
             return { text: `${providerLabel} voice list failed: ${message}` };
           }
         }
 
         if (action === "set") {
+          // Gateway callers can override messageChannel, so scope presence is
+          // the reliable signal for internal admin-only mutations.
+          if (requiresAdminToSetVoice(ctx.channel, ctx.gatewayClientScopes)) {
+            return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
+          }
+
           const query = tokens.slice(1).join(" ").trim();
           if (!query) {
             return { text: `Usage: ${commandLabel} set <voiceId|name>` };
@@ -177,7 +200,7 @@ export default definePluginEntry({
               baseUrl,
             });
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
+            const message = formatErrorMessage(error);
             return { text: `${providerLabel} voice lookup failed: ${message}` };
           }
           const chosen = findVoice(voices, query);
@@ -192,9 +215,9 @@ export default definePluginEntry({
               ...cfg.talk,
               provider: providerId,
               providers: {
-                ...(cfg.talk?.providers ?? {}),
+                ...cfg.talk?.providers,
                 [providerId]: {
-                  ...(cfg.talk?.providers?.[providerId] ?? {}),
+                  ...cfg.talk?.providers?.[providerId],
                   voiceId: chosen.id,
                 },
               },

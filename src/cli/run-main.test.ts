@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   rewriteUpdateFlagArgv,
+  resolveMissingPluginCommandMessage,
   shouldEnsureCliPath,
-  shouldRegisterPrimarySubcommand,
-  shouldSkipPluginCommandRegistration,
   shouldUseRootHelpFastPath,
 } from "./run-main.js";
 
@@ -41,71 +40,6 @@ describe("rewriteUpdateFlagArgv", () => {
   });
 });
 
-describe("shouldRegisterPrimarySubcommand", () => {
-  it("skips eager primary registration for help/version invocations", () => {
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "status", "--help"])).toBe(false);
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "-V"])).toBe(false);
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "-v"])).toBe(false);
-  });
-
-  it("keeps eager primary registration for regular command runs", () => {
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "status"])).toBe(true);
-    expect(shouldRegisterPrimarySubcommand(["node", "openclaw", "acp", "-v"])).toBe(true);
-  });
-});
-
-describe("shouldSkipPluginCommandRegistration", () => {
-  it("skips plugin registration for root help/version", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "--help"],
-        primary: null,
-        hasBuiltinPrimary: false,
-      }),
-    ).toBe(true);
-  });
-
-  it("skips plugin registration for builtin subcommand help", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "config", "--help"],
-        primary: "config",
-        hasBuiltinPrimary: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("skips plugin registration for builtin command runs", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "sessions", "--json"],
-        primary: "sessions",
-        hasBuiltinPrimary: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps plugin registration for non-builtin help", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "voicecall", "--help"],
-        primary: "voicecall",
-        hasBuiltinPrimary: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps plugin registration for non-builtin command runs", () => {
-    expect(
-      shouldSkipPluginCommandRegistration({
-        argv: ["node", "openclaw", "voicecall", "status"],
-        primary: "voicecall",
-        hasBuiltinPrimary: false,
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("shouldEnsureCliPath", () => {
   it("skips path bootstrap for help/version invocations", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "--help"])).toBe(false);
@@ -134,5 +68,41 @@ describe("shouldUseRootHelpFastPath", () => {
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
+  });
+});
+
+describe("resolveMissingPluginCommandMessage", () => {
+  it("explains plugins.allow misses for a bundled plugin command", () => {
+    expect(
+      resolveMissingPluginCommandMessage("browser", {
+        plugins: {
+          allow: ["telegram"],
+        },
+      }),
+    ).toContain('`plugins.allow` excludes "browser"');
+  });
+
+  it("explains explicit bundled plugin disablement", () => {
+    expect(
+      resolveMissingPluginCommandMessage("browser", {
+        plugins: {
+          entries: {
+            browser: {
+              enabled: false,
+            },
+          },
+        },
+      }),
+    ).toContain("plugins.entries.browser.enabled=false");
+  });
+
+  it("returns null when the bundled plugin command is already allowed", () => {
+    expect(
+      resolveMissingPluginCommandMessage("browser", {
+        plugins: {
+          allow: ["browser"],
+        },
+      }),
+    ).toBeNull();
   });
 });

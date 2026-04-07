@@ -1,6 +1,7 @@
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   resolveSecretInputModeForEnvSelection,
@@ -76,18 +77,13 @@ export function formatApiKeyPreview(
 export function normalizeTokenProviderInput(
   tokenProvider: string | null | undefined,
 ): string | undefined {
-  const normalized = String(tokenProvider ?? "")
-    .trim()
-    .toLowerCase();
-  return normalized || undefined;
+  return normalizeOptionalLowercaseString(tokenProvider);
 }
 
 export function normalizeSecretInputModeInput(
   secretInputMode: string | null | undefined,
 ): SecretInputMode | undefined {
-  const normalized = String(secretInputMode ?? "")
-    .trim()
-    .toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(secretInputMode);
   if (normalized === "plaintext" || normalized === "ref") {
     return normalized;
   }
@@ -119,6 +115,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   tokenProvider: string | undefined;
   secretInputMode?: SecretInputMode;
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   expectedProviders: string[];
   provider: string;
   envLabel: string;
@@ -148,6 +145,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
+    env: params.env,
     provider: params.provider,
     envLabel: params.envLabel,
     promptMessage: params.promptMessage,
@@ -161,6 +159,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   provider: string;
   envLabel: string;
   promptMessage: string;
@@ -174,7 +173,8 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     prompter: params.prompter,
     explicitMode: params.secretInputMode,
   });
-  const envKey = resolveEnvApiKey(params.provider);
+  const env = params.env ?? process.env;
+  const envKey = resolveEnvApiKey(params.provider, env);
 
   if (selectedMode === "ref") {
     if (typeof params.prompter.select !== "function") {
@@ -182,6 +182,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
         config: params.config,
         provider: params.provider,
         preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
+        env,
       });
       await params.setCredential(fallback.ref, selectedMode);
       return fallback.resolvedValue;
@@ -191,6 +192,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
       config: params.config,
       prompter: params.prompter,
       preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
+      env,
     });
     await params.setCredential(resolved.ref, selectedMode);
     return resolved.resolvedValue;

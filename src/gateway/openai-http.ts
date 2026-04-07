@@ -18,6 +18,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -25,9 +26,14 @@ import {
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
+import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext, resolveOpenAiCompatModelOverride } from "./http-utils.js";
+import {
+  resolveGatewayRequestContext,
+  resolveOpenAiCompatModelOverride,
+  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
+} from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
 type OpenAiHttpOptions = {
@@ -106,6 +112,8 @@ function buildAgentCommandInput(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  senderIsOwner: boolean;
+  abortSignal?: AbortSignal;
 }) {
   return {
     message: params.prompt.message,
@@ -117,9 +125,9 @@ function buildAgentCommandInput(params: {
     deliver: false as const,
     messageChannel: params.messageChannel,
     bestEffortDeliver: false as const,
-    // HTTP API callers are authenticated operator clients for this gateway context.
-    senderIsOwner: true as const,
+    senderIsOwner: params.senderIsOwner,
     allowModelOverride: true as const,
+    abortSignal: params.abortSignal,
   };
 }
 
@@ -241,7 +249,9 @@ function parseImageUrlToSource(url: string): InputImageSource {
       .split(";")
       .map((part) => part.trim())
       .filter(Boolean);
-    const isBase64 = metadataParts.some((part) => part.toLowerCase() === "base64");
+    const isBase64 = metadataParts.some(
+      (part) => normalizeLowercaseStringOrEmpty(part) === "base64",
+    );
     if (!isBase64) {
       throw new Error("image_url data URI must be base64 encoded");
     }
@@ -416,6 +426,10 @@ export async function handleOpenAiHttpRequest(
   const limits = resolveOpenAiChatCompletionsLimits(opts.config);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/chat/completions",
+    requiredOperatorMethod: "chat.send",
+    // Compat HTTP uses a different scope model from generic HTTP helpers:
+    // shared-secret bearer auth is treated as full operator access here.
+    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
@@ -428,6 +442,9 @@ export async function handleOpenAiHttpRequest(
   if (!handled) {
     return true;
   }
+  // On the compat surface, shared-secret bearer auth is also treated as an
+  // owner sender so owner-only tool policy matches the documented contract.
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
 
   const payload = coerceRequest(handled.body);
   const stream = Boolean(payload.stream);
@@ -481,6 +498,7 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const abortController = new AbortController();
   const commandInput = buildAgentCommandInput({
     prompt: {
       message: prompt.message,
@@ -491,11 +509,18 @@ export async function handleOpenAiHttpRequest(
     sessionKey,
     runId,
     messageChannel,
+    abortSignal: abortController.signal,
+    senderIsOwner,
   });
 
   if (!stream) {
+    const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+
+      if (abortController.signal.aborted) {
+        return true;
+      }
 
       const content = resolveAgentResponseText(result);
 
@@ -514,10 +539,15 @@ export async function handleOpenAiHttpRequest(
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
     } catch (err) {
+      if (abortController.signal.aborted) {
+        return true;
+      }
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
       sendJson(res, 500, {
         error: { message: "internal error", type: "api_error" },
       });
+    } finally {
+      stopWatchingDisconnect();
     }
     return true;
   }
@@ -527,6 +557,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let sawAssistantDelta = false;
   let closed = false;
+  let stopWatchingDisconnect = () => {};
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
@@ -561,6 +592,7 @@ export async function handleOpenAiHttpRequest(
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
         closed = true;
+        stopWatchingDisconnect();
         unsubscribe();
         writeDone(res);
         res.end();
@@ -568,7 +600,7 @@ export async function handleOpenAiHttpRequest(
     }
   });
 
-  req.on("close", () => {
+  stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
   });
@@ -598,10 +630,10 @@ export async function handleOpenAiHttpRequest(
         });
       }
     } catch (err) {
-      logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
-      if (closed) {
+      if (closed || abortController.signal.aborted) {
         return;
       }
+      logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
       writeAssistantContentChunk(res, {
         runId,
         model,
@@ -616,6 +648,7 @@ export async function handleOpenAiHttpRequest(
     } finally {
       if (!closed) {
         closed = true;
+        stopWatchingDisconnect();
         unsubscribe();
         writeDone(res);
         res.end();

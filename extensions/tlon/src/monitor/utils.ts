@@ -1,3 +1,5 @@
+import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asNullableObjectRecord, readStringField } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeShip } from "../targets.js";
 
 // Cite types for message references
@@ -130,7 +132,9 @@ export function isBotMentioned(
  * "~bot-ship /status" → "/status"
  */
 export function stripBotMention(messageText: string, botShipName: string): string {
-  if (!messageText || !botShipName) return messageText;
+  if (!messageText || !botShipName) {
+    return messageText;
+  }
   return messageText.replace(normalizeShip(botShipName), "").trim();
 }
 
@@ -179,9 +183,13 @@ export async function resolveAuthorizedMessageText(params: {
   return citedContent + rawText;
 }
 
+export const asRecord = asNullableObjectRecord;
+export const formatErrorMessage = sharedFormatErrorMessage;
+export const readString = readStringField;
+
 // Helper to recursively extract text from inline content
 function renderInlineItem(
-  item: any,
+  item: unknown,
   options?: {
     linkMode?: "content-or-href" | "href";
     allowBreak?: boolean;
@@ -191,44 +199,57 @@ function renderInlineItem(
   if (typeof item === "string") {
     return item;
   }
-  if (!item || typeof item !== "object") {
+  const record = asRecord(item);
+  if (!record) {
     return "";
   }
-  if (item.ship) {
-    return item.ship;
+  const ship = readString(record, "ship");
+  if (ship) {
+    return ship;
   }
-  if ("sect" in item) {
-    return `@${item.sect || "all"}`;
+  if ("sect" in record) {
+    const sect = record.sect;
+    if (typeof sect === "string") {
+      return `@${sect || "all"}`;
+    }
+    if (sect === null) {
+      return "@all";
+    }
   }
-  if (options?.allowBreak && item.break !== undefined) {
+  if (options?.allowBreak && "break" in record) {
     return "\n";
   }
-  if (item["inline-code"]) {
-    return `\`${item["inline-code"]}\``;
+  const inlineCode = readString(record, "inline-code");
+  if (inlineCode) {
+    return `\`${inlineCode}\``;
   }
-  if (item.code) {
-    return `\`${item.code}\``;
+  const code = readString(record, "code");
+  if (code) {
+    return `\`${code}\``;
   }
-  if (item.link && item.link.href) {
-    return options?.linkMode === "href" ? item.link.href : item.link.content || item.link.href;
+  const link = asRecord(record.link);
+  const linkHref = link ? readString(link, "href") : undefined;
+  if (link && linkHref) {
+    const linkContent = readString(link, "content");
+    return options?.linkMode === "href" ? linkHref : linkContent || linkHref;
   }
-  if (item.bold && Array.isArray(item.bold)) {
-    return `**${extractInlineText(item.bold)}**`;
+  if (Array.isArray(record.bold)) {
+    return `**${extractInlineText(record.bold)}**`;
   }
-  if (item.italics && Array.isArray(item.italics)) {
-    return `*${extractInlineText(item.italics)}*`;
+  if (Array.isArray(record.italics)) {
+    return `*${extractInlineText(record.italics)}*`;
   }
-  if (item.strike && Array.isArray(item.strike)) {
-    return `~~${extractInlineText(item.strike)}~~`;
+  if (Array.isArray(record.strike)) {
+    return `~~${extractInlineText(record.strike)}~~`;
   }
-  if (options?.allowBlockquote && item.blockquote && Array.isArray(item.blockquote)) {
-    return `> ${extractInlineText(item.blockquote)}`;
+  if (options?.allowBlockquote && Array.isArray(record.blockquote)) {
+    return `> ${extractInlineText(record.blockquote)}`;
   }
   return "";
 }
 
-function extractInlineText(items: any[]): string {
-  return items.map((item: any) => renderInlineItem(item)).join("");
+function extractInlineText(items: readonly unknown[]): string {
+  return items.map((item) => renderInlineItem(item)).join("");
 }
 
 export function extractMessageText(content: unknown): string {
@@ -237,11 +258,16 @@ export function extractMessageText(content: unknown): string {
   }
 
   return content
-    .map((verse: any) => {
+    .map((verse) => {
+      const verseRecord = asRecord(verse);
+      if (!verseRecord) {
+        return "";
+      }
+
       // Handle inline content (text, ships, links, etc.)
-      if (verse.inline && Array.isArray(verse.inline)) {
-        return verse.inline
-          .map((item: any) =>
+      if (Array.isArray(verseRecord.inline)) {
+        return verseRecord.inline
+          .map((item) =>
             renderInlineItem(item, {
               linkMode: "href",
               allowBreak: true,
@@ -252,38 +278,46 @@ export function extractMessageText(content: unknown): string {
       }
 
       // Handle block content (images, code blocks, etc.)
-      if (verse.block && typeof verse.block === "object") {
-        const block = verse.block;
+      const block = asRecord(verseRecord.block);
+      if (block) {
+        const image = asRecord(block.image);
 
         // Image blocks
-        if (block.image && block.image.src) {
-          const alt = block.image.alt ? ` (${block.image.alt})` : "";
-          return `\n${block.image.src}${alt}\n`;
+        if (image) {
+          const imageSrc = readString(image, "src");
+          if (imageSrc) {
+            const altText = readString(image, "alt");
+            const alt = altText ? ` (${altText})` : "";
+            return `\n${imageSrc}${alt}\n`;
+          }
         }
 
         // Code blocks
-        if (block.code && typeof block.code === "object") {
-          const lang = block.code.lang || "";
-          const code = block.code.code || "";
+        const codeBlock = asRecord(block.code);
+        if (codeBlock) {
+          const lang = readString(codeBlock, "lang") ?? "";
+          const code = readString(codeBlock, "code") ?? "";
           return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
         }
 
         // Header blocks
-        if (block.header && typeof block.header === "object") {
+        const header = asRecord(block.header);
+        if (header) {
+          const headerContent = Array.isArray(header.content) ? header.content : [];
           const text =
-            block.header.content
-              ?.map((item: any) => (typeof item === "string" ? item : ""))
-              .join("") || "";
+            headerContent.map((item) => (typeof item === "string" ? item : "")).join("") || "";
           return `\n## ${text}\n`;
         }
 
         // Cite/quote blocks - parse the reference structure
-        if (block.cite && typeof block.cite === "object") {
-          const cite = block.cite;
+        const cite = asRecord(block.cite);
+        if (cite) {
+          const chanCite = asRecord(cite.chan);
 
           // ChanCite - reference to a channel message
-          if (cite.chan && typeof cite.chan === "object") {
-            const { nest, where } = cite.chan;
+          if (chanCite) {
+            const nest = readString(chanCite, "nest");
+            const where = readString(chanCite, "where");
             // where is typically /msg/~author/timestamp
             const whereMatch = where?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
             if (whereMatch) {
@@ -294,18 +328,28 @@ export function extractMessageText(content: unknown): string {
           }
 
           // GroupCite - reference to a group
-          if (cite.group && typeof cite.group === "string") {
-            return `\n> [ref: group ${cite.group}]\n`;
+          const group = readString(cite, "group");
+          if (group) {
+            return `\n> [ref: group ${group}]\n`;
           }
 
           // DeskCite - reference to an app/desk
-          if (cite.desk && typeof cite.desk === "object") {
-            return `\n> [ref: ${cite.desk.flag}]\n`;
+          const desk = asRecord(cite.desk);
+          if (desk) {
+            const flag = readString(desk, "flag");
+            if (flag) {
+              return `\n> [ref: ${flag}]\n`;
+            }
           }
 
           // BaitCite - reference with group+graph context
-          if (cite.bait && typeof cite.bait === "object") {
-            return `\n> [ref: ${cite.bait.graph} in ${cite.bait.group}]\n`;
+          const bait = asRecord(cite.bait);
+          if (bait) {
+            const graph = readString(bait, "graph");
+            const groupName = readString(bait, "group");
+            if (graph && groupName) {
+              return `\n> [ref: ${graph} in ${groupName}]\n`;
+            }
           }
 
           return `\n> [quoted message]\n`;

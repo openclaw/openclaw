@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -8,45 +9,21 @@ vi.mock("../gateway/call.js", () => ({
 let mockConfig: Record<string, unknown> = {
   session: { mainKey: "main", scope: "per-sender" },
 };
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => mockConfig,
     resolveGatewayPort: () => 18789,
   };
 });
-
-import "./test-helpers/fast-core-tools.js";
-
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
-
-async function loadFreshOpenClawToolsModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../gateway/call.js", () => ({
-    callGateway: (opts: unknown) => callGatewayMock(opts),
-  }));
-  vi.doMock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
-    return {
-      ...actual,
-      loadConfig: () => mockConfig,
-      resolveGatewayPort: () => 18789,
-    };
-  });
-  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
-}
-
 function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
-  const tool = createOpenClawTools({
+  return createSessionsHistoryTool({
     agentSessionKey: "main",
     sandboxed: options?.sandboxed,
-  }).find((candidate) => candidate.name === "sessions_history");
-  expect(tool).toBeDefined();
-  if (!tool) {
-    throw new Error("missing sessions_history tool");
-  }
-  return tool;
+    config: mockConfig as never,
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  });
 }
 
 function mockGatewayWithHistory(
@@ -67,8 +44,8 @@ function mockGatewayWithHistory(
 }
 
 describe("sessions tools visibility", () => {
-  beforeEach(async () => {
-    await loadFreshOpenClawToolsModuleForTest();
+  beforeEach(() => {
+    callGatewayMock.mockClear();
   });
 
   it("defaults to tree visibility (self + spawned) for sessions_history", async () => {

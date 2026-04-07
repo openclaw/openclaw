@@ -1,44 +1,11 @@
-import type {
-  ChannelAccountSnapshot,
-  ChatType,
-  OpenClawConfig,
-  ReplyPayload,
-  RuntimeEnv,
-} from "../runtime-api.js";
-import {
-  buildAgentMediaPayload,
-  buildModelsProviderData,
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  logInboundDrop,
-  logTypingFailure,
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntryIfEnabled,
-  isDangerousNameMatchingEnabled,
-  registerPluginHttpRoute,
-  resolveControlCommandGate,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  resolveChannelMediaMaxBytes,
-  warnMissingProviderGroupPolicyFallbackOnce,
-  type HistoryEntry,
-} from "../runtime-api.js";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
-  fetchMattermostChannel,
   fetchMattermostMe,
-  fetchMattermostUser,
   normalizeMattermostBaseUrl,
-  sendMattermostTyping,
-  updateMattermostPost,
-  type MattermostChannel,
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
@@ -82,6 +49,36 @@ import {
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import type {
+  ChannelAccountSnapshot,
+  ChatType,
+  OpenClawConfig,
+  ReplyPayload,
+  RuntimeEnv,
+} from "./runtime-api.js";
+import {
+  buildAgentMediaPayload,
+  buildModelsProviderData,
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  DM_GROUP_ACCESS_REASON,
+  isDangerousNameMatchingEnabled,
+  logInboundDrop,
+  logTypingFailure,
+  readStoreAllowFromForDmPolicy,
+  recordPendingHistoryEntryIfEnabled,
+  registerPluginHttpRoute,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveChannelMediaMaxBytes,
+  resolveControlCommandGate,
+  resolveDefaultGroupPolicy,
+  resolveDmGroupAccessWithLists,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  type HistoryEntry,
+} from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
@@ -161,38 +158,42 @@ export function resolveMattermostReplyRootId(params: {
   threadRootId?: string;
   replyToId?: string;
 }): string | undefined {
-  const threadRootId = params.threadRootId?.trim();
+  const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId) {
     return threadRootId;
   }
-  return params.replyToId?.trim() || undefined;
+  return normalizeOptionalString(params.replyToId);
 }
 
 export function resolveMattermostEffectiveReplyToId(params: {
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): string | undefined {
-  const threadRootId = params.threadRootId?.trim();
+  const threadRootId = normalizeOptionalString(params.threadRootId);
   if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
   }
   if (params.kind === "direct") {
     return undefined;
   }
-  const postId = params.postId?.trim();
+  const postId = normalizeOptionalString(params.postId);
   if (!postId) {
     return undefined;
   }
-  return params.replyToMode === "all" || params.replyToMode === "first" ? postId : undefined;
+  return params.replyToMode === "all" ||
+    params.replyToMode === "first" ||
+    params.replyToMode === "batched"
+    ? postId
+    : undefined;
 }
 
 export function resolveMattermostThreadSessionContext(params: {
   baseSessionKey: string;
   kind: ChatType;
   postId?: string | null;
-  replyToMode: "off" | "first" | "all";
+  replyToMode: "off" | "first" | "all" | "batched";
   threadRootId?: string | null;
 }): { effectiveReplyToId?: string; sessionKey: string; parentSessionKey?: string } {
   const effectiveReplyToId = resolveMattermostEffectiveReplyToId({
@@ -212,6 +213,16 @@ export function resolveMattermostThreadSessionContext(params: {
     parentSessionKey: threadKeys.parentSessionKey,
   };
 }
+
+export function resolveMattermostReactionChannelId(
+  payload: Pick<MattermostEventPayload, "broadcast" | "data">,
+): string | undefined {
+  return (
+    normalizeOptionalString(payload.broadcast?.channel_id) ??
+    normalizeOptionalString(payload.data?.channel_id)
+  );
+}
+
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
   if (mediaList.length === 0) {
     return "";
@@ -263,10 +274,40 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     );
   }
 
-  const client = createMattermostClient({ baseUrl, botToken });
-  const botUser = await fetchMattermostMe(client);
+  const client = createMattermostClient({
+    baseUrl,
+    botToken,
+    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+  });
+
+  // Wait for the Mattermost API to accept our bot token before proceeding.
+  // When a bot account is disabled and re-enabled, the session is invalidated
+  // and API calls return 401 until the account is fully active again.  Retrying
+  // here (with exponential backoff) keeps the monitor alive and prevents the
+  // framework's auto-restart budget from being exhausted.
+  let botUser!: MattermostUser;
+  await runWithReconnect(
+    async () => {
+      botUser = await fetchMattermostMe(client);
+    },
+    {
+      abortSignal: opts.abortSignal,
+      jitterRatio: 0.2,
+      shouldReconnect: ({ outcome }) => outcome === "rejected",
+      onError: (err) => {
+        runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
+        opts.statusSink?.({ lastError: String(err), connected: false });
+      },
+      onReconnect: (delayMs) => {
+        runtime.log?.(`mattermost: API not accessible, retrying in ${Math.round(delayMs / 1000)}s`);
+      },
+    },
+  );
+  if (opts.abortSignal?.aborted) {
+    return;
+  }
   const botUserId = botUser.id;
-  const botUsername = botUser.username?.trim() || undefined;
+  const botUsername = normalizeOptionalString(botUser.username);
   runtime.log?.(`mattermost connected as ${botUsername ? `@${botUsername}` : botUserId}`);
   await registerMattermostMonitorSlashCommands({
     client,
@@ -361,7 +402,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           response: {
             update: {
               message: post.message ?? "",
-              props: post.props as Record<string, unknown> | undefined,
+              props: post.props ?? undefined,
             },
             ephemeral_text: `OpenClaw ignored this action for ${decision.roomLabel}.`,
           },
@@ -1086,7 +1127,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   idLine: `Your Mattermost user id: ${senderId}`,
                   code,
                 }),
-                { accountId: account.accountId },
+                { cfg, accountId: account.accountId },
               );
               opts.statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {
@@ -1144,7 +1185,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
 
     const baseSessionKey = route.sessionKey;
-    const threadRootId = post.root_id?.trim() || undefined;
+    const threadRootId = normalizeOptionalString(post.root_id);
     const replyToMode = resolveMattermostReplyToMode(account, kind);
     const threadContext = resolveMattermostThreadSessionContext({
       baseSessionKey,
@@ -1488,7 +1529,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const senderName = senderInfo?.username?.trim() || userId;
 
     // Resolve the channel from broadcast or post to route to the correct agent session
-    const channelId = payload.broadcast?.channel_id;
+    const channelId = resolveMattermostReactionChannelId(payload);
     if (!channelId) {
       // Without a channel id we cannot verify DM/group policies — drop to be safe
       logVerboseMessage(
@@ -1634,6 +1675,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     runtime,
     webSocketFactory: opts.webSocketFactory,
     nextSeq: () => seq++,
+    getBotUpdateAt: async () => {
+      const me = await fetchMattermostMe(client);
+      return me.update_at ?? 0;
+    },
     onPosted: async (post, payload) => {
       await debouncer.enqueue({ post, payload });
     },
@@ -1689,7 +1734,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     unregisterInteractions?.();
   }
 
-  if (slashShutdownCleanup) {
-    await slashShutdownCleanup;
+  const slashShutdownCleanupPromise = slashShutdownCleanup;
+  if (slashShutdownCleanupPromise) {
+    await Promise.resolve(slashShutdownCleanupPromise);
   }
 }

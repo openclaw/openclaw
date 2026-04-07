@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 
 const resolveMatrixTargetsMock = vi.hoisted(() => vi.fn(async () => []));
 
@@ -7,7 +7,7 @@ vi.mock("./resolve-targets.js", () => ({
   resolveMatrixTargets: resolveMatrixTargetsMock,
 }));
 
-import { matrixPlugin } from "./channel.js";
+import { matrixResolverAdapter } from "./resolver.js";
 
 describe("matrix resolver adapter", () => {
   beforeEach(() => {
@@ -15,7 +15,7 @@ describe("matrix resolver adapter", () => {
   });
 
   it("forwards accountId into Matrix target resolution", async () => {
-    await matrixPlugin.resolver?.resolveTargets({
+    await matrixResolverAdapter.resolveTargets({
       cfg: { channels: { matrix: {} } },
       accountId: "ops",
       inputs: ["Alice"],

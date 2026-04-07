@@ -2,6 +2,10 @@ import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
@@ -89,6 +93,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
+      .option("--tools <csv>", "Comma-separated tool allow-list (e.g. exec,read,write)")
       .option("--announce", "Announce summary to a chat (subagent-style)", false)
       .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
       .option("--no-deliver", "Disable announce delivery and skip main-session summary")
@@ -143,15 +148,18 @@ export function registerCronAddCommand(cron: Command) {
             return {
               kind: "agentTurn" as const,
               message,
-              model:
-                typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined,
-              thinking:
-                typeof opts.thinking === "string" && opts.thinking.trim()
-                  ? opts.thinking.trim()
-                  : undefined,
+              model: normalizeOptionalString(opts.model),
+              thinking: normalizeOptionalString(opts.thinking),
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
               lightContext: opts.lightContext === true ? true : undefined,
+              toolsAllow:
+                typeof opts.tools === "string" && opts.tools.trim()
+                  ? opts.tools
+                      .split(",")
+                      .map((t: string) => t.trim())
+                      .filter(Boolean)
+                  : undefined,
             };
           })();
 
@@ -165,7 +173,7 @@ export function registerCronAddCommand(cron: Command) {
           const sessionTarget =
             sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
           const isCustomSessionTarget =
-            sessionTarget.toLowerCase().startsWith("session:") &&
+            normalizeLowercaseStringOrEmpty(sessionTarget).startsWith("session:") &&
             sessionTarget.slice(8).trim().length > 0;
           const isIsolatedLikeSessionTarget =
             sessionTarget === "isolated" || sessionTarget === "current" || isCustomSessionTarget;
@@ -242,7 +250,7 @@ export function registerCronAddCommand(cron: Command) {
                     typeof opts.channel === "string" && opts.channel.trim()
                       ? opts.channel.trim()
                       : undefined,
-                  to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  to: normalizeOptionalString(opts.to),
                   accountId,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }
