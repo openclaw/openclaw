@@ -1,6 +1,6 @@
 # PR Monitor Report
 
-**Date:** 2026-04-07 (run 11)
+**Date:** 2026-04-07 (run 12)
 **Contributor:** suboss87
 **Repo:** openclaw/openclaw
 
@@ -121,18 +121,23 @@ The actual PR fix commits are:
 
 ---
 
-## Actions Taken This Run (run 11 — 2026-04-07)
+## Actions Taken This Run (run 12 — 2026-04-07)
 
 **None — blocked by missing GitHub access.**
 
 This run could not query any PR data:
 
-- `gh` CLI: not installed in this environment
-- GitHub MCP server tools (`mcp__github__*`): not loaded (ToolSearch returned no matches)
+- `gh` CLI: not installed in this environment (`command not found`)
+- GitHub MCP server tools (`mcp__github__*`): not loaded (ToolSearch returned no matches for `mcp__github__get_pull_request` or related tools)
 - Unauthenticated GitHub REST API: not attempted (no auth token; system instructions prohibit direct API access)
 
-PR statuses, CI, reviews, and merge-conflict state below are carried over from run 10 (2026-04-06).
+PR statuses, CI, reviews, and merge-conflict state in this report are carried over from run 10 (2026-04-06).
 They may be stale. Human review is required to confirm current state.
+
+**To unblock future monitoring runs**, one of the following must be in place:
+
+1. Install `gh` CLI in the environment and authenticate (`gh auth login`), OR
+2. Register the GitHub MCP server so that `mcp__github__*` tools appear in the session.
 
 ---
 
