@@ -13,6 +13,40 @@ function createGatewayRequestMock() {
 }
 
 describe("createApprovalNativeRouteReporter", () => {
+  it("caps route-notice cleanup timers to five minutes", () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const requestGateway = createGatewayRequestMock();
+      const reporter = createApprovalNativeRouteReporter({
+        handledKinds: new Set(["exec"]),
+        channel: "slack",
+        channelLabel: "Slack",
+        accountId: "default",
+        requestGateway,
+      });
+      reporter.start();
+
+      reporter.observeRequest({
+        approvalKind: "exec",
+        request: {
+          id: "approval-long",
+          request: {
+            command: "echo hi",
+            turnSourceChannel: "slack",
+            turnSourceTo: "channel:C123",
+          },
+          createdAtMs: 0,
+          expiresAtMs: Date.now() + 24 * 60 * 60_000,
+        },
+      });
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5 * 60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not wait on runtimes that start after a request was already observed", async () => {
     const requestGateway = createGatewayRequestMock();
     const lateRuntimeGateway = createGatewayRequestMock();

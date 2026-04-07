@@ -176,4 +176,51 @@ describe("runtimeContexts", () => {
       }),
     );
   });
+
+  it("auto-disposes when a watcher aborts during the registered event", () => {
+    const channel = createRuntimeChannel();
+    const controller = new AbortController();
+    const onEvent = vi.fn((event) => {
+      if (event.type === "registered") {
+        controller.abort();
+      }
+    });
+
+    channel.runtimeContexts.watch({
+      channelId: "matrix",
+      accountId: "default",
+      capability: "approval.native",
+      onEvent,
+    });
+
+    const lease = channel.runtimeContexts.register({
+      channelId: "matrix",
+      accountId: "default",
+      capability: "approval.native",
+      context: { client: "ok" },
+      abortSignal: controller.signal,
+    });
+
+    expect(
+      channel.runtimeContexts.get({
+        channelId: "matrix",
+        accountId: "default",
+        capability: "approval.native",
+      }),
+    ).toBeUndefined();
+    expect(onEvent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "registered",
+      }),
+    );
+    expect(onEvent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "unregistered",
+      }),
+    );
+
+    lease.dispose();
+  });
 });

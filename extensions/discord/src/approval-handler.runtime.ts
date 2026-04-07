@@ -19,6 +19,7 @@ import type {
   PluginApprovalResolvedView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   ExecApprovalActionDescriptor,
@@ -504,18 +505,23 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       if (!resolved) {
         return null;
       }
+      if (plannedTarget.surface === "origin") {
+        const destinationId =
+          typeof plannedTarget.target.threadId === "string" &&
+          plannedTarget.target.threadId.trim().length > 0
+            ? plannedTarget.target.threadId.trim()
+            : plannedTarget.target.to;
+        return {
+          dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
+          target: {
+            discordChannelId: destinationId,
+          },
+        };
+      }
       const { rest, request: discordRequest } = createDiscordClient(
         { token: resolved.context.token, accountId: resolved.accountId },
         cfg,
       );
-      if (plannedTarget.surface === "origin") {
-        return {
-          dedupeKey: plannedTarget.target.to,
-          target: {
-            discordChannelId: plannedTarget.target.to,
-          },
-        };
-      }
       const userId = plannedTarget.target.to;
       const dmChannel = (await discordRequest(
         () =>

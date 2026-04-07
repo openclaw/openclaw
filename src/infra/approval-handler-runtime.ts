@@ -409,6 +409,38 @@ async function finalizeWrappedEntries(params: {
   }
 }
 
+async function unbindWrappedEntries(params: {
+  entries: WrappedPendingEntry[];
+  request: ApprovalRequest;
+  approvalKind: ChannelApprovalKind;
+  baseContext: ChannelApprovalCapabilityHandlerContext;
+  nativeRuntime: ChannelApprovalNativeRuntimeAdapter;
+  log: ReturnType<typeof createSubsystemLogger>;
+}): Promise<void> {
+  if (!params.nativeRuntime.interactions?.unbindPending) {
+    return;
+  }
+  for (const wrapped of params.entries) {
+    if (wrapped.binding === undefined) {
+      continue;
+    }
+    try {
+      await params.nativeRuntime.interactions.unbindPending({
+        ...params.baseContext,
+        entry: wrapped.entry,
+        binding: wrapped.binding,
+        request: params.request,
+        approvalKind: params.approvalKind,
+      });
+    } catch (error) {
+      params.log.error(
+        `failed to unbind stopped native approval entry ` +
+          `approval=${params.request.id}: ${String(error)}`,
+      );
+    }
+  }
+}
+
 async function applyApprovalFinalAction(params: {
   nativeRuntime: ChannelApprovalNativeRuntimeAdapter;
   baseContext: ChannelApprovalCapabilityHandlerContext;
@@ -1019,23 +1051,19 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         });
       },
       onStopped: async () => {
-        if (!nativeRuntime.interactions?.unbindPending || activeEntries.size === 0) {
+        if (activeEntries.size === 0) {
           activeEntries.clear();
           return;
         }
         for (const activeRequest of activeEntries.values()) {
-          for (const wrapped of activeRequest.entries) {
-            if (wrapped.binding === undefined) {
-              continue;
-            }
-            await nativeRuntime.interactions.unbindPending({
-              ...baseContext,
-              entry: wrapped.entry,
-              binding: wrapped.binding,
-              request: activeRequest.request,
-              approvalKind: activeRequest.approvalKind,
-            });
-          }
+          await unbindWrappedEntries({
+            entries: activeRequest.entries,
+            request: activeRequest.request,
+            approvalKind: activeRequest.approvalKind,
+            baseContext,
+            nativeRuntime,
+            log,
+          });
         }
         activeEntries.clear();
       },

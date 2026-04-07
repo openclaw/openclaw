@@ -205,9 +205,18 @@ function buildResolvedApprovalText(view: ResolvedApprovalView): string {
       : view.decision === "allow-always"
         ? "Allowed always"
         : "Denied";
-  return [`Exec approval: ${decisionLabel}`, "", "Command", "```", view.commandText, "```"].join(
-    "\n",
-  );
+  return [
+    `Exec approval: ${decisionLabel}`,
+    "",
+    "Command",
+    buildMarkdownCodeBlock(view.commandText),
+  ].join("\n");
+}
+
+function buildMarkdownCodeBlock(text: string): string {
+  const longestFence = Math.max(...Array.from(text.matchAll(/`+/g), (match) => match[0].length), 0);
+  const fence = "`".repeat(Math.max(3, longestFence + 1));
+  return [fence, text, fence].join("\n");
 }
 
 export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<

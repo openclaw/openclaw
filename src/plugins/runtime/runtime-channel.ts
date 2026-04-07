@@ -277,16 +277,6 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
           return { dispose: () => {} };
         }
         const token = Symbol(normalized.mapKey);
-        runtimeContexts.set(normalized.mapKey, {
-          token,
-          context: params.context,
-          normalizedKey: normalized.normalizedKey,
-        });
-        emitRuntimeContextEvent({
-          type: "registered",
-          key: normalized.normalizedKey,
-          context: params.context,
-        });
         let disposed = false;
         const dispose = () => {
           if (disposed) {
@@ -304,6 +294,23 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
           });
         };
         params.abortSignal?.addEventListener("abort", dispose, { once: true });
+        if (params.abortSignal?.aborted) {
+          dispose();
+          return { dispose };
+        }
+        runtimeContexts.set(normalized.mapKey, {
+          token,
+          context: params.context,
+          normalizedKey: normalized.normalizedKey,
+        });
+        if (disposed) {
+          return { dispose };
+        }
+        emitRuntimeContextEvent({
+          type: "registered",
+          key: normalized.normalizedKey,
+          context: params.context,
+        });
         return { dispose };
       },
       get: <T = unknown>(params: PluginRuntimeChannelContextKey) => {

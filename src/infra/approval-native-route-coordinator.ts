@@ -58,6 +58,7 @@ type RouteNoticeTarget = {
 const activeApprovalRouteRuntimes = new Map<string, ApprovalRouteRuntimeRecord>();
 const pendingApprovalRouteNotices = new Map<string, PendingApprovalRouteNotice>();
 let approvalRouteRuntimeSeq = 0;
+const MAX_APPROVAL_ROUTE_NOTICE_TTL_MS = 5 * 60_000;
 
 function normalizeChannel(value?: string | null): string {
   return value?.trim().toLowerCase() || "";
@@ -79,7 +80,10 @@ function createPendingApprovalRouteNotice(params: {
   approvalKind: ChannelApprovalKind;
   expectedRuntimeIds?: Iterable<string>;
 }): PendingApprovalRouteNotice {
-  const timeoutMs = Math.max(0, params.request.expiresAtMs - Date.now());
+  const timeoutMs = Math.min(
+    Math.max(0, params.request.expiresAtMs - Date.now()),
+    MAX_APPROVAL_ROUTE_NOTICE_TTL_MS,
+  );
   const cleanupTimeout = setTimeout(() => {
     clearPendingApprovalRouteNotice(params.request.id);
   }, timeoutMs);
