@@ -1574,6 +1574,12 @@ export async function startGatewayServer(
                 reason: "reload",
                 activate: true,
               });
+              const nextSharedGatewaySessionGeneration =
+                resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+              // activateRuntimeSecrets(..., { activate: true }) can make getResolvedAuth()
+              // observe the rotated secret before applyHotReload settles; advance current
+              // generation now so fresh reconnects are not rejected during that window.
+              currentSharedGatewaySessionGeneration = nextSharedGatewaySessionGeneration;
               try {
                 await applyHotReload(plan, prepared.config);
               } catch (err) {
@@ -1585,8 +1591,6 @@ export async function startGatewayServer(
                 currentSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
                 throw err;
               }
-              const nextSharedGatewaySessionGeneration =
-                resolveSharedGatewaySessionGenerationForConfig(prepared.config);
               setCurrentSharedGatewaySessionGeneration(nextSharedGatewaySessionGeneration);
               if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
                 disconnectStaleSharedGatewayAuthClients(nextSharedGatewaySessionGeneration);
