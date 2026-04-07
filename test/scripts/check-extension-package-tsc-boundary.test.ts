@@ -4,9 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  acquireBoundaryCheckLock,
   cleanupCanaryArtifactsForExtensions,
+  formatStepFailure,
   installCanaryArtifactCleanup,
+  resolveBoundaryCheckLockPath,
   resolveCanaryArtifactPaths,
+  runNodeStepAsync,
   runNodeStepsWithConcurrency,
 } from "../../scripts/check-extension-package-tsc-boundary.mjs";
 
@@ -78,6 +82,61 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(fs.existsSync(demoA.tsconfigPath)).toBe(false);
     expect(fs.existsSync(demoB.canaryPath)).toBe(false);
     expect(fs.existsSync(demoB.tsconfigPath)).toBe(false);
+  });
+
+  it("blocks concurrent boundary checks in the same checkout", () => {
+    const { rootDir } = createTempExtensionRoot();
+    const processObject = new EventEmitter();
+    const release = acquireBoundaryCheckLock({ processObject, rootDir });
+
+    expect(() => acquireBoundaryCheckLock({ rootDir })).toThrow(
+      "another extension package boundary check is already running",
+    );
+
+    release();
+
+    const lockPath = resolveBoundaryCheckLockPath(rootDir);
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("summarizes long failure output with the useful tail", () => {
+    const stdout = Array.from({ length: 45 }, (_, index) => `stdout ${index + 1}`).join("\n");
+    const stderr = Array.from({ length: 3 }, (_, index) => `stderr ${index + 1}`).join("\n");
+
+    const message = formatStepFailure("demo-plugin", {
+      stdout,
+      stderr,
+      note: "demo-plugin timed out after 5000ms",
+    });
+    const messageLines = message.split("\n");
+
+    expect(message).toContain("demo-plugin");
+    expect(message).toContain("[... 5 earlier lines omitted ...]");
+    expect(message).toContain("stdout 45");
+    expect(messageLines).not.toContain("stdout 1");
+    expect(message).toContain("stderr:\nstderr 1\nstderr 2\nstderr 3");
+    expect(message).toContain("demo-plugin timed out after 5000ms");
+  });
+
+  it("keeps full failure output on the thrown error for canary detection", async () => {
+    await expect(
+      runNodeStepAsync(
+        "demo-plugin",
+        [
+          "--eval",
+          [
+            "console.log('src/cli/acp-cli.ts');",
+            "for (let index = 1; index <= 45; index += 1) console.log(`stdout ${index}`);",
+            "console.error('TS6059');",
+            "process.exit(2);",
+          ].join(" "),
+        ],
+        5_000,
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("[... 6 earlier lines omitted ...]"),
+      fullOutput: expect.stringContaining("src/cli/acp-cli.ts"),
+    });
   });
 
   it("aborts concurrent sibling steps after the first failure", async () => {

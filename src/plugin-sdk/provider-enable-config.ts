@@ -1,8 +1,20 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 
-export type PluginEnableResult = {
-  config: OpenClawConfig;
+type ProviderPluginConfig = {
+  enabled?: boolean;
+};
+
+type ProviderEnableConfigCarrier = {
+  plugins?: {
+    enabled?: boolean;
+    deny?: string[];
+    allow?: string[];
+    entries?: Record<string, ProviderPluginConfig | undefined>;
+  };
+};
+
+export type PluginEnableResult<TConfig extends ProviderEnableConfigCarrier> = {
+  config: TConfig;
   enabled: boolean;
   reason?: string;
 };
@@ -11,7 +23,10 @@ export type PluginEnableResult = {
  * Provider contract surfaces only ever enable provider plugins, so they do not
  * need the built-in channel normalization path from plugins/enable.ts.
  */
-export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): PluginEnableResult {
+export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier>(
+  cfg: TConfig,
+  pluginId: string,
+): PluginEnableResult<TConfig> {
   if (cfg.plugins?.enabled === false) {
     return { config: cfg, enabled: false, reason: "plugins disabled" };
   }
@@ -19,7 +34,7 @@ export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): Plu
     return { config: cfg, enabled: false, reason: "blocked by denylist" };
   }
 
-  let next: OpenClawConfig = {
+  let next = {
     ...cfg,
     plugins: {
       ...cfg.plugins,
@@ -31,7 +46,7 @@ export function enablePluginInConfig(cfg: OpenClawConfig, pluginId: string): Plu
         },
       },
     },
-  };
+  } as TConfig;
   next = ensurePluginAllowlisted(next, pluginId);
   return { config: next, enabled: true };
 }
