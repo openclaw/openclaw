@@ -33,6 +33,7 @@ export default definePluginEntry({
       if (!baseUrl) {
         baseUrl = await ctx.prompter.text({
           message: "Enter Databricks Workspace Base URL (e.g. https://dbc-xxxx.cloud.databricks.com)",
+          validate: (value) => value.trim().length === 0 ? "Databricks Workspace Base URL is required." : undefined,
         });
       }
       if (!baseUrl) return originalRun(ctx);
