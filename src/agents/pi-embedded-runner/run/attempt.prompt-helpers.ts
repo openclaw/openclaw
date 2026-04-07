@@ -10,6 +10,11 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import {
+  isAssistantConclusionFreshnessGateEnabled,
+  resolveAssistantConclusionFreshnessGate,
+  summarizeAssistantConclusionFreshnessGateLog,
+} from "../../assistant-conclusion-freshness-gate.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
@@ -38,7 +43,22 @@ export async function resolvePromptBuildHookResult(params: {
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  freshnessGateEnv?: Record<string, string | undefined>;
 }): Promise<PluginHookBeforePromptBuildResult> {
+  const freshnessGateEnabled = isAssistantConclusionFreshnessGateEnabled(
+    params.freshnessGateEnv ?? process.env,
+  );
+  const freshnessGateResult = freshnessGateEnabled
+    ? resolveAssistantConclusionFreshnessGate({
+        prompt: params.prompt,
+        messages: params.messages,
+      })
+    : { freshnessState: "not_high_risk" as const };
+  log.debug(
+    freshnessGateEnabled
+      ? summarizeAssistantConclusionFreshnessGateLog(freshnessGateResult)
+      : "assistant freshness gate: disabled",
+  );
   const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
     ? await params.hookRunner
         .runBeforePromptBuild(
@@ -78,6 +98,7 @@ export async function resolvePromptBuildHookResult(params: {
       legacyResult?.prependContext,
     ]),
     prependSystemContext: joinPresentTextSegments([
+      freshnessGateResult.prependSystemContext,
       promptBuildResult?.prependSystemContext,
       legacyResult?.prependSystemContext,
     ]),
