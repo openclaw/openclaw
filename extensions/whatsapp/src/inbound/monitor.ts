@@ -152,11 +152,17 @@ export async function monitorWebInbox(options: {
       // onMessage completes — without this ordering, Case 2 would fire
       // a "already processed" notification while the agent is still handling
       // the original body.
-      await options.onMessage(messageToDeliver);
-      for (const entry of entries) {
-        if (entry.id) {
-          pendingMessageIds.delete(entry.id);
-          rememberProcessedId(entry.id);
+      // Use try/finally so bookkeeping always runs even if onMessage rejects.
+      // Without this, a failed flush leaves IDs stuck in pendingMessageIds
+      // indefinitely, causing stale entries to misclassify later edits.
+      try {
+        await options.onMessage(messageToDeliver);
+      } finally {
+        for (const entry of entries) {
+          if (entry.id) {
+            pendingMessageIds.delete(entry.id);
+            rememberProcessedId(entry.id);
+          }
         }
       }
     },
@@ -550,8 +556,13 @@ export async function monitorWebInbox(options: {
       const msgId = key.id;
       const remoteJid = key.remoteJid;
 
-      // Only handle edits/revocations originating from the user (not fromMe = bot's own messages).
-      if (!msgId || !remoteJid || key.fromMe) {
+      // Skip messages with no id or remoteJid.
+      // Do NOT skip fromMe unconditionally: in self-chat mode the owner's own
+      // messages have fromMe=true but should still be tracked for edits.
+      // Instead, skip only outbound bot messages that were sent by sendTrackedMessage
+      // (those are already filtered by the rememberRecentOutboundMessage dedupe path
+      // in normalizeInboundMessage and will not be in pendingMessageIds).
+      if (!msgId || !remoteJid) {
         continue;
       }
 
