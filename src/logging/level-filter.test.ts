@@ -1,11 +1,13 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { readLoggingConfigMock } = vi.hoisted(() => ({
+const { readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } = vi.hoisted(() => ({
   readLoggingConfigMock: vi.fn(() => undefined),
+  shouldSkipMutatingLoggingConfigReadMock: vi.fn(() => false),
 }));
 
 vi.mock("./config.js", () => ({
   readLoggingConfig: readLoggingConfigMock,
+  shouldSkipMutatingLoggingConfigRead: shouldSkipMutatingLoggingConfigReadMock,
 }));
 
 vi.mock("./node-require.js", () => ({
@@ -24,6 +26,8 @@ beforeEach(() => {
   delete process.env.OPENCLAW_TEST_FILE_LOG;
   delete process.env.OPENCLAW_LOG_LEVEL;
   readLoggingConfigMock.mockClear();
+  shouldSkipMutatingLoggingConfigReadMock.mockReset();
+  shouldSkipMutatingLoggingConfigReadMock.mockReturnValue(false);
   logging.resetLogger();
   logging.setLoggerOverride(null);
 });
@@ -106,5 +110,19 @@ describe("getChildLogger minLevel inheritance", () => {
     const child = logging.getChildLogger({ component: "test" });
     expect(child.settings.minLevel).not.toBe(0);
     expect(child.settings.minLevel).toBe(logging.levelToMinLevel("fatal"));
+  });
+
+  it("pino child logger propagates the parent minLevel", () => {
+    logging.setLoggerOverride({ level: "error" });
+    const base = logging.getLogger();
+    const getSubLoggerSpy = vi.spyOn(base, "getSubLogger");
+
+    logging.toPinoLikeLogger(base, "info").child({ component: "test" });
+
+    expect(getSubLoggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        minLevel: logging.levelToMinLevel("error"),
+      }),
+    );
   });
 });
