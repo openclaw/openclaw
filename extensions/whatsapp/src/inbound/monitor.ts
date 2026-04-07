@@ -450,6 +450,7 @@ export async function monitorWebInbox(options: {
       selfLid: self.lid ?? undefined,
       selfE164: self.e164 ?? undefined,
       fromMe: Boolean(msg.key?.fromMe),
+      isAccountOwnerMessage: inbound.access.isAccountOwnerMessage,
       location: enriched.location ?? undefined,
       sendComposing,
       reply,
