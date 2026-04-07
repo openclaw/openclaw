@@ -226,8 +226,7 @@ describe("gateway node pairing authorization", () => {
           (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
         );
         if (
-          JSON.stringify(node?.commands?.toSorted() ?? []) ===
-          JSON.stringify(["canvas.snapshot", "system.run"])
+          JSON.stringify(node?.commands?.toSorted() ?? []) === JSON.stringify(["canvas.snapshot"])
         ) {
           break;
         }
@@ -300,10 +299,7 @@ describe("gateway node pairing authorization", () => {
         const node = lastNodes.find(
           (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
         );
-        if (
-          JSON.stringify(node?.commands?.toSorted() ?? []) ===
-          JSON.stringify(["canvas.snapshot", "system.run"])
-        ) {
+        if (JSON.stringify(node?.commands?.toSorted() ?? []) === JSON.stringify([])) {
           break;
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
