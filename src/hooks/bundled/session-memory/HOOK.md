@@ -24,29 +24,31 @@ When you run `/new` or `/reset` to start a fresh session:
 
 1. **Finds the previous session** - Uses the pre-reset session entry to locate the correct transcript
 2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
-3. **Generates descriptive slug** - Uses LLM to create a meaningful filename slug based on conversation content
-4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-slug.md`
+3. **Generates descriptive slug** - Uses LLM to create a meaningful session heading based on conversation content
+4. **Saves to memory** - Appends to the canonical daily file at `<workspace>/memory/YYYY-MM-DD.md`
 
 ## Output Format
 
 Memory files are created with the following format:
 
 ```markdown
-# Session: 2026-01-16 14:30:00 UTC
+## Session: 2026-01-16 14:30:00 UTC — vendor-pitch
 
 - **Session Key**: agent:main:main
 - **Session ID**: abc123def456
 - **Source**: telegram
+
+### Conversation Summary
+
+user: ...
+assistant: ...
 ```
 
-## Filename Examples
+Multiple `/reset` calls on the same day append to the same daily file, separated by `---`.
 
-The LLM generates descriptive slugs based on your conversation:
+## Filename Convention
 
-- `2026-01-16-vendor-pitch.md` - Discussion about vendor evaluation
-- `2026-01-16-api-design.md` - API architecture planning
-- `2026-01-16-bug-fix.md` - Debugging session
-- `2026-01-16-1430.md` - Fallback timestamp if slug generation fails
+All session memory files use the canonical daily filename `YYYY-MM-DD.md`, matching the rest of the memory system (flush plan, AGENTS templates, post-compaction context). The LLM-generated slug appears in the section heading for descriptive context. If slug generation fails, the heading uses an `HHMM` timestamp fallback.
 
 ## Requirements
 

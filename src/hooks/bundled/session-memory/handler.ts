@@ -12,6 +12,7 @@ import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
+import { resolveUserTimezone } from "../../../agents/date-time.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { writeFileWithinRoot } from "../../../infra/fs-safe.js";
@@ -27,6 +28,22 @@ import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+
+function formatDateStampInTimezone(nowMs: number, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(nowMs));
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  if (year && month && day) {
+    return `${year}-${month}-${day}`;
+  }
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
 
 function resolveDisplaySessionKey(params: {
   cfg?: OpenClawConfig;
@@ -80,9 +97,11 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Get today's date for filename
+    // Get today's date for filename, respecting the user's configured timezone
+    // so the date stamp matches flush-plan and post-compaction context.
     const now = new Date(event.timestamp);
-    const dateStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
+    const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
+    const dateStr = formatDateStampInTimezone(now.getTime(), userTimezone);
 
     // Generate descriptive slug from session using LLM
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
@@ -165,8 +184,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
       log.debug("Using fallback timestamp slug", { slug });
     }
 
-    // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
+    // Use canonical daily filename (YYYY-MM-DD.md) so post-compaction context
+    // and AGENTS templates can locate the file without slug awareness.
+    const filename = `${dateStr}.md`;
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
@@ -180,9 +200,9 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
-    // Build Markdown entry
+    // Build Markdown entry (include slug in heading for descriptive context)
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr} UTC`,
+      `## Session: ${dateStr} ${timeStr} UTC — ${slug}`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
@@ -192,16 +212,27 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Include conversation content if available
     if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+      entryParts.push("### Conversation Summary", "", sessionContent, "");
     }
 
     const entry = entryParts.join("\n");
+
+    // Append to existing daily file so multiple /reset calls in the same day
+    // accumulate in one canonical file instead of creating orphaned slug files.
+    const rawExisting = await fs.readFile(memoryFilePath, "utf-8").catch((err) => {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    });
+    const existingContent = rawExisting?.trim() || null;
+    const finalContent = existingContent ? `${existingContent}\n\n---\n\n${entry}` : entry;
 
     // Write under memory root with alias-safe file validation.
     await writeFileWithinRoot({
       rootDir: memoryDir,
       relativePath: filename,
-      data: entry,
+      data: finalContent,
       encoding: "utf-8",
     });
     log.debug("Memory file written successfully");

@@ -247,6 +247,67 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Captured before reset");
   });
 
+  it("writes canonical YYYY-MM-DD.md filename without slug suffix", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Check filename convention" },
+      { role: "assistant", content: "Daily file should match YYYY-MM-DD.md" },
+    ]);
+    const { tempDir, files } = await runNewWithPreviousSession({ sessionContent });
+
+    expect(files.length).toBe(1);
+    // Filename must be pure YYYY-MM-DD.md — no slug suffix
+    expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}\.md$/);
+
+    // Slug should appear inside the content as a section heading instead (HHMM fallback in test env)
+    const content = await fs.readFile(path.join(tempDir, "memory", files[0]), "utf-8");
+    expect(content).toMatch(/— \d{4}/); // HHMM timestamp slug in heading
+  });
+
+  it("appends to existing daily file on multiple resets", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // First reset
+    const sessionFile1 = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "session-1.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "First session topic" },
+        { role: "assistant", content: "First session reply" },
+      ]),
+    });
+    await runNewWithPreviousSessionEntry({
+      tempDir,
+      previousSessionEntry: { sessionId: "sess-1", sessionFile: sessionFile1 },
+    });
+
+    // Second reset
+    const sessionFile2 = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "session-2.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Second session topic" },
+        { role: "assistant", content: "Second session reply" },
+      ]),
+    });
+    await runNewWithPreviousSessionEntry({
+      tempDir,
+      previousSessionEntry: { sessionId: "sess-2", sessionFile: sessionFile2 },
+    });
+
+    const memoryDir = path.join(tempDir, "memory");
+    const files = await fs.readdir(memoryDir);
+    // Both resets should land in a single daily file
+    expect(files.length).toBe(1);
+
+    const content = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
+    // Both sessions should be present, separated by ---
+    expect(content).toContain("user: First session topic");
+    expect(content).toContain("user: Second session topic");
+    expect(content).toContain("---");
+  });
+
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");
