@@ -246,12 +246,17 @@ export function createChannelNativeApprovalRuntime<
     eventKinds: adapter.eventKinds,
     isConfigured: adapter.isConfigured,
     shouldHandle: (request) => {
+      const approvalKind = resolveApprovalKind(request);
+      routeReporter.observeRequest({
+        approvalKind,
+        request,
+      });
       const shouldHandle = adapter.shouldHandle(request);
       if (shouldHandle) {
         return shouldHandle;
       }
       void routeReporter.reportSkipped({
-        approvalKind: resolveApprovalKind(request),
+        approvalKind,
         request,
       });
       return false;

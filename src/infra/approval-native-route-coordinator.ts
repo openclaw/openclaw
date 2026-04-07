@@ -76,6 +76,7 @@ function clearPendingApprovalRouteNotice(approvalId: string): void {
 function createPendingApprovalRouteNotice(params: {
   request: ApprovalRequest;
   approvalKind: ChannelApprovalKind;
+  expectedRuntimeIds?: Iterable<string>;
 }): PendingApprovalRouteNotice {
   const timeoutMs = Math.max(0, params.request.expiresAtMs - Date.now());
   const cleanupTimeout = setTimeout(() => {
@@ -85,13 +86,10 @@ function createPendingApprovalRouteNotice(params: {
   return {
     request: params.request,
     approvalKind: params.approvalKind,
-    // Snapshot the active native runtimes that handle this approval kind so we
-    // emit one notice only after every sibling runtime has reported.
-    expectedRuntimeIds: new Set(
-      Array.from(activeApprovalRouteRuntimes.values())
-        .filter((runtime) => runtime.handledKinds.has(params.approvalKind))
-        .map((runtime) => runtime.runtimeId),
-    ),
+    // Snapshot siblings at first observation time so already-running runtimes
+    // can still aggregate one notice, while late-starting runtimes that cannot
+    // replay old gateway events never block the quorum.
+    expectedRuntimeIds: new Set(params.expectedRuntimeIds ?? []),
     reports: new Map(),
     cleanupTimeout,
     finalized: false,
@@ -272,6 +270,7 @@ export function createApprovalNativeRouteReporter(params: {
       createPendingApprovalRouteNotice({
         request: payload.request,
         approvalKind: payload.approvalKind,
+        expectedRuntimeIds: [runtimeId],
       });
     entry.expectedRuntimeIds.add(runtimeId);
     entry.reports.set(runtimeId, {
@@ -289,6 +288,22 @@ export function createApprovalNativeRouteReporter(params: {
   };
 
   return {
+    observeRequest(payload: { approvalKind: ChannelApprovalKind; request: ApprovalRequest }): void {
+      if (!registered || !params.handledKinds.has(payload.approvalKind)) {
+        return;
+      }
+      const entry =
+        pendingApprovalRouteNotices.get(payload.request.id) ??
+        createPendingApprovalRouteNotice({
+          request: payload.request,
+          approvalKind: payload.approvalKind,
+          expectedRuntimeIds: Array.from(activeApprovalRouteRuntimes.values())
+            .filter((runtime) => runtime.handledKinds.has(payload.approvalKind))
+            .map((runtime) => runtime.runtimeId),
+        });
+      entry.expectedRuntimeIds.add(runtimeId);
+      pendingApprovalRouteNotices.set(payload.request.id, entry);
+    },
     start(): void {
       if (registered) {
         return;
