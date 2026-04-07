@@ -2048,6 +2048,7 @@ export async function runEmbeddedAttempt(
 
       // Copy so hook handlers cannot mutate the original via shared reference.
       let finalAssistantTexts = [...assistantTexts];
+      let wasOutputModifiedByPlugin = false;
 
       const toolMetasNormalized = toolMetas
         .filter(
@@ -2111,7 +2112,7 @@ export async function runEmbeddedAttempt(
               provider: params.provider,
               model: params.modelId,
               assistantTexts,
-              lastAssistant,
+              lastAssistant: lastAssistant ? { ...lastAssistant } : lastAssistant,
               usage: attemptUsage,
             },
             {
@@ -2128,6 +2129,7 @@ export async function runEmbeddedAttempt(
 
           if (llmOutputResult?.assistantTexts !== undefined) {
             finalAssistantTexts = llmOutputResult.assistantTexts;
+            wasOutputModifiedByPlugin = true;
             // Strip text, reasoning, and error content from lastAssistant to
             // prevent downstream payload construction from leaking the original
             // model output. This includes reasoning blocks (reasoning mode) and
@@ -2181,6 +2183,7 @@ export async function runEmbeddedAttempt(
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
+        wasOutputModifiedByPlugin: wasOutputModifiedByPlugin || undefined,
         yieldDetected: yieldDetected || undefined,
       };
     } finally {

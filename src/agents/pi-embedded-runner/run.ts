@@ -662,7 +662,8 @@ export async function runEmbeddedPiAgent(
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
             attempt.toolMetas.length === 0 &&
-            attempt.assistantTexts.length === 0;
+            attempt.assistantTexts.length === 0 &&
+            !attempt.wasOutputModifiedByPlugin;
           const requestedSelection = shouldSwitchToLiveModel({
             cfg: params.config,
             sessionKey: params.sessionKey,
