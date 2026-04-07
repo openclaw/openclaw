@@ -39,6 +39,9 @@ export async function createOperatorApprovalsGatewayClient(
     ? await loadGatewayTlsRuntime(params.config.gateway?.tls)
     : undefined;
   const remoteTlsFingerprint =
+    // Env overrides may still inherit configured remote TLS pinning for private cert deployments.
+    // CLI overrides remain explicit-only and intentionally skip config remote TLS to avoid
+    // accidentally pinning against caller-supplied target URLs.
     isRemoteMode && gatewayUrlOverrideSource !== "cli"
       ? trimToUndefined(params.config.gateway?.remote?.tlsFingerprint)
       : undefined;
