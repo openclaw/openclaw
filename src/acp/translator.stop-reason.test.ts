@@ -12,9 +12,10 @@ type PendingPromptHarness = {
   runId: string;
 };
 
-async function createPendingPromptHarness(): Promise<PendingPromptHarness> {
+async function createPendingPromptHarness(
+  sessionKey = "agent:main:main",
+): Promise<PendingPromptHarness> {
   const sessionId = "session-1";
-  const sessionKey = "agent:main:main";
 
   let runId: string | undefined;
   const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
@@ -88,6 +89,23 @@ describe("acp translator stop reason mapping", () => {
         sessionKey: "agent:main:main",
         seq: 1,
         state: "error",
+      }),
+    );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  });
+
+  it("matches canonical gateway session keys for ACP bridge sessions", async () => {
+    const { agent, promptPromise, runId } = await createPendingPromptHarness(
+      "acp-bridge:bridge-session",
+    );
+
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey: "agent:main:acp-bridge:bridge-session",
+        seq: 1,
+        state: "final",
       }),
     );
 

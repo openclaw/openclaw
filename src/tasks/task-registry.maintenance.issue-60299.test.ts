@@ -136,6 +136,27 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
   });
 
+  it("marks active cron tasks lost when their child session is terminal", async () => {
+    const childSessionKey = "agent:main:main";
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-child",
+      childSessionKey,
+    });
+
+    const { mod, currentTasks } = await loadMaintenanceModule({
+      tasks: [task],
+      activeCronJobIds: ["cron-job-terminal-child"],
+      sessionStore: { [childSessionKey]: { status: "done", endedAt: Date.now() - 1_000 } },
+    });
+
+    expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+      error: "backing session missing",
+    });
+  });
+
   it("marks chat-backed cli tasks lost after the owning run context disappears", async () => {
     const channelKey = "agent:main:slack:channel:C1234567890";
     const task = makeStaleTask({

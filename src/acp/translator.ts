@@ -408,6 +408,24 @@ function buildSystemProvenanceReceipt(params: {
   ].join("\n");
 }
 
+function stripAgentSessionKeyPrefix(sessionKey: string): string {
+  const raw = sessionKey.trim();
+  const parts = raw.split(":").filter(Boolean);
+  if (parts.length >= 3 && parts[0]?.toLowerCase() === "agent") {
+    return parts.slice(2).join(":");
+  }
+  return raw;
+}
+
+function isSameGatewaySessionKey(left: string, right: string): boolean {
+  const normalizedLeft = left.trim().toLowerCase();
+  const normalizedRight = right.trim().toLowerCase();
+  if (normalizedLeft === normalizedRight) {
+    return true;
+  }
+  return stripAgentSessionKeyPrefix(normalizedLeft) === stripAgentSessionKeyPrefix(normalizedRight);
+}
+
 export class AcpGatewayAgent implements Agent {
   private connection: AgentSideConnection;
   private gateway: GatewayClient;
@@ -522,7 +540,7 @@ export class AcpGatewayAgent implements Agent {
     const meta = parseSessionMeta(params._meta);
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
-      fallbackKey: `acp:${sessionId}`,
+      fallbackKey: `acp-bridge:${sessionId}`,
     });
 
     const session = this.sessionStore.createSession({
@@ -1038,7 +1056,7 @@ export class AcpGatewayAgent implements Agent {
 
   private findPendingBySessionKey(sessionKey: string, runId?: string): PendingPrompt | undefined {
     for (const pending of this.pendingPrompts.values()) {
-      if (pending.sessionKey !== sessionKey) {
+      if (!isSameGatewaySessionKey(pending.sessionKey, sessionKey)) {
         continue;
       }
       if (runId && pending.idempotencyKey !== runId) {
