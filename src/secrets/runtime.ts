@@ -164,6 +164,16 @@ function mergeSecretsRuntimeEnv(
   return merged;
 }
 
+function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
+  const entries = config.plugins?.entries;
+  return (
+    !!entries &&
+    typeof entries === "object" &&
+    !Array.isArray(entries) &&
+    Object.keys(entries).length > 0
+  );
+}
+
 export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -186,7 +196,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const resolvedConfig = structuredClone(params.config);
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
-    (await resolveLoadablePluginOrigins({ config: sourceConfig, env: runtimeEnv }));
+    (hasConfiguredPluginEntries(sourceConfig)
+      ? await resolveLoadablePluginOrigins({ config: sourceConfig, env: runtimeEnv })
+      : new Map<string, PluginOrigin>());
   const context = createResolverContext({
     sourceConfig,
     env: runtimeEnv,

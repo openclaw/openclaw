@@ -357,8 +357,46 @@ describe("control UI routing", () => {
     if (!container) {
       return;
     }
-    expect(container.scrollTop).toBeGreaterThanOrEqual(0);
-    expect(container.textContent).toContain("Line 59");
+    let finalScrollTop = 0;
+    Object.defineProperty(container, "clientHeight", {
+      value: 180,
+      configurable: true,
+    });
+    Object.defineProperty(container, "scrollHeight", {
+      value: 960,
+      configurable: true,
+    });
+    Object.defineProperty(container, "scrollTop", {
+      configurable: true,
+      get: () => finalScrollTop,
+      set: (value: number) => {
+        finalScrollTop = value;
+      },
+    });
+    Object.defineProperty(container, "scrollTo", {
+      configurable: true,
+      value: ({ top }: { top: number }) => {
+        finalScrollTop = top;
+      },
+    });
+    const targetScrollTop = container.scrollHeight;
+    expect(targetScrollTop).toBeGreaterThan(container.clientHeight);
+    app.chatMessages = [
+      ...app.chatMessages,
+      {
+        role: "assistant",
+        content: `Line 60 - ${"x".repeat(200)}`,
+        timestamp: Date.now() + 60,
+      },
+    ];
+    await app.updateComplete;
+    for (let i = 0; i < 10; i++) {
+      if (container.scrollTop === targetScrollTop) {
+        break;
+      }
+      await nextFrame();
+    }
+    expect(container.scrollTop).toBe(targetScrollTop);
   });
 
   it("hydrates token from query params and strips them", async () => {

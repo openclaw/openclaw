@@ -1,6 +1,7 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
@@ -164,11 +165,12 @@ export async function loadModelCatalog(params?: {
       if (supplemental.length > 0) {
         const seen = new Set(
           models.map(
-            (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+            (entry) =>
+              `${normalizeLowercaseStringOrEmpty(entry.provider)}::${normalizeLowercaseStringOrEmpty(entry.id)}`,
           ),
         );
         for (const entry of supplemental) {
-          const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+          const key = `${normalizeLowercaseStringOrEmpty(entry.provider)}::${normalizeLowercaseStringOrEmpty(entry.id)}`;
           if (seen.has(key)) {
             continue;
           }
@@ -226,10 +228,10 @@ export function findModelInCatalog(
   modelId: string,
 ): ModelCatalogEntry | undefined {
   const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModelId = modelId.toLowerCase().trim();
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   return catalog.find(
     (entry) =>
       normalizeProviderId(entry.provider) === normalizedProvider &&
-      entry.id.toLowerCase() === normalizedModelId,
+      normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId,
   );
 }

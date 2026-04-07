@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveAuthStatePath, resolveAuthStorePath } from "./auth-profiles/paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -10,6 +10,11 @@ import {
   saveAuthProfileStore,
 } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+
+vi.mock("./auth-profiles/external-auth.js", () => ({
+  overlayExternalAuthProfiles: <T>(store: T) => store,
+  shouldPersistExternalAuthProfile: () => true,
+}));
 
 describe("saveAuthProfileStore", () => {
   it("strips plaintext when keyRef/tokenRef are present", async () => {

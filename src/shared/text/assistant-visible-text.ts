@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import {
@@ -133,7 +134,7 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
     cursor += 1;
   }
 
-  const tagName = text.slice(nameStart, cursor).toLowerCase();
+  const tagName = normalizeLowercaseStringOrEmpty(text.slice(nameStart, cursor));
   if (!TOOL_CALL_TAG_NAMES.has(tagName) || !isToolCallBoundary(text[cursor])) {
     return null;
   }
@@ -391,7 +392,7 @@ export function stripDowngradedToolCallText(text: string): string {
       while (index < input.length && (input[index] === " " || input[index] === "\t")) {
         index += 1;
       }
-      if (input.slice(index, index + 9).toLowerCase() === "arguments") {
+      if (normalizeLowercaseStringOrEmpty(input.slice(index, index + 9)) === "arguments") {
         index += 9;
         if (input[index] === ":") {
           index += 1;

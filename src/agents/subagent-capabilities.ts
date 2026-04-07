@@ -2,6 +2,7 @@ import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
@@ -19,18 +20,12 @@ type SessionCapabilityEntry = {
 };
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(value);
   return SUBAGENT_SESSION_ROLES.find((entry) => entry === trimmed);
 }
 
 function normalizeSubagentControlScope(value: unknown): SubagentControlScope | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(value);
   return SUBAGENT_CONTROL_SCOPES.find((entry) => entry === trimmed);
 }
 

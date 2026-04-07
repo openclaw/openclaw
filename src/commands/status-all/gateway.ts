@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const raw = await fs.readFile(filePath, "utf8").catch(() => "");
@@ -117,7 +118,7 @@ export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number 
         const code = parsed?.error?.code?.trim() || null;
         const msg = parsed?.error?.message?.trim() || null;
         const msgShort = msg
-          ? msg.toLowerCase().includes("signing in again")
+          ? normalizeLowercaseStringOrEmpty(msg).includes("signing in again")
             ? "re-auth required"
             : shorten(msg, 52)
           : null;

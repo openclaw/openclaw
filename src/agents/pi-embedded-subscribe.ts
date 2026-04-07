@@ -113,6 +113,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingMediaUrls: new Map(),
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
+    deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
   };
   const usageTotals = {
@@ -687,6 +688,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
+    state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     resetAssistantMessageState(0);
   };

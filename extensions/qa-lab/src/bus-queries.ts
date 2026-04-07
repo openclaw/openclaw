@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   QaBusConversation,
   QaBusEvent,
@@ -103,7 +104,7 @@ export function searchQaBusMessages(params: {
 }) {
   const accountId = normalizeAccountId(params.input.accountId);
   const limit = Math.max(1, Math.min(params.input.limit ?? 20, 100));
-  const query = params.input.query?.trim().toLowerCase();
+  const query = normalizeOptionalLowercaseString(params.input.query);
   return Array.from(params.messages.values())
     .filter((message) => message.accountId === accountId)
     .filter((message) =>
@@ -112,7 +113,9 @@ export function searchQaBusMessages(params: {
     .filter((message) =>
       params.input.threadId ? message.threadId === params.input.threadId : true,
     )
-    .filter((message) => (query ? message.text.toLowerCase().includes(query) : true))
+    .filter((message) =>
+      query ? normalizeOptionalLowercaseString(message.text)?.includes(query) === true : true,
+    )
     .slice(-limit)
     .map((message) => cloneMessage(message));
 }

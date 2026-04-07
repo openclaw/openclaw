@@ -3,6 +3,7 @@ import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -1081,7 +1082,7 @@ export async function runSingleChannelSecretStep(params: {
     return {
       cfg: params.applyUseEnv ? await params.applyUseEnv(params.cfg) : params.cfg,
       action: result.action,
-      resolvedValue: params.envValue?.trim() || undefined,
+      resolvedValue: normalizeOptionalString(params.envValue),
     };
   }
 

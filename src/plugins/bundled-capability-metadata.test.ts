@@ -12,6 +12,7 @@ describe("bundled capability metadata", () => {
     const expected = listBundledPluginMetadata()
       .map(({ manifest }) => ({
         pluginId: manifest.id,
+        cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
         providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
         speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders, (value) =>
           value.trim(),
@@ -50,6 +51,7 @@ describe("bundled capability metadata", () => {
       }))
       .filter(
         (entry) =>
+          entry.cliBackendIds.length > 0 ||
           entry.providerIds.length > 0 ||
           entry.speechProviderIds.length > 0 ||
           entry.realtimeTranscriptionProviderIds.length > 0 ||

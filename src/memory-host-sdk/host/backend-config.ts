@@ -13,6 +13,7 @@ import type {
   MemoryQmdSearchMode,
 } from "../../config/types.memory.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 
@@ -107,7 +108,7 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
 };
 
 function sanitizeName(input: string): string {
-  const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
   const trimmed = lower.replace(/^-+|-+$/g, "");
   return trimmed || "collection";
 }

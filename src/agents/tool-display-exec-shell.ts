@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 type PreambleResult = {
   command: string;
   chdirPath?: string;
@@ -82,7 +84,7 @@ export function binaryName(token: string | undefined): string | undefined {
   }
   const cleaned = stripOuterQuotes(token) ?? token;
   const segment = cleaned.split(/[/]/).at(-1) ?? cleaned;
-  return segment.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(segment);
 }
 
 export function optionValue(words: string[], names: string[]): string | undefined {

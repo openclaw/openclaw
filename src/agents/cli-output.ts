@@ -1,4 +1,5 @@
 import type { CliBackendConfig } from "../config/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 
 type CliUsage = {
@@ -23,7 +24,7 @@ export type CliStreamingDelta = {
 };
 
 function isClaudeCliProvider(providerId: string): boolean {
-  return providerId.trim().toLowerCase() === "claude-cli";
+  return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
@@ -397,7 +398,7 @@ export function parseCliJsonl(
 
       const item = isRecord(parsed.item) ? parsed.item : null;
       if (item && typeof item.text === "string") {
-        const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
+        const type = normalizeLowercaseStringOrEmpty(item.type);
         if (!type || type.includes("message")) {
           texts.push(item.text);
         }

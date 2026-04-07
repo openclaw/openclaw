@@ -13,6 +13,7 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "../../utils/mask-api-key.js";
 
@@ -196,7 +197,7 @@ export const resolveAuthLabel = async (
   if (envKey) {
     const isOAuthEnv =
       envKey.source.includes("ANTHROPIC_OAUTH_TOKEN") ||
-      envKey.source.toLowerCase().includes("oauth");
+      normalizeLowercaseStringOrEmpty(envKey.source).includes("oauth");
     const label = isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey);
     return { label, source: mode === "verbose" ? envKey.source : "" };
   }

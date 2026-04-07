@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { CronDeliveryStatus, CronRunStatus, CronRunTelemetry } from "./types.js";
 
 export type CronRunLogEntry = {
@@ -239,7 +243,7 @@ function normalizeDeliveryStatuses(opts?: {
 }
 
 function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunLogEntry[] {
-  const jobId = opts?.jobId?.trim() || undefined;
+  const jobId = normalizeOptionalString(opts?.jobId);
   if (!raw.trim()) {
     return [];
   }
@@ -347,7 +351,7 @@ function filterRunLogEntries(
     if (!opts.query) {
       return true;
     }
-    return opts.queryTextForEntry(entry).toLowerCase().includes(opts.query);
+    return normalizeLowercaseStringOrEmpty(opts.queryTextForEntry(entry)).includes(opts.query);
   });
 }
 
@@ -360,7 +364,7 @@ export async function readCronRunLogEntriesPage(
   const raw = await fs.readFile(path.resolve(filePath), "utf-8").catch(() => "");
   const statuses = normalizeRunStatuses(opts);
   const deliveryStatuses = normalizeDeliveryStatuses(opts);
-  const query = opts?.query?.trim().toLowerCase() ?? "";
+  const query = normalizeLowercaseStringOrEmpty(opts?.query);
   const sortDir: CronRunLogSortDir = opts?.sortDir === "asc" ? "asc" : "desc";
   const all = parseAllRunLogEntries(raw, { jobId: opts?.jobId });
   const filtered = filterRunLogEntries(all, {
@@ -393,7 +397,7 @@ export async function readCronRunLogEntriesPageAll(
   const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)));
   const statuses = normalizeRunStatuses(opts);
   const deliveryStatuses = normalizeDeliveryStatuses(opts);
-  const query = opts.query?.trim().toLowerCase() ?? "";
+  const query = normalizeLowercaseStringOrEmpty(opts.query);
   const sortDir: CronRunLogSortDir = opts.sortDir === "asc" ? "asc" : "desc";
   const runsDir = path.resolve(path.dirname(path.resolve(opts.storePath)), "runs");
   const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);

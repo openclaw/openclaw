@@ -5,6 +5,7 @@ import {
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readStringValue } from "../../shared/string-coerce.js";
 import { pickAutoSshTargetFromDiscovery } from "./discovery.js";
 import {
   extractConfigSummary,
@@ -117,8 +118,8 @@ export async function runGatewayStatusProbePass(params: {
     const probed = await Promise.all(
       targets.map(async (target) => {
         const authResolution = await resolveAuthForTarget(params.cfg, target, {
-          token: typeof params.opts.token === "string" ? params.opts.token : undefined,
-          password: typeof params.opts.password === "string" ? params.opts.password : undefined,
+          token: readStringValue(params.opts.token),
+          password: readStringValue(params.opts.password),
         });
         const probe = await probeGateway({
           url: target.url,

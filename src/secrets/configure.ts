@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { runSecretsApply, type SecretsApplyResult } from "./apply.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import {
@@ -233,13 +234,10 @@ function hasSourceChoice(
 }
 
 function resolveCandidateProviderHint(candidate: ConfigureCandidate): string | undefined {
-  if (typeof candidate.authProfileProvider === "string" && candidate.authProfileProvider.trim()) {
-    return candidate.authProfileProvider.trim().toLowerCase();
-  }
-  if (typeof candidate.providerId === "string" && candidate.providerId.trim()) {
-    return candidate.providerId.trim().toLowerCase();
-  }
-  return undefined;
+  return (
+    normalizeOptionalLowercaseString(candidate.authProfileProvider) ??
+    normalizeOptionalLowercaseString(candidate.providerId)
+  );
 }
 
 function resolveSuggestedEnvSecretId(candidate: ConfigureCandidate): string | undefined {

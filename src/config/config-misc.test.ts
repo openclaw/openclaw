@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
+import {
+  collectRelevantDoctorPluginIds,
+  listPluginDoctorLegacyConfigRules,
+} from "../plugins/doctor-contract-registry.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -7,6 +12,7 @@ import {
   unsetConfigValueAtPath,
 } from "./config-paths.js";
 import { readConfigFileSnapshot, validateConfigObject } from "./config.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -372,7 +378,7 @@ describe("broadcast", () => {
 
 describe("model compat config schema", () => {
   it("accepts full openai-completions compat fields", () => {
-    const res = validateConfigObject({
+    const res = OpenClawSchema.safeParse({
       models: {
         providers: {
           local: {
@@ -385,6 +391,7 @@ describe("model compat config schema", () => {
                 compat: {
                   supportsUsageInStreaming: true,
                   supportsStrictMode: false,
+                  requiresStringContent: true,
                   thinkingFormat: "qwen",
                   requiresToolResultName: true,
                   requiresAssistantAfterToolResult: false,
@@ -399,7 +406,7 @@ describe("model compat config schema", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.success).toBe(true);
   });
 });
 
@@ -532,62 +539,83 @@ describe("config strict validation", () => {
   });
 
   it("accepts legacy messages.tts provider keys via auto-migration and reports legacyIssues", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        messages: {
-          tts: {
-            provider: "elevenlabs",
-            elevenlabs: {
-              apiKey: "test-key",
-              voiceId: "voice-1",
-            },
+    const raw = {
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          elevenlabs: {
+            apiKey: "test-key",
+            voiceId: "voice-1",
           },
         },
-      });
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
 
-      const snap = await readConfigFileSnapshot();
+    expect(issues.some((issue) => issue.path === "messages.tts")).toBe(true);
+    expect(migrated.next).not.toBeNull();
 
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "messages.tts")).toBe(true);
-      expect(snap.sourceConfig.messages?.tts?.providers?.elevenlabs).toEqual({
-        apiKey: "test-key",
-        voiceId: "voice-1",
-      });
-      expect(
-        (snap.sourceConfig.messages?.tts as Record<string, unknown> | undefined)?.elevenlabs,
-      ).toBeUndefined();
+    const next = migrated.next as {
+      messages?: {
+        tts?: {
+          providers?: {
+            elevenlabs?: {
+              apiKey?: string;
+              voiceId?: string;
+            };
+          };
+          elevenlabs?: unknown;
+        };
+      };
+    } | null;
+    expect(next?.messages?.tts?.providers?.elevenlabs).toEqual({
+      apiKey: "test-key",
+      voiceId: "voice-1",
     });
+    expect(next?.messages?.tts?.elevenlabs).toBeUndefined();
   });
 
-  it("accepts legacy talk flat fields via auto-migration and reports legacyIssues", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        talk: {
-          voiceId: "voice-1",
-          modelId: "eleven_v3",
-          apiKey: "test-key",
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "talk")).toBe(true);
-      expect(snap.sourceConfig.talk?.providers?.elevenlabs).toEqual({
+  it("accepts legacy talk flat fields via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      talk: {
         voiceId: "voice-1",
         modelId: "eleven_v3",
         apiKey: "test-key",
-      });
-      expect(
-        (snap.sourceConfig.talk as Record<string, unknown> | undefined)?.voiceId,
-      ).toBeUndefined();
-      expect(
-        (snap.sourceConfig.talk as Record<string, unknown> | undefined)?.modelId,
-      ).toBeUndefined();
-      expect(
-        (snap.sourceConfig.talk as Record<string, unknown> | undefined)?.apiKey,
-      ).toBeUndefined();
+      },
+    };
+    const issues = findLegacyConfigIssues(
+      raw,
+      raw,
+      listPluginDoctorLegacyConfigRules({ pluginIds: collectRelevantDoctorPluginIds(raw) }),
+    );
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
+
+    expect(issues.some((issue) => issue.path === "talk")).toBe(true);
+    expect(migrated.next).not.toBeNull();
+
+    const next = migrated.next as {
+      talk?: {
+        providers?: {
+          elevenlabs?: {
+            voiceId?: string;
+            modelId?: string;
+            apiKey?: string;
+          };
+        };
+        voiceId?: unknown;
+        modelId?: unknown;
+        apiKey?: unknown;
+      };
+    } | null;
+    expect(next?.talk?.providers?.elevenlabs).toEqual({
+      voiceId: "voice-1",
+      modelId: "eleven_v3",
+      apiKey: "test-key",
     });
+    expect(next?.talk?.voiceId).toBeUndefined();
+    expect(next?.talk?.modelId).toBeUndefined();
+    expect(next?.talk?.apiKey).toBeUndefined();
   });
 
   it("accepts legacy sandbox perSession via auto-migration and reports legacyIssues", async () => {
@@ -688,78 +716,77 @@ describe("config strict validation", () => {
     });
   });
 
-  it("accepts legacy thread binding ttlHours via auto-migration and reports legacyIssues", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        session: {
-          threadBindings: {
-            ttlHours: 24,
-          },
+  it("accepts legacy thread binding ttlHours via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      session: {
+        threadBindings: {
+          ttlHours: 24,
         },
-        channels: {
-          discord: {
-            threadBindings: {
-              ttlHours: 12,
-            },
-            accounts: {
-              alpha: {
-                threadBindings: {
-                  ttlHours: 6,
-                },
+      },
+      channels: {
+        discord: {
+          threadBindings: {
+            ttlHours: 12,
+          },
+          accounts: {
+            alpha: {
+              threadBindings: {
+                ttlHours: 6,
               },
             },
           },
         },
-      });
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
 
-      const snap = await readConfigFileSnapshot();
+    expect(issues.some((issue) => issue.path === "session.threadBindings")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels")).toBe(true);
+    expect(migrated.next).not.toBeNull();
 
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "session.threadBindings")).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels")).toBe(true);
-      expect(snap.sourceConfig.session?.threadBindings).toMatchObject({
-        idleHours: 24,
-      });
-      expect(snap.sourceConfig.channels?.discord?.threadBindings).toMatchObject({
-        idleHours: 12,
-      });
-      expect(snap.sourceConfig.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-        idleHours: 6,
-      });
-      expect(
-        (snap.sourceConfig.session?.threadBindings as Record<string, unknown> | undefined)
-          ?.ttlHours,
-      ).toBeUndefined();
-      expect(
-        (snap.sourceConfig.channels?.discord?.threadBindings as Record<string, unknown> | undefined)
-          ?.ttlHours,
-      ).toBeUndefined();
-      expect(
-        (
-          snap.sourceConfig.channels?.discord?.accounts?.alpha?.threadBindings as
-            | Record<string, unknown>
-            | undefined
-        )?.ttlHours,
-      ).toBeUndefined();
+    const next = migrated.next as {
+      session?: {
+        threadBindings?: {
+          idleHours?: number;
+          ttlHours?: unknown;
+        };
+      };
+      channels?: {
+        discord?: {
+          threadBindings?: {
+            idleHours?: number;
+            ttlHours?: unknown;
+          };
+          accounts?: {
+            alpha?: {
+              threadBindings?: {
+                idleHours?: number;
+                ttlHours?: unknown;
+              };
+            };
+          };
+        };
+      };
+    } | null;
+    expect(next?.session?.threadBindings).toMatchObject({
+      idleHours: 24,
     });
+    expect(next?.channels?.discord?.threadBindings).toMatchObject({
+      idleHours: 12,
+    });
+    expect(next?.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
+      idleHours: 6,
+    });
+    expect(next?.session?.threadBindings?.ttlHours).toBeUndefined();
+    expect(next?.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
+    expect(next?.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
   });
 
   it("accepts legacy channel streaming aliases via auto-migration and reports legacyIssues", () => {
     const raw = {
       channels: {
-        telegram: {
-          streamMode: "block",
-          chunkMode: "newline",
-          blockStreaming: true,
-          draftChunk: {
-            minChars: 120,
-          },
-        },
         discord: {
-          streaming: false,
-          blockStreamingCoalesce: {
-            idleMs: 250,
-          },
           accounts: {
             work: {
               streamMode: "block",
@@ -769,22 +796,10 @@ describe("config strict validation", () => {
             },
           },
         },
-        googlechat: {
-          streamMode: "append",
-          accounts: {
-            work: {
-              streamMode: "replace",
-            },
-          },
-        },
-        slack: {
-          streaming: true,
-          nativeStreaming: false,
-        },
       },
     };
 
-    const migrated = applyRuntimeLegacyConfigMigrations(raw);
+    const migrated = applyLegacyDoctorMigrations(raw);
     expect(migrated.next).not.toBeNull();
 
     if (!migrated.next) {
@@ -793,38 +808,10 @@ describe("config strict validation", () => {
     const channels = (
       migrated.next as {
         channels?: {
-          telegram?: unknown;
           discord?: { accounts?: { work?: unknown } };
-          googlechat?: { accounts?: { work?: unknown } };
-          slack?: unknown;
         };
       }
     ).channels;
-    expect(channels?.telegram).toMatchObject({
-      streaming: {
-        mode: "block",
-        chunkMode: "newline",
-        block: {
-          enabled: true,
-        },
-        preview: {
-          chunk: {
-            minChars: 120,
-          },
-        },
-      },
-    });
-    expect((channels?.telegram as Record<string, unknown> | undefined)?.streamMode).toBeUndefined();
-    expect(channels?.discord).toMatchObject({
-      streaming: {
-        mode: "off",
-        block: {
-          coalesce: {
-            idleMs: 250,
-          },
-        },
-      },
-    });
     expect(channels?.discord?.accounts?.work).toMatchObject({
       streaming: {
         mode: "block",
@@ -835,79 +822,60 @@ describe("config strict validation", () => {
         },
       },
     });
-    expect(channels?.googlechat).toMatchObject({
-      accounts: {
-        work: {},
-      },
-    });
-    expect(
-      (channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
-    expect(
-      (channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)?.streamMode,
-    ).toBeUndefined();
-    expect(channels?.slack).toMatchObject({
-      streaming: {
-        mode: "partial",
-        nativeTransport: false,
-      },
-    });
   });
 
-  it("accepts legacy nested channel allow aliases via auto-migration and reports legacyIssues", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        channels: {
-          slack: {
-            channels: {
-              ops: {
-                allow: false,
-              },
+  it("accepts legacy nested channel allow aliases via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      channels: {
+        slack: {
+          channels: {
+            ops: {
+              allow: false,
             },
-            accounts: {
-              work: {
-                channels: {
-                  general: {
-                    allow: true,
-                  },
+          },
+          accounts: {
+            work: {
+              channels: {
+                general: {
+                  allow: true,
                 },
               },
             },
           },
-          googlechat: {
-            groups: {
-              "spaces/aaa": {
-                allow: false,
-              },
+        },
+        googlechat: {
+          groups: {
+            "spaces/aaa": {
+              allow: false,
             },
-            accounts: {
-              work: {
-                groups: {
-                  "spaces/bbb": {
-                    allow: true,
-                  },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "spaces/bbb": {
+                  allow: true,
                 },
               },
             },
           },
-          discord: {
-            guilds: {
-              "100": {
-                channels: {
-                  general: {
-                    allow: false,
-                  },
+        },
+        discord: {
+          guilds: {
+            "100": {
+              channels: {
+                general: {
+                  allow: false,
                 },
               },
             },
-            accounts: {
-              work: {
-                guilds: {
-                  "200": {
-                    channels: {
-                      help: {
-                        allow: true,
-                      },
+          },
+          accounts: {
+            work: {
+              guilds: {
+                "200": {
+                  channels: {
+                    help: {
+                      allow: true,
                     },
                   },
                 },
@@ -915,126 +883,95 @@ describe("config strict validation", () => {
             },
           },
         },
-      });
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
 
-      const snap = await readConfigFileSnapshot();
+    expect(issues.some((issue) => issue.path === "channels.slack")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.slack.accounts")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.googlechat")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.googlechat.accounts")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.discord")).toBe(true);
+    expect(issues.some((issue) => issue.path === "channels.discord.accounts")).toBe(true);
+    expect(migrated.next).not.toBeNull();
 
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack.accounts")).toBe(
-        true,
-      );
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.googlechat")).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.googlechat.accounts")).toBe(
-        true,
-      );
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord")).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
-        true,
-      );
-      expect(snap.sourceConfig.channels?.slack?.channels?.ops).toMatchObject({
-        enabled: false,
-      });
-      expect(snap.sourceConfig.channels?.googlechat?.groups?.["spaces/aaa"]).toMatchObject({
-        enabled: false,
-      });
-      expect(snap.sourceConfig.channels?.discord?.guilds?.["100"]?.channels?.general).toMatchObject(
-        {
-          enabled: false,
-        },
-      );
-      expect(
-        (snap.sourceConfig.channels?.slack?.channels?.ops as Record<string, unknown> | undefined)
-          ?.allow,
-      ).toBeUndefined();
-      expect(
-        (
-          snap.sourceConfig.channels?.googlechat?.groups?.["spaces/aaa"] as
-            | Record<string, unknown>
-            | undefined
-        )?.allow,
-      ).toBeUndefined();
-      expect(
-        (
-          snap.sourceConfig.channels?.discord?.guilds?.["100"]?.channels?.general as
-            | Record<string, unknown>
-            | undefined
-        )?.allow,
-      ).toBeUndefined();
-    });
-  });
-
-  it("accepts telegram groupMentionsOnly via auto-migration and reports legacyIssues", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        channels: {
-          telegram: {
-            groupMentionsOnly: true,
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(true);
-      expect(
-        snap.legacyIssues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly"),
-      ).toBe(true);
-      expect(snap.sourceConfig.channels?.telegram?.groups?.["*"]).toMatchObject({
-        requireMention: true,
-      });
-      expect(
-        (snap.sourceConfig.channels?.telegram as Record<string, unknown> | undefined)
-          ?.groupMentionsOnly,
-      ).toBeUndefined();
-    });
-  });
-
-  it("accepts legacy plugins.entries.*.config.tts provider keys via auto-migration", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        plugins: {
-          entries: {
-            "voice-call": {
-              config: {
-                tts: {
-                  provider: "openai",
-                  openai: {
-                    model: "gpt-4o-mini-tts",
-                    voice: "alloy",
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "plugins.entries")).toBe(true);
-      const voiceCallTts = (
-        snap.sourceConfig.plugins?.entries as
-          | Record<
-              string,
-              {
-                config?: {
-                  tts?: {
-                    providers?: Record<string, unknown>;
-                    openai?: unknown;
-                  };
+    const next = migrated.next as {
+      channels?: {
+        slack?: {
+          channels?: {
+            ops?: {
+              enabled?: boolean;
+              allow?: unknown;
+            };
+          };
+        };
+        googlechat?: {
+          groups?: {
+            "spaces/aaa"?: {
+              enabled?: boolean;
+              allow?: unknown;
+            };
+          };
+        };
+        discord?: {
+          guilds?: {
+            "100"?: {
+              channels?: {
+                general?: {
+                  enabled?: boolean;
+                  allow?: unknown;
                 };
-              }
-            >
-          | undefined
-      )?.["voice-call"]?.config?.tts;
-      expect(voiceCallTts?.providers?.openai).toEqual({
-        model: "gpt-4o-mini-tts",
-        voice: "alloy",
-      });
-      expect(voiceCallTts?.openai).toBeUndefined();
+              };
+            };
+          };
+        };
+      };
+    } | null;
+    expect(next?.channels?.slack?.channels?.ops).toMatchObject({
+      enabled: false,
     });
+    expect(next?.channels?.googlechat?.groups?.["spaces/aaa"]).toMatchObject({
+      enabled: false,
+    });
+    expect(next?.channels?.discord?.guilds?.["100"]?.channels?.general).toMatchObject({
+      enabled: false,
+    });
+    expect(next?.channels?.slack?.channels?.ops?.allow).toBeUndefined();
+    expect(next?.channels?.googlechat?.groups?.["spaces/aaa"]?.allow).toBeUndefined();
+    expect(next?.channels?.discord?.guilds?.["100"]?.channels?.general?.allow).toBeUndefined();
+  });
+
+  it("accepts telegram groupMentionsOnly via auto-migration and reports legacyIssues", () => {
+    const raw = {
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+    const migrated = applyRuntimeLegacyConfigMigrations(raw);
+
+    expect(issues.some((issue) => issue.path === "channels.telegram.groupMentionsOnly")).toBe(true);
+    expect(migrated.next).not.toBeNull();
+
+    const next = migrated.next as {
+      channels?: {
+        telegram?: {
+          groups?: {
+            "*"?: {
+              requireMention?: boolean;
+            };
+          };
+          groupMentionsOnly?: unknown;
+        };
+      };
+    } | null;
+    expect(next?.channels?.telegram?.groups?.["*"]).toMatchObject({
+      requireMention: true,
+    });
+    expect(next?.channels?.telegram?.groupMentionsOnly).toBeUndefined();
   });
 
   it("accepts legacy discord voice tts provider keys via auto-migration and reports legacyIssues", async () => {

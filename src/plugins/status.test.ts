@@ -62,6 +62,7 @@ vi.mock("../plugin-sdk/facade-runtime.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getActivePluginChannelRegistry: () => null,
   listImportedRuntimePluginIds: (...args: unknown[]) => listImportedRuntimePluginIdsMock(...args),
 }));
 

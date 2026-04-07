@@ -20,6 +20,10 @@ import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtim
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
@@ -128,7 +132,7 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
     const pathname = new URL(url).pathname;
     const segments = pathname.split("/").filter(Boolean);
     const method = segments.length > 0 ? (segments.at(-1) ?? null) : null;
-    return method?.toLowerCase() ?? null;
+    return normalizeOptionalLowercaseString(method) ?? null;
   } catch {
     return null;
   }
@@ -258,7 +262,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
       : undefined;
-  const apiRoot = telegramCfg.apiRoot?.trim() || undefined;
+  const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
   const client: ApiClientOptions | undefined =
     finalFetch || timeoutSeconds || apiRoot
       ? {

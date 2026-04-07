@@ -12,6 +12,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 import type { SlackChannelConfigEntries } from "./channel-config.js";
@@ -314,7 +315,7 @@ export function createSlackMonitorContext(params: {
         p.channelName ? normalizeSlackSlug(p.channelName) : undefined,
       ]
         .filter((value): value is string => Boolean(value))
-        .map((value) => value.toLowerCase());
+        .map((value) => normalizeLowercaseStringOrEmpty(value));
       const permitted =
         groupDmChannelsLower.includes("*") ||
         candidates.some((candidate) => groupDmChannelsLower.includes(candidate));

@@ -1,4 +1,5 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeAccountId } from "./account-id.js";
 import { normalizeMessageChannel } from "./message-channel.js";
 
@@ -31,13 +32,13 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
     typeof context.channel === "string"
       ? (normalizeMessageChannel(context.channel) ?? context.channel.trim())
       : undefined;
-  const to = typeof context.to === "string" ? context.to.trim() : undefined;
+  const to = normalizeOptionalString(context.to);
   const accountId = normalizeAccountId(context.accountId);
   const threadId =
     typeof context.threadId === "number" && Number.isFinite(context.threadId)
       ? Math.trunc(context.threadId)
       : typeof context.threadId === "string"
-        ? context.threadId.trim()
+        ? normalizeOptionalString(context.threadId)
         : undefined;
   const normalizedThreadId =
     typeof threadId === "string" ? (threadId ? threadId : undefined) : threadId;
@@ -68,7 +69,7 @@ export function formatConversationTarget(params: {
     typeof params.conversationId === "number" && Number.isFinite(params.conversationId)
       ? String(Math.trunc(params.conversationId))
       : typeof params.conversationId === "string"
-        ? params.conversationId.trim()
+        ? normalizeOptionalString(params.conversationId)
         : undefined;
   if (!channel || !conversationId) {
     return undefined;
@@ -77,7 +78,7 @@ export function formatConversationTarget(params: {
     typeof params.parentConversationId === "number" && Number.isFinite(params.parentConversationId)
       ? String(Math.trunc(params.parentConversationId))
       : typeof params.parentConversationId === "string"
-        ? params.parentConversationId.trim()
+        ? normalizeOptionalString(params.parentConversationId)
         : undefined;
   const pluginTarget = normalizeChannelId(channel)
     ? getChannelPlugin(normalizeChannelId(channel)!)?.messaging?.resolveDeliveryTarget?.({
@@ -104,13 +105,13 @@ export function resolveConversationDeliveryTarget(params: {
     typeof params.conversationId === "number" && Number.isFinite(params.conversationId)
       ? String(Math.trunc(params.conversationId))
       : typeof params.conversationId === "string"
-        ? params.conversationId.trim()
+        ? normalizeOptionalString(params.conversationId)
         : undefined;
   const parentConversationId =
     typeof params.parentConversationId === "number" && Number.isFinite(params.parentConversationId)
       ? String(Math.trunc(params.parentConversationId))
       : typeof params.parentConversationId === "string"
-        ? params.parentConversationId.trim()
+        ? normalizeOptionalString(params.parentConversationId)
         : undefined;
   const pluginTarget =
     channel && conversationId

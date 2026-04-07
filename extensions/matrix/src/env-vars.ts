@@ -1,4 +1,5 @@
 import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const MATRIX_SCOPED_ENV_SUFFIXES = [
   "HOMESERVER",
@@ -60,7 +61,7 @@ function decodeMatrixEnvAccountToken(token: string): string | undefined {
     if (!char || !/[A-Z0-9]/.test(char)) {
       return undefined;
     }
-    decoded += char.toLowerCase();
+    decoded += normalizeLowercaseStringOrEmpty(char);
     index += 1;
   }
   const normalized = normalizeOptionalAccountId(decoded);

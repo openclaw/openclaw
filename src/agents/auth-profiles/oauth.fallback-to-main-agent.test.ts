@@ -34,6 +34,10 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   refreshProviderOAuthCredentialWithPlugin: async () => null,
 }));
 
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./store.js").clearRuntimeAuthProfileStoreSnapshots;
 let ensureAuthProfileStore: typeof import("./store.js").ensureAuthProfileStore;
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;

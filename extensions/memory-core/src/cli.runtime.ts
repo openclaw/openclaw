@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   colorize,
   defaultRuntime,
@@ -215,15 +216,15 @@ function matchesPromotionSelector(
   },
   selector: string,
 ): boolean {
-  const trimmed = selector.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(selector);
   if (!trimmed) {
     return false;
   }
   return (
-    candidate.key.toLowerCase() === trimmed ||
-    candidate.key.toLowerCase().includes(trimmed) ||
-    candidate.path.toLowerCase().includes(trimmed) ||
-    candidate.snippet.toLowerCase().includes(trimmed)
+    normalizeLowercaseStringOrEmpty(candidate.key) === trimmed ||
+    normalizeLowercaseStringOrEmpty(candidate.key).includes(trimmed) ||
+    normalizeLowercaseStringOrEmpty(candidate.path).includes(trimmed) ||
+    normalizeLowercaseStringOrEmpty(candidate.snippet).includes(trimmed)
   );
 }
 

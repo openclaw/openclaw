@@ -26,9 +26,16 @@ function mergePluginSection<T>(
     typeof runtimeValue === "object" &&
     typeof setupValue === "object"
   ) {
-    return {
+    const merged = {
       ...(runtimeValue as Record<string, unknown>),
-      ...(setupValue as Record<string, unknown>),
+    };
+    for (const [key, value] of Object.entries(setupValue as Record<string, unknown>)) {
+      if (value !== undefined) {
+        merged[key] = value;
+      }
+    }
+    return {
+      ...merged,
     } as T;
   }
   return setupValue ?? runtimeValue;
