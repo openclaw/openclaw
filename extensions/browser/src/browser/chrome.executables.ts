@@ -178,9 +178,35 @@ function detectDefaultChromiumExecutable(platform: NodeJS.Platform): BrowserExec
   return null;
 }
 
+// Known bundle ID to executable path mappings for macOS browsers
+// LaunchServices may return different bundle IDs than Info.plist (e.g., com.microsoft.edgemac vs com.microsoft.Edge)
+const KNOWN_BUNDLE_ID_PATHS: Record<string, string> = {
+  "com.microsoft.edgemac": "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  "com.microsoft.edgemac.beta": "/Applications/Microsoft Edge Beta.app/Contents/MacOS/Microsoft Edge Beta",
+  "com.microsoft.edgemac.dev": "/Applications/Microsoft Edge Dev.app/Contents/MacOS/Microsoft Edge Dev",
+  "com.microsoft.edgemac.canary": "/Applications/Microsoft Edge Canary.app/Contents/MacOS/Microsoft Edge Canary",
+  "com.brave.Browser": "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+  "com.brave.Browser.beta": "/Applications/Brave Browser Beta.app/Contents/MacOS/Brave Browser Beta",
+  "com.brave.Browser.nightly": "/Applications/Brave Browser Nightly.app/Contents/MacOS/Brave Browser Nightly",
+  "com.google.Chrome": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "com.google.Chrome.beta": "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+  "com.google.Chrome.canary": "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+  "com.google.Chrome.dev": "/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev",
+  "org.chromium.Chromium": "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  "com.vivaldi.Vivaldi": "/Applications/Vivaldi.app/Contents/MacOS/Vivaldi",
+  "com.operasoftware.Opera": "/Applications/Opera.app/Contents/MacOS/Opera",
+  "com.operasoftware.OperaGX": "/Applications/Opera GX.app/Contents/MacOS/Opera GX",
+  "company.thebrowser.Browser": "/Applications/Arc.app/Contents/MacOS/Arc",
+};
+
 function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
   const bundleId = detectDefaultBrowserBundleIdMac();
-  if (!bundleId || !CHROMIUM_BUNDLE_IDS.has(bundleId)) {
+  if (!bundleId) {
+    return null;
+  }
+
+  const isKnownChromium = CHROMIUM_BUNDLE_IDS.has(bundleId) || Object.hasOwn(KNOWN_BUNDLE_ID_PATHS, bundleId);
+  if (!isKnownChromium) {
     return null;
   }
 
@@ -188,20 +214,34 @@ function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
     "-e",
     `POSIX path of (path to application id "${bundleId}")`,
   ]);
-  if (!appPathRaw) {
-    return null;
+  let exePath: string | null = null;
+
+  if (appPathRaw) {
+    const appPath = appPathRaw.trim().replace(/\/$/, "");
+    const exeName = execText("/usr/bin/defaults", [
+      "read",
+      path.join(appPath, "Contents", "Info"),
+      "CFBundleExecutable",
+    ]);
+    if (exeName) {
+      exePath = path.join(appPath, "Contents", "MacOS", exeName.trim());
+    }
   }
-  const appPath = appPathRaw.trim().replace(/\/$/, "");
-  const exeName = execText("/usr/bin/defaults", [
-    "read",
-    path.join(appPath, "Contents", "Info"),
-    "CFBundleExecutable",
-  ]);
-  if (!exeName) {
-    return null;
+
+  // Fallback to known paths if osascript/defaults resolution failed
+  // Check both /Applications (system-wide) and ~/Applications (user installs)
+  if (!exePath && Object.hasOwn(KNOWN_BUNDLE_ID_PATHS, bundleId)) {
+    const systemPath = KNOWN_BUNDLE_ID_PATHS[bundleId];
+    const userPath = path.join(os.homedir(), "Applications", systemPath.replace("/Applications/", ""));
+
+    if (exists(systemPath)) {
+      exePath = systemPath;
+    } else if (exists(userPath)) {
+      exePath = userPath;
+    }
   }
-  const exePath = path.join(appPath, "Contents", "MacOS", exeName.trim());
-  if (!exists(exePath)) {
+
+  if (!exePath || !exists(exePath)) {
     return null;
   }
   return { kind: inferKindFromIdentifier(bundleId), path: exePath };
@@ -723,3 +763,4 @@ export function resolveBrowserExecutableForPlatform(
   }
   return null;
 }
+
