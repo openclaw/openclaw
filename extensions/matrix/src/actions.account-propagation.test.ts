@@ -111,6 +111,23 @@ describe("matrixMessageActions account propagation", () => {
     );
   });
 
+  it("rejects self-profile updates for non-owner callers", async () => {
+    await expect(
+      matrixMessageActions.handleAction?.(
+        createContext({
+          action: profileAction,
+          senderIsOwner: false,
+          accountId: "ops",
+          params: {
+            displayName: "Ops Bot",
+          },
+        }),
+      ),
+    ).rejects.toThrow("Matrix profile updates require owner access.");
+
+    expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
+  });
+
   it("forwards local avatar paths for self-profile updates", async () => {
     await matrixMessageActions.handleAction?.(
       createContext({
