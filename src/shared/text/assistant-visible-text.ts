@@ -531,7 +531,7 @@ const SUSPICIOUS_LINE_RE =
 
 function stripCodeForScoring(text: string): string {
   const codeRegions = findCodeRegions(text);
-  if (codeRegions.length === 0) return text;
+  if (codeRegions.length === 0) { return text; }
   let result = "";
   let lastIndex = 0;
   for (const region of codeRegions) {
@@ -544,7 +544,7 @@ function stripCodeForScoring(text: string): string {
 
 function scoreSuspiciousPreamble(text: string): number {
   const scorableText = stripCodeForScoring(text);
-  if (!scorableText.trim()) return 0;
+  if (!scorableText.trim()) { return 0; }
   let score = 0;
   if (/<\s*think\b|<\s*final\b|chain[- ]of[- ]thought|internal reasoning/iu.test(scorableText)) {
     score += 3;
@@ -568,10 +568,10 @@ function scoreSuspiciousPreamble(text: string): number {
 
 function looksUserFacingStart(text: string): boolean {
   const trimmed = text.trimStart();
-  if (!trimmed) return false;
-  if (trimmed.startsWith("```") || /^<\s*(think|final)\b/i.test(trimmed)) return false;
+  if (!trimmed) { return false; }
+  if (trimmed.startsWith("```") || /^<\s*(think|final)\b/i.test(trimmed)) { return false; }
   const firstLine = trimmed.split("\n", 1)[0] ?? "";
-  if (SUSPICIOUS_LINE_RE.test(firstLine)) return false;
+  if (SUSPICIOUS_LINE_RE.test(firstLine)) { return false; }
   return true;
 }
 
@@ -580,7 +580,7 @@ function hasFencedCode(text: string): boolean {
 }
 
 function stripLeakedReasoningPreamble(text: string): string {
-  if (!text || !SUSPICIOUS_PREAMBLE_QUICK_RE.test(text)) return text;
+  if (!text || !SUSPICIOUS_PREAMBLE_QUICK_RE.test(text)) { return text; }
 
   const codeRegions = findCodeRegions(text);
 
@@ -589,13 +589,21 @@ function stripLeakedReasoningPreamble(text: string): string {
   let paragraphCount = 0;
   while ((paragraphMatch = paragraphBreakRe.exec(text)) !== null && paragraphCount < 4) {
     const splitIndex = paragraphMatch.index + paragraphMatch[0].length;
-    if (isInsideCode(splitIndex, codeRegions)) continue;
+    if (isInsideCode(splitIndex, codeRegions)) {
+      continue;
+    }
     const prefix = text.slice(0, paragraphMatch.index).trim();
     const suffix = text.slice(splitIndex).trimStart();
-    if (!prefix || !suffix) continue;
+    if (!prefix || !suffix) {
+      continue;
+    }
     paragraphCount += 1;
-    if (hasFencedCode(prefix)) continue;
-    if (scoreSuspiciousPreamble(prefix) >= 3 && looksUserFacingStart(suffix)) return suffix;
+    if (hasFencedCode(prefix)) {
+      continue;
+    }
+    if (scoreSuspiciousPreamble(prefix) >= 3 && looksUserFacingStart(suffix)) {
+      return suffix;
+    }
   }
 
   const lineBreakRe = /\n/g;
@@ -603,13 +611,21 @@ function stripLeakedReasoningPreamble(text: string): string {
   let lineCount = 0;
   while ((lineMatch = lineBreakRe.exec(text)) !== null && lineCount < 6) {
     const splitIndex = lineMatch.index + lineMatch[0].length;
-    if (isInsideCode(splitIndex, codeRegions)) continue;
+    if (isInsideCode(splitIndex, codeRegions)) {
+      continue;
+    }
     const prefix = text.slice(0, lineMatch.index);
     const suffix = text.slice(splitIndex).trimStart();
-    if (!prefix.trim() || !suffix) continue;
+    if (!prefix.trim() || !suffix) {
+      continue;
+    }
     lineCount += 1;
-    if (hasFencedCode(prefix)) continue;
-    if (scoreSuspiciousPreamble(prefix) >= 3 && looksUserFacingStart(suffix)) return suffix;
+    if (hasFencedCode(prefix)) {
+      continue;
+    }
+    if (scoreSuspiciousPreamble(prefix) >= 3 && looksUserFacingStart(suffix)) {
+      return suffix;
+    }
   }
 
   return text;
@@ -620,41 +636,56 @@ function stripLeakedReasoningPreamble(text: string): string {
 // ---------------------------------------------------------------------------
 
 const CONTAM_ENVELOPE_RE =
-  /\{\s*"schema"[^}]*\}(?:\s*\{\s*"(?:message_id|sender_id|label|name|username)"[^}]*\})+/gs;
-const CONTAM_CSS_RE = /(?:^|\n)\s*(?:[a-z-]+\s*:\s*[^;]+;\s*){3,}(?:\n|$)/gm;
+  /\{\s*"schema"[^}]*\}(?:[^]*?\{\s*"(?:message_id|sender_id|label|name|username)"[^}]*\})+/gs;
+const CONTAM_CSS_RE = /(?:^|\n)\s*(?:[\w.-]+\s*\{\s*)?(?:[a-z-]+\s*:\s*[^;]+;\s*){2,}(?:\}\s*)?(?:\n|$)/gm;
 const CONTAM_FENCE_RE = /```\s*```/g;
 const CONTAM_CODE_DEBRIS_RE = /(?:^|\n)\s*\.\w+\([^)]*\)\)?;?/gm;
-const CONTAM_FOOTER_RE = /(?:^|\n)(?:Copyright ©|Powered by|Manage your notification settings).*$/gim;
+const CONTAM_FOOTER_RE =
+  /(?:^|\n)(?:Copyright ©|Powered by|Manage your notification settings)[^\n]*(?:\n[^\n]+)*/gim;
 
 function isInsideCodeAt(offset: number, length: number, text: string): boolean {
   const codeRegions = findCodeRegions(text);
   for (const region of codeRegions) {
-    if (offset < region.end && offset + length > region.start) return true;
+    if (offset < region.end && offset + length > region.start) {
+      return true;
+    }
   }
   return false;
 }
 
 function stripStructuralContamination(text: string): string {
-  if (!text || text.length < 50) return text;
+  if (!text || text.length < 50) {
+    return text;
+  }
 
   let result = text.replace(CONTAM_ENVELOPE_RE, (match, offset) => {
-    if (isInsideCodeAt(offset, match.length, text)) return match;
+    if (isInsideCodeAt(offset, match.length, text)) {
+      return match;
+    }
     return "";
   });
   result = result.replace(CONTAM_CSS_RE, (match, offset) => {
-    if (isInsideCodeAt(offset, match.length, result)) return match;
+    if (isInsideCodeAt(offset, match.length, result)) {
+      return match;
+    }
     return "";
   });
   result = result.replace(CONTAM_FENCE_RE, (match, offset) => {
-    if (isInsideCodeAt(offset, match.length, result)) return match;
+    if (isInsideCodeAt(offset, match.length, result)) {
+      return match;
+    }
     return "";
   });
   result = result.replace(CONTAM_CODE_DEBRIS_RE, (match, offset) => {
-    if (isInsideCodeAt(offset, match.length, result)) return match;
+    if (isInsideCodeAt(offset, match.length, result)) {
+      return match;
+    }
     return "";
   });
   result = result.replace(CONTAM_FOOTER_RE, (match, offset) => {
-    if (isInsideCodeAt(offset, match.length, result)) return match;
+    if (isInsideCodeAt(offset, match.length, result)) {
+      return match;
+    }
     return "";
   });
   result = result.replace(/\n{3,}/g, "\n\n");
