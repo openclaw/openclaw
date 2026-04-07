@@ -4,7 +4,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { RuntimeEnv } from "../runtime.js";
+import type { RuntimeEnv, OutputRuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => []),
@@ -33,11 +33,12 @@ vi.mock("../infra/outbound/targets.js", async () => {
 });
 
 describe("deliverAgentCommandResult", () => {
-  function createRuntime(): RuntimeEnv {
+  function createRuntime(): OutputRuntimeEnv {
     return {
       log: vi.fn(),
       error: vi.fn(),
-    } as unknown as RuntimeEnv;
+      writeJson: vi.fn(),
+    } as unknown as OutputRuntimeEnv;
   }
 
   function createResult(text = "hi") {
@@ -304,10 +305,8 @@ describe("deliverAgentCommandResult", () => {
       },
     });
 
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(
-      JSON.parse(String((runtime.log as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])),
-    ).toEqual({
+    expect(runtime.writeJson).toHaveBeenCalledTimes(1);
+    expect((runtime.writeJson as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toEqual({
       payloads: [
         {
           text: "voice caption",
