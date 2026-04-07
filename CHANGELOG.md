@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 - Tools/media generation: report applied fallback geometry and duration settings consistently in tool results, add a shared normalization contract for image/music/video runtimes, and simplify the bundled image-generation-core runtime test to only verify the plugin-sdk re-export seam.
 - Gateway/sessions: add persisted compaction checkpoints plus Sessions UI branch/restore actions so operators can inspect and recover pre-compaction session state. (#62146) Thanks @scoootscooob.
 - Providers/Ollama: detect vision capability from the `/api/show` response and set image input on models that support it so Ollama vision models accept image attachments. (#62193) Thanks @BruceMacD.
+- Memory/dreaming: ingest redacted session transcripts into the dreaming corpus with per-day session-corpus notes, cursor checkpointing, and promotion/doctor support. (#62227) Thanks @vignesh07.
 
 ### Fixes
 
