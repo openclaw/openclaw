@@ -260,6 +260,9 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
         if (!normalized) {
           return { dispose: () => {} };
         }
+        if (params.abortSignal?.aborted) {
+          return { dispose: () => {} };
+        }
         const token = Symbol(normalized.mapKey);
         runtimeContexts.set(normalized.mapKey, {
           token,

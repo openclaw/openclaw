@@ -150,7 +150,14 @@ function resolveApprovalRouteNotice(params: {
       .filter((report) => normalizeChannel(report.channel) === originChannel || !originChannel)
       .map(resolveFallbackRouteNoticeTarget)
       .find((target) => target !== null) ?? null;
-  const target = explicitTarget ?? fallbackTarget;
+  const target = explicitTarget
+    ? {
+        ...fallbackTarget,
+        ...explicitTarget,
+        accountId: explicitTarget.accountId ?? fallbackTarget?.accountId,
+        threadId: explicitTarget.threadId ?? fallbackTarget?.threadId,
+      }
+    : fallbackTarget;
   if (!target) {
     return null;
   }

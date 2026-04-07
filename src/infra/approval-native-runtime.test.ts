@@ -246,6 +246,67 @@ describe("createChannelNativeApprovalRuntime", () => {
     await runtime.stop();
   });
 
+  it("inherits fallback account and thread when the request omits them", async () => {
+    mockGatewayClientStarts.mockReset();
+    mockGatewayClientStops.mockReset();
+    mockGatewayClientRequests.mockReset();
+    mockCreateOperatorApprovalsGatewayClient.mockReset().mockResolvedValue({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    });
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-route-notice-fallback-account",
+      clientDisplayName: "Matrix",
+      channel: "matrix",
+      channelLabel: "Matrix",
+      accountId: "alerts",
+      cfg: {} as never,
+      nativeAdapter: {
+        describeDeliveryCapabilities: () => ({
+          enabled: true,
+          preferredSurface: "approver-dm",
+          supportsOriginSurface: true,
+          supportsApproverDmSurface: true,
+          notifyOriginWhenDmOnly: true,
+        }),
+        resolveOriginTarget: async () => ({ to: "room:!ops:example.org", threadId: "$thread-1" }),
+        resolveApproverDmTargets: async () => [{ to: "user:@owner:example.org" }],
+      },
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent: async () => "pending exec",
+      prepareTarget: async () => ({
+        dedupeKey: "matrix-dm:owner",
+        target: { chatId: "matrix-dm:owner" },
+      }),
+      deliverTarget: async () => ({ chatId: "matrix-dm:owner", messageId: "m1" }),
+      finalizeResolved: async () => {},
+    });
+
+    await runtime.start();
+    await runtime.handleRequested({
+      id: "req-fallback-account",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "matrix",
+        turnSourceTo: "room:!ops:example.org",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("send", {
+      channel: "matrix",
+      to: "room:!ops:example.org",
+      accountId: "alerts",
+      threadId: "$thread-1",
+      message: "Approval required. I sent the approval request to Matrix DMs, not this chat.",
+      idempotencyKey: "approval-route-notice:req-fallback-account",
+    });
+    await runtime.stop();
+  });
+
   it("aggregates same-channel and cross-channel fallback destinations into one notice", async () => {
     mockGatewayClientStarts.mockReset();
     mockGatewayClientStops.mockReset();

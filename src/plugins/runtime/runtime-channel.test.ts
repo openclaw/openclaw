@@ -79,4 +79,35 @@ describe("runtimeContexts", () => {
     ).toBeUndefined();
     lease.dispose();
   });
+
+  it("does not register contexts when the abort signal is already aborted", () => {
+    const channel = createRuntimeChannel();
+    const onEvent = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+    channel.runtimeContexts.watch({
+      channelId: "matrix",
+      accountId: "default",
+      capability: "approval.native",
+      onEvent,
+    });
+
+    const lease = channel.runtimeContexts.register({
+      channelId: "matrix",
+      accountId: "default",
+      capability: "approval.native",
+      context: { client: "stale" },
+      abortSignal: controller.signal,
+    });
+
+    expect(
+      channel.runtimeContexts.get({
+        channelId: "matrix",
+        accountId: "default",
+        capability: "approval.native",
+      }),
+    ).toBeUndefined();
+    expect(onEvent).not.toHaveBeenCalled();
+    lease.dispose();
+  });
 });
