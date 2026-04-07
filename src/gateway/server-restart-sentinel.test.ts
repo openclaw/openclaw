@@ -291,6 +291,32 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  it("honors suppressPrimaryNotice while still executing persisted outbox", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        message: "restart message",
+        suppressPrimaryNotice: true,
+        outbox: [
+          {
+            kind: "message",
+            message: "outbox legacy message",
+          },
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+      "outbox legacy message",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalledWith("restart message", expect.anything());
+  });
+
   it("does not wake the main session when the sentinel has no sessionKey", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
       payload: {

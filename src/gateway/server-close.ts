@@ -73,7 +73,7 @@ function normalizeGatewayOutbox(outbox: unknown[]): RestartOutboxTask[] {
         ? kindRaw
         : "message";
     const message = normalizeNonEmptyString(item.message);
-    if (!kind || !message) {
+    if (!message) {
       continue;
     }
 
