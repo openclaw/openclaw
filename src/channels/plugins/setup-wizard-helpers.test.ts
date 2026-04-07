@@ -9,7 +9,11 @@ import {
   resolveSingleAccountPromotionTarget as resolveMatrixSingleAccountPromotionTarget,
   singleAccountKeysToMove as matrixSingleAccountKeysToMove,
 } from "../../plugin-sdk/matrix.js";
-import { singleAccountKeysToMove as telegramSingleAccountKeysToMove } from "../../plugin-sdk/telegram.js";
+import {
+  namedAccountPromotionKeys as telegramNamedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget as resolveTelegramSingleAccountPromotionTarget,
+  singleAccountKeysToMove as telegramSingleAccountKeysToMove,
+} from "../../plugin-sdk/telegram.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
@@ -97,6 +101,8 @@ beforeEach(() => {
           ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
           setup: {
             singleAccountKeysToMove: telegramSingleAccountKeysToMove,
+            namedAccountPromotionKeys: telegramNamedAccountPromotionKeys,
+            resolveSingleAccountPromotionTarget: resolveTelegramSingleAccountPromotionTarget,
           },
         },
       },
