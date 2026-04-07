@@ -565,7 +565,12 @@ function validatePluginConfig(params: {
   return { ok: false, errors: result.errors.map((error) => error.text) };
 }
 
-function unwrapDefaultModuleExport(moduleExport: unknown): unknown {
+function unwrapDefaultModuleExport(
+  moduleExport: unknown,
+  options?: {
+    shouldStop?: (value: Record<string, unknown>) => boolean;
+  },
+): unknown {
   let resolved = moduleExport;
   const visited = new Set<unknown>();
   while (
@@ -574,8 +579,12 @@ function unwrapDefaultModuleExport(moduleExport: unknown): unknown {
     "default" in (resolved as Record<string, unknown>) &&
     !visited.has(resolved)
   ) {
+    const record = resolved as Record<string, unknown>;
+    if (options?.shouldStop?.(record)) {
+      break;
+    }
     visited.add(resolved);
-    resolved = (resolved as { default: unknown }).default;
+    resolved = record.default;
   }
   return resolved;
 }
@@ -584,7 +593,10 @@ function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
 } {
-  const resolved = unwrapDefaultModuleExport(moduleExport);
+  const resolved = unwrapDefaultModuleExport(moduleExport, {
+    shouldStop: (candidate) =>
+      typeof candidate.register === "function" || typeof candidate.activate === "function",
+  });
   if (typeof resolved === "function") {
     return {
       register: resolved as OpenClawPluginDefinition["register"],
@@ -601,7 +613,11 @@ function resolvePluginModuleExport(moduleExport: unknown): {
 function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
 } {
-  const resolved = unwrapDefaultModuleExport(moduleExport);
+  const resolved = unwrapDefaultModuleExport(moduleExport, {
+    shouldStop: (candidate) =>
+      typeof candidate.loadSetupPlugin === "function" ||
+      Boolean(candidate.plugin && typeof candidate.plugin === "object"),
+  });
   if (!resolved || typeof resolved !== "object") {
     return {};
   }

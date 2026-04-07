@@ -162,4 +162,19 @@ describe("plugin module default-unwrapping", () => {
     expect(loaded?.status).toBe("loaded");
     expect(loaded?.failurePhase).toBeUndefined();
   });
+
+  it("does not unwrap past a plugin definition that includes a default field", async () => {
+    const plugin = writePlugin({
+      id: "nested-default-with-definition-default",
+      body: `module.exports = { default: { id: "nested-default-with-definition-default", register() {}, default: { marker: true } } };`,
+    });
+
+    const registry = await loadPlugins([plugin.file]);
+    const loaded = registry.plugins.find(
+      (entry) => entry.id === "nested-default-with-definition-default",
+    );
+
+    expect(loaded?.status).toBe("loaded");
+    expect(loaded?.failurePhase).toBeUndefined();
+  });
 });
