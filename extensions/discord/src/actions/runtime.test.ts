@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveEventCoverImage as resolveEventCoverImageReal } from "../send.guild.js";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
@@ -24,6 +25,11 @@ const discordSendMocks = {
     name: "test",
     type: 0,
   })),
+  createScheduledEventDiscord: vi.fn(async () => ({
+    id: "event-1",
+    name: "Test Event",
+  })),
+  resolveEventCoverImage: vi.fn(async () => "data:image/png;base64,abc123"),
   createThreadDiscord: vi.fn(async () => ({})),
   deleteChannelDiscord: vi.fn(async () => ({ ok: true, channelId: "C1" })),
   deleteMessageDiscord: vi.fn(async () => ({})),
@@ -77,6 +83,8 @@ const {
   sendMessageDiscord,
   sendPollDiscord,
   sendVoiceMessageDiscord,
+  createScheduledEventDiscord,
+  resolveEventCoverImage,
   setChannelPermissionDiscord,
   timeoutMemberDiscord,
 } = discordSendMocks;
@@ -535,8 +543,145 @@ describe("handleDiscordGuildAction", () => {
   });
 });
 
+const eventsEnabled = (key: keyof DiscordActionConfig) => key === "events";
+
 const channelsEnabled = (key: keyof DiscordActionConfig) => key === "channels";
 const channelsDisabled = () => false;
+
+describe("handleDiscordGuildAction - event create", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("creates an event without a cover image", async () => {
+    const result = await handleDiscordGuildAction(
+      "eventCreate",
+      {
+        guildId: "G1",
+        name: "Live Show",
+        startTime: "2026-05-01T20:00:00Z",
+        description: "A great show",
+      },
+      eventsEnabled,
+    );
+    expect(createScheduledEventDiscord).toHaveBeenCalledWith(
+      "G1",
+      expect.objectContaining({
+        name: "Live Show",
+        scheduled_start_time: "2026-05-01T20:00:00Z",
+        description: "A great show",
+        image: undefined,
+      }),
+    );
+    expect(resolveEventCoverImage).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({ ok: true });
+  });
+
+  it("creates an event with a cover image", async () => {
+    const result = await handleDiscordGuildAction(
+      "eventCreate",
+      {
+        guildId: "G1",
+        name: "Art Night",
+        startTime: "2026-06-01T19:00:00Z",
+        image: "https://example.com/cover.png",
+      },
+      eventsEnabled,
+    );
+    expect(resolveEventCoverImage).toHaveBeenCalledWith("https://example.com/cover.png");
+    expect(createScheduledEventDiscord).toHaveBeenCalledWith(
+      "G1",
+      expect.objectContaining({
+        name: "Art Night",
+        image: "data:image/png;base64,abc123",
+      }),
+    );
+    expect(result.details).toMatchObject({ ok: true });
+  });
+
+  it("forwards accountId for event creation", async () => {
+    await handleDiscordGuildAction(
+      "eventCreate",
+      {
+        guildId: "G1",
+        name: "Private Event",
+        startTime: "2026-07-01T18:00:00Z",
+        accountId: "ops",
+      },
+      eventsEnabled,
+    );
+    expect(createScheduledEventDiscord).toHaveBeenCalledWith(
+      "G1",
+      expect.any(Object),
+      { accountId: "ops" },
+    );
+  });
+
+  it("passes through a data URI image without calling resolveEventCoverImage for URL loading", async () => {
+    resolveEventCoverImage.mockResolvedValueOnce("data:image/jpeg;base64,/9j/4AAQ");
+    await handleDiscordGuildAction(
+      "eventCreate",
+      {
+        guildId: "G1",
+        name: "Base64 Event",
+        startTime: "2026-08-01T20:00:00Z",
+        image: "data:image/jpeg;base64,/9j/4AAQ",
+      },
+      eventsEnabled,
+    );
+    expect(resolveEventCoverImage).toHaveBeenCalledWith("data:image/jpeg;base64,/9j/4AAQ");
+    expect(createScheduledEventDiscord).toHaveBeenCalledWith(
+      "G1",
+      expect.objectContaining({
+        image: "data:image/jpeg;base64,/9j/4AAQ",
+      }),
+    );
+  });
+
+  it("respects event gating", async () => {
+    await expect(
+      handleDiscordGuildAction(
+        "eventCreate",
+        { guildId: "G1", name: "Test", startTime: "2026-05-01T20:00:00Z" },
+        channelsDisabled,
+      ),
+    ).rejects.toThrow(/Discord events are disabled/);
+  });
+});
+
+describe("resolveEventCoverImage - data URI handling", () => {
+  it("passes through a valid PNG data URI", async () => {
+    const dataUri = "data:image/png;base64,iVBORw0KGgo=";
+    const result = await resolveEventCoverImageReal(dataUri);
+    expect(result).toBe(dataUri);
+  });
+
+  it("passes through a valid JPEG data URI", async () => {
+    const dataUri = "data:image/jpeg;base64,/9j/4AAQ";
+    const result = await resolveEventCoverImageReal(dataUri);
+    expect(result).toBe(dataUri);
+  });
+
+  it("passes through a valid GIF data URI", async () => {
+    const dataUri = "data:image/gif;base64,R0lGODlh";
+    const result = await resolveEventCoverImageReal(dataUri);
+    expect(result).toBe(dataUri);
+  });
+
+  it("rejects a data URI with unsupported MIME type", async () => {
+    await expect(
+      resolveEventCoverImageReal("data:image/webp;base64,UklGRg=="),
+    ).rejects.toThrow(/PNG, JPG, or GIF/);
+  });
+
+  it("rejects a data URI exceeding 8 MB", async () => {
+    // ~12 MB of base64 payload
+    const bigPayload = "A".repeat(12 * 1024 * 1024);
+    await expect(
+      resolveEventCoverImageReal(`data:image/png;base64,${bigPayload}`),
+    ).rejects.toThrow(/exceeds 8 MB/);
+  });
+});
 
 describe("handleDiscordGuildAction - channel management", () => {
   beforeEach(() => {

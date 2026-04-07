@@ -8,12 +8,14 @@ import type {
 } from "discord-api-types/v10";
 import { Routes } from "discord-api-types/v10";
 import { resolveDiscordRest } from "./send.shared.js";
+import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import type {
   DiscordModerationTarget,
   DiscordReactOpts,
   DiscordRoleChange,
   DiscordTimeoutTarget,
 } from "./send.types.js";
+import { DISCORD_MAX_EVENT_COVER_BYTES } from "./send.types.js";
 
 export async function fetchMemberInfoDiscord(
   guildId: string,
@@ -75,6 +77,47 @@ export async function listScheduledEventsDiscord(
 ): Promise<APIGuildScheduledEvent[]> {
   const rest = resolveDiscordRest(opts);
   return (await rest.get(Routes.guildScheduledEvents(guildId))) as APIGuildScheduledEvent[];
+}
+
+const ALLOWED_EVENT_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/gif"];
+
+function validateEventImageType(contentType: string | undefined): asserts contentType is string {
+  if (!contentType || !ALLOWED_EVENT_IMAGE_TYPES.includes(contentType)) {
+    throw new Error("Discord event cover images must be PNG, JPG, or GIF (max 8 MB)");
+  }
+}
+
+/**
+ * Resolve a cover image URL, local path, data URI, or raw base64 string into a
+ * data URI suitable for the Discord scheduled-event API.
+ *
+ * Accepted inputs (mirrors the send/media pattern):
+ *   - HTTPS/HTTP URL
+ *   - Local file path
+ *   - `data:<mime>;base64,<payload>` (returned as-is after validation)
+ *   - Raw base64 string (assumed PNG when no MIME is detectable)
+ */
+export async function resolveEventCoverImage(imageUrl: string): Promise<string> {
+  // Already a data URI — validate and pass through.
+  const dataUriMatch = imageUrl.match(/^data:(image\/[^;]+);base64,/);
+  if (dataUriMatch) {
+    const mime = dataUriMatch[1].toLowerCase();
+    validateEventImageType(mime);
+    const payload = imageUrl.slice(imageUrl.indexOf(",") + 1);
+    const size = Math.ceil((payload.length * 3) / 4);
+    if (size > DISCORD_MAX_EVENT_COVER_BYTES) {
+      throw new Error(
+        `Event cover image exceeds 8 MB limit (${(size / 1024 / 1024).toFixed(1)} MB)`,
+      );
+    }
+    return imageUrl;
+  }
+
+  // URL or local file — load via the standard media pipeline.
+  const media = await loadWebMediaRaw(imageUrl, DISCORD_MAX_EVENT_COVER_BYTES);
+  const contentType = media.contentType?.toLowerCase();
+  validateEventImageType(contentType);
+  return `data:${contentType};base64,${media.buffer.toString("base64")}`;
 }
 
 export async function createScheduledEventDiscord(

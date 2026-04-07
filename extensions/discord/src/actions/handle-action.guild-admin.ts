@@ -336,6 +336,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const channelId = readStringParam(actionParams, "channelId");
     const location = readStringParam(actionParams, "location");
     const entityType = readStringParam(actionParams, "eventType");
+    const image = readStringParam(actionParams, "image", { trim: false });
     return await handleDiscordAction(
       {
         action: "eventCreate",
@@ -348,6 +349,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         channelId,
         location,
         entityType,
+        image,
       },
       cfg,
     );
