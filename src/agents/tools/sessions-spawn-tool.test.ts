@@ -122,6 +122,23 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it('rejects lightContext when runtime is not "subagent"', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-light-acp", {
+        runtime: "acp",
+        task: "summarize this",
+        lightContext: true,
+      }),
+    ).rejects.toThrow("lightContext is only supported for runtime='subagent'.");
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("routes to ACP runtime when runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
