@@ -255,6 +255,42 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  it("executes persisted restart outbox notify-session tasks on startup", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        message: "restart message",
+        outbox: [
+          {
+            kind: "notify-session",
+            sessionKey: "agent:main:main",
+            message: "outbox message",
+            channel: "telegram",
+            to: "telegram:119707338",
+            accountId: "default",
+            threadId: "20",
+          },
+        ],
+      },
+    } as unknown as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.enqueueSystemEvent).toHaveBeenNthCalledWith(
+      1,
+      "outbox message",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(mocks.requestHeartbeatNow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "gateway.restart.outbox",
+        sessionKey: "agent:main:main",
+      }),
+    );
+  });
+
   it("does not wake the main session when the sentinel has no sessionKey", async () => {
     mocks.consumeRestartSentinel.mockResolvedValue({
       payload: {

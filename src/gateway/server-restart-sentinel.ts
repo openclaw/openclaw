@@ -12,6 +12,7 @@ import {
   consumeRestartSentinel,
   formatRestartSentinelMessage,
   summarizeRestartSentinel,
+  type RestartOutboxTask,
 } from "../infra/restart-sentinel.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -118,12 +119,63 @@ async function deliverRestartSentinelNotice(params: {
   }
 }
 
+function executePersistedRestartOutbox(tasks: RestartOutboxTask[] | undefined) {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return;
+  }
+  for (const task of tasks) {
+    if (task.kind !== "notify-session") {
+      continue;
+    }
+    const message = typeof task.message === "string" ? task.message.trim() : "";
+    const sessionKey = typeof task.sessionKey === "string" ? task.sessionKey.trim() : "";
+    if (!message || !sessionKey) {
+      continue;
+    }
+    const deliveryContext = "deliveryContext" in task ? task.deliveryContext : undefined;
+    const dcChannel =
+      deliveryContext && typeof deliveryContext.channel === "string"
+        ? deliveryContext.channel
+        : undefined;
+    const dcTo =
+      deliveryContext && typeof deliveryContext.to === "string" ? deliveryContext.to : undefined;
+    const dcAccountId =
+      deliveryContext && typeof deliveryContext.accountId === "string"
+        ? deliveryContext.accountId
+        : undefined;
+    enqueueSystemEvent(message, {
+      sessionKey,
+      ...(dcChannel ||
+      dcTo ||
+      dcAccountId ||
+      task.channel ||
+      task.to ||
+      task.accountId ||
+      task.threadId
+        ? {
+            deliveryContext: {
+              ...(dcChannel ? { channel: dcChannel } : {}),
+              ...(dcTo ? { to: dcTo } : {}),
+              ...(dcAccountId ? { accountId: dcAccountId } : {}),
+              ...(task.channel ? { channel: task.channel } : {}),
+              ...(task.to ? { to: task.to } : {}),
+              ...(task.accountId ? { accountId: task.accountId } : {}),
+              ...(task.threadId ? { threadId: task.threadId } : {}),
+            },
+          }
+        : {}),
+    });
+    requestHeartbeatNow({ reason: "gateway.restart.outbox", sessionKey });
+  }
+}
+
 export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const sentinel = await consumeRestartSentinel();
   if (!sentinel) {
     return;
   }
   const payload = sentinel.payload;
+  executePersistedRestartOutbox(payload.outbox);
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
   const summary = summarizeRestartSentinel(payload);

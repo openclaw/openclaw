@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createGatewayCloseHandler } from "./server-close.js";
 
 type TestGatewayHookEvent = {
@@ -210,10 +210,9 @@ describe("createGatewayCloseHandler", () => {
           suppressPrimaryNotice: true,
           outbox: [
             expect.objectContaining({
+              kind: "message",
               message: "Gateway is back after restart",
               sessionKey: "agent:main:main",
-              restartId: "restart-abc",
-              correlationId: "restart-abc",
             }),
           ],
         }),
