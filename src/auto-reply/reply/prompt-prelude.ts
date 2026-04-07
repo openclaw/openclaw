@@ -26,10 +26,9 @@ export function buildReplyPromptBodies(params: {
     prependEvents(params.prefixedBody),
     params.sessionCtx.UntrustedContext,
   );
-  const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]
-    .filter(Boolean)
-    .join("\n\n");
-  const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
+  const contextualPrefix = params.threadContextNote?.trim() || undefined;
+  const prefixedBody = [contextualPrefix, prefixedBodyWithEvents].filter(Boolean).join("\n\n");
+  const queueBodyBase = [contextualPrefix, bodyWithEvents].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(params.ctx);
   const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
   const queuedBody = mediaNote
