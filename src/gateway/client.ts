@@ -178,6 +178,7 @@ export class GatewayClient {
   private tickTimer: NodeJS.Timeout | null = null;
   private readonly requestTimeoutMs: number;
   private pendingStop: PendingStop | null = null;
+  private pendingTlsIdentityError: Error | null = null;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = {
@@ -229,6 +230,7 @@ export class GatewayClient {
       return;
     }
     // Allow node screen snapshots and other large responses.
+    this.pendingTlsIdentityError = null;
     const wsOptions: ClientOptions = {
       maxPayload: 25 * 1024 * 1024,
     };
@@ -247,15 +249,19 @@ export class GatewayClient {
         );
         const expected = normalizeFingerprint(this.opts.tlsFingerprint ?? "");
         if (!expected) {
-          return new Error("gateway tls fingerprint missing");
+          this.pendingTlsIdentityError = new Error("gateway tls fingerprint missing");
+          return false;
         }
         if (!fingerprint) {
-          return new Error("gateway tls fingerprint unavailable");
+          this.pendingTlsIdentityError = new Error("gateway tls fingerprint unavailable");
+          return false;
         }
         if (fingerprint !== expected) {
-          return new Error("gateway tls fingerprint mismatch");
+          this.pendingTlsIdentityError = new Error("gateway tls fingerprint mismatch");
+          return false;
         }
-        return undefined;
+        this.pendingTlsIdentityError = null;
+        return true;
       };
       wsOptions.checkServerIdentity = checkServerIdentity;
     }
@@ -263,6 +269,7 @@ export class GatewayClient {
     this.ws = ws;
 
     ws.on("open", () => {
+      this.pendingTlsIdentityError = null;
       if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
         const tlsError = this.validateTlsFingerprint();
         if (tlsError) {
@@ -314,7 +321,11 @@ export class GatewayClient {
     ws.on("error", (err) => {
       logDebug(`gateway client error: ${String(err)}`);
       if (!this.connectSent) {
-        this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
+        const pendingTlsError = this.pendingTlsIdentityError;
+        this.pendingTlsIdentityError = null;
+        this.opts.onConnectError?.(
+          pendingTlsError ?? (err instanceof Error ? err : new Error(String(err))),
+        );
       }
     });
   }
