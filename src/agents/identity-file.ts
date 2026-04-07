@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isAvatarDataUrl, isAvatarHttpUrl, looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
@@ -35,6 +36,33 @@ function isIdentityPlaceholder(value: string): boolean {
   return IDENTITY_PLACEHOLDER_VALUES.has(normalized);
 }
 
+function extractAvatarValue(rawValue: string): string {
+  const value = rawValue.trim();
+  if (!value) {
+    return value;
+  }
+  const parts = value
+    .split(/\s+[\u2013\u2014-]\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length > 1) {
+    for (let index = parts.length - 1; index >= 0; index -= 1) {
+      const candidate = parts[index] ?? "";
+      if (
+        isAvatarHttpUrl(candidate) ||
+        isAvatarDataUrl(candidate) ||
+        looksLikeAvatarPath(candidate)
+      ) {
+        return candidate;
+      }
+    }
+  }
+  if (isAvatarHttpUrl(value) || isAvatarDataUrl(value) || looksLikeAvatarPath(value)) {
+    return value;
+  }
+  return value;
+}
+
 export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   const identity: AgentIdentityFile = {};
   const lines = content.split(/\r?\n/);
@@ -47,10 +75,11 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     const label = normalizeLowercaseStringOrEmpty(
       cleaned.slice(0, colonIndex).replace(/[*_]/g, ""),
     );
-    const value = cleaned
+    const rawValue = cleaned
       .slice(colonIndex + 1)
       .replace(/^[*_]+|[*_]+$/g, "")
       .trim();
+    const value = label === "avatar" ? extractAvatarValue(rawValue) : rawValue;
     if (!value) {
       continue;
     }
