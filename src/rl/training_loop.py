@@ -355,7 +355,7 @@ class TrainingRunner:
                 success=rule_score > 0.5,
                 latency_ms=latency_ms,
                 auditor_score=staged_reward,  # use staged reward
-                user_rating=0.0,
+                user_rating=None,
                 output_tokens=len(response) // 4,
                 error_type=None,
             ))

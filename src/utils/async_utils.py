@@ -19,7 +19,8 @@ async def taskgroup_gather(
 
     Drop-in replacement for ``asyncio.gather(*coros, return_exceptions=...)``:
     - ``return_exceptions=True``: exceptions are returned as values (like gather).
-    - ``return_exceptions=False``: first exception cancels all siblings and propagates.
+    - ``return_exceptions=False``: first exception cancels all siblings and propagates
+      as a bare exception (unwrapped from ExceptionGroup for gather-compatibility).
     """
     results: List[Any] = [None] * len(coros)
 
@@ -32,8 +33,15 @@ async def taskgroup_gather(
             else:
                 raise
 
-    async with asyncio.TaskGroup() as tg:
-        for i, c in enumerate(coros):
-            tg.create_task(_wrap(i, c))
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for i, c in enumerate(coros):
+                tg.create_task(_wrap(i, c))
+    except ExceptionGroup as eg:
+        # Unwrap single-exception groups to match asyncio.gather behavior
+        if not return_exceptions:
+            if len(eg.exceptions) == 1:
+                raise eg.exceptions[0] from eg
+            raise
 
     return results

@@ -5,7 +5,6 @@ Inspired by:
 - Gorilla (arXiv:2305.15334): connecting LLMs to massive APIs
 """
 
-import asyncio
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -25,7 +24,6 @@ class ToolLearningTracker:
     def __init__(self) -> None:
         self._stats: Dict[str, ToolStats] = {}
         self._task_tool_map: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        self._lock = asyncio.Lock()
 
     def record_tool_use(
         self,

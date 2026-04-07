@@ -223,6 +223,9 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
     # Session Management: Context Auto-Reset (per-user)
     if not hasattr(gateway, '_session_msg_count'):
         gateway._session_msg_count = {}
+    # Evict to prevent unbounded memory growth
+    if len(gateway._session_msg_count) > 10000:
+        gateway._session_msg_count.clear()
     _uid = message.from_user.id if message.from_user else 0
     gateway._session_msg_count[_uid] = gateway._session_msg_count.get(_uid, 0) + 1
 
@@ -234,9 +237,11 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
         if hasattr(gateway, 'memory_gc'):
             gateway.memory_gc._persistent_summary = ""
             gateway.memory_gc._compression_count = 0
-        # v15.1: also clear chat history on session reset
+        # v15.1: also clear chat history on session reset (per-user only)
         if hasattr(gateway, '_chat_history'):
-            gateway._chat_history.clear()
+            _uid_key = message.from_user.id if message.from_user else 0
+            if _uid_key in gateway._chat_history:
+                del gateway._chat_history[_uid_key]
         logger.info("Session context auto-reset triggered", limit=reset_limit)
         await message.reply(
             f"🔄 **Внимание:** Достигнут лимит сессии ({reset_limit} сообщений). "
@@ -374,7 +379,7 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
             from src.boot._heartbeat import send_api_error_debug
             tg_config = gateway.config.get("system", {}).get("telegram", {})
             await send_api_error_debug(
-                token=tg_config.get("token", ""),
+                token=tg_config.get("bot_token", ""),
                 admin_id=gateway.admin_id,
                 error_info=api_err,
             )
@@ -392,10 +397,11 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
         }
         markup = ForceReply(selective=True)
         try:
-            await status_msg.edit_text(
-                f"❓ *Вопрос от Оркестратора:*\n\n{question}",
-                parse_mode="Markdown",
-            )
+            if status_msg:
+                await status_msg.edit_text(
+                    f"❓ *Вопрос от Оркестратора:*\n\n{question}",
+                    parse_mode="Markdown",
+                )
             await message.reply("Ответьте на это сообщение для продолжения (Reply):", reply_markup=markup)
         except Exception:
             await message.reply(
@@ -419,6 +425,7 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
     _pipeline_elapsed = time.time() - _pipeline_start
 
     # Safety: Hallucination Detection on output
+    hall_result = None
     if hasattr(gateway, 'hallucination_detector') and gateway.hallucination_detector:
         hall_result = gateway.hallucination_detector.detect(llm_response, prompt)
         if hall_result.overall_risk == "high":
@@ -479,7 +486,7 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
     # Build metadata footer (spoiler in Telegram)
     _dur = f"{_pipeline_elapsed:.1f}s"
     _steps_count = len(result.get("steps", []))
-    _hall_risk = hall_result.overall_risk
+    _hall_risk = hall_result.overall_risk if hall_result else "n/a"
     _total_est_tokens = sum(len(s.get("response", "")) // 4 for s in result.get("steps", []))
     meta_footer = (
         f"\n\n<tg-spoiler>📊 {display_brigade} | {chain_str} | "
@@ -591,14 +598,14 @@ async def _send_response(gateway, message, status_msg, result, llm_response,
             await status_msg.edit_text(chunks[0])
     else:
         # First chunk replaces the status message
-        first = f"{chunks[0]}\n\n⏬ _(1/{len(chunks)})_"
+        first = f"{chunks[0]}\n\n⏬ <i>(1/{len(chunks)})</i>"
         try:
             await status_msg.edit_text(first, parse_mode="HTML")
         except Exception:
             await status_msg.edit_text(first)
         # Remaining chunks sent as new messages
         for i, chunk in enumerate(chunks[1:], start=2):
-            label = f"\n\n⏬ _({i}/{len(chunks)})_" if i < len(chunks) else ""
+            label = f"\n\n⏬ <i>({i}/{len(chunks)})</i>" if i < len(chunks) else ""
             try:
                 await message.reply(chunk + label, parse_mode="HTML")
             except Exception:

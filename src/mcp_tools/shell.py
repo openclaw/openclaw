@@ -28,7 +28,7 @@ mcp = FastMCP("Shell Executor")
 # Add patterns here to block commands that must never run automatically.      #
 # --------------------------------------------------------------------------- #
 _DENY_PATTERNS: list[re.Pattern] = [
-    re.compile(r'\brm\s+-rf\b', re.IGNORECASE),
+    re.compile(r'\brm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+|--recursive)', re.IGNORECASE),
     re.compile(r'\bformat\b', re.IGNORECASE),
     re.compile(r'\bdiskpart\b', re.IGNORECASE),
     re.compile(r'\bmkfs\b', re.IGNORECASE),
@@ -37,8 +37,28 @@ _DENY_PATTERNS: list[re.Pattern] = [
     re.compile(r'\breboot\b', re.IGNORECASE),
     re.compile(r'\bpowershell\s+-enc\b', re.IGNORECASE),     # base64-encoded PS payloads
     re.compile(r'>\s*/dev/(sd|hd|nvme)', re.IGNORECASE),     # raw disk writes
-    re.compile(r'\bcurl\b.*(sh|bash|python)\s*\|', re.IGNORECASE),  # pipe-to-shell downloads
+    re.compile(r'\b(curl|wget)\b.*\|\s*(sh|bash|python)', re.IGNORECASE),  # pipe-to-shell downloads
+    re.compile(r'\b(python|python3|node|ruby|perl)\s+-[ce]\b', re.IGNORECASE),  # inline code execution
+    re.compile(r'\bchmod\s+[0-7]*7[0-7]*\b', re.IGNORECASE),  # world-writable chmod
+    re.compile(r'\b(sudo|su)\b', re.IGNORECASE),             # privilege escalation
+    re.compile(r'\bnc\s+-[a-z]*l', re.IGNORECASE),           # netcat listener
+    re.compile(r'\bcrontab\b', re.IGNORECASE),               # cron modification
+    re.compile(r'\bmkdir.*&&.*cd.*&&.*\bwget\b', re.IGNORECASE),  # download-and-execute chains
+    re.compile(r'\beval\b', re.IGNORECASE),                  # eval in shell
+    re.compile(r'\bbase64\s+(-d|--decode)', re.IGNORECASE),  # base64 decode pipes
 ]
+
+# Allowed commands whitelist — only these base commands can run
+_ALLOW_LIST: frozenset[str] = frozenset({
+    "ls", "dir", "cat", "head", "tail", "echo", "pwd", "cd",
+    "grep", "rg", "find", "wc", "sort", "uniq", "diff",
+    "git", "pip", "pip3", "npm", "npx", "pnpm", "bunx", "cargo",
+    "python", "python3",  # only without -c/-e (blocked by deny pattern)
+    "mkdir", "cp", "mv", "touch", "tree", "which", "where",
+    "docker", "docker-compose", "kubectl",
+    "curl", "wget",  # only without pipe-to-shell (blocked by deny pattern)
+    "jq", "yq", "awk", "sed", "cut", "tr",
+})
 
 _MAX_OUTPUT_CHARS = 16_000
 _MAX_TIMEOUT_SEC = 120
@@ -49,11 +69,28 @@ def _is_denied(command: str) -> str | None:
     for pattern in _DENY_PATTERNS:
         if pattern.search(command):
             return pattern.pattern
+
+    # Whitelist check: extract base command and verify it's allowed
+    # Handle chained commands (&&, ||, ;, |)
+    segments = re.split(r'[&|;]+', command)
+    for segment in segments:
+        segment = segment.strip()
+        if not segment:
+            continue
+        # Extract the base command (first word)
+        parts = shlex.split(segment) if segment else []
+        if parts:
+            base_cmd = os.path.basename(parts[0]).lower()
+            # Strip common extensions on Windows
+            base_cmd = re.sub(r'\.(exe|cmd|bat|ps1)$', '', base_cmd)
+            if base_cmd not in _ALLOW_LIST:
+                return f"command '{base_cmd}' not in allowlist"
+
     return None
 
 
 @mcp.tool()
-def run_command(command: str, workdir: str = "", timeout: int = 30) -> str:
+async def run_command(command: str, workdir: str = "", timeout: int = 30) -> str:
     """
     Execute a shell command and return its output (stdout + stderr).
 
@@ -80,7 +117,7 @@ def run_command(command: str, workdir: str = "", timeout: int = 30) -> str:
     capped_timeout = min(int(timeout), _MAX_TIMEOUT_SEC)
 
     # Resolve working directory
-    bot_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    bot_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     cwd = workdir.strip() if workdir.strip() else bot_root
     if not os.path.isdir(cwd):
         cwd = bot_root
@@ -97,69 +134,41 @@ def run_command(command: str, workdir: str = "", timeout: int = 30) -> str:
     # Inherit PATH + common env vars so npm/pnpm/bunx resolve correctly
     env = os.environ.copy()
 
+    return await _exec_async(args, cwd, env, capped_timeout, command)
+
+
+async def _exec_async(
+    args: list[str], cwd: str, env: dict, timeout: int, command: str = "",
+) -> str:
+    """Non-blocking subprocess execution using asyncio.create_subprocess_exec."""
+    proc: asyncio.subprocess.Process | None = None
     try:
-        # Check if there's already a running event loop
-        try:
-            asyncio.get_running_loop()
-            _has_loop = True
-        except RuntimeError:
-            _has_loop = False
-
-        if not _has_loop:
-            # No running loop — safe to use run_until_complete
-            proc = asyncio.new_event_loop().run_until_complete(
-                _exec_async(args, cwd, env, capped_timeout)
-            )
-            return proc
-        else:
-            # Running loop exists — fall through to sync subprocess
-            raise RuntimeError("use sync fallback")
-    except RuntimeError:
-        # If no event loop is running (called from sync context by FastMCP)
-        import subprocess
-        try:
-            result = subprocess.run(
-                args,
-                cwd=cwd,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=capped_timeout,
-                encoding="utf-8",
-                errors="replace",
-            )
-            output = _merge_output(result.stdout, result.stderr, result.returncode)
-            logger.info("run_command exit=%d: %s", result.returncode, command[:80])
-            return output
-        except subprocess.TimeoutExpired:
-            return f"⏳ Timeout: command took longer than {capped_timeout} s and was killed."
-        except Exception as exc:
-            logger.error("run_command error: %s", exc)
-            return f"❌ Execution error: {exc}"
-
-
-async def _exec_async(args: list[str], cwd: str, env: dict, timeout: int) -> str:
-    """Async variant of subprocess execution."""
-    import subprocess
-    try:
-        result = await asyncio.wait_for(
-            asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    args,
-                    cwd=cwd,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-            ),
-            timeout=timeout + 2,
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        return _merge_output(result.stdout, result.stderr, result.returncode)
+
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            proc.communicate(), timeout=timeout,
+        )
+
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        returncode = proc.returncode or 0
+
+        logger.info("run_command exit=%d: %s", returncode, (command or " ".join(args))[:80])
+        return _merge_output(stdout, stderr, returncode)
+
     except asyncio.TimeoutError:
+        if proc is not None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
         return f"⏳ Timeout: command took longer than {timeout} s and was killed."
     except Exception as exc:
         logger.error("_exec_async error: %s", exc)

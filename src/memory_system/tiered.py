@@ -17,6 +17,7 @@ import json
 import math
 import os
 import re
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
@@ -72,6 +73,8 @@ class EpisodeRecord:
     success: bool
     timestamp: float = field(default_factory=time.time)
     compressed_summary: str = ""
+    # Alias for cross-module compatibility with legacy.EpisodeRecord
+    summary: str = ""
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -516,9 +519,15 @@ class TieredMemoryManager:
             if version > self._STATE_VERSION:
                 logger.warning("State file version newer than supported", file_version=version)
             for k, d in data.get("hot", {}).items():
-                self._hot[k] = MemoryItem.from_dict(d)
+                try:
+                    self._hot[k] = MemoryItem.from_dict(d)
+                except (TypeError, KeyError) as e:
+                    logger.warning("Skipping corrupt hot item", key=k, error=str(e))
             for k, d in data.get("warm", {}).items():
-                self._warm[k] = MemoryItem.from_dict(d)
+                try:
+                    self._warm[k] = MemoryItem.from_dict(d)
+                except (TypeError, KeyError) as e:
+                    logger.warning("Skipping corrupt warm item", key=k, error=str(e))
             logger.info("TieredMemory state restored", path=path, hot=len(self._hot), warm=len(self._warm))
         except Exception as e:
             logger.warning("Failed to restore TieredMemory state", error=str(e))
@@ -547,6 +556,7 @@ class EpisodicMemory:
         self._storage_file = os.path.join(storage_dir, "enhanced_episodes.jsonl")
         self._idf_dirty = True
         self._idf_cache: Dict[str, float] = {}
+        self._file_lock = threading.Lock()
         self._load()
 
     # -- Public API --
@@ -681,24 +691,31 @@ class EpisodicMemory:
             return
         try:
             with open(self._storage_file, "r", encoding="utf-8") as f:
-                for line in f:
+                for line_num, line in enumerate(f, 1):
                     line = line.strip()
-                    if line:
+                    if not line:
+                        continue
+                    try:
                         self._episodes.append(EpisodeRecord.from_dict(json.loads(line)))
-        except (json.JSONDecodeError, OSError) as exc:
+                    except (json.JSONDecodeError, TypeError, KeyError) as exc:
+                        logger.warning("episode_line_parse_error", line=line_num, error=str(exc))
+                        continue  # Skip corrupt line, keep loading rest
+        except OSError as exc:
             logger.warning("episode_load_error", error=str(exc))
 
     def _persist_one(self, episode: EpisodeRecord) -> None:
         os.makedirs(self.storage_dir, exist_ok=True)
-        with open(self._storage_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(episode.to_dict(), ensure_ascii=False) + "\n")
+        with self._file_lock:
+            with open(self._storage_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(episode.to_dict(), ensure_ascii=False) + "\n")
 
     def _rewrite_all(self) -> None:
         """Rewrite the full JSONL file (used after compression/import)."""
         os.makedirs(self.storage_dir, exist_ok=True)
-        with open(self._storage_file, "w", encoding="utf-8") as f:
-            for ep in self._episodes:
-                f.write(json.dumps(ep.to_dict(), ensure_ascii=False) + "\n")
+        with self._file_lock:
+            with open(self._storage_file, "w", encoding="utf-8") as f:
+                for ep in self._episodes:
+                    f.write(json.dumps(ep.to_dict(), ensure_ascii=False) + "\n")
 
     def _rebuild_idf_if_needed(self) -> None:
         if not self._idf_dirty:

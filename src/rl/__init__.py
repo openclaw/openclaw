@@ -57,4 +57,9 @@ __all__ = [
     "AdaptiveContextBuilder", "ContextSection",
     "BenchmarkRunner", "BenchmarkScorer", "BENCHMARK_TASKS",
     "TrainingRunner",
+    # Research-backed Training (Phase 3)
+    "MCTSPromptSearch", "PromptConstitution", "PromptRule",
+    "DifficultyCurriculum", "DifficultyLevel", "DifficultyTask",
+    "StagedRewardCalculator", "StabilityMonitor",
+    "QualityCritic", "MultiEvaluator", "CoEvolutionTracker",
 ]

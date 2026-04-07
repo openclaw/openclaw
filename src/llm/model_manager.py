@@ -41,10 +41,15 @@ WSL_LORA_DIR = "/mnt/d/lora_adapters"
 
 def _running_in_wsl() -> bool:
     """Detect if we are running inside WSL (Linux on Windows)."""
-    return os.environ.get("WSL_ENV") == "1" or os.path.exists("/proc/version") and (
-        "microsoft" in open("/proc/version").read().lower()
-        if os.path.exists("/proc/version") else False
-    )
+    if os.environ.get("WSL_ENV") == "1":
+        return True
+    if os.path.exists("/proc/version"):
+        try:
+            with open("/proc/version") as f:
+                return "microsoft" in f.read().lower()
+        except OSError:
+            pass
+    return False
 
 
 def _wsl_cmd(*args: str) -> list[str]:
@@ -65,8 +70,12 @@ _NO_TOOL_CALL_MODELS: frozenset[str] = frozenset({
 
 # CLI flags that must be stripped together with their value argument
 _TOOL_CALL_FLAGS: frozenset[str] = frozenset({
-    "--enable-auto-tool-choice",
     "--tool-call-parser",
+})
+
+# Boolean flags that are stripped alone (no following value)
+_TOOL_CALL_BOOL_FLAGS: frozenset[str] = frozenset({
+    "--enable-auto-tool-choice",
 })
 
 
@@ -89,8 +98,10 @@ def _filter_args_for_model(extra_args: list[str], model_name: str) -> list[str]:
             skip_next = False
             continue
         if arg in _TOOL_CALL_FLAGS:
-            skip_next = True  # also drop the value that follows
+            skip_next = True  # drop the flag AND the value that follows
             continue
+        if arg in _TOOL_CALL_BOOL_FLAGS:
+            continue  # boolean flag — drop it alone, don't skip next
         filtered.append(arg)
     return filtered
 
@@ -493,7 +504,7 @@ class ModelManager:
 
         engine_args.extend(filtered_extra)
 
-        args_str = " ".join(engine_args)
+        args_str = " ".join(shlex.quote(a) for a in engine_args)
         log_path = f"{WSL_HF_HOME}/vllm_server.log"
         bash_cmd = f"export HF_HOME={WSL_HF_HOME} && {args_str} > {log_path} 2>&1"
 

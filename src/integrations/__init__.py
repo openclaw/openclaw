@@ -2,7 +2,6 @@
 
 Submodules:
   - archivist_telegram : Telegram message splitter + status updates + rate limiting
-  - discord_handler    : Discord message handler
   - tailscale_monitor  : Tailscale IP monitor
   - tts_engine         : Multi-provider TTS (edge-tts, etc.)
   - rag_engine         : ChromaDB-based retrieval (Markdown chunking + cosine similarity)

@@ -24,7 +24,7 @@ async def reflexion_fallback(
         task = (
             f"The pipeline produced an error or low-quality response for this task:\n"
             f"{prompt[:500]}\n\n"
-            f"Error/response:\n{error_response[:500]}\n\n"
+            f"Error/response:\n{(error_response or '')[:500]}\n\n"
             f"Reflect on what went wrong and produce a corrected answer."
         )
         result = await agent.solve_with_reflection(task, max_attempts=2)

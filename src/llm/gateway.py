@@ -38,6 +38,29 @@ _token_budget = None
 _metrics_collector = None
 _configured: bool = False
 
+# Shared aiohttp session (connection pooling — avoids creating a new session per call)
+_shared_session: Optional[aiohttp.ClientSession] = None
+_session_lock = asyncio.Lock()
+
+
+async def _get_shared_session(timeout: Optional[aiohttp.ClientTimeout] = None) -> aiohttp.ClientSession:
+    """Return (and lazily create) a module-level shared aiohttp session."""
+    global _shared_session
+    async with _session_lock:
+        if _shared_session is None or _shared_session.closed:
+            _shared_session = aiohttp.ClientSession(
+                timeout=timeout or aiohttp.ClientTimeout(total=120)
+            )
+        return _shared_session
+
+
+async def close_shared_session() -> None:
+    """Close the shared aiohttp session (call during shutdown)."""
+    global _shared_session
+    if _shared_session and not _shared_session.closed:
+        await _shared_session.close()
+        _shared_session = None
+
 # ---------------------------------------------------------------------------
 # HITL (Human-in-the-Loop) Approval Gate — extracted to src/llm/hitl.py
 # Re-exported here for backward compatibility.
@@ -49,7 +72,6 @@ from src.llm.hitl import (
     get_pending_approval,
     resolve_approval,
     set_approval_callback,
-    _approval_callback,
     _approval_config,
     _pending_approvals,
 )
@@ -263,8 +285,8 @@ async def route_llm(
             if routed:
                 selected_model = routed
                 logger.debug("SmartRouter selected", model=selected_model, task_type=inferred_type)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("SmartRouter failed, using config fallback", error=str(e))
 
     # Fallback model from config
     if not selected_model:
@@ -389,8 +411,23 @@ def _infer_task_type(prompt: str, hint: str) -> str:
     return "general"
 
 
+def _ensure_free_suffix(model: str) -> str:
+    """Ensure model name has :free suffix to prevent 402 on free-tier."""
+    if ":free" in model:
+        return model
+    logger.warning("Free-tier guard: model missing :free suffix, auto-appending", model=model)
+    # Replace existing :<tag> suffix if present (e.g. :beta, :extended)
+    return (model.rsplit(":", 1)[0] if ":" in model and "/" in model.split(":")[0] else model) + ":free"
+
+
 # Last API error details — populated by _call_openrouter for Telegram debug reporting
 _last_api_error: Dict[str, Any] = {}
+
+
+def set_last_api_error(error_data: Dict[str, Any]) -> None:
+    """Atomically replace the last API error state (prevents partial-update races)."""
+    global _last_api_error
+    _last_api_error = dict(error_data)
 
 
 def get_last_api_error() -> Dict[str, Any]:
@@ -407,7 +444,7 @@ async def _call_openrouter(
     timeout_override: Optional[int] = None,
 ) -> str:
     """Call OpenRouter API with retry + circuit breaker awareness."""
-    from src.llm.openrouter import _is_circuit_open_async, record_failure_async, record_success_async, _wait_for_rate_limit
+    from src.llm.openrouter import _is_circuit_open_async, record_failure_async, record_success_async, _wait_for_rate_limit, _update_rate_limits
 
     api_key = _openrouter_config.get("api_key", "").strip()
     base_url = _openrouter_config.get("base_url", "https://openrouter.ai/api/v1").rstrip("/")
@@ -420,10 +457,7 @@ async def _call_openrouter(
     await _wait_for_rate_limit()
 
     # Free-tier enforcement: ensure model has :free suffix to prevent 402
-    if ":free" not in model:
-        logger.warning("Free-tier guard: model missing :free suffix, auto-appending", model=model)
-        # Replace existing :<tag> suffix if present (e.g. :beta, :extended)
-        model = (model.rsplit(":", 1)[0] if ":" in model and "/" in model.split(":")[0] else model) + ":free"
+    model = _ensure_free_suffix(model)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -440,81 +474,82 @@ async def _call_openrouter(
     }
 
     timeout = aiohttp.ClientTimeout(total=timeout_override or 120)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        for attempt in range(retries):
-            try:
-                async with session.post(endpoint, json=payload, headers=headers) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        content = (
-                            ((data.get("choices") or [{}])[0]
-                            .get("message") or {})
-                            .get("content")
+    session = await _get_shared_session(timeout)
+    for attempt in range(retries):
+        try:
+            async with session.post(endpoint, json=payload, headers=headers, timeout=timeout) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    _update_rate_limits(dict(resp.headers))
+                    content = (
+                        ((data.get("choices") or [{}])[0]
+                        .get("message") or {})
+                        .get("content")
+                    )
+                    if content is None or not content.strip():
+                        # NoneType / empty response — treat as transient failure, retry
+                        logger.warning(
+                            "OpenRouter returned empty/None content",
+                            model=model,
+                            attempt=f"{attempt + 1}/{retries}",
                         )
-                        if content is None or not content.strip():
-                            # NoneType / empty response — treat as transient failure, retry
-                            logger.warning(
-                                "OpenRouter returned empty/None content",
-                                model=model,
-                                attempt=f"{attempt + 1}/{retries}",
-                            )
-                            await record_failure_async(model)
-                            if attempt < retries - 1:
-                                await asyncio.sleep(2 ** attempt)
-                                continue
-                            return ""
-                        await record_success_async(model)
-                        return content.strip()
+                        await record_failure_async(model)
+                        if attempt < retries - 1:
+                            await asyncio.sleep(2 ** attempt)
+                            continue
+                        return ""
+                    await record_success_async(model)
+                    return content.strip()
 
-                    # Capture full error details for debug reporting
-                    error_body = await resp.text()
-                    # Sanitize to avoid leaking auth tokens in stored error state
-                    _sanitized = re.sub(
-                        r'(Bearer\s+|api[_-]?key["\s:=]+)[^\s"]+',
-                        r'\1[REDACTED]',
-                        error_body[:1000],
-                        flags=re.IGNORECASE,
-                    )
-                    _last_api_error.update({
-                        "status": resp.status,
-                        "model": model,
-                        "endpoint": endpoint,
-                        "body": _sanitized,
-                        "attempt": attempt + 1,
-                    })
-                    logger.warning(
-                        "OpenRouter HTTP error",
-                        status=resp.status,
-                        model=model,
-                        attempt=f"{attempt + 1}/{retries}",
-                        body=error_body[:300],
-                    )
-
-                    if resp.status == 429 and attempt < retries - 1:
-                        wait = min(2 ** attempt * 3, 30)
-                        await asyncio.sleep(wait)
-                        continue
-
-                    await record_failure_async(model)
-                    if attempt < retries - 1:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                await record_failure_async(model)
-                _last_api_error.update({
-                    "status": 0,
+                # Capture full error details for debug reporting
+                error_body = await resp.text()
+                # Sanitize to avoid leaking auth tokens in stored error state
+                _sanitized = re.sub(
+                    r'(Bearer\s+|api[_-]?key["\s:=]+)[^\s"]+',
+                    r'\1[REDACTED]',
+                    error_body[:1000],
+                    flags=re.IGNORECASE,
+                )
+                set_last_api_error({
+                    "status": resp.status,
                     "model": model,
                     "endpoint": endpoint,
-                    "body": str(e)[:1000],
+                    "body": _sanitized,
                     "attempt": attempt + 1,
                 })
+                logger.warning(
+                    "OpenRouter HTTP error",
+                    status=resp.status,
+                    model=model,
+                    attempt=f"{attempt + 1}/{retries}",
+                    body=error_body[:300],
+                )
+
+                if resp.status == 429 and attempt < retries - 1:
+                    wait = min(2 ** attempt * 3, 30)
+                    await asyncio.sleep(wait)
+                    continue
+
+                await record_failure_async(model)
                 if attempt < retries - 1:
-                    logger.warning("OpenRouter error", error=str(e), attempt=attempt)
                     await asyncio.sleep(2 ** attempt)
                     continue
-                logger.warning("OpenRouter failed after retries", error=str(e))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            await record_failure_async(model)
+            set_last_api_error({
+                "status": 0,
+                "model": model,
+                "endpoint": endpoint,
+                "body": str(e)[:1000],
+                "attempt": attempt + 1,
+            })
+            if attempt < retries - 1:
+                logger.warning("OpenRouter error", error=str(e), attempt=attempt)
+                await asyncio.sleep(2 ** attempt)
+                continue
+            logger.warning("OpenRouter failed after retries", error=str(e))
 
     return ""
 
@@ -538,8 +573,7 @@ async def _call_openrouter_stream(
     await _wait_for_rate_limit()
 
     # Free-tier enforcement
-    if ":free" not in model:
-        model = (model.rsplit(":", 1)[0] if ":" in model and "/" in model.split(":")[0] else model) + ":free"
+    model = _ensure_free_suffix(model)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -557,35 +591,35 @@ async def _call_openrouter_stream(
 
     timeout = aiohttp.ClientTimeout(total=120)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(endpoint, json=payload, headers=headers) as resp:
-                _update_rate_limits(dict(resp.headers))
-                if resp.status != 200:
-                    await record_failure_async(model)
-                    return
+        session = await _get_shared_session(timeout)
+        async with session.post(endpoint, json=payload, headers=headers, timeout=timeout) as resp:
+            _update_rate_limits(dict(resp.headers))
+            if resp.status != 200:
+                await record_failure_async(model)
+                return
 
-                stream_ok = False
-                async for line in resp.content:
-                    decoded = line.decode("utf-8", errors="ignore").strip()
-                    if not decoded.startswith("data: "):
-                        continue
-                    data_str = decoded[6:]
-                    if data_str == "[DONE]":
-                        stream_ok = True
-                        break
-                    try:
-                        data = json.loads(data_str)
-                        delta = (data.get("choices") or [{}])[0].get("delta") or {}
-                        chunk = delta.get("content", "")
-                        if chunk:
-                            yield chunk
-                    except (json.JSONDecodeError, IndexError):
-                        continue
+            stream_ok = False
+            async for line in resp.content:
+                decoded = line.decode("utf-8", errors="ignore").strip()
+                if not decoded.startswith("data: "):
+                    continue
+                data_str = decoded[6:]
+                if data_str == "[DONE]":
+                    stream_ok = True
+                    break
+                try:
+                    data = json.loads(data_str)
+                    delta = (data.get("choices") or [{}])[0].get("delta") or {}
+                    chunk = delta.get("content", "")
+                    if chunk:
+                        yield chunk
+                except (json.JSONDecodeError, IndexError):
+                    continue
 
-                if stream_ok:
-                    await record_success_async(model)
-                else:
-                    await record_failure_async(model)
+            if stream_ok:
+                await record_success_async(model)
+            else:
+                await record_failure_async(model)
     except Exception as e:
         await record_failure_async(model)
         logger.warning("OpenRouter stream failed", model=model, error=str(e))

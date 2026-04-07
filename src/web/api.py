@@ -72,7 +72,10 @@ def record_log(event: Dict[str, Any]) -> None:
     # Non-blocking broadcast
     for ws in list(_ws_clients):
         try:
-            asyncio.get_event_loop().create_task(ws.send_json(entry))
+            loop = asyncio.get_running_loop()
+            loop.create_task(ws.send_json(entry))
+        except RuntimeError:
+            pass  # No running loop — skip WS broadcast
         except Exception:
             pass
 

@@ -99,15 +99,7 @@ async def configure_llm_and_pipeline(gateway) -> None:
     gateway._scheduler = OpenClawScheduler(gateway.config, gateway.pipeline, gateway.bot)
     await gateway._scheduler.start()
 
-    # 8. Discord handler (optional)
-    discord_cfg = gateway.config.get("discord", {})
-    if discord_cfg.get("token") or os.getenv("DISCORD_BOT_TOKEN"):
-        from src.integrations.discord_handler import DiscordHandler
-        gateway._discord = DiscordHandler(gateway.config, gateway.pipeline)
-        gateway._discord.run_in_background()
-        logger.info("Discord handler started in background")
-
-    # 9. Brigade REST API
+    # 8. Brigade REST API
     brigade_port = int(os.environ.get("BRIGADE_API_PORT", "8765"))
     try:
         from src.integrations.brigade_api import run_brigade_api

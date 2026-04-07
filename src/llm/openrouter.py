@@ -24,6 +24,30 @@ logger = structlog.get_logger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
+# Shared aiohttp session for connection pooling
+_shared_or_session: Optional[aiohttp.ClientSession] = None
+_or_session_lock = asyncio.Lock()
+
+
+async def _get_or_session(timeout: Optional[aiohttp.ClientTimeout] = None) -> aiohttp.ClientSession:
+    """Return (and lazily create) a module-level shared aiohttp session for OpenRouter."""
+    global _shared_or_session
+    async with _or_session_lock:
+        if _shared_or_session is None or _shared_or_session.closed:
+            _shared_or_session = aiohttp.ClientSession(
+                timeout=timeout or aiohttp.ClientTimeout(total=120)
+            )
+        return _shared_or_session
+
+
+async def close_or_session() -> None:
+    """Close the shared OpenRouter aiohttp session (call during shutdown)."""
+    global _shared_or_session
+    if _shared_or_session and not _shared_or_session.closed:
+        await _shared_or_session.close()
+        _shared_or_session = None
+
+
 # Per-model circuit breaker state (isolates failures by model)
 _model_circuit_breakers: Dict[str, Dict[str, Any]] = {}
 _CB_THRESHOLD = 5        # consecutive failures before opening circuit for a model
@@ -154,8 +178,12 @@ async def reset_circuit_breakers_async() -> None:
 
 
 def get_rate_limit_info() -> Dict[str, Any]:
-    """Get current rate-limit and circuit breaker state."""
-    open_models = [m for m in _model_circuit_breakers if _is_circuit_open(m)]
+    """Get current rate-limit and circuit breaker state (read-only, no mutations)."""
+    open_models = []
+    for m in _model_circuit_breakers:
+        cb = _get_cb(m)
+        if cb["failures"] >= _CB_THRESHOLD and time.time() < cb["open_until"]:
+            open_models.append(m)
     return {
         "requests_remaining": _rate_limit_state["requests_remaining"],
         "tokens_remaining": _rate_limit_state["tokens_remaining"],
@@ -250,154 +278,164 @@ async def call_openrouter(
             payload["tools"] = tools
 
         timeout = aiohttp.ClientTimeout(total=timeout_sec)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            for attempt in range(max_retries):
-                payload["messages"] = list(messages)  # reset to avoid corrupted retries
-                try:
-                    async with session.post(
-                        f"{base_url}/chat/completions",
-                        json=payload,
-                        headers=headers,
-                    ) as resp:
-                        _update_rate_limits(dict(resp.headers))
+        session = await _get_or_session(timeout)
+        for attempt in range(max_retries):
+            payload["messages"] = list(messages)  # reset to avoid corrupted retries
+            try:
+                async with session.post(
+                    f"{base_url}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=timeout,
+                ) as resp:
+                    _update_rate_limits(dict(resp.headers))
 
-                        if resp.status == 200:
-                            await record_success_async(current_model)
-                            data = await resp.json()
-                            choice = (data.get("choices") or [{}])[0]
-                            msg = choice.get("message") or {}
+                    if resp.status == 200:
+                        data = await resp.json()
+                        choice = (data.get("choices") or [{}])[0]
+                        msg = choice.get("message") or {}
 
-                            # Handle tool calls
-                            if msg.get("tool_calls") and tools:
-                                tool_results = await _execute_tool_calls(
-                                    msg["tool_calls"], mcp_client
-                                )
-                                tc_messages = list(messages)
-                                tc_messages.append(msg)
-                                tc_messages.extend(tool_results)
-                                payload["messages"] = tc_messages
-
-                                async with session.post(
-                                    f"{base_url}/chat/completions",
-                                    json=payload,
-                                    headers=headers,
-                                    timeout=timeout,
-                                ) as resp2:
-                                    if resp2.status == 200:
-                                        data2 = await resp2.json()
-                                        raw = ((data2.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-                                        text = raw.strip()
-                                        if not preserve_think:
-                                            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-                                            text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL).strip()
-                                        if not text:
-                                            logger.warning(
-                                                "Empty content after tool call (not server failure)",
-                                                model=current_model, role=role_name,
-                                                attempt=f"{attempt + 1}/{max_retries}",
-                                            )
-                                            if attempt < max_retries - 1:
-                                                await asyncio.sleep(1)
-                                                continue
-                                            last_error = f"Empty response after tool call from {current_model}"
-                                            break
-                                        if model_idx > 0:
-                                            logger.info(f"OpenRouter OK for {role_name} (fallback #{model_idx})", model=current_model)
-                                        else:
-                                            logger.info(f"OpenRouter OK for {role_name}", model=current_model)
-                                        return text
-                                    else:
-                                        _tc_err = await resp2.text()
-                                        raise ValueError(f"Tool follow-up HTTP {resp2.status}: {_tc_err[:200]}")
-
-                            text = (msg.get("content") or "").strip()
-                            if not preserve_think:
-                                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-                                text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL).strip()
-                            if not text:
-                                logger.warning(
-                                    "OpenRouter empty content (not server failure)",
-                                    model=current_model, role=role_name,
-                                    attempt=f"{attempt + 1}/{max_retries}",
-                                )
-                                if attempt < max_retries - 1:
-                                    await asyncio.sleep(1)
-                                    continue
-                                last_error = f"Empty response from {current_model}"
+                        # Handle tool calls
+                        if msg.get("tool_calls") and tools:
+                            if not mcp_client:
+                                logger.warning("Tool calls received but no mcp_client provided", model=current_model)
+                                text = (msg.get("content") or "").strip()
+                                if text:
+                                    await record_success_async(current_model)
+                                    return text
+                                last_error = f"Tool calls without mcp_client from {current_model}"
                                 break
-                            if model_idx > 0:
-                                logger.info(f"OpenRouter OK for {role_name} (fallback #{model_idx})", model=current_model)
-                            else:
-                                logger.info(f"OpenRouter OK for {role_name}", model=current_model)
-                            return text
+                            tool_results = await _execute_tool_calls(
+                                msg["tool_calls"], mcp_client
+                            )
+                            tc_messages = list(messages)
+                            tc_messages.append(msg)
+                            tc_messages.extend(tool_results)
+                            payload["messages"] = tc_messages
 
-                        # Rate limited or upstream error: retry with backoff
-                        if resp.status == 429:
+                            async with session.post(
+                                f"{base_url}/chat/completions",
+                                json=payload,
+                                headers=headers,
+                                timeout=timeout,
+                            ) as resp2:
+                                if resp2.status == 200:
+                                    data2 = await resp2.json()
+                                    raw = ((data2.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                                    text = raw.strip()
+                                    if not preserve_think:
+                                        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+                                        text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL).strip()
+                                    if not text:
+                                        logger.warning(
+                                            "Empty content after tool call (not server failure)",
+                                            model=current_model, role=role_name,
+                                            attempt=f"{attempt + 1}/{max_retries}",
+                                        )
+                                        if attempt < max_retries - 1:
+                                            await asyncio.sleep(1)
+                                            continue
+                                        last_error = f"Empty response after tool call from {current_model}"
+                                        break
+                                    if model_idx > 0:
+                                        logger.info(f"OpenRouter OK for {role_name} (fallback #{model_idx})", model=current_model)
+                                    else:
+                                        logger.info(f"OpenRouter OK for {role_name}", model=current_model)
+                                    return text
+                                else:
+                                    _tc_err = await resp2.text()
+                                    raise ValueError(f"Tool follow-up HTTP {resp2.status}: {_tc_err[:200]}")
+
+                        text = (msg.get("content") or "").strip()
+                        if not preserve_think:
+                            text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+                            text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL).strip()
+                        if not text:
                             await record_failure_async(current_model)
-                            wait = min(2 ** attempt * 2, 15)
                             logger.warning(
-                                f"Rate-limited ({current_model}) for {role_name}, "
-                                f"retry {attempt + 1}/{max_retries} in {wait}s"
+                                "OpenRouter empty content (not server failure)",
+                                model=current_model, role=role_name,
+                                attempt=f"{attempt + 1}/{max_retries}",
                             )
-                            await asyncio.sleep(wait)
-                            continue
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(1)
+                                continue
+                            last_error = f"Empty response from {current_model}"
+                            break
+                        await record_success_async(current_model)
+                        if model_idx > 0:
+                            logger.info(f"OpenRouter OK for {role_name} (fallback #{model_idx})", model=current_model)
+                        else:
+                            logger.info(f"OpenRouter OK for {role_name}", model=current_model)
+                        return text
 
-                        # Other HTTP errors
-                        error_body = await resp.text()
-                        last_error = f"HTTP {resp.status}: {error_body[:300]}"
-                        try:
-                            from src.llm.gateway import _last_api_error
-                            # Sanitize error body to avoid leaking API keys or auth tokens
-                            _sanitized_body = re.sub(
-                                r'(Bearer\s+|api[_-]?key["\s:=]+)[^\s"]+',
-                                r'\1[REDACTED]',
-                                error_body[:1000],
-                                flags=re.IGNORECASE,
-                            )
-                            _last_api_error.update({
-                                "status": resp.status,
-                                "model": current_model,
-                                "endpoint": f"{base_url}/chat/completions",
-                                "body": _sanitized_body,
-                                "role": role_name,
-                                "attempt": attempt + 1,
-                            })
-                        except ImportError:
-                            pass
-                        logger.warning(
-                            "OpenRouter HTTP error",
-                            status=resp.status,
-                            role=role_name,
-                            model=current_model,
-                            attempt=f"{attempt + 1}/{max_retries}",
-                            body=error_body[:200],
-                        )
+                    # Rate limited or upstream error: retry with backoff
+                    if resp.status == 429:
                         await record_failure_async(current_model)
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(min(2 ** attempt, 8))
-                            continue
-                        # All retries exhausted for this model — move to next in chain
-                        break
+                        wait = min(2 ** attempt * 2, 15)
+                        logger.warning(
+                            f"Rate-limited ({current_model}) for {role_name}, "
+                            f"retry {attempt + 1}/{max_retries} in {wait}s"
+                        )
+                        await asyncio.sleep(wait)
+                        continue
 
-                except asyncio.TimeoutError:
-                    await record_failure_async(current_model)
+                    # Other HTTP errors
+                    error_body = await resp.text()
+                    last_error = f"HTTP {resp.status}: {error_body[:300]}"
+                    try:
+                        from src.llm.gateway import set_last_api_error
+                        # Sanitize error body to avoid leaking API keys or auth tokens
+                        _sanitized_body = re.sub(
+                            r'(Bearer\s+|api[_-]?key["\s:=]+)[^\s"]+',
+                            r'\1[REDACTED]',
+                            error_body[:1000],
+                            flags=re.IGNORECASE,
+                        )
+                        set_last_api_error({
+                            "status": resp.status,
+                            "model": current_model,
+                            "endpoint": f"{base_url}/chat/completions",
+                            "body": _sanitized_body,
+                            "role": role_name,
+                            "attempt": attempt + 1,
+                        })
+                    except ImportError:
+                        pass
                     logger.warning(
-                        f"Timeout ({current_model}) for {role_name} ({timeout_sec}s), "
-                        f"attempt {attempt + 1}/{max_retries}"
+                        "OpenRouter HTTP error",
+                        status=resp.status,
+                        role=role_name,
+                        model=current_model,
+                        attempt=f"{attempt + 1}/{max_retries}",
+                        body=error_body[:200],
                     )
+                    await record_failure_async(current_model)
                     if attempt < max_retries - 1:
                         await asyncio.sleep(min(2 ** attempt, 8))
                         continue
+                    # All retries exhausted for this model — move to next in chain
                     break
 
-                except Exception as e:
-                    await record_failure_async(current_model)
-                    last_error = str(e)
-                    logger.warning(f"Error ({current_model}) for {role_name}: {e}, attempt {attempt + 1}/{max_retries}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(min(2 ** attempt, 8))
-                        continue
-                    break
+            except asyncio.TimeoutError:
+                await record_failure_async(current_model)
+                logger.warning(
+                    f"Timeout ({current_model}) for {role_name} ({timeout_sec}s), "
+                    f"attempt {attempt + 1}/{max_retries}"
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(min(2 ** attempt, 8))
+                    continue
+                break
+
+            except Exception as e:
+                await record_failure_async(current_model)
+                last_error = str(e)
+                logger.warning(f"Error ({current_model}) for {role_name}: {e}, attempt {attempt + 1}/{max_retries}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(min(2 ** attempt, 8))
+                    continue
+                break
 
     # --- All models in chain failed ---
     tried = ", ".join(models_to_try)
@@ -428,15 +466,21 @@ async def _execute_tool_calls(tool_calls: list, mcp_client: Any) -> list:
             except json.JSONDecodeError:
                 fn_args = {}
         try:
-            result = await mcp_client.call_tool(fn_name, fn_args)
+            result = await asyncio.wait_for(
+                mcp_client.call_tool(fn_name, fn_args),
+                timeout=30.0,  # 30s timeout per tool call
+            )
             return {"role": "tool", "tool_call_id": tc_id,
                     "content": json.dumps(result)}
+        except asyncio.TimeoutError:
+            logger.error(f"Tool {fn_name} timed out after 30s")
+            return {"role": "tool", "tool_call_id": tc_id,
+                    "content": json.dumps({"error": f"Tool {fn_name} timed out"})}
         except Exception as e:
             logger.error(f"Tool {fn_name} failed: {e}")
             return {"role": "tool", "tool_call_id": tc_id,
                     "content": json.dumps({"error": str(e)})}
 
-    import asyncio
     return list(await asyncio.gather(*[_exec_one(tc) for tc in tool_calls]))
 
 

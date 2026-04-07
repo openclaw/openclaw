@@ -111,6 +111,13 @@ class FeedbackCollector:
         self._initialized = True
         logger.info("FeedbackCollector initialized", db=self._db_path)
 
+    def close(self) -> None:
+        """Close the SQLite connection and release resources."""
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+        self._initialized = False
+
     # ------------------------------------------------------------------
     # Record
     # ------------------------------------------------------------------

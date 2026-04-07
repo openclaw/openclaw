@@ -128,6 +128,13 @@ class ExperienceReplayBuffer:
         count = self._count()
         logger.info("ExperienceReplayBuffer initialized", db=self._db_path, size=count)
 
+    def close(self) -> None:
+        """Close the SQLite connection and release resources."""
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+        self._initialized = False
+
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------

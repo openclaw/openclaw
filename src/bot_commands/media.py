@@ -18,7 +18,7 @@ VIDEO_PROMPT_COUNTER = Counter("openclaw_prompts_video", "Video prompts received
 
 async def handle_photo(gateway, message: Message):
     """Handle image inputs via Vision-capable LLM (Phase 8: route_llm with multimodal)."""
-    if message.from_user.id != gateway.admin_id:
+    if not message.from_user or message.from_user.id != gateway.admin_id:
         return
 
     PHOTO_PROMPT_COUNTER.inc()
@@ -68,7 +68,7 @@ async def handle_photo(gateway, message: Message):
 
 async def handle_voice(gateway, message: Message):
     """Transcribe voice message to text, then route to brigade pipeline."""
-    if message.from_user.id != gateway.admin_id:
+    if not message.from_user or message.from_user.id != gateway.admin_id:
         return
 
     status_msg = await message.reply("🎤 Распознаю голосовое сообщение...")
@@ -120,20 +120,23 @@ async def _transcribe_audio(gateway, audio_data: bytes) -> str:
             tmp.write(audio_data)
             tmp_path = tmp.name
 
-        def _run_whisper_cli():
-            return subprocess.run(
-                ["whisper-cpp", "-m", "models/ggml-base.bin", "-f", tmp_path, "--output-txt"],
-                capture_output=True, text=True, timeout=30,
-            )
-        result = await asyncio.to_thread(_run_whisper_cli)
-        os.unlink(tmp_path)
-        txt_path = tmp_path + ".txt"
-        if os.path.exists(txt_path):
-            with open(txt_path, "r") as f:
-                text = f.read().strip()
-            os.unlink(txt_path)
-            return text
-        return result.stdout.strip()
+        try:
+            def _run_whisper_cli():
+                return subprocess.run(
+                    ["whisper-cpp", "-m", "models/ggml-base.bin", "-f", tmp_path, "--output-txt"],
+                    capture_output=True, text=True, timeout=30,
+                )
+            result = await asyncio.to_thread(_run_whisper_cli)
+            txt_path = tmp_path + ".txt"
+            if os.path.exists(txt_path):
+                with open(txt_path, "r") as f:
+                    text = f.read().strip()
+                os.unlink(txt_path)
+                return text
+            return result.stdout.strip()
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
     except Exception as e:
         logger.debug("Whisper CLI transcription failed", error=str(e))
 
@@ -146,12 +149,16 @@ async def _transcribe_audio(gateway, audio_data: bytes) -> str:
             tmp.write(audio_data)
             tmp_path = tmp.name
 
-        def _run_whisper_py():
-            model = whisper.load_model("base")
-            return model.transcribe(tmp_path, language="ru")
-        result = await asyncio.to_thread(_run_whisper_py)
-        os.unlink(tmp_path)
-        return result.get("text", "")
+        try:
+            def _run_whisper_py():
+                if not hasattr(_run_whisper_py, "_model"):
+                    _run_whisper_py._model = whisper.load_model("base")
+                return _run_whisper_py._model.transcribe(tmp_path, language="ru")
+            result = await asyncio.to_thread(_run_whisper_py)
+            return result.get("text", "")
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
     except Exception as e:
         logger.warning("All STT backends failed", error=str(e))
         return ""
@@ -159,7 +166,7 @@ async def _transcribe_audio(gateway, audio_data: bytes) -> str:
 
 async def handle_document(gateway, message: Message):
     """Extract text from PDF/TXT documents and send to brigade pipeline."""
-    if message.from_user.id != gateway.admin_id:
+    if not message.from_user or message.from_user.id != gateway.admin_id:
         return
 
     doc = message.document
@@ -221,7 +228,7 @@ async def handle_document(gateway, message: Message):
 
 async def handle_video(gateway, message: Message):
     """Handle video inputs — extract keyframes and route to video_analyst model (Nemotron VL)."""
-    if message.from_user.id != gateway.admin_id:
+    if not message.from_user or message.from_user.id != gateway.admin_id:
         return
 
     VIDEO_PROMPT_COUNTER.inc()
@@ -300,27 +307,22 @@ async def handle_video(gateway, message: Message):
         await status_msg.edit_text(f"❌ Ошибка обработки видео: {e}")
 
 
-async def _extract_keyframes(video_bytes: bytes, max_frames: int = 4) -> list[str]:
-    """Extract evenly-spaced keyframes from video as base64 JPEG strings.
-    
-    Requires opencv-python; returns empty list if unavailable.
-    """
+def _extract_keyframes_sync(video_bytes: bytes, max_frames: int = 4) -> list[str]:
+    """Synchronous helper — runs blocking cv2/file I/O off the event loop."""
+    import cv2
+    import tempfile
+    import os
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        tmp.write(video_bytes)
+        tmp_path = tmp.name
+
+    cap = None
     try:
-        import cv2
-        import numpy as np
-        import tempfile
-        import os
-
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-            tmp.write(video_bytes)
-            tmp_path = tmp.name
-
         cap = cv2.VideoCapture(tmp_path)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         if total_frames <= 0:
-            cap.release()
-            os.unlink(tmp_path)
             return []
 
         # Pick evenly spaced frame indices
@@ -335,10 +337,22 @@ async def _extract_keyframes(video_bytes: bytes, max_frames: int = 4) -> list[st
                 _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 frames_b64.append(base64.b64encode(buf.tobytes()).decode("utf-8"))
 
-        cap.release()
-        os.unlink(tmp_path)
         return frames_b64
+    finally:
+        if cap is not None:
+            cap.release()
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
+
+async def _extract_keyframes(video_bytes: bytes, max_frames: int = 4) -> list[str]:
+    """Extract evenly-spaced keyframes from video as base64 JPEG strings.
+
+    Requires opencv-python; returns empty list if unavailable.
+    Blocking I/O is offloaded to a thread via asyncio.to_thread.
+    """
+    try:
+        return await asyncio.to_thread(_extract_keyframes_sync, video_bytes, max_frames)
     except ImportError:
         logger.warning("opencv-python not installed — video keyframe extraction unavailable")
         return []

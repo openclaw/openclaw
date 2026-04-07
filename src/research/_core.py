@@ -498,40 +498,49 @@ class DeepResearchPipeline:
         """LLM inference via Unified LLM Gateway (handles OpenRouter routing).
 
         v7: enforces total message size budget to prevent context window overflow.
+        Retries on empty/failed responses up to `retries` times.
         """
-        messages = [{"role": "system", "content": system}]
-        budget_used = len(system)
+        for attempt in range(max(1, retries)):
+            messages = [{"role": "system", "content": system}]
+            budget_used = len(system)
 
-        if self._research_context:
-            ctx = "\n".join(self._research_context[-6:])
-            ctx_msg = f"Контекст исследования:\n{ctx}"
-            budget_used += len(ctx_msg) + 30  # +30 for assistant ack
-            if budget_used + len(user) < self._MAX_CONTEXT_CHARS:
-                messages.append({"role": "user", "content": ctx_msg})
-                messages.append({"role": "assistant", "content": "Понял, учитываю контекст."})
-            else:
-                # Truncate context to fit budget
-                available = self._MAX_CONTEXT_CHARS - len(system) - len(user) - 200
-                if available > 500:
-                    truncated_ctx = ctx[:available]
-                    messages.append({"role": "user", "content": f"Контекст:\n{truncated_ctx}"})
-                    messages.append({"role": "assistant", "content": "Понял."})
+            if self._research_context:
+                ctx = "\n".join(self._research_context[-6:])
+                ctx_msg = f"Контекст исследования:\n{ctx}"
+                budget_used += len(ctx_msg) + 30  # +30 for assistant ack
+                if budget_used + len(user) < self._MAX_CONTEXT_CHARS:
+                    messages.append({"role": "user", "content": ctx_msg})
+                    messages.append({"role": "assistant", "content": "Понял, учитываю контекст."})
+                else:
+                    # Truncate context to fit budget
+                    available = self._MAX_CONTEXT_CHARS - len(system) - len(user) - 200
+                    if available > 500:
+                        truncated_ctx = ctx[:available]
+                        messages.append({"role": "user", "content": f"Контекст:\n{truncated_ctx}"})
+                        messages.append({"role": "assistant", "content": "Понял."})
 
-        # Truncate user message if still over budget
-        total = sum(len(m["content"]) for m in messages) + len(user)
-        if total > self._MAX_CONTEXT_CHARS:
-            available = self._MAX_CONTEXT_CHARS - sum(len(m["content"]) for m in messages) - 100
-            user = user[:max(available, 500)] + "\n[...усечено для бюджета токенов]"
+            # Truncate user message if still over budget
+            _user = user
+            total = sum(len(m["content"]) for m in messages) + len(_user)
+            if total > self._MAX_CONTEXT_CHARS:
+                available = self._MAX_CONTEXT_CHARS - sum(len(m["content"]) for m in messages) - 100
+                _user = _user[:max(available, 500)] + "\n[...усечено для бюджета токенов]"
 
-        messages.append({"role": "user", "content": user})
+            messages.append({"role": "user", "content": _user})
 
-        return await route_llm(
-            "",
-            messages=messages,
-            task_type="research",
-            max_tokens=max_tokens,
-            temperature=0.2,
-        )
+            result = await route_llm(
+                "",
+                messages=messages,
+                task_type="research",
+                max_tokens=max_tokens,
+                temperature=0.2,
+            )
+            if result and result.strip():
+                return result
+            if attempt < retries - 1:
+                await asyncio.sleep(2 ** attempt)
+
+        return result or ""
 
     # ------------------------------------------------------------------
     # Adaptive depth

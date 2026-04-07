@@ -9,10 +9,7 @@ import re
 import structlog
 from typing import Optional, List, Tuple
 
-try:
-    import json
-except ImportError:
-    import json
+import json
 
 logger = structlog.get_logger("LogicProvider")
 

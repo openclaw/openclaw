@@ -173,7 +173,7 @@ async def _classic_execution(executor, executor_model, executor_sys, executor_pr
             )
             json_match = re.search(r"```json\n(.*?)\n```", executor_response, re.DOTALL)
             if not json_match:
-                json_match = re.search(r"\{(?:[^{}]|\{[^{}]*\})*\}", executor_response, re.DOTALL)
+                json_match = re.search(r"\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}", executor_response, re.DOTALL)
 
             if json_match:
                 try:
@@ -205,15 +205,18 @@ async def _classic_execution(executor, executor_model, executor_sys, executor_pr
 
 async def _execute_mcp_tool(active_mcp, executor_response: str) -> str:
     """Execute the parsed tool call on the MCP server. Returns updated executor_response."""
+    if not active_mcp:
+        return executor_response
+
     json_match = re.search(r"```json\n(.*?)\n```", executor_response, re.DOTALL)
     if not json_match:
-        json_match = re.search(r"{.*?}", executor_response, re.DOTALL)
+        json_match = re.search(r"\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}", executor_response, re.DOTALL)
 
     if not json_match:
         return executor_response
 
     try:
-        exec_str = json_match.group(1) if "```" in executor_response else json_match.group(0)
+        exec_str = json_match.group(1) if json_match.lastindex and json_match.lastindex >= 1 else json_match.group(0)
         exec_str = exec_str.strip().replace("}\n{", "},{")
         if exec_str.startswith("{") and exec_str.endswith("}") and "},{" in exec_str:
             exec_str = f"[{exec_str}]"
@@ -246,6 +249,8 @@ async def _execute_mcp_tool(active_mcp, executor_response: str) -> str:
 async def _verify_proof_of_work(active_mcp, extracted_json_str: str) -> str:
     """Run Proof of Work verification via MCP. Returns result text or empty string."""
     pow_result = ""
+    if not active_mcp:
+        return pow_result
     try:
         lower_json = extracted_json_str.lower()
         if "sqlite" in lower_json or "table" in lower_json:

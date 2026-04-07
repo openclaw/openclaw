@@ -1,3 +1,4 @@
+python-dotenv>=1.0
 orjson>=3.9
 mcp>=0.1.0
 pydantic>=2.0
@@ -21,7 +22,6 @@ pyyaml>=6.0
 
 # Phase 4: New integrations
 apscheduler>=3.10
-discord.py>=2.3
 edge-tts>=6.1
 docker>=7.0
 

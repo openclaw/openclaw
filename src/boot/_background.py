@@ -50,7 +50,7 @@ async def poll_remote_tasks(gateway):
 
     from src.clawhub.client import ClawHubClient
 
-    client = ClawHubClient(base_url=poll_url, bot_id=str(gateway.admin_id))
+    client = ClawHubClient(base_url=poll_url, agent_id=str(gateway.admin_id))
     await client.initialize()
 
     while True:
@@ -62,36 +62,62 @@ async def poll_remote_tasks(gateway):
                     if task_hash in gateway.processed_task_hashes:
                         continue
                     gateway.processed_task_hashes.add(task_hash)
+                    # Evict oldest entries to prevent unbounded memory growth
+                    if len(gateway.processed_task_hashes) > 10000:
+                        # Remove ~20% of entries instead of clearing all
+                        evict_count = 2000
+                        it = iter(gateway.processed_task_hashes)
+                        to_remove = [next(it) for _ in range(evict_count)]
+                        for h in to_remove:
+                            gateway.processed_task_hashes.discard(h)
                     logger.info("Polling Gateway: Received new task", task_hash=task_hash[:8])
 
                     class MockMessage:
                         def __init__(self, prompt, admin_id, bot):
                             self.text = prompt
-                            self.from_user = type("MockUser", (), {"id": admin_id})()
-                            self.chat = type("MockChat", (), {"id": admin_id})()
+                            self.message_id = 0
+                            self.date = __import__('datetime').datetime.now()
+                            self.from_user = type("MockUser", (), {
+                                "id": admin_id, "first_name": "System",
+                                "username": "system", "last_name": None,
+                                "is_bot": False, "language_code": "en",
+                            })()
+                            self.chat = type("MockChat", (), {
+                                "id": admin_id, "type": "private",
+                                "first_name": "System", "username": "system",
+                            })()
                             self.reply_to_message = None
                             self.bot = bot
 
                         async def reply(self, text, *args, **kwargs):
-                            logger.info("Polling Result", result=text)
+                            logger.info("Polling Result", result=text[:200])
 
-                            class MockStatus:
+                            class MockSent:
+                                message_id = 0
                                 async def edit_text(self, *a, **k):
                                     return True
+                                async def delete(self, *a, **k):
+                                    return True
 
-                            return MockStatus()
+                            return MockSent()
 
                         async def answer(self, text, *args, **kwargs):
-                            logger.info("Polling Result (Answer)", result=text)
+                            logger.info("Polling Result (Answer)", result=text[:200])
+                            return MockSent()
 
                     from src.handlers.prompt_handler import handle_prompt
 
                     mock_msg = MockMessage(task.get("prompt"), gateway.admin_id, gateway.bot)
-                    asyncio.create_task(handle_prompt(gateway, mock_msg))
+                    task = asyncio.create_task(handle_prompt(gateway, mock_msg))
+                    # Store strong reference to prevent GC mid-execution
+                    if not hasattr(gateway, '_poll_tasks'):
+                        gateway._poll_tasks = set()
+                    gateway._poll_tasks.add(task)
+                    task.add_done_callback(lambda t: gateway._poll_tasks.discard(t))
 
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.debug("Polling Gateway Error", error=str(e))
+            logger.warning("Polling Gateway Error", error=str(e))
             await asyncio.sleep(interval * 2)

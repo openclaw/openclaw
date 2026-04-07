@@ -82,8 +82,9 @@ class OpenClawGateway:
 
         # Watchdog for Config
         self._observer = Observer()
+        self._config_reloader = ConfigReloader(self.reload_config)
         self._observer.schedule(
-            ConfigReloader(self.reload_config, loop=asyncio.get_event_loop()),
+            self._config_reloader,
             os.path.dirname(self.config_path) or ".",
             recursive=False,
         )
@@ -101,6 +102,7 @@ class OpenClawGateway:
 
         # Background logic
         self._bg_tasks = set()
+        self._reload_lock = asyncio.Lock()
 
     def _make_handler(self, fn):
         """Wrap a command handler so `self` (gateway) is injected as first arg."""
@@ -156,8 +158,6 @@ class OpenClawGateway:
         )
 
     async def reload_config(self):
-        if not hasattr(self, '_reload_lock'):
-            self._reload_lock = asyncio.Lock()
         async with self._reload_lock:
             try:
                 from src.auto_rollback import AutoRollback
@@ -225,6 +225,23 @@ class OpenClawGateway:
             await stop_dashboard()
         except Exception:
             pass
+        # Clean up MCP subprocess servers
+        if hasattr(self, 'pipeline') and hasattr(self.pipeline, 'mcp_client') and self.pipeline.mcp_client:
+            try:
+                await self.pipeline.mcp_client.cleanup()
+            except Exception as e:
+                logger.warning("MCP cleanup error during shutdown", error=str(e))
+        # Close shared aiohttp sessions (connection pooling)
+        try:
+            from src.llm.gateway import close_shared_session
+            await close_shared_session()
+        except Exception:
+            pass
+        try:
+            from src.llm.openrouter import close_or_session
+            await close_or_session()
+        except Exception:
+            pass
         # Close bot session
         try:
             await self.bot.session.close()
@@ -235,6 +252,10 @@ class OpenClawGateway:
     async def run(self):
         logger.info("Starting OpenClaw Gateway...")
         logger.info("Admin ID", admin_id=self.admin_id)
+
+        # Pass the running event loop to the ConfigReloader (fixes watchdog thread callback)
+        import asyncio
+        self._config_reloader.set_loop(asyncio.get_running_loop())
 
         # --- Heartbeat: first-signal test ---
         from src.boot._heartbeat import send_heartbeat, TelegramInitLogger, crash_reporter

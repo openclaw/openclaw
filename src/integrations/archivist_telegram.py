@@ -1,7 +1,10 @@
 import os
 import aiohttp
 import asyncio
+import structlog
 from typing import List
+
+logger = structlog.get_logger("TelegramArchivist")
 
 
 class TelegramArchivist:
@@ -16,6 +19,19 @@ class TelegramArchivist:
         self.chat_id = chat_id
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         self.max_length = 4096
+        self._session: aiohttp.ClientSession | None = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Return a reusable aiohttp session (created lazily) with timeout."""
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=30)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
+
+    async def close(self) -> None:
+        """Close the shared HTTP session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
 
     def split_message(self, text: str) -> List[str]:
         """Splits message safely to respect Telegram's 4096 char limit."""
@@ -30,9 +46,9 @@ class TelegramArchivist:
 
             # Find the best split point (newline or space)
             split_at = text.rfind('\n', 0, self.max_length)
-            if split_at == -1:
+            if split_at <= 0:
                 split_at = text.rfind(' ', 0, self.max_length)
-                if split_at == -1:
+                if split_at <= 0:
                     split_at = self.max_length  # Hard split in the middle of a word
 
             parts.append(text[:split_at].strip())
@@ -58,8 +74,9 @@ class TelegramArchivist:
 
         for i, part in enumerate(parts):
             if len(parts) > 1:
-                # Append part counter if message is split
-                part = f"{part}\n\n_(Part {i+1}/{len(parts)})_"
+                # Escape part counter for MarkdownV2 compatibility
+                counter = self.escape_markdown(f"(Part {i+1}/{len(parts)})")
+                part = f"{part}\n\n_{counter}_"
             await self._send_to_telegram(part)
             # Sleep to prevent hitting Telegram's rate limit
             # (usually ~30 msgs per sec, but 1-2 sec is safer for bots)
@@ -68,9 +85,9 @@ class TelegramArchivist:
     def escape_markdown(self, text: str) -> str:
         """
         Escapes reserved characters for Telegram MarkdownV2.
-        Characters to escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
+        Characters to escape: \\ _ * [ ] ( ) ~ ` > # + - = | { } . !
         """
-        escape_chars = r'_*[]()~`>#+-=|{}.!'
+        escape_chars = r'\\_*[]()~`>#+-=|{}.!'
         return "".join(['\\' + char if char in escape_chars else char for char in text])
 
     async def _send_to_telegram(self, text: str):
@@ -80,21 +97,21 @@ class TelegramArchivist:
             "text": text,
             "parse_mode": "MarkdownV2"
         }
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.post(self.api_url, json=payload) as response:
-                    if response.status != 200:
-                        resp_text = await response.text()
-                        print(f"Failed to send Markdown message: {resp_text}")
-                        # Fallback to plain text if it's a parse error
-                        if "can't parse entities" in resp_text or "Bad Request" in resp_text:
-                            print("Retrying as plain text...")
-                            del payload["parse_mode"]
-                            async with session.post(self.api_url, json=payload) as retry_resp:
-                                if retry_resp.status != 200:
-                                    print(f"Failed to send plain text message: {await retry_resp.text()}")
-            except Exception as e:
-                print(f"Error sending to Telegram: {e}")
+        session = await self._get_session()
+        try:
+            async with session.post(self.api_url, json=payload) as response:
+                if response.status != 200:
+                    resp_text = await response.text()
+                    logger.warning("Failed to send Markdown message", status=response.status, body=resp_text[:200])
+                    # Fallback to plain text if it's a parse error
+                    if "can't parse entities" in resp_text or "Bad Request" in resp_text:
+                        logger.info("Retrying as plain text...")
+                        del payload["parse_mode"]
+                        async with session.post(self.api_url, json=payload) as retry_resp:
+                            if retry_resp.status != 200:
+                                logger.warning("Failed to send plain text message", status=retry_resp.status)
+        except Exception as e:
+            logger.error("Error sending to Telegram", error=str(e))
 
 
 # ======= Example Usage =======

@@ -39,15 +39,22 @@ def setup_structlog() -> None:
 class ConfigReloader(FileSystemEventHandler):
     def __init__(self, callback, loop=None):
         self.callback = callback
+        self._loop = loop  # Store reference to the main event loop
+
+    def set_loop(self, loop):
+        """Set the event loop reference (call from async context at startup)."""
         self._loop = loop
 
     def on_modified(self, event):
-        if event.src_path.endswith("config/openclaw_config.json"):
+        normalized = os.path.normpath(event.src_path)
+        if normalized.endswith(os.path.normpath("config/openclaw_config.json")):
             structlog.get_logger("ConfigReloader").info("Config changed, reloading...")
             import asyncio
             import inspect
             if inspect.iscoroutinefunction(self.callback):
-                loop = self._loop or asyncio.get_event_loop()
+                loop = self._loop
+                if loop is None or loop.is_closed():
+                    return  # No usable loop — skip
                 asyncio.run_coroutine_threadsafe(self.callback(), loop)
             else:
                 self.callback()

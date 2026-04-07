@@ -372,7 +372,6 @@ class DependencyGraphEngine:
                 if target and target != fpath:
                     self._adjacency[fpath].add(target)
                     self._reverse_adj[target].add(fpath)
-                    node.imports  # keep raw imports for reference
 
     def _bfs_reverse(self, start: str, max_depth: int) -> Set[str]:
         """BFS on reverse adjacency to find transitively affected files."""

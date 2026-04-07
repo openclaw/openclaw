@@ -15,7 +15,6 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
-import aiohttp
 import structlog
 
 from src.core.auto_rollback import AutoRollback
@@ -1281,8 +1280,8 @@ class PipelineExecutor:
                     logger.debug("SLEA-RL step save failed (non-fatal)", error=str(_slea_err))
             step_index += 1
 
-        raw_response = steps_results[-1]["response"] if steps_results else ""
-        final_response = clean_response_for_user(raw_response)
+        raw_response = steps_results[-1]["response"] if steps_results else None
+        final_response = clean_response_for_user(raw_response) if raw_response else ""
 
         if not final_response or final_response.startswith("⚠️"):
             logger.warning("Pipeline produced empty/error response, attempting Reflexion fallback")
@@ -1685,6 +1684,7 @@ class PipelineExecutor:
                 temperature=role_config.get("temperature", 0.3),
             )
         elapsed_ms = (time.monotonic() - t0) * 1000
+        result = result or ""
 
         used_model = or_model or model
         prompt_tokens_est = (len(system_prompt) + len(user_prompt)) // 4

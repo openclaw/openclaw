@@ -8,7 +8,19 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-VRAM_TOTAL_GB = 16.0  # RTX 5060 Ti
+def _detect_vram_total_gb() -> float:
+    """Attempt to detect total GPU VRAM via pynvml, fallback to 16 GB."""
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        return round(info.total / (1024 ** 3), 1)
+    except Exception:
+        return 16.0
+
+
+VRAM_TOTAL_GB: float = _detect_vram_total_gb()
 _HISTORY_WINDOW = 100
 
 

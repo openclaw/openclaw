@@ -15,6 +15,7 @@ and the SuperMemory store in src/supermemory.py.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from dataclasses import dataclass, field
@@ -147,6 +148,7 @@ class MARCHProtocol:
         self.supermemory = supermemory
         self.model = model
         self._vault = vault_bridge  # v7: cross-check against Obsidian vault
+        self._verify_lock = asyncio.Lock()
 
     async def cross_verify_agents(
         self,
@@ -164,70 +166,71 @@ class MARCHProtocol:
         v14.4: Accepts **kwargs so callers can pass extra context
         (memory, config, etc.) without causing TypeError.
         """
-        # v14.4: Accept supermemory override from pipeline caller (use local to avoid race condition)
+        # v14.4: Accept supermemory override from pipeline caller (thread-safe with lock)
         _mem = kwargs.get("memory") if "memory" in kwargs and kwargs["memory"] is not None else self.supermemory
-        _prev_mem = self.supermemory
-        self.supermemory = _mem
 
         start = time.monotonic()
 
-        try:
-            # Step 1: Extract claims
-            executor_claims = extract_entities(executor_response, "Executor")
-            archivist_claims = extract_entities(archivist_response, "Archivist") if archivist_response else []
-            all_claims = executor_claims + archivist_claims
+        async with self._verify_lock:
+            _prev_mem = self.supermemory
+            self.supermemory = _mem
+            try:
+                # Step 1: Extract claims
+                executor_claims = extract_entities(executor_response, "Executor")
+                archivist_claims = extract_entities(archivist_response, "Archivist") if archivist_response else []
+                all_claims = executor_claims + archivist_claims
 
-            if not all_claims:
-                return MARCHResult(
-                    is_consistent=True,
-                    verified_claims=[],
-                    discrepancies=[],
+                if not all_claims:
+                    return MARCHResult(
+                        is_consistent=True,
+                        verified_claims=[],
+                        discrepancies=[],
+                        elapsed_sec=round(time.monotonic() - start, 2),
+                    )
+
+                # Step 2: Verify against SuperMemory
+                verified: List[VerificationResult] = []
+                discrepancies: List[VerificationResult] = []
+
+                for claim in all_claims:
+                    vr = await self._verify_claim(claim)
+                    if vr.verified:
+                        verified.append(vr)
+                    else:
+                        discrepancies.append(vr)
+
+                # Cross-check: look for contradictions between executor and archivist
+                cross_disc = self._cross_check_agents(executor_claims, archivist_claims)
+                discrepancies.extend(cross_disc)
+
+                total = len(all_claims) + len(cross_disc)
+                disc_rate = len(discrepancies) / total if total > 0 else 0.0
+                is_consistent = disc_rate < self._DISCREPANCY_THRESHOLD
+
+                result = MARCHResult(
+                    is_consistent=is_consistent,
+                    verified_claims=verified,
+                    discrepancies=discrepancies,
                     elapsed_sec=round(time.monotonic() - start, 2),
                 )
 
-            # Step 2: Verify against SuperMemory
-            verified: List[VerificationResult] = []
-            discrepancies: List[VerificationResult] = []
+                # Step 3: Reflexion cycle if needed
+                if not is_consistent and prompt:
+                    logger.warning(
+                        "march_discrepancy_detected",
+                        disc_rate=round(disc_rate, 2),
+                        discrepancy_count=len(discrepancies),
+                    )
+                    corrected = await self._reflexion_correct(
+                        prompt, executor_response, discrepancies,
+                    )
+                    if corrected:
+                        result.reflexion_triggered = True
+                        result.corrected_response = corrected
 
-            for claim in all_claims:
-                vr = await self._verify_claim(claim)
-                if vr.verified:
-                    verified.append(vr)
-                else:
-                    discrepancies.append(vr)
-
-            # Cross-check: look for contradictions between executor and archivist
-            cross_disc = self._cross_check_agents(executor_claims, archivist_claims)
-            discrepancies.extend(cross_disc)
-
-            total = len(all_claims) + len(cross_disc)
-            disc_rate = len(discrepancies) / total if total > 0 else 0.0
-            is_consistent = disc_rate < self._DISCREPANCY_THRESHOLD
-
-            result = MARCHResult(
-                is_consistent=is_consistent,
-                verified_claims=verified,
-                discrepancies=discrepancies,
-                elapsed_sec=round(time.monotonic() - start, 2),
-            )
-
-            # Step 3: Reflexion cycle if needed
-            if not is_consistent and prompt:
-                logger.warning(
-                    "march_discrepancy_detected",
-                    disc_rate=round(disc_rate, 2),
-                    discrepancy_count=len(discrepancies),
-                )
-                corrected = await self._reflexion_correct(
-                    prompt, executor_response, discrepancies,
-                )
-                if corrected:
-                    result.reflexion_triggered = True
-                    result.corrected_response = corrected
-
-            return result
-        finally:
-            self.supermemory = _prev_mem
+                return result
+            finally:
+                self.supermemory = _prev_mem
 
     # ------------------------------------------------------------------
     # Private: verify a single claim against SuperMemory
@@ -265,7 +268,11 @@ class MARCHProtocol:
             )
 
         try:
-            results = self.supermemory.recall(claim.entity, top_k=2)
+            recall_method = self.supermemory.recall
+            if asyncio.iscoroutinefunction(recall_method):
+                results = await recall_method(claim.entity, top_k=2)
+            else:
+                results = recall_method(claim.entity, top_k=2)
             if not results:
                 # Entity not found in memory — this is NOT a discrepancy,
                 # it simply means the entity is new / generated.
