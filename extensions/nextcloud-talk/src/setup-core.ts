@@ -6,18 +6,13 @@ import {
   mergeAllowFromEntries,
   promptParsedAllowFromForAccount,
   resolveSetupAccountId,
-  setSetupChannelEnabled,
   type ChannelSetupDmPolicy,
-  type ChannelSetupWizard,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { applyAccountNameToChannelSection, patchScopedAccountConfig } from "../runtime-api.js";
-import {
-  listNextcloudTalkAccountIds,
-  resolveDefaultNextcloudTalkAccountId,
-  resolveNextcloudTalkAccount,
-} from "./accounts.js";
+import { resolveDefaultNextcloudTalkAccountId, resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "nextcloud-talk" as const;
@@ -78,7 +73,7 @@ export function clearNextcloudTalkAccountFields(
     return {
       ...cfg,
       channels: {
-        ...(cfg.channels ?? {}),
+        ...cfg.channels,
         "nextcloud-talk": nextSection as NextcloudTalkSection,
       },
     } as CoreConfig;
@@ -96,7 +91,7 @@ export function clearNextcloudTalkAccountFields(
   return {
     ...cfg,
     channels: {
-      ...(cfg.channels ?? {}),
+      ...cfg.channels,
       "nextcloud-talk": {
         ...section,
         accounts: {
@@ -130,14 +125,14 @@ async function promptNextcloudTalkAllowFrom(params: {
     parseEntries: (raw) => ({
       entries: String(raw)
         .split(/[\n,;]+/g)
-        .map((value) => value.trim().toLowerCase())
+        .map(normalizeLowercaseStringOrEmpty)
         .filter(Boolean),
     }),
     getExistingAllowFrom: ({ cfg, accountId }) =>
       resolveNextcloudTalkAccount({ cfg, accountId }).config.allowFrom ?? [],
     mergeEntries: ({ existing, parsed }) =>
       mergeAllowFromEntries(
-        existing.map((value) => String(value).trim().toLowerCase()),
+        existing.map((value) => normalizeLowercaseStringOrEmpty(String(value))),
         parsed,
       ),
     applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
@@ -169,11 +164,11 @@ export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   channel,
   policyKey: "channels.nextcloud-talk.dmPolicy",
   allowFromKey: "channels.nextcloud-talk.allowFrom",
-  resolveConfigKeys: (_cfg, accountId) =>
-    accountId && accountId !== DEFAULT_ACCOUNT_ID
+  resolveConfigKeys: (cfg, accountId) =>
+    (accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)) !== DEFAULT_ACCOUNT_ID
       ? {
-          policyKey: `channels.nextcloud-talk.accounts.${accountId}.dmPolicy`,
-          allowFromKey: `channels.nextcloud-talk.accounts.${accountId}.allowFrom`,
+          policyKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.dmPolicy`,
+          allowFromKey: `channels.nextcloud-talk.accounts.${accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig)}.allowFrom`,
         }
       : {
           policyKey: "channels.nextcloud-talk.dmPolicy",
@@ -182,10 +177,10 @@ export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   getCurrent: (cfg, accountId) =>
     resolveNextcloudTalkAccount({
       cfg: cfg as CoreConfig,
-      accountId: accountId ?? DEFAULT_ACCOUNT_ID,
+      accountId: accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig),
     }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) => {
-    const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+    const resolvedAccountId = accountId ?? resolveDefaultNextcloudTalkAccountId(cfg as CoreConfig);
     const resolved = resolveNextcloudTalkAccount({
       cfg: cfg as CoreConfig,
       accountId: resolvedAccountId,
@@ -210,7 +205,7 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   validateInput: createSetupInputPresenceValidator({
     defaultAccountOnlyEnvError:
       "NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.",
-    validate: ({ accountId, input }) => {
+    validate: ({ input }) => {
       const setupInput = input as NextcloudSetupInput;
       if (!setupInput.useEnv && !setupInput.secret && !setupInput.secretFile) {
         return "Nextcloud Talk requires bot secret or --secret-file (or --use-env).";

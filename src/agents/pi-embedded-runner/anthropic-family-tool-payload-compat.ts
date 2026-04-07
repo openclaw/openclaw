@@ -158,3 +158,12 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
     });
   };
 }
+
+export function createOpenAIAnthropicToolPayloadCompatibilityWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  return createAnthropicToolPayloadCompatibilityWrapper(baseStreamFn, {
+    toolSchemaMode: "openai-functions",
+    toolChoiceMode: "openai-string-modes",
+  });
+}

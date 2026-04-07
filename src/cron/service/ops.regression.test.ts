@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { clearCommandLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
-import { CommandLane } from "../../process/lanes.js";
 import {
   createAbortAwareIsolatedRunner,
   createDeferred,
@@ -11,7 +9,13 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
   writeCronJobs,
-} from "../service.regression-fixtures.js";
+} from "../../../test/helpers/cron/service-regression-fixtures.js";
+import {
+  clearCommandLane,
+  setCommandLaneConcurrency,
+  waitForActiveTasks,
+} from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import { enqueueRun, run } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
@@ -351,6 +355,7 @@ describe("cron service ops regressions", () => {
 
     secondRun.resolve({ status: "ok", summary: "second queued run" });
     await bothFinished.promise;
+    await waitForActiveTasks(5_000);
     const jobs = state.store?.jobs ?? [];
     expect(jobs.find((job) => job.id === first.id)?.state.lastStatus).toBe("ok");
     expect(jobs.find((job) => job.id === second.id)?.state.lastStatus).toBe("ok");

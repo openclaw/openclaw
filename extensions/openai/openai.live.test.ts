@@ -4,10 +4,10 @@ import path from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
+import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
-import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/speech-runtime";
 import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
@@ -142,7 +142,7 @@ async function createTempAgentDir(): Promise<string> {
 
 describeLive("openai plugin live", () => {
   it("registers an OpenAI provider that can complete a live request", async () => {
-    const { providers } = registerOpenAIPlugin();
+    const { providers } = await registerOpenAIPlugin();
     const provider = requireRegisteredProvider(providers, "openai");
 
     const resolved = provider.resolveDynamicModel?.({
@@ -182,7 +182,7 @@ describeLive("openai plugin live", () => {
   }, 30_000);
 
   it("lists voices and synthesizes audio through the registered speech provider", async () => {
-    const { speechProviders } = registerOpenAIPlugin();
+    const { speechProviders } = await registerOpenAIPlugin();
     const speechProvider = requireRegisteredProvider(speechProviders, "openai");
 
     const voices = await speechProvider.listVoices?.({});
@@ -217,7 +217,7 @@ describeLive("openai plugin live", () => {
   }, 45_000);
 
   it("transcribes synthesized speech through the registered media provider", async () => {
-    const { speechProviders, mediaProviders } = registerOpenAIPlugin();
+    const { speechProviders, mediaProviders } = await registerOpenAIPlugin();
     const speechProvider = requireRegisteredProvider(speechProviders, "openai");
     const mediaProvider = requireRegisteredProvider(mediaProviders, "openai");
 
@@ -247,7 +247,7 @@ describeLive("openai plugin live", () => {
   }, 45_000);
 
   it("generates an image through the registered image provider", async () => {
-    const { imageProviders } = registerOpenAIPlugin();
+    const { imageProviders } = await registerOpenAIPlugin();
     const imageProvider = requireRegisteredProvider(imageProviders, "openai");
 
     const cfg = createLiveConfig();
@@ -275,7 +275,7 @@ describeLive("openai plugin live", () => {
   }, 60_000);
 
   it("edits a reference image through the registered image provider", async () => {
-    const { imageProviders } = registerOpenAIPlugin();
+    const { imageProviders } = await registerOpenAIPlugin();
     const imageProvider = requireRegisteredProvider(imageProviders, "openai");
 
     const cfg = createLiveConfig();
@@ -311,7 +311,7 @@ describeLive("openai plugin live", () => {
   }, 60_000);
 
   it("describes a deterministic image through the registered media provider", async () => {
-    const { mediaProviders } = registerOpenAIPlugin();
+    const { mediaProviders } = await registerOpenAIPlugin();
     const mediaProvider = requireRegisteredProvider(mediaProviders, "openai");
 
     const cfg = createLiveConfig();

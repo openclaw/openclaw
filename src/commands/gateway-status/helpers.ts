@@ -2,11 +2,11 @@ import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
-import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../../gateway/credentials.js";
+import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
-import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { pickGatewaySelfPresence } from "../gateway-presence.js";
 
@@ -107,10 +107,11 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   }
 
   const port = resolveGatewayPort(cfg);
+  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   add({
     id: "localLoopback",
     kind: "localLoopback",
-    url: `ws://127.0.0.1:${port}`,
+    url: `${localScheme}://127.0.0.1:${port}`,
     active: cfg.gateway?.mode !== "remote",
   });
 
@@ -163,98 +164,16 @@ export async function resolveAuthForTarget(
   target: GatewayStatusTarget,
   overrides: { token?: string; password?: string },
 ): Promise<{ token?: string; password?: string; diagnostics?: string[] }> {
-  const tokenOverride = overrides.token?.trim() ? overrides.token.trim() : undefined;
-  const passwordOverride = overrides.password?.trim() ? overrides.password.trim() : undefined;
+  const tokenOverride = normalizeOptionalString(overrides.token);
+  const passwordOverride = normalizeOptionalString(overrides.password);
   if (tokenOverride || passwordOverride) {
     return { token: tokenOverride, password: passwordOverride };
   }
 
-  const diagnostics: string[] = [];
-  const authMode = cfg.gateway?.auth?.mode;
-  const tokenOnly = authMode === "token";
-  const passwordOnly = authMode === "password";
-
-  const resolveToken = async (value: unknown, path: string): Promise<string | undefined> => {
-    const tokenResolution = await resolveConfiguredSecretInputString({
-      config: cfg,
-      env: process.env,
-      value,
-      path,
-      unresolvedReasonStyle: "detailed",
-    });
-    if (tokenResolution.unresolvedRefReason) {
-      diagnostics.push(tokenResolution.unresolvedRefReason);
-    }
-    return tokenResolution.value;
-  };
-  const resolvePassword = async (value: unknown, path: string): Promise<string | undefined> => {
-    const passwordResolution = await resolveConfiguredSecretInputString({
-      config: cfg,
-      env: process.env,
-      value,
-      path,
-      unresolvedReasonStyle: "detailed",
-    });
-    if (passwordResolution.unresolvedRefReason) {
-      diagnostics.push(passwordResolution.unresolvedRefReason);
-    }
-    return passwordResolution.value;
-  };
-  const withDiagnostics = <T extends { token?: string; password?: string }>(result: T) =>
-    diagnostics.length > 0 ? { ...result, diagnostics } : result;
-
-  if (target.kind === "configRemote" || target.kind === "sshTunnel") {
-    const remoteTokenValue = cfg.gateway?.remote?.token;
-    const remotePasswordValue = (cfg.gateway?.remote as { password?: unknown } | undefined)
-      ?.password;
-    const token = await resolveToken(remoteTokenValue, "gateway.remote.token");
-    const password = token
-      ? undefined
-      : await resolvePassword(remotePasswordValue, "gateway.remote.password");
-    return withDiagnostics({ token, password });
-  }
-
-  const authDisabled = authMode === "none" || authMode === "trusted-proxy";
-  if (authDisabled) {
-    return {};
-  }
-
-  const envToken = readGatewayTokenEnv();
-  const envPassword = readGatewayPasswordEnv();
-  if (tokenOnly) {
-    const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
-    if (token) {
-      return withDiagnostics({ token });
-    }
-    if (envToken) {
-      return { token: envToken };
-    }
-    return withDiagnostics({});
-  }
-  if (passwordOnly) {
-    const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
-    if (password) {
-      return withDiagnostics({ password });
-    }
-    if (envPassword) {
-      return { password: envPassword };
-    }
-    return withDiagnostics({});
-  }
-
-  const token = await resolveToken(cfg.gateway?.auth?.token, "gateway.auth.token");
-  if (token) {
-    return withDiagnostics({ token });
-  }
-  if (envToken) {
-    return { token: envToken };
-  }
-  if (envPassword) {
-    return withDiagnostics({ password: envPassword });
-  }
-  const password = await resolvePassword(cfg.gateway?.auth?.password, "gateway.auth.password");
-
-  return withDiagnostics({ token, password });
+  return resolveGatewayProbeSurfaceAuth({
+    config: cfg,
+    surface: target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local",
+  });
 }
 
 export { pickGatewaySelfPresence };
@@ -326,9 +245,10 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
 export function buildNetworkHints(cfg: OpenClawConfig) {
   const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
   const port = resolveGatewayPort(cfg);
+  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   return {
-    localLoopbackUrl: `ws://127.0.0.1:${port}`,
-    localTailnetUrl: tailnetIPv4 ? `ws://${tailnetIPv4}:${port}` : null,
+    localLoopbackUrl: `${localScheme}://127.0.0.1:${port}`,
+    localTailnetUrl: tailnetIPv4 ? `${localScheme}://${tailnetIPv4}:${port}` : null,
     tailnetIPv4: tailnetIPv4 ?? null,
   };
 }

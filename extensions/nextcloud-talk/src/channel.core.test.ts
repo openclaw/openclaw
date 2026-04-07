@@ -1,7 +1,9 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { nextcloudTalkPlugin } from "./channel.js";
+import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import type { CoreConfig } from "./types.js";
 
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
+vi.mock("../../../test/helpers/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelRuntimeMap: () => new Map(),
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));
@@ -10,14 +12,6 @@ vi.mock("../../../src/channels/plugins/bundled.js", () => ({
   bundledChannelPlugins: [],
   bundledChannelSetupPlugins: [],
 }));
-
-let nextcloudTalkPlugin: typeof import("./channel.js").nextcloudTalkPlugin;
-let NextcloudTalkConfigSchema: typeof import("./config-schema.js").NextcloudTalkConfigSchema;
-
-beforeAll(async () => {
-  ({ nextcloudTalkPlugin } = await import("./channel.js"));
-  ({ NextcloudTalkConfigSchema } = await import("./config-schema.js"));
-});
 
 describe("nextcloud talk channel core", () => {
   it("accepts SecretRef botSecret and apiPassword at top-level", () => {

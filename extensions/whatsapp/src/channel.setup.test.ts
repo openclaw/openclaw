@@ -2,6 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQueuedWizardPrompter } from "../../../test/helpers/plugins/setup-wizard.js";
+import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { finalizeWhatsAppSetup } from "./setup-finalize.js";
 
@@ -17,7 +18,10 @@ vi.mock("./login.js", () => ({
   loginWeb: hoisted.loginWeb,
 }));
 
-vi.mock("openclaw/plugin-sdk/setup", () => {
+vi.mock("openclaw/plugin-sdk/setup", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/setup")>(
+    "openclaw/plugin-sdk/setup",
+  );
   const normalizeE164 = (value?: string | null) => {
     const raw = `${value ?? ""}`.trim();
     if (!raw) {
@@ -27,6 +31,7 @@ vi.mock("openclaw/plugin-sdk/setup", () => {
     return digits.startsWith("+") ? digits : `+${digits}`;
   };
   return {
+    ...actual,
     DEFAULT_ACCOUNT_ID,
     normalizeAccountId: (value?: string | null) => value?.trim() || DEFAULT_ACCOUNT_ID,
     normalizeAllowFromEntries: (entries: string[], normalize: (value: string) => string) => [
@@ -52,9 +57,13 @@ vi.mock("openclaw/plugin-sdk/setup", () => {
   };
 });
 
-vi.mock("./accounts.js", () => ({
-  resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir,
-}));
+vi.mock("./accounts.js", async () => {
+  const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
+  return {
+    ...actual,
+    resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir,
+  };
+});
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -243,5 +252,28 @@ describe("whatsapp setup wizard", () => {
       expect.stringContaining("openclaw channels login"),
       "WhatsApp",
     );
+  });
+
+  it("heartbeat readiness uses configured defaultAccount for active listener checks", async () => {
+    const result = await checkWhatsAppHeartbeatReady({
+      cfg: {
+        channels: {
+          whatsapp: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                authDir: "/tmp/work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      deps: {
+        webAuthExists: async () => true,
+        hasActiveWebListener: (accountId?: string) => accountId === "work",
+      },
+    });
+
+    expect(result).toEqual({ ok: true, reason: "ok" });
   });
 });

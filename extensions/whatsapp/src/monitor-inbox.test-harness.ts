@@ -12,7 +12,6 @@ import {
 } from "./pairing-security.test-harness.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
-// oxlint-disable-next-line typescript/no-explicit-any
 type AnyMockFn = any;
 
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -29,7 +28,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
     responsePrefix: undefined,
   },
 } as const;
-export const mockLoadConfig = loadConfigMock;
+export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
 export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 

@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { normalizeProviderId } from "./provider-id.js";
@@ -96,6 +100,7 @@ export type ProviderRequestCompatibilityFamily = "moonshot";
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
+  supportsOpenAIReasoningCompatPayload: boolean;
   allowsAnthropicServiceTier: boolean;
   supportsResponsesStoreField: boolean;
   allowsResponsesStore: boolean;
@@ -128,7 +133,7 @@ function formatOpenClawUserAgent(version: string): string {
 
 function tryParseHostname(value: string): string | undefined {
   try {
-    return new URL(value).hostname.toLowerCase();
+    return normalizeOptionalLowercaseString(new URL(value).hostname);
   } catch {
     return undefined;
   }
@@ -139,11 +144,10 @@ function isSchemelessHostnameCandidate(value: string): boolean {
 }
 
 function resolveUrlHostname(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
     return undefined;
   }
-
-  const trimmed = value.trim();
   const parsedHostname = tryParseHostname(trimmed);
   if (parsedHostname) {
     return parsedHostname;
@@ -155,7 +159,7 @@ function resolveUrlHostname(value: unknown): string | undefined {
 }
 
 function normalizeComparableBaseUrl(value: string): string | undefined {
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -171,7 +175,7 @@ function normalizeComparableBaseUrl(value: string): string | undefined {
     }
     url.hash = "";
     url.search = "";
-    return url.toString().replace(/\/+$/, "").toLowerCase();
+    return normalizeOptionalLowercaseString(url.toString().replace(/\/+$/, ""));
   } catch {
     return undefined;
   }
@@ -237,7 +241,7 @@ export function resolveProviderEndpoint(
   if (host === "openrouter.ai" || host.endsWith(".openrouter.ai")) {
     return { endpointClass: "openrouter", hostname: host };
   }
-  if (host === "api.x.ai") {
+  if (host === "api.x.ai" || host === "api.grok.x.ai") {
     return { endpointClass: "xai-native", hostname: host };
   }
   if (host === "api.z.ai") {
@@ -294,6 +298,8 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
     case "moonshot":
     case "kimi":
       return "moonshot";
+    case "qwen":
+    case "qwencloud":
     case "modelstudio":
     case "dashscope":
       return "modelstudio";
@@ -462,7 +468,7 @@ export function resolveProviderRequestPolicy(
   const policy = resolveProviderAttributionPolicy(provider, env);
   const endpointResolution = resolveProviderEndpoint(input.baseUrl);
   const endpointClass = endpointResolution.endpointClass;
-  const api = input.api?.trim().toLowerCase();
+  const api = normalizeOptionalLowercaseString(input.api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
@@ -532,8 +538,8 @@ export function resolveProviderRequestCapabilities(
 ): ProviderRequestCapabilities {
   const policy = resolveProviderRequestPolicy(input, env);
   const provider = policy.provider;
-  const api = input.api?.trim().toLowerCase();
-  const normalizedModelId = input.modelId?.trim().toLowerCase();
+  const api = normalizeOptionalLowercaseString(input.api);
+  const normalizedModelId = normalizeOptionalLowercaseString(input.modelId);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||
@@ -574,6 +580,18 @@ export function resolveProviderRequestCapabilities(
       (provider === "openai-codex" &&
         (api === "openai-codex-responses" || api === "openai-responses") &&
         endpointClass === "openai-codex"),
+    supportsOpenAIReasoningCompatPayload:
+      provider !== undefined &&
+      api !== undefined &&
+      !policy.usesExplicitProxyLikeEndpoint &&
+      (provider === "openai" ||
+        provider === "openai-codex" ||
+        provider === "azure-openai" ||
+        provider === "azure-openai-responses") &&
+      (api === "openai-completions" ||
+        api === "openai-responses" ||
+        api === "openai-codex-responses" ||
+        api === "azure-openai-responses"),
     allowsAnthropicServiceTier:
       provider === "anthropic" &&
       api === "anthropic-messages" &&
@@ -591,9 +609,10 @@ export function resolveProviderRequestCapabilities(
       policy.usesKnownNativeOpenAIEndpoint,
     shouldStripResponsesPromptCache:
       api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
+    // Native endpoint class is the real signal here. Users can point a generic
+    // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:
-      (provider === "moonshot" && endpointClass === "moonshot-native") ||
-      (provider === "modelstudio" && endpointClass === "modelstudio-native"),
+      endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
     compatibilityFamily,
   };
 }

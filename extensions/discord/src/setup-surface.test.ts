@@ -1,6 +1,21 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import { discordSetupWizard } from "./setup-surface.js";
+import { createDiscordSetupWizardBase } from "./setup-core.js";
+
+const discordSetupWizard = createDiscordSetupWizardBase({
+  promptAllowFrom: async ({ cfg }) => cfg,
+  resolveAllowFromEntries: async ({ entries }) =>
+    entries.map((entry) => ({
+      input: entry,
+      resolved: false,
+      id: null,
+    })),
+  resolveGroupAllowlist: async ({ entries }) =>
+    entries.map((entry) => ({
+      input: entry,
+      resolved: false,
+    })),
+});
 
 describe("discordSetupWizard.dmPolicy", () => {
   it("reads the named-account DM policy instead of the channel root", () => {
@@ -52,5 +67,30 @@ describe("discordSetupWizard.dmPolicy", () => {
     expect(next?.channels?.discord?.dmPolicy).toBeUndefined();
     expect(next?.channels?.discord?.accounts?.alerts?.dmPolicy).toBe("open");
     expect(next?.channels?.discord?.accounts?.alerts?.allowFrom).toEqual(["123", "*"]);
+  });
+});
+
+describe("discordSetupWizard.status", () => {
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const configured = await discordSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          discord: {
+            defaultAccount: "work",
+            token: "discord-root-token",
+            accounts: {
+              alerts: {
+                token: "discord-alerts-token",
+              },
+              work: {
+                token: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
@@ -169,10 +170,6 @@ const PluginEntrySchema = z
 
 const TalkProviderEntrySchema = z
   .object({
-    voiceId: z.string().optional(),
-    voiceAliases: z.record(z.string(), z.string()).optional(),
-    modelId: z.string().optional(),
-    outputFormat: z.string().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
   })
   .catchall(z.unknown());
@@ -186,7 +183,7 @@ const TalkSchema = z
   })
   .strict()
   .superRefine((talk, ctx) => {
-    const provider = talk.provider?.trim().toLowerCase();
+    const provider = normalizeLowercaseStringOrEmpty(talk.provider ?? "");
     const providers = talk.providers ? Object.keys(talk.providers) : [];
 
     if (provider && providers.length > 0 && !(provider in talk.providers!)) {
@@ -443,6 +440,8 @@ export const OpenClawSchema = z
             billingBackoffHours: z.number().positive().optional(),
             billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
             billingMaxHours: z.number().positive().optional(),
+            authPermanentBackoffMinutes: z.number().positive().optional(),
+            authPermanentMaxMinutes: z.number().positive().optional(),
             failureWindowHours: z.number().positive().optional(),
             overloadedProfileRotations: z.number().int().nonnegative().optional(),
             overloadedBackoffMs: z.number().int().nonnegative().optional(),

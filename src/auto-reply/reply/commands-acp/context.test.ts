@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
@@ -425,6 +425,10 @@ describe("commands-acp context", () => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
+  afterEach(() => {
+    setMinimalAcpContextRegistryForTests();
+  });
+
   it("resolves channel/account/thread context from originating fields", () => {
     const params = buildCommandTestParams("/acp sessions", baseCfg, {
       Provider: "discord",
@@ -499,6 +503,58 @@ describe("commands-acp context", () => {
       conversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
+  });
+
+  it("uses the plugin default account when ACP context omits AccountId", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "line",
+              label: "LINE",
+              config: {
+                listAccountIds: () => ["default", "work"],
+                defaultAccountId: () => "work",
+              },
+            }),
+            bindings: {
+              resolveCommandConversation: ({
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              }: {
+                originatingTo?: string;
+                commandTo?: string;
+                fallbackTo?: string;
+              }) => {
+                const conversationId =
+                  parseLineConversationIdFromTargetForTest(originatingTo) ??
+                  parseLineConversationIdFromTargetForTest(commandTo) ??
+                  parseLineConversationIdFromTargetForTest(fallbackTo);
+                return conversationId ? { conversationId } : null;
+              },
+            },
+          },
+        },
+      ]),
+    );
+
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "line:user:U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
   });
 
   it("builds canonical telegram topic conversation ids from originating chat + thread", () => {

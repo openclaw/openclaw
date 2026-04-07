@@ -1,9 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createChannelReplyPipeline } from "../runtime-api.js";
 
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
+vi.mock("../../../test/helpers/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelRuntimeMap: () => new Map(),
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));
@@ -20,19 +20,21 @@ vi.mock("./mattermost/send.js", () => ({
   sendMessageMattermost: sendMessageMattermostMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/ssrf-runtime")) as Record<
+    string,
+    unknown
+  >;
   return { ...original, fetchWithSsrFGuard: mockFetchGuard };
 });
 
+import { mattermostPlugin } from "./channel.js";
+import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
   withMockedGlobalFetch,
 } from "./mattermost/reactions.test-helpers.js";
-
-let mattermostPlugin: typeof import("./channel.js").mattermostPlugin;
-let resetMattermostReactionBotUserCacheForTests: typeof import("./mattermost/reactions.js").resetMattermostReactionBotUserCacheForTests;
 
 type MattermostHandleAction = NonNullable<
   NonNullable<typeof mattermostPlugin.actions>["handleAction"]
@@ -108,11 +110,6 @@ function createMattermostActionContext(
 }
 
 describe("mattermostPlugin", () => {
-  beforeAll(async () => {
-    ({ mattermostPlugin } = await import("./channel.js"));
-    ({ resetMattermostReactionBotUserCacheForTests } = await import("./mattermost/reactions.js"));
-  });
-
   beforeEach(() => {
     sendMessageMattermostMock.mockReset();
     sendMessageMattermostMock.mockResolvedValue({
@@ -174,6 +171,33 @@ describe("mattermostPlugin", () => {
           chatType: "direct",
         }),
       ).toBe("off");
+    });
+
+    it("uses configured defaultAccount when accountId is omitted", () => {
+      const resolveReplyToMode = requireMattermostReplyToModeResolver();
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            defaultAccount: "alerts",
+            replyToMode: "off",
+            accounts: {
+              alerts: {
+                replyToMode: "all",
+                botToken: "alerts-token",
+                baseUrl: "https://alerts.example.com",
+              },
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveReplyToMode({
+          cfg,
+          chatType: "channel",
+        }),
+      ).toBe("all");
     });
   });
 

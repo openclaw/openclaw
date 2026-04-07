@@ -2,39 +2,23 @@ import fs from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectIntegrityDriftRejected,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
 import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
+import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+
+const runCommandWithTimeoutMock = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: vi.fn(),
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-let suiteTempRoot = "";
-let tempDirCounter = 0;
 const dynamicArchiveTemplatePathCache = new Map<string, string>();
 const pluginFixturesDir = path.resolve(process.cwd(), "test", "fixtures", "plugins-install");
-
-function ensureSuiteTempRoot() {
-  if (suiteTempRoot) {
-    return suiteTempRoot;
-  }
-  const bundleTempRoot = path.join(process.cwd(), ".tmp");
-  fs.mkdirSync(bundleTempRoot, { recursive: true });
-  suiteTempRoot = fs.mkdtempSync(path.join(bundleTempRoot, "openclaw-plugin-install-npm-spec-"));
-  return suiteTempRoot;
-}
-
-function makeTempDir() {
-  const dir = path.join(ensureSuiteTempRoot(), `case-${String(tempDirCounter)}`);
-  tempDirCounter += 1;
-  fs.mkdirSync(dir);
-  return dir;
-}
+const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
 
 function readVoiceCallArchiveBuffer(version: string): Buffer {
   return fs.readFileSync(path.join(pluginFixturesDir, `voice-call-${version}.tgz`));
@@ -91,7 +75,7 @@ async function ensureDynamicArchiveTemplate(params: {
   if (cachedPath) {
     return cachedPath;
   }
-  const templateDir = makeTempDir();
+  const templateDir = suiteTempRootTracker.makeTempDir();
   const pkgDir = params.flatRoot ? templateDir : path.join(templateDir, "package");
   fs.mkdirSync(pkgDir, { recursive: true });
   if (params.withDistIndex) {
@@ -105,7 +89,7 @@ async function ensureDynamicArchiveTemplate(params: {
   fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify(params.packageJson), "utf-8");
   const archivePath = await packToArchive({
     pkgDir,
-    outDir: ensureSuiteTempRoot(),
+    outDir: suiteTempRootTracker.ensureSuiteTempRoot(),
     outName: params.outName,
     flatRoot: params.flatRoot,
   });
@@ -114,30 +98,22 @@ async function ensureDynamicArchiveTemplate(params: {
 }
 
 afterAll(() => {
-  if (!suiteTempRoot) {
-    return;
-  }
-  try {
-    fs.rmSync(suiteTempRoot, { recursive: true, force: true });
-  } finally {
-    suiteTempRoot = "";
-    tempDirCounter = 0;
-    dynamicArchiveTemplatePathCache.clear();
-  }
+  suiteTempRootTracker.cleanup();
+  dynamicArchiveTemplatePathCache.clear();
 });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  runCommandWithTimeoutMock.mockReset();
   vi.unstubAllEnvs();
 });
 
 describe("installPluginFromNpmSpec", () => {
   it("uses --ignore-scripts for npm pack and cleans up temp dir", async () => {
-    const stateDir = makeTempDir();
+    const stateDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(stateDir, "extensions");
     fs.mkdirSync(extensionsDir, { recursive: true });
 
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     const voiceCallArchiveBuffer = readVoiceCallArchiveBuffer("0.0.1");
 
     let packTmpDir = "";
@@ -180,7 +156,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(result.npmResolution?.integrity).toBe("sha512-plugin-test");
 
     expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls,
+      calls: run.mock.calls as Array<[unknown, unknown]>,
       expectedSpec: "@openclaw/voice-call@0.0.1",
     });
 
@@ -189,7 +165,7 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("allows npm-spec installs with dangerous code patterns when forced unsafe install is set", async () => {
-    const stateDir = makeTempDir();
+    const stateDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(stateDir, "extensions");
     fs.mkdirSync(extensionsDir, { recursive: true });
 
@@ -205,7 +181,7 @@ describe("installPluginFromNpmSpec", () => {
     });
     const archiveBuffer = fs.readFileSync(archivePath);
 
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     let packTmpDir = "";
     const packedName = "dangerous-plugin-1.0.0.tgz";
     run.mockImplementation(async (argv, opts) => {
@@ -253,7 +229,7 @@ describe("installPluginFromNpmSpec", () => {
       ),
     ).toBe(true);
     expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls,
+      calls: run.mock.calls as Array<[unknown, unknown]>,
       expectedSpec: "dangerous-plugin@1.0.0",
     });
     expect(packTmpDir).not.toBe("");
@@ -270,7 +246,7 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("aborts when integrity drift callback rejects the fetched artifact", async () => {
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     mockNpmPackMetadataResult(run, {
       id: "@openclaw/voice-call@0.0.1",
       name: "@openclaw/voice-call",
@@ -295,7 +271,7 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("classifies npm package-not-found errors with a stable error code", async () => {
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     run.mockResolvedValue({
       code: 1,
       stdout: "",
@@ -326,7 +302,7 @@ describe("installPluginFromNpmSpec", () => {
     };
 
     {
-      const run = vi.mocked(runCommandWithTimeout);
+      const run = runCommandWithTimeoutMock;
       mockNpmPackMetadataResult(run, prereleaseMetadata);
 
       const result = await installPluginFromNpmSpec({
@@ -340,10 +316,10 @@ describe("installPluginFromNpmSpec", () => {
       }
     }
 
-    vi.clearAllMocks();
+    runCommandWithTimeoutMock.mockReset();
 
     {
-      const run = vi.mocked(runCommandWithTimeout);
+      const run = runCommandWithTimeoutMock;
       let packTmpDir = "";
       const packedName = "voice-call-0.0.2-beta.1.tgz";
       const voiceCallArchiveBuffer = readVoiceCallArchiveBuffer("0.0.1");
@@ -363,7 +339,7 @@ describe("installPluginFromNpmSpec", () => {
         throw new Error(`unexpected command: ${argv.join(" ")}`);
       });
 
-      const stateDir = makeTempDir();
+      const stateDir = suiteTempRootTracker.makeTempDir();
       const extensionsDir = path.join(stateDir, "extensions");
       fs.mkdirSync(extensionsDir, { recursive: true });
       const result = await installPluginFromNpmSpec({
@@ -378,7 +354,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.npmResolution?.version).toBe("0.0.2-beta.1");
       expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
       expectSingleNpmPackIgnoreScriptsCall({
-        calls: run.mock.calls,
+        calls: run.mock.calls as Array<[unknown, unknown]>,
         expectedSpec: "@openclaw/voice-call@beta",
       });
       expect(packTmpDir).not.toBe("");

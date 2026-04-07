@@ -1,20 +1,23 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import { createHookRunner } from "../../plugins/hooks.js";
-import { addTestHook } from "../../plugins/hooks.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { PluginHookRegistration } from "../../plugins/types.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
-import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
-import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { createIMessageTestPlugin } from "../../../test/helpers/channels/imessage-test-plugin.js";
 import {
   imessageOutboundForTest,
   signalOutbound,
   whatsappOutbound,
-} from "./deliver.test-outbounds.js";
+} from "../../../test/helpers/infra/deliver-test-outbounds.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { createHookRunner } from "../../plugins/hooks.js";
+import { addTestHook } from "../../plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import {
+  releasePinnedPluginChannelRegistry,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import type { PluginHookRegistration } from "../../plugins/types.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
@@ -100,7 +103,7 @@ type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
 
 async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
-    NonNullable<Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["deps"]>["sendWhatsApp"]
+    NonNullable<Parameters<DeliverModule["deliverOutboundPayloads"]>[0]["deps"]>["whatsapp"]
   >;
   payload: DeliverOutboundPayload;
   cfg?: OpenClawConfig;
@@ -110,7 +113,7 @@ async function deliverWhatsAppPayload(params: {
     channel: "whatsapp",
     to: "+1555",
     payloads: [params.payload],
-    deps: { sendWhatsApp: params.sendWhatsApp },
+    deps: { whatsapp: params.sendWhatsApp },
   });
 }
 
@@ -129,7 +132,7 @@ async function runChunkedWhatsAppDelivery(params?: {
     channel: "whatsapp",
     to: "+1555",
     payloads: [{ text: "abcd" }],
-    deps: { sendWhatsApp },
+    deps: { whatsapp: sendWhatsApp },
     ...(params?.mirror ? { mirror: params.mirror } : {}),
   });
   return { sendWhatsApp, results };
@@ -142,7 +145,7 @@ async function deliverSingleWhatsAppForHookTest(params?: { sessionKey?: string }
     channel: "whatsapp",
     to: "+1555",
     payloads: [{ text: "hello" }],
-    deps: { sendWhatsApp },
+    deps: { whatsapp: sendWhatsApp },
     ...(params?.sessionKey ? { session: { key: params.sessionKey } } : {}),
   });
 }
@@ -159,7 +162,7 @@ async function runBestEffortPartialFailureDelivery() {
     channel: "whatsapp",
     to: "+1555",
     payloads: [{ text: "a" }, { text: "b" }],
-    deps: { sendWhatsApp },
+    deps: { whatsapp: sendWhatsApp },
     bestEffort: true,
     onError,
   });
@@ -189,6 +192,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   beforeEach(() => {
+    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
@@ -210,6 +214,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   afterEach(() => {
+    releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
   });
   it("chunks direct adapter text and preserves delivery overrides across sends", async () => {
@@ -421,7 +426,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
     });
 
     expect(sendWhatsApp).toHaveBeenCalledWith(
@@ -441,7 +446,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "imessage",
       to: "imessage:+15551234567",
       payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
-      deps: { sendIMessage },
+      deps: { imessage: sendIMessage },
     });
 
     expect(sendIMessage).toHaveBeenCalledWith(
@@ -471,7 +476,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "Line one\n\nLine two" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
@@ -562,14 +567,14 @@ describe("deliverOutboundPayloads", () => {
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
-  it("uses iMessage media maxBytes from agent fallback", async () => {
+  it("passes config through for iMessage media sends so the channel runtime can resolve limits", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
     setActivePluginRegistry(
       createTestRegistry([
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin({ outbound: imessageOutboundForTest }),
+          plugin: createIMessageTestPlugin(),
         },
       ]),
     );
@@ -581,14 +586,17 @@ describe("deliverOutboundPayloads", () => {
       cfg,
       channel: "imessage",
       to: "chat_id:42",
-      payloads: [{ text: "hello" }],
-      deps: { sendIMessage },
+      payloads: [{ text: "hello", mediaUrls: ["https://example.com/a.png"] }],
+      deps: { imessage: sendIMessage },
     });
 
     expect(sendIMessage).toHaveBeenCalledWith(
       "chat_id:42",
       "hello",
-      expect.objectContaining({ maxBytes: 3 * 1024 * 1024 }),
+      expect.objectContaining({
+        config: cfg,
+        mediaUrl: "https://example.com/a.png",
+      }),
     );
   });
 
@@ -666,7 +674,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hello" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
       session: { agentId: "agent-main" },
     });
 
@@ -702,7 +710,7 @@ describe("deliverOutboundPayloads", () => {
         channel: "whatsapp",
         to: "+1555",
         payloads: [{ text: "a" }],
-        deps: { sendWhatsApp },
+        deps: { whatsapp: sendWhatsApp },
         abortSignal: abortController.signal,
       }),
     ).rejects.toThrow("Operation aborted");
@@ -722,7 +730,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hi", mediaUrl: "https://x.test/a.jpg" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
       bestEffort: true,
       onError,
     });
@@ -783,7 +791,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hello" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
     });
 
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
@@ -824,7 +832,7 @@ describe("deliverOutboundPayloads", () => {
       channel: "whatsapp",
       to: "+1555",
       payloads: [{ text: "hello" }],
-      deps: { sendWhatsApp },
+      deps: { whatsapp: sendWhatsApp },
     });
 
     expect(hookMocks.runner.runMessageSending).toHaveBeenCalledTimes(1);
@@ -1036,7 +1044,7 @@ describe("deliverOutboundPayloads", () => {
         channel: "whatsapp",
         to: "+1555",
         payloads: [{ text: "hi" }],
-        deps: { sendWhatsApp },
+        deps: { whatsapp: sendWhatsApp },
       }),
     ).rejects.toThrow("downstream failed");
 

@@ -5,7 +5,18 @@ import {
   runSetupWizardFinalize,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
-import { slackSetupWizard } from "./setup-surface.js";
+import { createSlackSetupWizardBase } from "./setup-core.js";
+
+const slackSetupWizard = createSlackSetupWizardBase({
+  promptAllowFrom: async ({ cfg }) => cfg,
+  resolveAllowFromEntries: async ({ entries }) =>
+    entries.map((entry) => ({
+      input: entry,
+      resolved: false,
+      id: null,
+    })),
+  resolveGroupAllowlist: async ({ entries }) => entries,
+});
 
 describe("slackSetupWizard.finalize", () => {
   const baseCfg = {
@@ -116,5 +127,33 @@ describe("slackSetupWizard.dmPolicy", () => {
     expect(next?.channels?.slack?.dmPolicy).toBeUndefined();
     expect(next?.channels?.slack?.accounts?.alerts?.dmPolicy).toBe("open");
     expect(next?.channels?.slack?.accounts?.alerts?.allowFrom).toEqual(["U123", "*"]);
+  });
+});
+
+describe("slackSetupWizard.status", () => {
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const configured = await slackSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          slack: {
+            defaultAccount: "work",
+            botToken: "xoxb-root",
+            appToken: "xapp-root",
+            accounts: {
+              alerts: {
+                botToken: "xoxb-alerts",
+                appToken: "xapp-alerts",
+              },
+              work: {
+                botToken: "",
+                appToken: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
   });
 });

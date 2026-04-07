@@ -1,8 +1,12 @@
 import type { MsgContext } from "../auto-reply/templating.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeChatType } from "./chat-type.js";
 
 function extractConversationId(from?: string): string | undefined {
-  const trimmed = from?.trim();
+  const trimmed = normalizeOptionalString(from);
   if (!trimmed) {
     return undefined;
   }
@@ -21,26 +25,26 @@ function shouldAppendId(id: string): boolean {
 }
 
 export function resolveConversationLabel(ctx: MsgContext): string | undefined {
-  const explicit = ctx.ConversationLabel?.trim();
+  const explicit = normalizeOptionalString(ctx.ConversationLabel);
   if (explicit) {
     return explicit;
   }
 
-  const threadLabel = ctx.ThreadLabel?.trim();
+  const threadLabel = normalizeOptionalString(ctx.ThreadLabel);
   if (threadLabel) {
     return threadLabel;
   }
 
   const chatType = normalizeChatType(ctx.ChatType);
   if (chatType === "direct") {
-    return ctx.SenderName?.trim() || ctx.From?.trim() || undefined;
+    return normalizeOptionalString(ctx.SenderName) ?? normalizeOptionalString(ctx.From);
   }
 
   const base =
-    ctx.GroupChannel?.trim() ||
-    ctx.GroupSubject?.trim() ||
-    ctx.GroupSpace?.trim() ||
-    ctx.From?.trim() ||
+    normalizeOptionalString(ctx.GroupChannel) ||
+    normalizeOptionalString(ctx.GroupSubject) ||
+    normalizeOptionalString(ctx.GroupSpace) ||
+    normalizeOptionalString(ctx.From) ||
     "";
   if (!base) {
     return undefined;
@@ -59,7 +63,7 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   if (base.includes(id)) {
     return base;
   }
-  if (base.toLowerCase().includes(" id:")) {
+  if (normalizeLowercaseStringOrEmpty(base).includes(" id:")) {
     return base;
   }
   if (base.startsWith("#") || base.startsWith("@")) {

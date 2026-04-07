@@ -23,6 +23,7 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl,
   buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
@@ -30,7 +31,7 @@ import {
 } from "./component-custom-id.js";
 // Some test-only module graphs partially mock `@buape/carbon` and can drop `Modal`.
 // Keep dynamic form definitions loadable instead of crashing unrelated suites.
-const ModalBase: typeof Modal = (Modal ?? class {}) as typeof Modal;
+const ModalBase: typeof Modal = Modal ?? class {};
 
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
@@ -319,7 +320,7 @@ export function resolveDiscordComponentAttachmentName(value: string): string {
 }
 
 function mapButtonStyle(style?: DiscordComponentButtonStyle): ButtonStyle {
-  switch ((style ?? "primary").toLowerCase()) {
+  switch (normalizeLowercaseStringOrEmpty(style ?? "primary")) {
     case "secondary":
       return ButtonStyle.Secondary;
     case "success":
@@ -339,7 +340,7 @@ function mapTextInputStyle(style?: DiscordModalFieldSpec["style"]) {
 }
 
 function normalizeBlockType(raw: string) {
-  const lowered = raw.trim().toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
   return BLOCK_ALIASES.get(lowered) ?? (lowered as DiscordComponentBlock["type"]);
 }
 
@@ -432,10 +433,9 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
 
 function parseModalField(raw: unknown, label: string, index: number): DiscordModalFieldSpec {
   const obj = requireObject(raw, label);
-  const type = readString(
-    obj.type,
-    `${label}.type`,
-  ).toLowerCase() as DiscordComponentModalFieldType;
+  const type = normalizeLowercaseStringOrEmpty(
+    readString(obj.type, `${label}.type`),
+  ) as DiscordComponentModalFieldType;
   const supported: DiscordComponentModalFieldType[] = [
     "text",
     "checkbox",
@@ -469,7 +469,7 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
 
 function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock {
   const obj = requireObject(raw, label);
-  const typeRaw = readString(obj.type, `${label}.type`).toLowerCase();
+  const typeRaw = normalizeLowercaseStringOrEmpty(readString(obj.type, `${label}.type`));
   const type = normalizeBlockType(typeRaw);
   switch (type) {
     case "text":
@@ -489,10 +489,9 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
       let accessory: DiscordComponentSectionAccessory | undefined;
       if (obj.accessory !== undefined) {
         const accessoryObj = requireObject(obj.accessory, `${label}.accessory`);
-        const accessoryType = readString(
-          accessoryObj.type,
-          `${label}.accessory.type`,
-        ).toLowerCase();
+        const accessoryType = normalizeLowercaseStringOrEmpty(
+          readString(accessoryObj.type, `${label}.accessory.type`),
+        );
         if (accessoryType === "thumbnail") {
           accessory = {
             type: "thumbnail",
@@ -710,7 +709,9 @@ function createSelectComponent(params: {
     | ChannelSelectMenu;
   entry: DiscordComponentEntry;
 } {
-  const type = (params.spec.type ?? "string").toLowerCase() as DiscordComponentSelectType;
+  const type = normalizeLowercaseStringOrEmpty(
+    params.spec.type ?? "string",
+  ) as DiscordComponentSelectType;
   const componentId = params.componentId ?? createShortId("sel_");
   const customId = buildDiscordComponentCustomIdImpl({ componentId });
   if (type === "string") {

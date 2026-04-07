@@ -1,10 +1,5 @@
-import {
-  DEFAULT_ACCOUNT_ID,
-  setSetupChannelEnabled,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { DEFAULT_ACCOUNT_ID, setSetupChannelEnabled } from "openclaw/plugin-sdk/setup";
 import { listWhatsAppAccountIds } from "./accounts.js";
 import { detectWhatsAppLinked, finalizeWhatsAppSetup } from "./setup-finalize.js";
 
@@ -19,36 +14,38 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "not linked",
     configuredScore: 5,
     unconfiguredScore: 4,
-    resolveConfigured: async ({ cfg }) => {
-      for (const accountId of listWhatsAppAccountIds(cfg)) {
-        if (await detectWhatsAppLinked(cfg, accountId)) {
+    resolveConfigured: async ({ cfg, accountId }) => {
+      for (const resolvedAccountId of accountId ? [accountId] : listWhatsAppAccountIds(cfg)) {
+        if (await detectWhatsAppLinked(cfg, resolvedAccountId)) {
           return true;
         }
       }
       return false;
     },
-    resolveStatusLines: async ({ cfg, configured }) => {
+    resolveStatusLines: async ({ cfg, accountId, configured }) => {
       const linkedAccountId = (
         await Promise.all(
-          listWhatsAppAccountIds(cfg).map(async (accountId) => ({
-            accountId,
-            linked: await detectWhatsAppLinked(cfg, accountId),
-          })),
+          (accountId ? [accountId] : listWhatsAppAccountIds(cfg)).map(
+            async (resolvedAccountId) => ({
+              accountId: resolvedAccountId,
+              linked: await detectWhatsAppLinked(cfg, resolvedAccountId),
+            }),
+          ),
         )
       ).find((entry) => entry.linked)?.accountId;
-      const label = linkedAccountId
-        ? `WhatsApp (${linkedAccountId === DEFAULT_ACCOUNT_ID ? "default" : linkedAccountId})`
+      const labelAccountId = accountId ?? linkedAccountId;
+      const label = labelAccountId
+        ? `WhatsApp (${labelAccountId === DEFAULT_ACCOUNT_ID ? "default" : labelAccountId})`
         : "WhatsApp";
       return [`${label}: ${configured ? "linked" : "not linked"}`];
     },
   },
-  resolveShouldPromptAccountIds: ({ options, shouldPromptAccountIds }) =>
-    Boolean(shouldPromptAccountIds || options?.promptWhatsAppAccountId),
+  resolveShouldPromptAccountIds: ({ shouldPromptAccountIds }) => Boolean(shouldPromptAccountIds),
   credentials: [],
   finalize: async ({ cfg, accountId, forceAllowFrom, prompter, runtime }) =>
     await finalizeWhatsAppSetup({ cfg, accountId, forceAllowFrom, prompter, runtime }),
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
   onAccountRecorded: (accountId, options) => {
-    options?.onWhatsAppAccountId?.(accountId);
+    options?.onAccountId?.(channel, accountId);
   },
 };

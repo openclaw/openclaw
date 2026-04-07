@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { createDiscordRuntimeAccountContext } from "../client.js";
 import { readDiscordComponentSpec } from "../components.js";
 import {
@@ -112,12 +113,14 @@ export async function handleDiscordMessagingAction(
   const reactionRuntimeOptions = cfg
     ? createDiscordRuntimeAccountContext({
         cfg,
-        accountId: accountId ?? "default",
+        accountId: accountId ?? resolveDefaultDiscordAccountId(cfg),
       })
-    : undefined;
+    : accountId
+      ? { accountId }
+      : undefined;
   const withReactionRuntimeOptions = <T extends Record<string, unknown>>(extra?: T) => ({
     ...(reactionRuntimeOptions ?? cfgOptions),
-    ...(extra ?? {}),
+    ...extra,
   });
   const normalizeMessage = (message: unknown) => {
     if (!message || typeof message !== "object") {

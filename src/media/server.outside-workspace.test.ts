@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
-import os from "node:os";
-import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
   readFileWithinRoot: vi.fn(),
@@ -27,9 +26,22 @@ vi.mock("./server.runtime.js", () => {
 
 let startMediaServer: typeof import("./server.js").startMediaServer;
 let realFetch: typeof import("undici").fetch;
+const mediaRootTracker = createSuiteTempRootTracker({
+  prefix: "openclaw-media-outside-workspace-",
+});
+const LOOPBACK_FETCH_ENV = {
+  HTTP_PROXY: undefined,
+  HTTPS_PROXY: undefined,
+  ALL_PROXY: undefined,
+  http_proxy: undefined,
+  https_proxy: undefined,
+  all_proxy: undefined,
+  NO_PROXY: "127.0.0.1,localhost",
+  no_proxy: "127.0.0.1,localhost",
+} as const;
 
 async function expectOutsideWorkspaceServerResponse(url: string) {
-  const response = await realFetch(url);
+  const response = await withEnvAsync(LOOPBACK_FETCH_ENV, () => realFetch(url));
   expect(response.status).toBe(400);
   expect(await response.text()).toBe("file is outside workspace root");
 }
@@ -45,7 +57,8 @@ describe("media server outside-workspace mapping", () => {
     const require = createRequire(import.meta.url);
     ({ startMediaServer } = await import("./server.js"));
     ({ fetch: realFetch } = require("undici") as typeof import("undici"));
-    mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-outside-workspace-"));
+    await mediaRootTracker.setup();
+    mediaDir = await mediaRootTracker.make("case");
     try {
       server = await startMediaServer(0, 1_000);
     } catch (error) {
@@ -76,7 +89,7 @@ describe("media server outside-workspace mapping", () => {
     if (boundServer) {
       await new Promise((resolve) => boundServer.close(resolve));
     }
-    await fs.rm(mediaDir, { recursive: true, force: true });
+    await mediaRootTracker.cleanup();
     mediaDir = "";
   });
 

@@ -86,6 +86,14 @@ function createHost(agentsPanel: AgentsPanel): Parameters<typeof refreshActiveTa
     eventLog: [],
     eventLogBuffer: [],
     basePath: "",
+    dreamingStatusLoading: false,
+    dreamingStatusError: null,
+    dreamingStatus: null,
+    dreamingModeSaving: false,
+    dreamDiaryLoading: false,
+    dreamDiaryError: null,
+    dreamDiaryPath: null,
+    dreamDiaryContent: null,
   } as Parameters<typeof refreshActiveTab>[0];
 }
 

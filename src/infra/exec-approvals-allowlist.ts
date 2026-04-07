@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { isDispatchWrapperExecutable } from "./dispatch-wrapper-resolution.js";
 import {
   analyzeShellCommand,
@@ -47,7 +51,7 @@ export function normalizeSafeBins(entries?: readonly string[]): Set<string> {
     return new Set();
   }
   const normalized = entries
-    .map((entry) => entry.trim().toLowerCase())
+    .map((entry) => normalizeLowercaseStringOrEmpty(entry))
     .filter((entry) => entry.length > 0);
   return new Set(normalized);
 }
@@ -149,12 +153,12 @@ function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistCo
 }
 
 function normalizeSkillBinName(value: string | undefined): string | null {
-  const trimmed = value?.trim().toLowerCase();
+  const trimmed = normalizeOptionalString(value)?.toLowerCase();
   return trimmed && trimmed.length > 0 ? trimmed : null;
 }
 
 function normalizeSkillBinResolvedPath(value: string | undefined): string | null {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return null;
   }
@@ -977,11 +981,11 @@ function collectAllowAlwaysPatterns(params: {
   const isPowerShellFileInvocation =
     POWERSHELL_WRAPPERS.has(normalizeExecutableToken(segment.argv[0] ?? "")) &&
     segment.argv.some((t) => {
-      const lower = t.trim().toLowerCase();
+      const lower = normalizeLowercaseStringOrEmpty(t);
       return lower === "-file" || lower === "-f";
     }) &&
     !segment.argv.some((t) => {
-      const lower = t.trim().toLowerCase();
+      const lower = normalizeLowercaseStringOrEmpty(t);
       return lower === "-command" || lower === "-c" || lower === "--command";
     });
   const inlineCommand = isPowerShellFileInvocation

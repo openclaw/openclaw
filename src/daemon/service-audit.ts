@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -220,7 +221,7 @@ function auditGatewayToken(
     detail: "Run `openclaw gateway install --force` to remove embedded service token.",
     level: "recommended",
   });
-  const expectedToken = expectedGatewayToken?.trim();
+  const expectedToken = normalizeOptionalString(expectedGatewayToken);
   if (!expectedToken || serviceToken === expectedToken) {
     return;
   }
@@ -240,7 +241,7 @@ export function readEmbeddedGatewayToken(command: GatewayServiceCommand): string
   if (command.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file") {
     return undefined;
   }
-  return command.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  return normalizeOptionalString(command.environment?.OPENCLAW_GATEWAY_TOKEN);
 }
 
 function getPathModule(platform: NodeJS.Platform) {
@@ -378,8 +379,8 @@ export function checkTokenDrift(params: {
   serviceToken: string | undefined;
   configToken: string | undefined;
 }): ServiceConfigIssue | null {
-  const serviceToken = params.serviceToken?.trim() || undefined;
-  const configToken = params.configToken?.trim() || undefined;
+  const serviceToken = normalizeOptionalString(params.serviceToken);
+  const configToken = normalizeOptionalString(params.configToken);
 
   // Tokenless service units are canonical; no drift to report.
   if (!serviceToken) {

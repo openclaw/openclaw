@@ -1,11 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as translate from "../lib/translate.ts";
+import { de } from "../locales/de.ts";
+import { en } from "../locales/en.ts";
+import { es } from "../locales/es.ts";
+import { fr } from "../locales/fr.ts";
+import { id } from "../locales/id.ts";
+import { ja_JP } from "../locales/ja-JP.ts";
+import { ko } from "../locales/ko.ts";
+import { pl } from "../locales/pl.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
+import { tr } from "../locales/tr.ts";
+import { uk } from "../locales/uk.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
 describe("i18n", () => {
+  function flatten(value: Record<string, string | Record<string, unknown>>, prefix = ""): string[] {
+    return Object.entries(value).flatMap(([key, nested]) => {
+      const fullKey = prefix ? `${prefix}.${key}` : key;
+      if (typeof nested === "string") {
+        return [fullKey];
+      }
+      return flatten(nested as Record<string, string | Record<string, unknown>>, fullKey);
+    });
+  }
+
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -80,8 +100,39 @@ describe("i18n", () => {
   });
 
   it("keeps the version label available in shipped locales", () => {
+    expect((de.common as { version?: string }).version).toBeTruthy();
+    expect((es.common as { version?: string }).version).toBeTruthy();
+    expect((fr.common as { version?: string }).version).toBeTruthy();
+    expect((id.common as { version?: string }).version).toBeTruthy();
+    expect((ja_JP.common as { version?: string }).version).toBeTruthy();
+    expect((ko.common as { version?: string }).version).toBeTruthy();
+    expect((pl.common as { version?: string }).version).toBeTruthy();
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
+    expect((tr.common as { version?: string }).version).toBeTruthy();
+    expect((uk.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
     expect((zh_TW.common as { version?: string }).version).toBeTruthy();
+  });
+
+  it("keeps shipped locales structurally aligned with English", () => {
+    const englishKeys = flatten(en);
+    for (const [locale, value] of Object.entries({
+      de,
+      es,
+      fr,
+      id,
+      ja_JP,
+      ko,
+      pl,
+      pt_BR,
+      tr,
+      uk,
+      zh_CN,
+      zh_TW,
+    })) {
+      expect(flatten(value as Record<string, string | Record<string, unknown>>), locale).toEqual(
+        englishKeys,
+      );
+    }
   });
 });

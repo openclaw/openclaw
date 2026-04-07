@@ -18,6 +18,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -74,7 +75,7 @@ function inferProviderFromSessionKey(params: {
   if (parts[0] === configuredMainKey) {
     return undefined;
   }
-  const candidate = parts[0]?.trim().toLowerCase();
+  const candidate = normalizeOptionalLowercaseString(parts[0]);
   if (!candidate) {
     return undefined;
   }

@@ -13,10 +13,11 @@ import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
 import {
   hasControlCommand,
+  implicitMentionKindWhen,
   normalizeE164,
   parseActivationCommand,
   recordPendingHistoryEntryIfEnabled,
-  resolveMentionGating,
+  resolveInboundMentionDecision,
 } from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
 
@@ -40,6 +41,7 @@ type ApplyGroupGatingParams = {
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryLimit: number;
   groupMemberNames: Map<string, Map<string, string>>;
+  selfChatMode?: boolean;
   logVerbose: (msg: string) => void;
   replyLogger: { debug: (obj: unknown, msg: string) => void };
 };
@@ -143,19 +145,36 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   });
   const requireMention = activation !== "always";
   const replyContext = getReplyContext(params.msg, params.authDir);
+  const sharedNumberSelfChat = params.selfChatMode === true;
   // Detect reply-to-bot: compare JIDs, LIDs, and E.164 numbers.
   // WhatsApp may report the quoted message sender as either a phone JID
   // (xxxxx@s.whatsapp.net) or a LID (xxxxx@lid), so we compare both.
-  const implicitMention = identitiesOverlap(self, replyContext?.sender);
-  const mentionGate = resolveMentionGating({
-    requireMention,
-    canDetectMention: true,
-    wasMentioned,
-    implicitMention,
-    shouldBypassMention,
+  // But in shared-number/selfChatMode setups, replies from the same self number
+  // should not count as implicit bot mentions unless the message explicitly
+  // mentioned the bot in text.
+  const implicitReplyToSelf = sharedNumberSelfChat && identitiesOverlap(self, sender);
+  const implicitMentionKinds = implicitMentionKindWhen(
+    "quoted_bot",
+    !implicitReplyToSelf && identitiesOverlap(self, replyContext?.sender),
+  );
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned,
+      implicitMentionKinds,
+    },
+    policy: {
+      isGroup: true,
+      requireMention,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
   });
-  params.msg.wasMentioned = mentionGate.effectiveWasMentioned;
-  if (!shouldBypassMention && requireMention && mentionGate.shouldSkip) {
+  const effectiveWasMentioned =
+    mentionDecision.effectiveWasMentioned || Boolean(shouldBypassMention);
+  params.msg.wasMentioned = effectiveWasMentioned;
+  if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,

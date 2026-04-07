@@ -4,6 +4,7 @@ import {
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
 import type { startGatewayServer } from "../../gateway/server.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
@@ -12,6 +13,7 @@ import {
   markGatewaySigusr1RestartHandled,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
+import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getActiveTaskCount,
@@ -23,6 +25,7 @@ import { createRestartIterationHook } from "../../process/restart-recovery.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
+const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 
 type GatewayRunSignalAction = "stop" | "restart";
 
@@ -77,6 +80,16 @@ export async function runGatewayLoop(params: {
           ? `spawned pid ${respawn.pid ?? "unknown"}`
           : "supervisor restart";
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+      if (
+        respawn.mode === "supervised" &&
+        detectRespawnSupervisor(process.env, process.platform) === "launchd"
+      ) {
+        // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
+        // tripping launchd crash-loop throttling before KeepAlive relaunches.
+        await new Promise((resolve) => {
+          setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
+        });
+      }
       exitProcess(0);
       return;
     }
@@ -249,7 +262,7 @@ export async function runGatewayLoop(params: {
         // Without this, the process holds the lock but is not listening,
         // forcing manual cleanup. (#35862)
         await releaseLockIfHeld();
-        const errMsg = err instanceof Error ? err.message : String(err);
+        const errMsg = formatErrorMessage(err);
         const errStack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
         gatewayLog.error(
           `gateway startup failed: ${errMsg}. ` +
