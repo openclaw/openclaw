@@ -13,6 +13,7 @@ const PLUGIN_SDK_DTS_INPUT_FILES = [
   "tsconfig.plugin-sdk.dts.json",
   path.join("scripts", "write-plugin-sdk-entry-dts.ts"),
   path.join("scripts", "lib", "plugin-sdk-entries.mjs"),
+  path.join("scripts", "lib", "plugin-sdk-entrypoints.json"),
 ];
 const PLUGIN_SDK_DTS_SOURCE_ROOTS = ["src", path.join("packages", "memory-host-sdk", "src")];
 
