@@ -6,6 +6,7 @@ const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const resolveRuntimePluginRegistryMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
+const getActivePluginChannelRegistryMock = vi.hoisted(() => vi.fn());
 const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
@@ -29,6 +30,8 @@ vi.mock("../../plugins/loader.js", () => ({
 
 vi.mock("../../plugins/runtime.js", () => ({
   getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
+  getActivePluginChannelRegistry: (...args: unknown[]) =>
+    getActivePluginChannelRegistryMock(...args),
   getActivePluginChannelRegistryVersion: (...args: unknown[]) =>
     getActivePluginChannelRegistryVersionMock(...args),
 }));
@@ -48,23 +51,27 @@ async function importChannelResolution(scope: string) {
 }
 
 function expectBootstrapArgs() {
-  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith({
-    config: { autoEnabled: true },
-    workspaceDir: "/tmp/workspace",
-    runtimeOptions: {
-      allowGatewaySubagentBinding: true,
-    },
-  });
+  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: { autoEnabled: true },
+      activationSourceConfig: { channels: {} },
+      workspaceDir: "/tmp/workspace",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    }),
+  );
 }
 
 describe("outbound channel resolution", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     getChannelPluginMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReset();
     getActivePluginRegistryMock.mockReset();
+    getActivePluginChannelRegistryMock.mockReset();
     getActivePluginChannelRegistryVersionMock.mockReset();
     normalizeMessageChannelMock.mockReset();
     isDeliverableMessageChannelMock.mockReset();
@@ -76,10 +83,17 @@ describe("outbound channel resolution", () => {
       ["telegram", "discord", "slack"].includes(String(value)),
     );
     getActivePluginRegistryMock.mockReturnValue({ channels: [] });
+    getActivePluginChannelRegistryMock.mockReturnValue({ channels: [] });
     getActivePluginChannelRegistryVersionMock.mockReturnValue(1);
-    applyPluginAutoEnableMock.mockReturnValue({ config: { autoEnabled: true } });
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: { autoEnabled: true },
+      autoEnabledReasons: {},
+    });
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
+
+    const channelResolution = await importChannelResolution("reset");
+    channelResolution.resetOutboundChannelResolutionStateForTest();
   });
 
   it.each([
@@ -109,6 +123,9 @@ describe("outbound channel resolution", () => {
     const plugin = { id: "telegram" };
     getChannelPluginMock.mockReturnValue(undefined);
     getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin }],
+    });
+    getActivePluginChannelRegistryMock.mockReturnValue({
       channels: [{ plugin }],
     });
     const channelResolution = await importChannelResolution("direct-registry");
@@ -147,6 +164,9 @@ describe("outbound channel resolution", () => {
     const plugin = { id: "telegram" };
     getChannelPluginMock.mockReturnValueOnce(undefined).mockReturnValueOnce(plugin);
     getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin: { id: "discord" } }],
+    });
+    getActivePluginChannelRegistryMock.mockReturnValue({
       channels: [{ plugin: { id: "discord" } }],
     });
     const channelResolution = await importChannelResolution("bootstrap-missing-target");

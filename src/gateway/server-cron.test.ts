@@ -12,12 +12,14 @@ const {
   loadConfigMock,
   fetchWithSsrFGuardMock,
   runCronIsolatedAgentTurnMock,
+  cleanupBrowserSessionsForLifecycleEndMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatNowMock: vi.fn(),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -32,9 +34,11 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+vi.mock("../infra/heartbeat-wake.js", async () => {
   return await mergeMockedModule(
-    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    ),
     () => ({
       requestHeartbeatNow,
     }),
@@ -55,6 +59,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
+}));
+
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
 }));
 
 import { buildGatewayCronService } from "./server-cron.js";
@@ -78,6 +86,7 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
+    cleanupBrowserSessionsForLifecycleEndMock.mockClear();
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -198,6 +207,10 @@ describe("buildGatewayCronService", () => {
           sessionKey: "project-alpha-monitor",
         }),
       );
+      expect(cleanupBrowserSessionsForLifecycleEndMock).toHaveBeenCalledWith({
+        sessionKeys: ["project-alpha-monitor"],
+        onWarn: expect.any(Function),
+      });
     } finally {
       state.cron.stop();
     }

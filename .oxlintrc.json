@@ -25,8 +25,8 @@
   "ignorePatterns": [
     "assets/",
     "dist/",
+    "dist-runtime/",
     "docs/_layouts/",
-    "extensions/",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",
@@ -34,6 +34,36 @@
     "src/auto-reply/reply/export-html/template.js",
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "Swabble/",
-    "vendor/"
+    "vendor/",
+    "**/.cache/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/dist/**",
+    "**/dist-runtime/**",
+    "**/node_modules/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.e2e.test.ts",
+        "**/*.live.test.ts",
+        "**/*test-harness.ts",
+        "**/*test-helpers.ts",
+        "**/*test-support.ts"
+      ],
+      "rules": {
+        "typescript/await-thenable": "off",
+        "typescript/no-base-to-string": "off",
+        "typescript/no-explicit-any": "off",
+        "typescript/no-floating-promises": "off",
+        "typescript/no-misused-spread": "off",
+        "typescript/no-redundant-type-constituents": "off",
+        "typescript/no-unnecessary-template-expression": "off",
+        "typescript/unbound-method": "off",
+        "eslint/no-unsafe-optional-chaining": "off"
+      }
+    }
   ]
 }

@@ -28,7 +28,6 @@ describe("PlaywrightDiffScreenshotter", () => {
   let cleanupRootDir: () => Promise<void>;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ PlaywrightDiffScreenshotter, resetSharedBrowserStateForTests } =
       await import("./browser.js"));
   });
@@ -107,7 +106,7 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 
   it("renders PDF output when format is pdf", async () => {
-    const { pages, browser, screenshotter } = await createScreenshotterHarness();
+    const { pages, screenshotter } = await createScreenshotterHarness();
     const pdfPath = path.join(rootDir, "preview.pdf");
 
     await screenshotter.screenshotHtml({

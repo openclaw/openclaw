@@ -2,6 +2,12 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { isMutatingToolCall } from "../agents/tool-mutation.js";
+import { resolveOwnerOnlyToolApprovalClass } from "../agents/tool-policy.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { asRecord } from "./record-shared.js";
 
 const SAFE_SEARCH_TOOL_IDS = new Set(["search", "web_search", "memory_search"]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
@@ -11,17 +17,9 @@ const EXEC_CAPABLE_TOOL_IDS = new Set([
   "shell",
   "bash",
   "process",
-  "nodes",
   "code_execution",
 ]);
-const CONTROL_PLANE_TOOL_IDS = new Set([
-  "gateway",
-  "cron",
-  "sessions_spawn",
-  "sessions_send",
-  "session_status",
-]);
-const INTERACTIVE_TOOL_IDS = new Set(["whatsapp_login"]);
+const CONTROL_PLANE_TOOL_IDS = new Set(["sessions_spawn", "sessions_send", "session_status"]);
 
 export type AcpApprovalClass =
   | "readonly_scoped"
@@ -39,12 +37,6 @@ export type AcpApprovalClassification = {
   autoApprove: boolean;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readFirstStringValue(
   source: Record<string, unknown> | undefined,
   keys: string[],
@@ -53,16 +45,16 @@ function readFirstStringValue(
     return undefined;
   }
   for (const key of keys) {
-    const value = source[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
+    const value = normalizeOptionalString(source[key]);
+    if (value) {
+      return value;
     }
   }
   return undefined;
 }
 
 function normalizeToolName(value: string): string | undefined {
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (!normalized || normalized.length > 128) {
     return undefined;
   }
@@ -73,7 +65,7 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
   if (!title) {
     return undefined;
   }
-  const head = title.split(":", 1)[0]?.trim();
+  const head = normalizeOptionalString(title.split(":", 1)[0]);
   return head ? normalizeToolName(head) : undefined;
 }
 
@@ -218,14 +210,15 @@ export function classifyAcpToolApproval(params: {
   if (SAFE_SEARCH_TOOL_IDS.has(toolName) && isTrustedToolId) {
     return { toolName, approvalClass: "readonly_search", autoApprove: true };
   }
+  const ownerOnlyApprovalClass = resolveOwnerOnlyToolApprovalClass(toolName);
+  if (ownerOnlyApprovalClass) {
+    return { toolName, approvalClass: ownerOnlyApprovalClass, autoApprove: false };
+  }
   if (EXEC_CAPABLE_TOOL_IDS.has(toolName)) {
     return { toolName, approvalClass: "exec_capable", autoApprove: false };
   }
   if (CONTROL_PLANE_TOOL_IDS.has(toolName)) {
     return { toolName, approvalClass: "control_plane", autoApprove: false };
-  }
-  if (INTERACTIVE_TOOL_IDS.has(toolName)) {
-    return { toolName, approvalClass: "interactive", autoApprove: false };
   }
   if (isMutatingToolCall(toolName, params.toolCall?.rawInput)) {
     return { toolName, approvalClass: "mutating", autoApprove: false };

@@ -75,8 +75,8 @@ function execAskRank(value: ExecAsk): number {
 function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const approvals = loadExecApprovals();
-  const defaultRequestedSecuritySource = "OpenClaw default (allowlist)";
-  const defaultRequestedAskSource = "OpenClaw default (on-miss)";
+  const defaultRequestedSecuritySource = "OpenClaw default (full)";
+  const defaultRequestedAskSource = "OpenClaw default (off)";
 
   const maybeWarn = (params: {
     scopeLabel: string;
@@ -183,6 +183,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   // Check for dangerous gateway binding configurations
   // that expose the gateway to network without proper auth
 
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const gatewayBind = (cfg.gateway?.bind ?? "loopback") as string;
   const customBindHost = cfg.gateway?.customBindHost?.trim();
   const bindModes: GatewayBindMode[] = ["auto", "lan", "loopback", "custom", "tailnet"];
@@ -197,7 +198,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const resolvedAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
     env: process.env,
-    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+    tailscaleMode,
   });
   const authToken = resolvedAuth.token?.trim() ?? "";
   const authPassword = resolvedAuth.password?.trim() ?? "";

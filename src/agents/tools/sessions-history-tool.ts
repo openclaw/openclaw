@@ -4,7 +4,12 @@ import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { readStringValue } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import {
+  describeSessionsHistoryTool,
+  SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -83,7 +88,7 @@ function sanitizeHistoryContentBlock(block: unknown): {
     redacted ||= res.redacted;
   }
   if (type === "image") {
-    const data = typeof entry.data === "string" ? entry.data : undefined;
+    const data = readStringValue(entry.data);
     const bytes = data ? data.length : undefined;
     if ("data" in entry) {
       delete entry.data;
@@ -176,7 +181,8 @@ export function createSessionsHistoryTool(opts?: {
   return {
     label: "Session History",
     name: "sessions_history",
-    description: "Fetch message history for a session.",
+    displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsHistoryTool(),
     parameters: SessionsHistoryToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

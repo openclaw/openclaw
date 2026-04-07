@@ -6,6 +6,7 @@ describe("resolveChannelApprovalCapability", () => {
     const authorizeActorAction = vi.fn();
     const getActionAvailabilityState = vi.fn();
     const delivery = { hasConfiguredDmRoute: vi.fn() };
+    const describeExecApprovalSetup = vi.fn();
 
     expect(
       resolveChannelApprovalCapability({
@@ -14,12 +15,14 @@ describe("resolveChannelApprovalCapability", () => {
           getActionAvailabilityState,
         },
         approvals: {
+          describeExecApprovalSetup,
           delivery,
         },
       }),
     ).toEqual({
       authorizeActorAction,
       getActionAvailabilityState,
+      describeExecApprovalSetup,
       delivery,
       render: undefined,
       native: undefined,
@@ -56,6 +59,7 @@ describe("resolveChannelApprovalCapability", () => {
 describe("resolveChannelApprovalAdapter", () => {
   it("preserves legacy delivery surfaces when approvalCapability only defines auth", () => {
     const delivery = { hasConfiguredDmRoute: vi.fn() };
+    const describeExecApprovalSetup = vi.fn();
 
     expect(
       resolveChannelApprovalAdapter({
@@ -63,10 +67,12 @@ describe("resolveChannelApprovalAdapter", () => {
           authorizeActorAction: vi.fn(),
         },
         approvals: {
+          describeExecApprovalSetup,
           delivery,
         },
       }),
     ).toEqual({
+      describeExecApprovalSetup,
       delivery,
       render: undefined,
       native: undefined,

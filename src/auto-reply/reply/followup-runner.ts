@@ -14,27 +14,18 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
-import {
-  resolveOriginAccountId,
-  resolveOriginMessageProvider,
-  resolveOriginMessageTo,
-} from "./origin-routing.js";
+import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
-import {
-  applyReplyThreading,
-  filterMessagingToolDuplicates,
-  filterMessagingToolMediaDuplicates,
-  shouldSuppressMessagingToolReplies,
-} from "./reply-payloads.js";
-import { resolveReplyToMode } from "./reply-threading.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -135,6 +126,13 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    const replySessionKey = queued.run.sessionKey ?? sessionKey;
+    const replyOperation = createReplyOperation({
+      sessionId: queued.run.sessionId,
+      sessionKey: replySessionKey ?? "",
+      resetTriggered: false,
+      upstreamAbortSignal: opts?.abortSignal,
+    });
     try {
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
@@ -167,10 +165,12 @@ export function createFollowupRunner(params: {
         sessionKey,
         storePath,
         isHeartbeat: opts?.isHeartbeat === true,
+        replyOperation,
       });
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      replyOperation.setPhase("running");
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -189,6 +189,7 @@ export function createFollowupRunner(params: {
             try {
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
+                replyOperation,
                 sessionId: queued.run.sessionId,
                 sessionKey: queued.run.sessionKey,
                 agentId: queued.run.agentId,
@@ -267,7 +268,8 @@ export function createFollowupRunner(params: {
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err);
+        replyOperation.fail("run_failed", err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;
       }
@@ -318,46 +320,18 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
-      const replyToChannel = resolveOriginMessageProvider({
-        originatingChannel: queued.originatingChannel,
-        provider: queued.run.messageProvider,
-      }) as OriginatingChannelType | undefined;
-      const replyToMode = resolveReplyToMode(
-        queued.run.config,
-        replyToChannel,
-        queued.originatingAccountId,
-        queued.originatingChatType,
-      );
-
-      const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
+      const finalPayloads = resolveFollowupDeliveryPayloads({
+        cfg: queued.run.config,
         payloads: sanitizedPayloads,
-        replyToMode,
-        replyToChannel,
+        messageProvider: queued.run.messageProvider,
+        originatingAccountId: queued.originatingAccountId ?? queued.run.agentAccountId,
+        originatingChannel: queued.originatingChannel,
+        originatingChatType: queued.originatingChatType,
+        originatingTo: queued.originatingTo,
+        sentMediaUrls: runResult.messagingToolSentMediaUrls,
+        sentTargets: runResult.messagingToolSentTargets,
+        sentTexts: runResult.messagingToolSentTexts,
       });
-
-      const dedupedPayloads = filterMessagingToolDuplicates({
-        payloads: replyTaggedPayloads,
-        sentTexts: runResult.messagingToolSentTexts ?? [],
-      });
-      const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
-        payloads: dedupedPayloads,
-        sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
-      });
-      const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-        messageProvider: resolveOriginMessageProvider({
-          originatingChannel: queued.originatingChannel,
-          provider: queued.run.messageProvider,
-        }),
-        messagingToolSentTargets: runResult.messagingToolSentTargets,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: queued.originatingTo,
-        }),
-        accountId: resolveOriginAccountId({
-          originatingAccountId: queued.originatingAccountId,
-          accountId: queued.run.agentAccountId,
-        }),
-      });
-      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (finalPayloads.length === 0) {
         return;
@@ -366,6 +340,7 @@ export function createFollowupRunner(params: {
       if (autoCompactionCount > 0) {
         const previousSessionId = queued.run.sessionId;
         const count = await incrementRunCompactionCount({
+          cfg: queued.run.config,
           sessionEntry,
           sessionStore,
           sessionKey,
@@ -398,6 +373,7 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
+      replyOperation.complete();
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the
       // buffered dispatcher's finally block, but followup turns bypass the

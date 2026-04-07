@@ -34,7 +34,7 @@ export function normalizeMattermostMessagingTarget(raw: string): string | undefi
   return undefined;
 }
 
-export function looksLikeMattermostTargetId(raw: string, normalized?: string): boolean {
+export function looksLikeMattermostTargetId(raw: string, _normalized?: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
     return false;

@@ -42,7 +42,11 @@ function isDiscordExecApprovalClientEnabledForTest(params: {
   const rootConfig = params.cfg.channels?.discord?.execApprovals;
   const accountConfig =
     accountId && accountId !== "default"
-      ? params.cfg.channels?.discordAccounts?.[accountId]?.execApprovals
+      ? (
+          params.cfg.channels?.discordAccounts?.[accountId] as
+            | { execApprovals?: { enabled?: boolean; approvers?: unknown[] } }
+            | undefined
+        )?.execApprovals
       : undefined;
   const config = accountConfig ?? rootConfig;
   return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
@@ -56,7 +60,11 @@ function isTelegramExecApprovalClientEnabledForTest(params: {
   const rootConfig = params.cfg.channels?.telegram?.execApprovals;
   const accountConfig =
     accountId && accountId !== "default"
-      ? params.cfg.channels?.telegramAccounts?.[accountId]?.execApprovals
+      ? (
+          params.cfg.channels?.telegramAccounts?.[accountId] as
+            | { execApprovals?: { enabled?: boolean; approvers?: unknown[] } }
+            | undefined
+        )?.execApprovals
       : undefined;
   const config = accountConfig ?? rootConfig;
   return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
@@ -95,7 +103,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
             },
             {
               label: "Allow Always",
-              value: `/approve ${params.request.id} always`,
+              value: `/approve ${params.request.id} allow-always`,
               style: "primary",
             },
             {
@@ -115,7 +123,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
         buttons: [
           [
             { text: "Allow Once", callback_data: `/approve ${params.request.id} allow-once` },
-            { text: "Allow Always", callback_data: `/approve ${params.request.id} always` },
+            { text: "Allow Always", callback_data: `/approve ${params.request.id} allow-always` },
           ],
           [{ text: "Deny", callback_data: `/approve ${params.request.id} deny` }],
         ],
@@ -465,7 +473,7 @@ describe("exec approval forwarder", () => {
                     },
                     {
                       label: "Allow Always",
-                      value: "/approve req-1 always",
+                      value: "/approve req-1 allow-always",
                       style: "primary",
                     },
                     {
@@ -476,6 +484,31 @@ describe("exec approval forwarder", () => {
                   ],
                 },
               ],
+            }),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("stores exec metadata on generic forwarded fallback payloads", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            channelData: expect.objectContaining({
+              execApproval: expect.objectContaining({
+                approvalId: "req-1",
+                approvalKind: "exec",
+                agentId: "main",
+                sessionKey: "agent:main:main",
+              }),
             }),
           }),
         ],

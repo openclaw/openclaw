@@ -63,6 +63,7 @@ describe("plugin HTTP route runtime scopes", () => {
     path: string;
     auth: "gateway" | "plugin";
     gatewayAuthSatisfied: boolean;
+    gatewayRequestOperatorScopes?: readonly string[];
   }) {
     const log = createMockLogger();
     const handler = createGatewayPluginRequestHandler({
@@ -86,7 +87,10 @@ describe("plugin HTTP route runtime scopes", () => {
       { url: params.path } as IncomingMessage,
       response.res,
       undefined,
-      { gatewayAuthSatisfied: params.gatewayAuthSatisfied },
+      {
+        gatewayAuthSatisfied: params.gatewayAuthSatisfied,
+        gatewayRequestOperatorScopes: params.gatewayRequestOperatorScopes,
+      },
     );
     return { handled, log, ...response };
   }
@@ -110,6 +114,7 @@ describe("plugin HTTP route runtime scopes", () => {
       path: "/secure-hook",
       auth: "gateway",
       gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.write"],
     });
 
     expect(handled).toBe(true);
@@ -117,22 +122,53 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("fails closed when gateway-auth route runtime scopes are missing", async () => {
+    const { handled, res, log } = await invokeRoute({
+      path: "/secure-hook",
+      auth: "gateway",
+      gatewayAuthSatisfied: true,
+    });
+
+    expect(handled).toBe(false);
+    expect(res.statusCode).toBe(200);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("blocked without caller scope context"),
+    );
+  });
+
+  it("does not allow write helpers for read-scoped gateway-auth requests", async () => {
+    const { handled, res, setHeader, end, log } = await invokeRoute({
+      path: "/secure-hook",
+      auth: "gateway",
+      gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.read"],
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(500);
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
+    expect(end).toHaveBeenCalledWith("Internal Server Error");
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing scope: operator.write"));
+  });
+
   it.each([
     {
       auth: "plugin" as const,
       gatewayAuthSatisfied: false,
       path: "/hook",
+      gatewayRequestOperatorScopes: undefined,
       expectedScopes: [],
     },
     {
       auth: "gateway" as const,
       gatewayAuthSatisfied: true,
       path: "/secure-hook",
-      expectedScopes: ["operator.write"],
+      gatewayRequestOperatorScopes: ["operator.read"],
+      expectedScopes: ["operator.read"],
     },
   ])(
     "maps $auth routes to $expectedScopes",
-    async ({ auth, gatewayAuthSatisfied, path, expectedScopes }) => {
+    async ({ auth, gatewayAuthSatisfied, gatewayRequestOperatorScopes, path, expectedScopes }) => {
       let observedScopes: string[] | undefined;
       const handler = createGatewayPluginRequestHandler({
         registry: createTestRegistry({
@@ -154,6 +190,7 @@ describe("plugin HTTP route runtime scopes", () => {
       const { res } = makeMockHttpResponse();
       const handled = await handler({ url: path } as IncomingMessage, res, undefined, {
         gatewayAuthSatisfied,
+        gatewayRequestOperatorScopes,
       });
 
       expect(handled).toBe(true);
