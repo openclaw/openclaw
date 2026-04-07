@@ -41,20 +41,26 @@ function extractAvatarValue(rawValue: string): string {
   if (!value) {
     return value;
   }
-  const parts = value
-    .split(/\s+[\u2013\u2014-]\s+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length > 1) {
-    for (let index = parts.length - 1; index >= 0; index -= 1) {
-      const candidate = parts[index] ?? "";
-      if (
-        isAvatarHttpUrl(candidate) ||
-        isAvatarDataUrl(candidate) ||
-        looksLikeAvatarPath(candidate)
-      ) {
-        return candidate;
-      }
+
+  const separatorPattern = /(?:\s+--\s*|\s+-\s+|\s*[\u2013\u2014]\s*)/g;
+  const candidates: string[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = separatorPattern.exec(value)) !== null) {
+    const candidate = value.slice(match.index + match[0].length).trim();
+    if (candidate) {
+      candidates.push(candidate);
+    }
+  }
+
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const candidate = candidates[index] ?? "";
+    if (
+      isAvatarHttpUrl(candidate) ||
+      isAvatarDataUrl(candidate) ||
+      looksLikeAvatarPath(candidate)
+    ) {
+      return candidate;
     }
   }
   return value;
