@@ -181,6 +181,14 @@ def derive_digest_order_key(item: dict[str, object]) -> tuple[int, int, int, str
     )
 
 
+def derive_digest_bucket_share(count: object, digest_bucket_total: object) -> float:
+    normalized_count = int(count) if isinstance(count, int) else 0
+    normalized_total = int(digest_bucket_total) if isinstance(digest_bucket_total, int) else 0
+    if normalized_total <= 0:
+        return 0.0
+    return round(normalized_count / normalized_total, 4)
+
+
 def derive_path_group(route_signature: str) -> str:
     path_signature = derive_path_signature(route_signature)
     return PATH_SHORT_LABELS.get(path_signature, 'other')
@@ -534,6 +542,10 @@ def main() -> int:
                 'notification_title_short': aggregate['notification_title_short'],
                 'count': aggregate['count'],
                 'digest_bucket_total': aggregate['digest_bucket_total'],
+                'digest_bucket_share': derive_digest_bucket_share(
+                    aggregate['count'],
+                    aggregate['digest_bucket_total'],
+                ),
                 'digest_bucket_rank': 0,
                 'digest_bucket_leader': False,
                 'digest_bucket_leader_count': 0,
