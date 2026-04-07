@@ -168,6 +168,10 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     }
 
     // Resolve the agent route for this conversation/sender.
+    // Extract teamId for team-scoped routing bindings (channel/group reactions).
+    const teamId = isDirectMessage
+      ? undefined
+      : (activity as unknown as { channelData?: { team?: { id?: string } } }).channelData?.team?.id;
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
@@ -175,6 +179,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,
       },
+      ...(teamId ? { teamId } : {}),
     });
 
     // The replyToId points to the message that was reacted to.

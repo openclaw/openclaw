@@ -19,11 +19,17 @@ export function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
+/** Generate an opaque random state value for OAuth CSRF protection (separate from PKCE verifier). */
+export function generateOAuthState(): string {
+  return randomBytes(32).toString("hex");
+}
+
 export function buildMSTeamsAuthUrl(params: {
   tenantId: string;
   clientId: string;
   challenge: string;
-  verifier: string;
+  /** Opaque CSRF state token — must NOT be the PKCE verifier. */
+  state: string;
   scopes?: readonly string[];
 }): string {
   const scopes = params.scopes ?? MSTEAMS_DEFAULT_DELEGATED_SCOPES;
@@ -35,7 +41,7 @@ export function buildMSTeamsAuthUrl(params: {
     scope: scopes.join(" "),
     code_challenge: params.challenge,
     code_challenge_method: "S256",
-    state: params.verifier,
+    state: params.state,
     prompt: "consent",
   });
   return `${endpoint}?${query.toString()}`;
@@ -62,11 +68,11 @@ export function parseCallbackInput(
     }
     return { code, state };
   } catch {
-    // Not a valid URL; treat input as a bare authorization code
-    if (!expectedState) {
-      return { error: "Paste the full redirect URL, not just the code." };
-    }
-    return { code: trimmed, state: expectedState };
+    // Not a valid URL — reject bare codes to enforce CSRF state verification.
+    return {
+      error:
+        "Paste the full redirect URL (including code and state parameters), not just the authorization code.",
+    };
   }
 }
 

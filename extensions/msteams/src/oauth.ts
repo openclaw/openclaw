@@ -1,5 +1,6 @@
 import {
   buildMSTeamsAuthUrl,
+  generateOAuthState,
   generatePkce,
   parseCallbackInput,
   shouldUseManualOAuthFlow,
@@ -43,16 +44,17 @@ export async function loginMSTeamsDelegated(
   );
 
   const { verifier, challenge } = generatePkce();
+  const state = generateOAuthState();
   const authUrl = buildMSTeamsAuthUrl({
     tenantId: params.tenantId,
     clientId: params.clientId,
     challenge,
-    verifier,
+    state,
     scopes,
   });
 
   if (needsManual) {
-    return manualFlow(ctx, authUrl, verifier, params);
+    return manualFlow(ctx, authUrl, state, verifier, params);
   }
 
   ctx.progress.update("Complete sign-in in browser...");
@@ -64,7 +66,7 @@ export async function loginMSTeamsDelegated(
 
   try {
     const { code } = await waitForLocalCallback({
-      expectedState: verifier,
+      expectedState: state,
       timeoutMs: 5 * 60 * 1000,
       onProgress: (msg) => ctx.progress.update(msg),
     });
@@ -86,7 +88,7 @@ export async function loginMSTeamsDelegated(
         err.message.includes("listen"))
     ) {
       ctx.progress.update("Local callback server failed. Switching to manual mode...");
-      return manualFlow(ctx, authUrl, verifier, params, err);
+      return manualFlow(ctx, authUrl, state, verifier, params, err);
     }
     throw err;
   }
@@ -95,6 +97,7 @@ export async function loginMSTeamsDelegated(
 async function manualFlow(
   ctx: MSTeamsDelegatedOAuthContext,
   authUrl: string,
+  state: string,
   verifier: string,
   params: {
     tenantId: string;
@@ -108,11 +111,11 @@ async function manualFlow(
   ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
   ctx.progress.update("Waiting for you to paste the callback URL...");
   const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
-  const parsed = parseCallbackInput(callbackInput, verifier);
+  const parsed = parseCallbackInput(callbackInput, state);
   if ("error" in parsed) {
     throw new Error(parsed.error, cause ? { cause } : undefined);
   }
-  if (parsed.state !== verifier) {
+  if (parsed.state !== state) {
     throw new Error("OAuth state mismatch - please try again", cause ? { cause } : undefined);
   }
   ctx.progress.update("Exchanging authorization code for tokens...");

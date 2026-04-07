@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { generatePkce, buildMSTeamsAuthUrl, parseCallbackInput } from "./oauth.flow.js";
+import {
+  generatePkce,
+  generateOAuthState,
+  buildMSTeamsAuthUrl,
+  parseCallbackInput,
+} from "./oauth.flow.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_OAUTH_REDIRECT_URI,
@@ -25,14 +30,24 @@ describe("generatePkce", () => {
   });
 });
 
+describe("generateOAuthState", () => {
+  it("produces a 64-char hex string separate from the PKCE verifier", () => {
+    const state = generateOAuthState();
+    expect(state).toMatch(/^[0-9a-f]{64}$/);
+    const { verifier } = generatePkce();
+    expect(state).not.toBe(verifier);
+  });
+});
+
 describe("buildMSTeamsAuthUrl", () => {
   it("includes correct tenant, client_id, scopes, PKCE params, and redirect_uri", () => {
-    const { verifier, challenge } = generatePkce();
+    const { challenge } = generatePkce();
+    const state = generateOAuthState();
     const url = buildMSTeamsAuthUrl({
       tenantId: "my-tenant-id",
       clientId: "my-client-id",
       challenge,
-      verifier,
+      state,
     });
 
     const parsed = new URL(url);
@@ -43,8 +58,21 @@ describe("buildMSTeamsAuthUrl", () => {
     expect(parsed.searchParams.get("scope")).toBe(MSTEAMS_DEFAULT_DELEGATED_SCOPES.join(" "));
     expect(parsed.searchParams.get("code_challenge")).toBe(challenge);
     expect(parsed.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(parsed.searchParams.get("state")).toBe(verifier);
+    expect(parsed.searchParams.get("state")).toBe(state);
     expect(parsed.searchParams.get("prompt")).toBe("consent");
+  });
+
+  it("does not expose the PKCE verifier in the URL", () => {
+    const { verifier, challenge } = generatePkce();
+    const state = generateOAuthState();
+    const url = buildMSTeamsAuthUrl({
+      tenantId: "t",
+      clientId: "c",
+      challenge,
+      state,
+    });
+    expect(url).not.toContain(verifier);
+    expect(url).toContain(`state=${state}`);
   });
 
   it("uses custom scopes when provided", () => {
@@ -52,7 +80,7 @@ describe("buildMSTeamsAuthUrl", () => {
       tenantId: "t",
       clientId: "c",
       challenge: "ch",
-      verifier: "v",
+      state: "s",
       scopes: ["User.Read", "offline_access"],
     });
     const parsed = new URL(url);
@@ -75,9 +103,12 @@ describe("parseCallbackInput", () => {
     expect(result).toEqual({ error: "Missing 'code' parameter in URL" });
   });
 
-  it("treats plain string as a bare authorization code", () => {
+  it("rejects bare authorization codes to prevent CSRF bypass", () => {
     const result = parseCallbackInput("bare-code-value", expectedState);
-    expect(result).toEqual({ code: "bare-code-value", state: expectedState });
+    expect(result).toEqual({
+      error:
+        "Paste the full redirect URL (including code and state parameters), not just the authorization code.",
+    });
   });
 
   it("returns error on empty input", () => {
@@ -88,12 +119,17 @@ describe("parseCallbackInput", () => {
   it("returns error when state is missing from a valid URL (CSRF protection)", () => {
     const input = `${MSTEAMS_OAUTH_REDIRECT_URI}?code=abc123`;
     const result = parseCallbackInput(input, expectedState);
-    expect(result).toEqual({ error: "Missing 'state' parameter in URL. Paste the full redirect URL." });
+    expect(result).toEqual({
+      error: "Missing 'state' parameter in URL. Paste the full redirect URL.",
+    });
   });
 
-  it("returns error when input is not a URL and expectedState is empty", () => {
+  it("rejects bare codes even when expectedState is empty", () => {
     const result = parseCallbackInput("bare-code", "");
-    expect(result).toEqual({ error: "Paste the full redirect URL, not just the code." });
+    expect(result).toEqual({
+      error:
+        "Paste the full redirect URL (including code and state parameters), not just the authorization code.",
+    });
   });
 });
 

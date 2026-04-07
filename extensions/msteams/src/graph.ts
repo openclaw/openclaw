@@ -233,46 +233,6 @@ export async function deleteGraphRequest(params: { token: string; path: string }
   });
 }
 
-export async function postGraphJson<T>(params: {
-  token: string;
-  path: string;
-  body?: unknown;
-}): Promise<T> {
-  const res = await requestGraph({
-    token: params.token,
-    path: params.path,
-    method: "POST",
-    body: params.body,
-    errorPrefix: "Graph POST",
-  });
-  return readOptionalGraphJson<T>(res);
-}
-
-export async function postGraphBetaJson<T>(params: {
-  token: string;
-  path: string;
-  body?: unknown;
-}): Promise<T> {
-  const res = await requestGraph({
-    token: params.token,
-    path: params.path,
-    method: "POST",
-    root: GRAPH_BETA,
-    body: params.body,
-    errorPrefix: "Graph beta POST",
-  });
-  return readOptionalGraphJson<T>(res);
-}
-
-export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
-  await requestGraph({
-    token: params.token,
-    path: params.path,
-    method: "DELETE",
-    errorPrefix: "Graph DELETE",
-  });
-}
-
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
   const { items } = await fetchAllGraphPages<GraphChannel>({ token, path, maxPages: 10 });

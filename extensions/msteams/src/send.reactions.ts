@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../runtime-api.js";
-import { postGraphJson, resolveGraphToken } from "./graph.js";
+import { fetchGraphJson, postGraphJson, resolveGraphToken } from "./graph.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 

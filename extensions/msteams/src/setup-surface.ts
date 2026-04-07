@@ -1,3 +1,4 @@
+import { exec } from "node:child_process";
 import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
@@ -350,6 +351,61 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
           },
         },
       };
+    }
+
+    // Offer delegated auth setup if credentials are available.
+    const finalCreds = resolveMSTeamsCredentials(next.channels?.msteams);
+    if (finalCreds) {
+      const enableDelegated = await prompter.confirm({
+        message: "Enable delegated auth? (required for reactions and write operations)",
+        initialValue: false,
+      });
+      if (enableDelegated) {
+        next = {
+          ...next,
+          channels: {
+            ...next.channels,
+            msteams: {
+              ...next.channels?.msteams,
+              delegatedAuth: { enabled: true },
+            },
+          },
+        };
+        try {
+          const { loginMSTeamsDelegated } = await import("./oauth.js");
+          const { saveDelegatedTokens } = await import("./token.js");
+          const { shouldUseManualOAuthFlow } = await import("./oauth.flow.js");
+          const isRemote = Boolean(process.env.SSH_TTY || process.env.SSH_CONNECTION);
+          const progress = prompter.progress("MSTeams Delegated OAuth");
+          const tokens = await loginMSTeamsDelegated(
+            {
+              isRemote: shouldUseManualOAuthFlow(isRemote),
+              openUrl: (url) =>
+                new Promise<void>((resolve, reject) => {
+                  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
+                  exec(`${cmd} ${JSON.stringify(url)}`, (err) => (err ? reject(err) : resolve()));
+                }),
+              log: (msg) => prompter.note(msg),
+              note: (msg, title) => prompter.note(msg, title),
+              prompt: (msg) => prompter.text({ message: msg }),
+              progress,
+            },
+            {
+              tenantId: finalCreds.tenantId,
+              clientId: finalCreds.appId,
+              clientSecret: finalCreds.appPassword,
+            },
+          );
+          saveDelegatedTokens(tokens);
+          progress.stop("Delegated auth configured");
+        } catch (err) {
+          await prompter.note(
+            `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
+              "You can retry later via the setup wizard.",
+            "MS Teams delegated auth",
+          );
+        }
+      }
     }
 
     return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };
