@@ -25,13 +25,14 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   if (!trimmedModel) {
     return "";
   }
-  // Preserve already-qualified model refs (provider/model) as-is.
-  // This avoids prepending an unrelated/default provider.
-  if (trimmedModel.includes("/")) {
-    return trimmedModel;
-  }
   const trimmedProvider = provider?.trim();
-  return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
+  // When provider is explicitly provided, always prefix it to the model.
+  // This ensures third-party model IDs (e.g., "deepseek-ai/deepseek-v3.2")
+  // configured under a specific provider get the correct qualified ref.
+  if (trimmedProvider) {
+    return `${trimmedProvider}/${trimmedModel}`;
+  }
+  return trimmedModel;
 }
 
 export function createChatModelOverride(value: string): ChatModelOverride | null {

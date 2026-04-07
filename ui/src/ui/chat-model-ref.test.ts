@@ -29,10 +29,15 @@ describe("chat-model-ref helpers", () => {
     });
   });
 
-  it("preserves already-qualified model refs without prepending provider", () => {
-    expect(resolveServerChatModelValue("ollama/qwen3:30b", "openai-codex")).toBe(
-      "ollama/qwen3:30b",
+  it("prefixes provider when explicitly provided, even for models containing slash", () => {
+    // When provider is explicitly provided, always prefix it
+    // This fixes issue #62390 where third-party model IDs like "deepseek-ai/deepseek-v3.2"
+    // configured under a specific provider (e.g., nvidia) were not getting the provider prefix
+    expect(resolveServerChatModelValue("deepseek-ai/deepseek-v3.2", "nvidia")).toBe(
+      "nvidia/deepseek-ai/deepseek-v3.2",
     );
+    // When no provider is provided, preserve as-is (for backward compatibility)
+    expect(resolveServerChatModelValue("ollama/qwen3:30b", null)).toBe("ollama/qwen3:30b");
   });
 
   it("normalizes raw overrides when the catalog match is unique", () => {
