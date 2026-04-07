@@ -15,9 +15,9 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
 });
 
 import {
-  resolveBundledWebFetchProvidersFromPublicArtifacts,
-  resolveBundledWebSearchProvidersFromPublicArtifacts,
-} from "./web-provider-public-artifacts.js";
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+} from "./web-provider-public-artifacts.explicit.js";
 
 describe("web provider public artifacts explicit fast path", () => {
   beforeEach(() => {
@@ -25,8 +25,7 @@ describe("web provider public artifacts explicit fast path", () => {
   });
 
   it("resolves bundled web search providers by explicit plugin id without manifest scans", () => {
-    const provider = resolveBundledWebSearchProvidersFromPublicArtifacts({
-      bundledAllowlistCompat: true,
+    const provider = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
       onlyPluginIds: ["brave"],
     })?.[0];
 
@@ -36,8 +35,7 @@ describe("web provider public artifacts explicit fast path", () => {
   });
 
   it("resolves bundled web fetch providers by explicit plugin id without manifest scans", () => {
-    const provider = resolveBundledWebFetchProvidersFromPublicArtifacts({
-      bundledAllowlistCompat: true,
+    const provider = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
       onlyPluginIds: ["firecrawl"],
     })?.[0];
 

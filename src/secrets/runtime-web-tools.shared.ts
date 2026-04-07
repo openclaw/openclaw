@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/manifest-registry.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type {
   ResolverContext,
   SecretDefaults,
@@ -95,10 +96,10 @@ export function normalizeKnownProvider<TProvider extends { id: string }>(
   value: unknown,
   providers: TProvider[],
 ): string | undefined {
-  if (typeof value !== "string") {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
   if (providers.some((provider) => provider.id === normalized)) {
     return normalized;
   }

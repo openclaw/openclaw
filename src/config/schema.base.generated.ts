@@ -3465,6 +3465,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
+                    imagePathScope: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "temp",
+                        },
+                        {
+                          type: "string",
+                          const: "workspace",
+                        },
+                      ],
+                    },
                     serialize: {
                       type: "boolean",
                     },

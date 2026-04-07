@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -182,7 +185,7 @@ export function resolveManifestContractOwnerPluginId(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  const normalizedValue = params.value?.trim().toLowerCase();
+  const normalizedValue = normalizeOptionalLowercaseString(params.value);
   if (!normalizedValue) {
     return undefined;
   }
@@ -194,7 +197,7 @@ export function resolveManifestContractOwnerPluginId(params: {
     (plugin) =>
       (!params.origin || plugin.origin === params.origin) &&
       listContractValues(plugin, params.contract).some(
-        (candidate) => candidate.trim().toLowerCase() === normalizedValue,
+        (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedValue,
       ),
   )?.id;
 }

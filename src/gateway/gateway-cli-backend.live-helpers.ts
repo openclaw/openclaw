@@ -28,7 +28,9 @@ import {
 import { renderCatFacePngBase64 } from "./live-image-probe.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
-const CLI_GATEWAY_CONNECT_TIMEOUT_MS = 30_000;
+// Aggregate docker live runs can contend on startup enough that the gateway
+// websocket handshake needs a wider budget than the single-provider reruns.
+const CLI_GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
 
 export type BootstrapWorkspaceContext = {
   expectedInjectedFiles: string[];
@@ -163,7 +165,7 @@ export async function connectTestGatewayClient(params: {
     try {
       return await connectClientOnce({
         ...params,
-        timeoutMs: Math.min(remainingMs, 35_000),
+        timeoutMs: Math.min(remainingMs, 45_000),
       });
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
@@ -344,39 +346,26 @@ export async function verifyCliBackendImageProbe(params: {
 }): Promise<void> {
   const imageBase64 = renderCatFacePngBase64();
   const runIdImage = randomUUID();
-  const imageFilePath = path.join(
-    params.bootstrapWorkspace?.workspaceDir ?? params.tempDir,
-    `probe-${runIdImage}.png`,
-  );
-  await fs.writeFile(imageFilePath, Buffer.from(imageBase64, "base64"));
-
   const imageProbe = await params.client.request(
     "agent",
-    params.providerId === "claude-cli"
-      ? {
-          sessionKey: params.sessionKey,
-          idempotencyKey: `idem-${runIdImage}-image`,
-          message:
-            `Image path: ${imageFilePath}\n` +
-            "Best match: lobster, mouse, cat, horse. " +
-            "Reply with one lowercase word only.",
-          deliver: false,
-        }
-      : {
-          sessionKey: params.sessionKey,
-          idempotencyKey: `idem-${runIdImage}-image`,
-          message:
-            "Best match for the attached image: lobster, mouse, cat, horse. " +
-            "Reply with one lowercase word only.",
-          attachments: [
-            {
-              mimeType: "image/png",
-              fileName: `probe-${runIdImage}.png`,
-              content: imageBase64,
-            },
-          ],
-          deliver: false,
+    {
+      sessionKey: params.sessionKey,
+      idempotencyKey: `idem-${runIdImage}-image`,
+      // Route all providers through the same attachment pipeline. Claude CLI
+      // still receives a local file path, but now via the runner code we
+      // actually want to validate instead of an ad hoc prompt-only shortcut.
+      message:
+        "Best match for the image: lobster, mouse, cat, horse. " +
+        "Reply with one lowercase word only.",
+      attachments: [
+        {
+          mimeType: "image/png",
+          fileName: `probe-${runIdImage}.png`,
+          content: imageBase64,
         },
+      ],
+      deliver: false,
+    },
     { expectFinal: true },
   );
   if (imageProbe?.status !== "ok") {

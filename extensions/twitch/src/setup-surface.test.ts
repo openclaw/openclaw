@@ -13,6 +13,15 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../api.js";
+import {
+  configureWithEnvToken,
+  promptChannelName,
+  promptClientId,
+  promptRefreshTokenSetup,
+  promptToken,
+  promptUsername,
+  twitchSetupWizard,
+} from "./setup-surface.js";
 import type { TwitchAccountConfig } from "./types.js";
 
 // Mock the helpers we're testing
@@ -41,8 +50,6 @@ describe("setup surface helpers", () => {
 
   describe("promptToken", () => {
     it("should return existing token when user confirms to keep it", async () => {
-      const { promptToken } = await import("./setup-surface.js");
-
       mockPromptConfirm.mockResolvedValue(true);
 
       const result = await promptToken(mockPrompter, mockAccount, undefined);
@@ -56,8 +63,6 @@ describe("setup surface helpers", () => {
     });
 
     it("should validate token format", async () => {
-      const { promptToken } = await import("./setup-surface.js");
-
       // Set up mocks - user doesn't want to keep existing token
       mockPromptConfirm.mockResolvedValueOnce(false);
 
@@ -93,8 +98,6 @@ describe("setup surface helpers", () => {
 
   describe("promptUsername", () => {
     it("should prompt for username with validation", async () => {
-      const { promptUsername } = await import("./setup-surface.js");
-
       mockPromptText.mockResolvedValue("mybot");
 
       const result = await promptUsername(mockPrompter, null);
@@ -110,8 +113,6 @@ describe("setup surface helpers", () => {
 
   describe("promptClientId", () => {
     it("should prompt for client ID with validation", async () => {
-      const { promptClientId } = await import("./setup-surface.js");
-
       mockPromptText.mockResolvedValue("abc123xyz");
 
       const result = await promptClientId(mockPrompter, null);
@@ -127,8 +128,6 @@ describe("setup surface helpers", () => {
 
   describe("promptChannelName", () => {
     it("should require a non-empty channel name", async () => {
-      const { promptChannelName } = await import("./setup-surface.js");
-
       mockPromptText.mockResolvedValue("");
 
       await promptChannelName(mockPrompter, null);
@@ -142,8 +141,6 @@ describe("setup surface helpers", () => {
 
   describe("promptRefreshTokenSetup", () => {
     it("should return empty object when user declines", async () => {
-      const { promptRefreshTokenSetup } = await import("./setup-surface.js");
-
       mockPromptConfirm.mockResolvedValue(false);
 
       const result = await promptRefreshTokenSetup(mockPrompter, mockAccount);
@@ -156,8 +153,6 @@ describe("setup surface helpers", () => {
     });
 
     it("should prompt for credentials when user accepts", async () => {
-      const { promptRefreshTokenSetup } = await import("./setup-surface.js");
-
       mockPromptConfirm
         .mockResolvedValueOnce(true) // First call: useRefresh
         .mockResolvedValueOnce("secret123") // clientSecret
@@ -176,8 +171,6 @@ describe("setup surface helpers", () => {
 
   describe("configureWithEnvToken", () => {
     it("should prompt for username and clientId when using env token", async () => {
-      const { configureWithEnvToken } = await import("./setup-surface.js");
-
       // Reset and set up mocks - user accepts env token
       mockPromptConfirm.mockReset().mockResolvedValue(true as never);
 
@@ -206,8 +199,6 @@ describe("setup surface helpers", () => {
     });
 
     it("writes env-token setup to the configured default account", async () => {
-      const { configureWithEnvToken } = await import("./setup-surface.js");
-
       mockPromptConfirm.mockReset().mockResolvedValue(true as never);
       mockPromptText
         .mockReset()
@@ -240,8 +231,6 @@ describe("setup surface helpers", () => {
 
   describe("defaultAccount setup resolution", () => {
     it("reports status for the configured default account", async () => {
-      const { twitchSetupWizard } = await import("./setup-surface.js");
-
       const lines = twitchSetupWizard.status?.resolveStatusLines?.({
         cfg: {
           channels: {

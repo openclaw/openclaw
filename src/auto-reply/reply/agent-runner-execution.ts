@@ -183,6 +183,29 @@ function buildFallbackSelectionState(params: {
   };
 }
 
+export function applyFallbackCandidateSelectionToEntry(params: {
+  entry: SessionEntry;
+  run: FollowupRun["run"];
+  provider: string;
+  model: string;
+  now?: number;
+}): { updated: boolean; nextState?: FallbackSelectionState } {
+  if (params.provider === params.run.provider && params.model === params.run.model) {
+    return { updated: false };
+  }
+  const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
+  const nextState = buildFallbackSelectionState({
+    provider: params.provider,
+    model: params.model,
+    authProfileId: scopedAuthProfile.authProfileId,
+    authProfileIdSource: scopedAuthProfile.authProfileIdSource,
+  });
+  return {
+    updated: applyFallbackSelectionState(params.entry, nextState, params.now),
+    nextState,
+  };
+}
+
 function applyFallbackSelectionState(
   entry: SessionEntry,
   nextState: FallbackSelectionState,
@@ -553,14 +576,14 @@ export async function runAgentTurnWithFallback(params: {
     }
 
     const previousState = snapshotFallbackSelectionState(activeSessionEntry);
-    const scopedAuthProfile = resolveRunAuthProfile(params.followupRun.run, provider);
-    const nextState = buildFallbackSelectionState({
+    const applied = applyFallbackCandidateSelectionToEntry({
+      entry: activeSessionEntry,
+      run: params.followupRun.run,
       provider,
       model,
-      authProfileId: scopedAuthProfile.authProfileId,
-      authProfileIdSource: scopedAuthProfile.authProfileIdSource,
     });
-    if (!applyFallbackSelectionState(activeSessionEntry, nextState)) {
+    const nextState = applied.nextState;
+    if (!applied.updated || !nextState) {
       return;
     }
     params.activeSessionStore[params.sessionKey] = activeSessionEntry;

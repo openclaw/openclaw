@@ -8,6 +8,7 @@ import {
   isShellWrapperExecutable,
   normalizeExecutableToken,
   resolveDispatchWrapperTrustPlan,
+  resolveShellWrapperTransportArgv,
   unwrapEnvInvocation,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
@@ -379,6 +380,25 @@ describe("hasEnvManipulationBeforeShellWrapper", () => {
     },
   ])("detects env manipulation before shell wrappers for %j", ({ argv, expected }) => {
     expect(hasEnvManipulationBeforeShellWrapper(argv)).toBe(expected);
+  });
+});
+
+describe("resolveShellWrapperTransportArgv", () => {
+  test.each([
+    {
+      argv: ["env", "cmd.exe", "/d", "/s", "/c", "echo hi"],
+      expected: ["cmd.exe", "/d", "/s", "/c", "echo hi"],
+    },
+    {
+      argv: ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c", "echo hi"],
+      expected: ["cmd.exe", "/d", "/s", "/c", "echo hi"],
+    },
+    {
+      argv: ["bash", "script.sh"],
+      expected: null,
+    },
+  ])("resolves wrapper transport argv for %j", ({ argv, expected }) => {
+    expect(resolveShellWrapperTransportArgv(argv)).toEqual(expected);
   });
 });
 

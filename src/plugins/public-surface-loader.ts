@@ -26,6 +26,7 @@ const publicSurfaceLocations = new Map<
   } | null
 >();
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+const sharedBundledPublicSurfaceJitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 
 function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
@@ -71,6 +72,10 @@ function resolvePublicSurfaceLocation(params: {
 function getJiti(modulePath: string) {
   const tryNative =
     shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
+  const sharedLoader = getSharedBundledPublicSurfaceJiti(modulePath, tryNative);
+  if (sharedLoader) {
+    return sharedLoader;
+  }
   const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
   const cacheKey = JSON.stringify({
     tryNative,
@@ -85,6 +90,39 @@ function getJiti(modulePath: string) {
     tryNative,
   });
   jitiLoaders.set(cacheKey, loader);
+  return loader;
+}
+
+function getSharedBundledPublicSurfaceJiti(
+  modulePath: string,
+  tryNative: boolean,
+): ReturnType<typeof createJiti> | null {
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  const normalizedModulePath = path.resolve(modulePath);
+  const sharedRoots = [
+    bundledPluginsDir ? path.resolve(bundledPluginsDir) : null,
+    path.join(OPENCLAW_PACKAGE_ROOT, "extensions"),
+    path.join(OPENCLAW_PACKAGE_ROOT, "dist", "extensions"),
+    path.join(OPENCLAW_PACKAGE_ROOT, "dist-runtime", "extensions"),
+  ].filter((root): root is string => typeof root === "string");
+  const isBundledPublicSurface = sharedRoots.some(
+    (root) =>
+      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
+  );
+  if (!isBundledPublicSurface) {
+    return null;
+  }
+  const cacheKey = tryNative ? "bundled:native" : "bundled:source";
+  const cached = sharedBundledPublicSurfaceJitiLoaders.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
+  const loader = createJiti(import.meta.url, {
+    ...buildPluginLoaderJitiOptions(aliasMap),
+    tryNative,
+  });
+  sharedBundledPublicSurfaceJitiLoaders.set(cacheKey, loader);
   return loader;
 }
 
@@ -136,4 +174,5 @@ export function resetBundledPluginPublicArtifactLoaderForTest(): void {
   loadedPublicSurfaceModules.clear();
   publicSurfaceLocations.clear();
   jitiLoaders.clear();
+  sharedBundledPublicSurfaceJitiLoaders.clear();
 }

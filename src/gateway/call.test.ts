@@ -178,6 +178,7 @@ describe("callGateway url resolution", () => {
   const envSnapshot = captureEnv([
     "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
     "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_GATEWAY_PORT",
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_STATE_DIR",
@@ -187,6 +188,7 @@ describe("callGateway url resolution", () => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     delete process.env.OPENCLAW_CONFIG_PATH;
+    delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_STATE_DIR;
@@ -612,6 +614,7 @@ describe("buildGatewayConnectionDetails", () => {
       resolveGatewayPort.mockReturnValue(18800);
       __testing.setDepsForTests({
         loadConfig: {} as never,
+        resolveGatewayPort: () => 18789,
       });
 
       const details = buildGatewayConnectionDetails();

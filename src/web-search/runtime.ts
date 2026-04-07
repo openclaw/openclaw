@@ -9,6 +9,7 @@ import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-provider
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   hasWebProviderEntryCredential,
   providerRequiresCredential,
@@ -110,8 +111,8 @@ export function resolveWebSearchProviderId(params: {
       }),
   );
   const raw =
-    params.search && "provider" in params.search && typeof params.search.provider === "string"
-      ? params.search.provider.trim().toLowerCase()
+    params.search && "provider" in params.search
+      ? normalizeLowercaseStringOrEmpty(params.search.provider)
       : "";
 
   if (raw) {

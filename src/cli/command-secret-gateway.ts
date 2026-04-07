@@ -18,6 +18,7 @@ import {
   discoverConfigSecretTargetsByIds,
   type DiscoveredConfigSecretTarget,
 } from "../secrets/target-registry.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 type ResolveCommandSecretsResult = {
@@ -147,8 +148,7 @@ function classifyRuntimeWebTargetPathState(params: {
       if (fetch?.enabled === false) {
         return "inactive";
       }
-      const configuredProvider =
-        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      const configuredProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
       if (!configuredProvider) {
         return "active";
       }
@@ -165,8 +165,7 @@ function classifyRuntimeWebTargetPathState(params: {
     if (search?.enabled === false) {
       return "inactive";
     }
-    const configuredProvider =
-      typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+    const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
     if (!configuredProvider) {
       return "active";
     }
@@ -216,8 +215,7 @@ function describeInactiveRuntimeWebTargetPath(params: {
       if (fetch?.enabled === false) {
         return "tools.web.fetch is disabled.";
       }
-      const configuredProvider =
-        typeof fetch?.provider === "string" ? fetch.provider.trim().toLowerCase() : "";
+      const configuredProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
       if (configuredProvider) {
         return `tools.web.fetch.provider is "${configuredProvider}".`;
       }
@@ -227,8 +225,7 @@ function describeInactiveRuntimeWebTargetPath(params: {
     if (search?.enabled === false) {
       return "tools.web.search is disabled.";
     }
-    const configuredProvider =
-      typeof search?.provider === "string" ? search.provider.trim().toLowerCase() : "";
+    const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
     const configuredPluginId = configuredProvider
       ? commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
           contract: "webSearchProviders",

@@ -1,5 +1,6 @@
 import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
 
@@ -87,7 +88,7 @@ function listActionTargetAliasSpecs(
   if (coreSpec) {
     specs.push(coreSpec);
   }
-  const normalizedChannel = channel?.trim().toLowerCase();
+  const normalizedChannel = normalizeOptionalLowercaseString(channel);
   if (!normalizedChannel) {
     return specs;
   }

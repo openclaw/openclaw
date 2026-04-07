@@ -15,6 +15,17 @@ const { resolvePluginWebFetchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
 }));
 const {
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock,
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock,
+} = vi.hoisted(() => ({
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock: vi.fn(() =>
+    buildTestWebSearchProviders(),
+  ),
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock: vi.fn(() =>
+    buildTestWebFetchProviders(),
+  ),
+}));
+const {
   resolveBundledWebSearchProvidersFromPublicArtifactsMock,
   resolveBundledWebFetchProvidersFromPublicArtifactsMock,
 } = vi.hoisted(() => ({
@@ -44,7 +55,14 @@ vi.mock("./runtime-web-tools-fallback.runtime.js", async () => {
   };
 });
 
-vi.mock("../plugins/web-provider-public-artifacts.js", () => ({
+vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
+  resolveBundledExplicitWebSearchProvidersFromPublicArtifacts:
+    resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock,
+  resolveBundledExplicitWebFetchProvidersFromPublicArtifacts:
+    resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock,
+}));
+
+vi.mock("./runtime-web-tools-public-artifacts.runtime.js", () => ({
   resolveBundledWebSearchProvidersFromPublicArtifacts:
     resolveBundledWebSearchProvidersFromPublicArtifactsMock,
   resolveBundledWebFetchProvidersFromPublicArtifacts:
@@ -275,6 +293,8 @@ describe("runtime web tools resolution", () => {
   beforeEach(() => {
     resolvePluginWebSearchProvidersMock.mockClear();
     resolvePluginWebFetchProvidersMock.mockClear();
+    resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock.mockClear();
+    resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock.mockClear();
     resolveBundledWebSearchProvidersFromPublicArtifactsMock.mockClear();
     resolveBundledWebFetchProvidersFromPublicArtifactsMock.mockClear();
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock.mockClear();
@@ -315,6 +335,7 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.providerSource).toBe("none");
     expect(metadata.fetch.selectedProvider).toBe("firecrawl");
     expect(metadata.fetch.selectedProviderKeySource).toBe("env");
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
@@ -350,6 +371,7 @@ describe("runtime web tools resolution", () => {
     expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
     expect(metadata.fetch.selectedProvider).toBeUndefined();
     expect(metadata.fetch.providerSource).toBe("none");
+    expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
@@ -773,12 +795,10 @@ describe("runtime web tools resolution", () => {
     });
 
     expect(metadata.search.selectedProvider).toBe("gemini");
-    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bundledAllowlistCompat: true,
-        onlyPluginIds: ["google"],
-      }),
-    );
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
+      onlyPluginIds: ["google"],
+    });
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -806,12 +826,10 @@ describe("runtime web tools resolution", () => {
         origin: "bundled",
       }),
     );
-    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bundledAllowlistCompat: true,
-        onlyPluginIds: ["brave"],
-      }),
-    );
+    expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
+      onlyPluginIds: ["brave"],
+    });
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -1215,11 +1233,10 @@ describe("runtime web tools resolution", () => {
     });
 
     expect(metadata.fetch.selectedProvider).toBe("firecrawl");
-    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bundledAllowlistCompat: true,
-      }),
-    );
+    expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifactsMock).toHaveBeenCalledWith({
+      onlyPluginIds: ["firecrawl"],
+    });
+    expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 });

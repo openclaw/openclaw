@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
-import { normalizeOptionalString, stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import {
   getCachedBlueBubblesPrivateApiStatus,
@@ -62,10 +66,10 @@ const EFFECT_MAP: Record<string, string> = {
 };
 
 function resolveEffectId(raw?: string): string | undefined {
-  if (!raw) {
+  const trimmed = normalizeOptionalLowercaseString(raw);
+  if (!trimmed) {
     return undefined;
   }
-  const trimmed = raw.trim().toLowerCase();
   if (EFFECT_MAP[trimmed]) {
     return EFFECT_MAP[trimmed];
   }
