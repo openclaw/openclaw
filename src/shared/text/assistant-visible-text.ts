@@ -640,8 +640,10 @@ const CONTAM_ENVELOPE_RE =
 const CONTAM_CSS_RE = /(?:^|\n)\s*(?:[\w.-]+\s*\{\s*)?(?:[a-z-]+\s*:\s*[^;]+;\s*){2,}(?:\}\s*)?(?:\n|$)/gm;
 const CONTAM_FENCE_RE = /```\s*```/g;
 const CONTAM_CODE_DEBRIS_RE = /(?:^|\n)\s*\.\w+\([^)]*\)\)?;?/gm;
+// Footer scrubber: match trigger line + subsequent short lines without sentence-end punctuation
+// Bounded to avoid eating legitimate reply content after footer-like phrases
 const CONTAM_FOOTER_RE =
-  /(?:^|\n)(?:Copyright ©|Powered by|Manage your notification settings)[^\n]*(?:\n[^\n]+)*/gim;
+  /(?:^|\n)(?:Copyright ©|Powered by|Manage your notification settings)[^\n]*(?:\n(?![A-Z][^\n]*[.!?]["']?\s*$)[^\n]{0,80})*/gim;
 
 function isInsideCodeAt(offset: number, length: number, text: string): boolean {
   const codeRegions = findCodeRegions(text);
@@ -733,7 +735,7 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningTrim: "start",
     stageOrder: "reasoning-first",
     stripLeakedPreamble: true,
-    stripStructuralContamination: true,
+    stripStructuralContamination: false,
   },
 };
 
