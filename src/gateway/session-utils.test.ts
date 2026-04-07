@@ -974,4 +974,55 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  test("matches catalog entry when provider ID differs only by case", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "qwen2.5-vl-72b-instruct",
+        provider: "OpenRouter",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen2.5-vl-72b-instruct",
+            name: "Qwen 2.5 VL 72B",
+            provider: "openrouter",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("matches catalog entry when model ID differs only by case", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "GPT-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "gpt-5.4",
+            name: "GPT-5.4",
+            provider: "openai",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("matches catalog entry when provider alias is used", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "glm-5",
+        provider: "z.ai",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "glm-5",
+            name: "GLM-5",
+            provider: "zai",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
 });
