@@ -168,6 +168,7 @@ export default definePluginEntry({
     globalState[VOICE_RUNTIME_KEY] ??= null;
     globalState[VOICE_RUNTIME_PROMISE_KEY] ??= null;
     globalState[VOICE_RUNTIME_STOP_PROMISE_KEY] ??= null;
+    const RETRY_ENSURE_RUNTIME = Symbol("voice-call.ensureRuntime.retry");
 
     const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
       if (!config.enabled) {
@@ -202,22 +203,27 @@ export default definePluginEntry({
 
         try {
           const runtime = await runtimePromise;
-          if (globalState[VOICE_RUNTIME_STOP_PROMISE_KEY]) {
-            await globalState[VOICE_RUNTIME_STOP_PROMISE_KEY];
+          const stopPromise: Promise<void> | null =
+            globalState[VOICE_RUNTIME_STOP_PROMISE_KEY] ?? null;
+          if (stopPromise !== null) {
+            await Promise.resolve(stopPromise);
             if (globalState[VOICE_RUNTIME_KEY]) {
               return globalState[VOICE_RUNTIME_KEY];
             }
-            throw new Error("Voice call runtime changed during initialization; retry");
+            throw RETRY_ENSURE_RUNTIME;
           }
           if (globalState[VOICE_RUNTIME_PROMISE_KEY] !== runtimePromise) {
             if (globalState[VOICE_RUNTIME_KEY]) {
               return globalState[VOICE_RUNTIME_KEY];
             }
-            throw new Error("Voice call runtime changed during initialization; retry");
+            throw RETRY_ENSURE_RUNTIME;
           }
           globalState[VOICE_RUNTIME_KEY] = runtime;
           return runtime;
         } catch (err) {
+          if (err === RETRY_ENSURE_RUNTIME) {
+            continue;
+          }
           if (globalState[VOICE_RUNTIME_PROMISE_KEY] === runtimePromise) {
             // Reset shared state so the next call can retry instead of caching a
             // rejected promise or stale runtime across plugin contexts.

@@ -204,6 +204,45 @@ describe("voice-call plugin", () => {
     expect(secondRuntime.manager.initiateCall).toHaveBeenCalledTimes(1);
   });
 
+  it("retries runtime access during stop instead of surfacing a transient error", async () => {
+    let resolveFirstRuntime: ((runtime: VoiceCallRuntime) => void) | undefined;
+    const firstRuntimePromise = new Promise<VoiceCallRuntime>((resolve) => {
+      resolveFirstRuntime = resolve;
+    });
+    const firstRuntime = {
+      ...runtimeStub,
+      stop: vi.fn(async () => {}),
+    } as VoiceCallRuntime;
+    const secondRuntime = {
+      ...createRuntimeStub("call-2"),
+      stop: vi.fn(async () => {}),
+    } as VoiceCallRuntime;
+    vi.mocked(createVoiceCallRuntime)
+      .mockImplementationOnce(async () => firstRuntimePromise)
+      .mockImplementationOnce(async () => secondRuntime);
+
+    const { methods, service } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.initiate") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+
+    const startPromise = service!.start();
+    const stopPromise = service!.stop();
+    const respond = vi.fn();
+    const handlerPromise = handler?.({ params: { message: "Hi" }, respond });
+
+    resolveFirstRuntime!(firstRuntime);
+    await Promise.all([startPromise, stopPromise, handlerPromise]);
+
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
+    expect(firstRuntime.stop).toHaveBeenCalledTimes(1);
+    expect(secondRuntime.manager.initiateCall).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(true, { callId: "call-2", initiated: true });
+  });
+
   it("initiates a call via voicecall.initiate", async () => {
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.initiate") as
