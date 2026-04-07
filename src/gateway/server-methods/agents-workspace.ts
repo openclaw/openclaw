@@ -111,7 +111,10 @@ async function workspaceList(
       type = "file";
     }
 
-    const stat = await fs.stat(fullPath).catch(() => null);
+    // Use lstat for symlinks to avoid following links outside workspace root
+    const stat = await (type === "symlink" ? fs.lstat(fullPath) : fs.stat(fullPath)).catch(
+      () => null,
+    );
 
     entries.push({
       name: item.name,
@@ -203,10 +206,21 @@ async function workspaceDelete(
       }
     }
 
-    await removePathWithinRoot({
-      rootDir: workspaceDir,
-      relativePath,
-    });
+    if (stat.isDirectory() && recursive) {
+      // removePathWithinRoot does not support recursive directory removal,
+      // so use fs.rm with recursive flag after verifying the path is within root
+      const realRoot = await fs.realpath(workspaceDir);
+      const realPath = await fs.realpath(fullPath);
+      if (!realPath.startsWith(realRoot + path.sep) && realPath !== realRoot) {
+        throw new Error("Path resolves outside workspace root");
+      }
+      await fs.rm(fullPath, { recursive: true });
+    } else {
+      await removePathWithinRoot({
+        rootDir: workspaceDir,
+        relativePath,
+      });
+    }
 
     return true;
   } catch (err) {
