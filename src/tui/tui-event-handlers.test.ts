@@ -630,14 +630,14 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBeNull();
     expect(state.pendingOptimisticUserMessage).toBe(true);
 
-    // Late stale delta for run-a must be ignored and must not consume the pending flag.
+    // A resumed delta for run-a should stay recoverable but must not consume the pending flag.
     handleChatEvent({
       runId: "run-a",
       sessionKey: state.currentSessionKey,
       state: "delta",
       message: { content: "late A" },
     });
-    expect(state.activeChatRunId).toBeNull();
+    expect(state.activeChatRunId).toBe("run-a");
     expect(state.pendingOptimisticUserMessage).toBe(true);
     expect(isLocalRunId("run-a")).toBe(false);
 
@@ -651,6 +651,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBe("run-b");
     expect(state.pendingOptimisticUserMessage).toBe(false);
     expect(isLocalRunId("run-b")).toBe(true);
+  });
+
+  it("keeps the pre-gap run recoverable until a real terminal event arrives", () => {
+    const { state, chatLog, setActivityStatus, handleChatEvent, handleEventGap } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handleChatEvent({
+      runId: "run-resume",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "before gap" },
+    });
+
+    handleEventGap();
+    chatLog.updateAssistant.mockClear();
+    chatLog.finalizeAssistant.mockClear();
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-resume",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "after gap" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-resume");
+    expect(chatLog.updateAssistant).toHaveBeenLastCalledWith("after gap", "run-resume");
+
+    handleChatEvent({
+      runId: "run-resume",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("done", "run-resume");
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
   });
 
   it("renders final error text when chat final has no content but includes event errorMessage", () => {

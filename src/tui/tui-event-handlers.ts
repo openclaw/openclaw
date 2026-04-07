@@ -65,6 +65,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
+  let gapClearedRunId: string | null = null;
 
   const pruneRunMap = (runs: Map<string, number>) => {
     if (runs.size <= 200) {
@@ -98,6 +99,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
+    gapClearedRunId = null;
     state.pendingOptimisticUserMessage = false;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
@@ -136,6 +138,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     status: "idle" | "error";
   }) => {
     noteFinalizedRun(params.runId);
+    if (gapClearedRunId === params.runId) {
+      gapClearedRunId = null;
+    }
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
@@ -150,6 +155,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     status: "aborted" | "error";
   }) => {
     streamAssembler.drop(params.runId);
+    if (gapClearedRunId === params.runId) {
+      gapClearedRunId = null;
+    }
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
@@ -233,11 +241,28 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
     noteSessionRun(evt.runId);
-    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
+    const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
+    if (
+      state.pendingOptimisticUserMessage &&
+      gapClearedRunId &&
+      state.activeChatRunId === gapClearedRunId &&
+      evt.runId !== gapClearedRunId &&
+      !isLocalBtwRun
+    ) {
       state.activeChatRunId = evt.runId;
-      if (state.pendingOptimisticUserMessage) {
+      noteLocalRunId?.(evt.runId);
+      state.pendingOptimisticUserMessage = false;
+      gapClearedRunId = null;
+    }
+    if (!state.activeChatRunId && !isLocalBtwRun) {
+      state.activeChatRunId = evt.runId;
+      const isGapRecoveredRun = gapClearedRunId != null && evt.runId === gapClearedRunId;
+      if (state.pendingOptimisticUserMessage && !isGapRecoveredRun) {
         noteLocalRunId?.(evt.runId);
         state.pendingOptimisticUserMessage = false;
+        gapClearedRunId = null;
+      } else if (!isGapRecoveredRun) {
+        gapClearedRunId = null;
       }
     }
     if (evt.state === "delta") {
@@ -417,15 +442,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     syncSessionKey();
     const previousRunId = state.activeChatRunId;
     if (!previousRunId) {
+      gapClearedRunId = null;
       if (shouldReload) {
         void loadHistory?.();
         void refreshSessionInfo?.();
       }
       return;
     }
-    // Mark the previous active run finalized so late-arriving events from that
-    // run are ignored and cannot consume optimistic binding for a newer run.
-    noteFinalizedRun(previousRunId);
+    gapClearedRunId = previousRunId;
+    // Reset in-progress rendering for the pre-gap run while still allowing it
+    // to recover if the stream resumes with the same run id.
+    streamAssembler.drop(previousRunId);
     sessionRuns.clear();
     state.activeChatRunId = null;
     pendingHistoryRefresh = false;
