@@ -449,12 +449,12 @@ export async function loadChatHistory(state: ChatState) {
   }
 }
 
-function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string | null } | null {
+  const match = /^data:([^;]*);base64,(.+)$/.exec(dataUrl);
   if (!match) {
     return null;
   }
-  return { mimeType: match[1], content: match[2] };
+  return { mimeType: match[1] || null, content: match[2] };
 }
 
 function buildApiAttachments(attachments?: ChatAttachment[]) {
@@ -466,9 +466,10 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
           if (!parsed) {
             return null;
           }
+          const mimeType = att.mimeType || parsed.mimeType || "application/octet-stream";
           return {
-            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
-            mimeType: parsed.mimeType,
+            type: mimeType.startsWith("image/") ? "image" : "file",
+            mimeType,
             fileName: att.fileName,
             content: parsed.content,
           };

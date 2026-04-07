@@ -477,6 +477,29 @@ describe("chat attachment picker", () => {
     expect(preview.textContent).toContain("brief.pdf");
   });
 
+  it("uses image extension fallback for file attachments with missing mime types", async () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const file = new File(["png"], "photo.png");
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [file],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(onAttachmentsChange).toHaveBeenCalledWith([
+        expect.objectContaining({
+          fileName: "photo.png",
+          mimeType: "image/png",
+        }),
+      ]);
+    });
+  });
+
   it("filters video file attachments", () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });

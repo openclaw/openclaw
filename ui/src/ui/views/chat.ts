@@ -4,7 +4,7 @@ import { repeat } from "lit/directives/repeat.js";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
-  isSupportedChatAttachmentFile,
+  resolveSupportedChatAttachmentMimeType,
 } from "../chat/attachment-support.ts";
 import { buildChatItems } from "../chat/build-chat-items.ts";
 import { renderChatQueue } from "../chat/chat-queue.ts";
@@ -204,11 +204,11 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
+function chatAttachmentFromFile(file: File, dataUrl: string, mimeType: string): ChatAttachment {
   return {
     id: generateAttachmentId(),
     dataUrl,
-    mimeType: file.type || "application/octet-stream",
+    mimeType,
     fileName: file.name || undefined,
   };
 }
@@ -241,7 +241,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
-      const newAttachment = chatAttachmentFromFile(file, dataUrl);
+      const newAttachment = chatAttachmentFromFile(file, dataUrl, file.type || item.type);
       const current = props.attachments ?? [];
       props.onAttachmentsChange?.([...current, newAttachment]);
     });
@@ -258,13 +258,14 @@ function handleFileSelect(e: Event, props: ChatProps) {
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of input.files) {
-    if (!isSupportedChatAttachmentFile(file)) {
+    const mimeType = resolveSupportedChatAttachmentMimeType(file);
+    if (!mimeType) {
       continue;
     }
     pending++;
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      additions.push(chatAttachmentFromFile(file, reader.result as string));
+      additions.push(chatAttachmentFromFile(file, reader.result as string, mimeType));
       pending--;
       if (pending === 0) {
         props.onAttachmentsChange?.([...current, ...additions]);
@@ -285,13 +286,14 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of files) {
-    if (!isSupportedChatAttachmentFile(file)) {
+    const mimeType = resolveSupportedChatAttachmentMimeType(file);
+    if (!mimeType) {
       continue;
     }
     pending++;
     const reader = new FileReader();
     reader.addEventListener("load", () => {
-      additions.push(chatAttachmentFromFile(file, reader.result as string));
+      additions.push(chatAttachmentFromFile(file, reader.result as string, mimeType));
       pending--;
       if (pending === 0) {
         props.onAttachmentsChange?.([...current, ...additions]);

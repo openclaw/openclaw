@@ -743,6 +743,39 @@ describe("sendChatMessage", () => {
     });
   });
 
+  it("serializes the resolved attachment mime type when the data url omits one", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const content = Buffer.from("png").toString("base64");
+    const result = await sendChatMessage(state, "inspect", [
+      {
+        id: "att-1",
+        dataUrl: `data:;base64,${content}`,
+        mimeType: "image/png",
+        fileName: "photo.png",
+      },
+    ]);
+
+    expect(result).toEqual(expect.any(String));
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "photo.png",
+            content,
+          },
+        ],
+      }),
+    );
+  });
+
   it("formats structured non-auth connect failures for chat send", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({
