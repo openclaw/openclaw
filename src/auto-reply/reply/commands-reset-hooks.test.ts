@@ -38,13 +38,11 @@ vi.mock("../commands-registry.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/binding-targets.js", () => ({
-  resetConfiguredBindingTargetInPlace: (...args: unknown[]) =>
-    resetMocks.resetConfiguredBindingTargetInPlace(...args),
+  resetConfiguredBindingTargetInPlace: resetMocks.resetConfiguredBindingTargetInPlace,
 }));
 
 vi.mock("./commands-acp/targets.js", () => ({
-  resolveBoundAcpThreadSessionKey: (...args: unknown[]) =>
-    resetMocks.resolveBoundAcpThreadSessionKey(...args),
+  resolveBoundAcpThreadSessionKey: resetMocks.resolveBoundAcpThreadSessionKey,
 }));
 
 vi.mock("./commands-handlers.runtime.js", () => ({
