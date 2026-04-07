@@ -301,6 +301,19 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  // Track the parent logger reference so we can detect date-roll rebuilds.
+  // When the parent logger is rebuilt (e.g. due to log file date rotation),
+  // loggingState.cachedLogger changes and we must refresh the child logger.
+  let cachedParentRef: unknown = null;
+
+  function getFileLogger(): TsLogger<LogObj> {
+    const currentParent = loggingState.cachedLogger;
+    if (!fileLogger || cachedParentRef !== currentParent) {
+      fileLogger = getChildLogger({ subsystem });
+      cachedParentRef = currentParent;
+    }
+    return fileLogger;
+  }
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -323,10 +336,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      if (!fileLogger) {
-        fileLogger = getChildLogger({ subsystem });
-      }
-      logToFile(fileLogger, level, message, fileMeta);
+      logToFile(getFileLogger(), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -389,10 +399,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        if (!fileLogger) {
-          fileLogger = getChildLogger({ subsystem });
-        }
-        logToFile(fileLogger, "info", message, { raw: true });
+        logToFile(getFileLogger(), "info", message, { raw: true });
       }
       if (
         shouldLogToConsole("info", { level: getConsoleSettings().level }) &&

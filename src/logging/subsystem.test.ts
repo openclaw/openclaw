@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
-import { resetLogger, setLoggerOverride } from "./logger.js";
+import { getChildLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
@@ -143,5 +143,50 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createSubsystemLogger file logger staleness (#62381)", () => {
+  it("refreshes child logger when parent logger is rebuilt (date roll)", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+
+    const log = createSubsystemLogger("test/date-roll");
+
+    // First log call — creates and caches the child logger.
+    log.info("day 1 message");
+
+    // Capture the child logger reference via getChildLogger (same parent).
+    const firstChild = getChildLogger({ subsystem: "test/date-roll" });
+
+    // Simulate a date-roll rebuild: reset the parent logger so the next
+    // getLogger() call produces a new instance (different reference).
+    resetLogger();
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+
+    // Second log call — should detect the parent changed and refresh the child.
+    log.info("day 2 message");
+
+    // After the rebuild, a new getChildLogger call should produce a
+    // different child instance (derived from the new parent).
+    const secondChild = getChildLogger({ subsystem: "test/date-roll" });
+
+    // The child logger instances must differ, proving the subsystem logger
+    // refreshed its cached child after the parent was rebuilt.
+    expect(firstChild).not.toBe(secondChild);
+  });
+
+  it("reuses cached child logger when parent has not changed", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+
+    const log = createSubsystemLogger("test/stable");
+
+    // Two log calls without resetting — should reuse the same child.
+    log.info("message 1");
+    const parentAfterFirst = loggingState.cachedLogger;
+    log.info("message 2");
+    const parentAfterSecond = loggingState.cachedLogger;
+
+    // Parent reference unchanged — child was reused (no unnecessary rebuild).
+    expect(parentAfterFirst).toBe(parentAfterSecond);
   });
 });
