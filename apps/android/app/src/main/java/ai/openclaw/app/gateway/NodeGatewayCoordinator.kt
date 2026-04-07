@@ -104,6 +104,7 @@ class NodeGatewayCoordinator(
       onConnected = { _, _, _ ->
         _nodeConnected.value = true
         nodeStatusText = "Connected"
+        refreshOperatorPlanAfterNodeBootstrap()
         callbacks.onNodeConnected()
         updateStatus()
       },
@@ -332,6 +333,29 @@ class NodeGatewayCoordinator(
       operatorSession.reconnect()
       nodeSession.reconnect()
     }
+  }
+
+  internal fun refreshOperatorPlanAfterNodeBootstrap() {
+    val endpoint = connectedEndpoint ?: return
+    val connectPlan = resolveConnectPlan(desiredNodeConnectAuth)
+    desiredNodeConnectAuth = connectPlan.nodeAuth
+    desiredOperatorConnectAuth = connectPlan.operatorAuth
+    shouldConnectOperator = connectPlan.connectOperator
+    if (!connectPlan.connectOperator || _isConnected.value) {
+      return
+    }
+
+    _operatorStatusText.value = "Connecting…"
+    val tls = connectionManager.resolveTlsParams(endpoint)
+    val operatorAuth = connectPlan.operatorAuth
+    operatorSession.connect(
+      endpoint,
+      operatorAuth?.token,
+      operatorAuth?.bootstrapToken,
+      operatorAuth?.password,
+      connectionManager.buildOperatorConnectOptions(),
+      tls,
+    )
   }
 
   private fun updateStatus() {

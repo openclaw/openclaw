@@ -10,12 +10,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.lang.reflect.Field
 
 @RunWith(RobolectricTestRunner::class)
 class NodeGatewayCoordinatorWearConfigTest {
@@ -74,7 +77,47 @@ class NodeGatewayCoordinatorWearConfigTest {
     assertEquals("0123abcd", payload.tlsFingerprintSha256)
   }
 
-  private fun newCoordinator(prefs: SecurePrefs): NodeGatewayCoordinator {
+  @Test
+  fun refreshOperatorPlanAfterNodeBootstrap_promotesStoredOperatorSessionAuth() {
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+    val identityStore = DeviceIdentityStore(context)
+    val coordinator = newCoordinator(prefs, identityStore)
+    val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+    val bootstrapAuth = GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null)
+
+    writeField(coordinator, "connectedEndpoint", endpoint)
+    writeField(coordinator, "desiredNodeConnectAuth", bootstrapAuth)
+    writeField(coordinator, "shouldConnectOperator", false)
+
+    val identity = identityStore.loadOrCreate()
+    DeviceAuthStore(prefs).saveToken(
+      identity.deviceId,
+      role = "operator",
+      token = "operator-device-token",
+      scopes = listOf("operator.read"),
+    )
+
+    coordinator.refreshOperatorPlanAfterNodeBootstrap()
+
+    assertTrue(readField(coordinator, "shouldConnectOperator"))
+    assertEquals("Connecting…", coordinator.operatorStatusText.value)
+    assertEquals(
+      GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
+      readField<GatewayConnectAuth?>(coordinator, "desiredOperatorConnectAuth"),
+    )
+
+    val desired = readField<Any?>(coordinator.operatorSession, "desired")
+    assertNotNull(desired)
+    assertEquals(endpoint, readField(desired!!, "endpoint"))
+    assertNull(readField<String?>(desired, "token"))
+    assertNull(readField<String?>(desired, "bootstrapToken"))
+    assertNull(readField<String?>(desired, "password"))
+  }
+
+  private fun newCoordinator(
+    prefs: SecurePrefs,
+    identityStore: DeviceIdentityStore = DeviceIdentityStore(context),
+  ): NodeGatewayCoordinator {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     val connectionManager =
       ConnectionManager(
@@ -96,7 +139,7 @@ class NodeGatewayCoordinatorWearConfigTest {
       scope = scope,
       prefs = prefs,
       connectionManager = connectionManager,
-      identityStore = DeviceIdentityStore(context),
+      identityStore = identityStore,
       callbacks =
         NodeGatewayCoordinator.Callbacks(
           onOperatorConnected = { _, _, _ -> },
@@ -108,5 +151,35 @@ class NodeGatewayCoordinatorWearConfigTest {
           onStatusChanged = { },
         ),
     )
+  }
+
+  private fun writeField(target: Any, name: String, value: Any?) {
+    var type: Class<*>? = target.javaClass
+    while (type != null) {
+      try {
+        val field: Field = type.getDeclaredField(name)
+        field.isAccessible = true
+        field.set(target, value)
+        return
+      } catch (_: NoSuchFieldException) {
+        type = type.superclass
+      }
+    }
+    error("Field $name not found on ${target.javaClass.name}")
+  }
+
+  private fun <T> readField(target: Any, name: String): T {
+    var type: Class<*>? = target.javaClass
+    while (type != null) {
+      try {
+        val field: Field = type.getDeclaredField(name)
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        return field.get(target) as T
+      } catch (_: NoSuchFieldException) {
+        type = type.superclass
+      }
+    }
+    error("Field $name not found on ${target.javaClass.name}")
   }
 }
