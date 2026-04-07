@@ -4,8 +4,12 @@ import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "../plugin-sdk/ollama-surface.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "../plugins/provider-model-defaults.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import {
   normalizeSecretInput,
@@ -32,7 +36,7 @@ function normalizeContextWindowForCustomModel(value: unknown): number {
 function isAzureFoundryUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(url.hostname);
     return host.endsWith(".services.ai.azure.com");
   } catch {
     return false;
@@ -42,7 +46,7 @@ function isAzureFoundryUrl(baseUrl: string): boolean {
 function isAzureOpenAiUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(url.hostname);
     return host.endsWith(".openai.azure.com");
   } catch {
     return false;
@@ -60,8 +64,8 @@ function isAzureUrl(baseUrl: string): boolean {
  * The api-version will be handled by the Azure OpenAI client or as a query param.
  *
  * Example:
- *   https://my-resource.services.ai.azure.com + gpt-5-nano
- *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5-nano
+ *   https://my-resource.services.ai.azure.com + gpt-5.4-nano
+ *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5.4-nano
  */
 function transformAzureUrl(baseUrl: string, modelId: string): string {
   const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
@@ -92,7 +96,10 @@ function transformAzureConfigUrl(baseUrl: string): string {
 
 function hasSameHost(a: string, b: string): boolean {
   try {
-    return new URL(a).hostname.toLowerCase() === new URL(b).hostname.toLowerCase();
+    return (
+      normalizeLowercaseStringOrEmpty(new URL(a).hostname) ===
+      normalizeLowercaseStringOrEmpty(new URL(b).hostname)
+    );
   } catch {
     return false;
   }
@@ -185,7 +192,7 @@ const COMPATIBILITY_OPTIONS: Array<{
 ];
 
 function normalizeEndpointId(raw: string): string {
-  const trimmed = raw.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return "";
   }
@@ -195,7 +202,7 @@ function normalizeEndpointId(raw: string): string {
 function buildEndpointIdFromUrl(baseUrl: string): string {
   try {
     const url = new URL(baseUrl);
-    const host = url.hostname.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    const host = normalizeLowercaseStringOrEmpty(url.hostname.replace(/[^a-z0-9]+/gi, "-"));
     const port = url.port ? `-${url.port}` : "";
     const candidate = `custom-${host}${port}`;
     return normalizeEndpointId(candidate) || "custom";
@@ -246,7 +253,7 @@ function resolveAliasError(params: {
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
-  const aliasKey = normalized.toLowerCase();
+  const aliasKey = normalizeLowercaseStringOrEmpty(normalized);
   const existing = aliasIndex.byAlias.get(aliasKey);
   if (!existing) {
     return undefined;
@@ -524,7 +531,7 @@ function resolveProviderApi(
 }
 
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
-  const compatibilityRaw = raw?.trim().toLowerCase();
+  const compatibilityRaw = normalizeOptionalLowercaseString(raw);
   if (!compatibilityRaw) {
     return "openai";
   }

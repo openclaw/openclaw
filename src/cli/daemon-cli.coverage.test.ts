@@ -15,7 +15,9 @@ const serviceRestart = vi.fn().mockResolvedValue({ outcome: "completed" });
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);
 const serviceReadCommand = vi.fn().mockResolvedValue(null);
 const serviceReadRuntime = vi.fn().mockResolvedValue({ status: "running" });
-const resolveGatewayProbeAuthWithSecretInputs = vi.fn(async (_opts?: unknown) => ({}));
+const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn(async (_opts?: unknown) => ({
+  auth: {},
+}));
 const findExtraGatewayServices = vi.fn(async (_env: unknown, _opts?: unknown) => []);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
@@ -62,16 +64,17 @@ vi.mock("./daemon-cli/probe.js", () => ({
 }));
 
 vi.mock("../gateway/probe-auth.js", () => ({
-  resolveGatewayProbeAuthWithSecretInputs: (opts: unknown) =>
-    resolveGatewayProbeAuthWithSecretInputs(opts),
+  resolveGatewayProbeAuthSafeWithSecretInputs: (opts: unknown) =>
+    resolveGatewayProbeAuthSafeWithSecretInputs(opts),
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
   resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
 }));
 
-vi.mock("../daemon/service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+vi.mock("../daemon/service.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return {
     ...actual,
     resolveGatewayService: () => ({
@@ -104,8 +107,8 @@ vi.mock("../infra/ports.js", () => ({
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
 
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
+vi.mock("../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../runtime.js")>("../runtime.js")),
   defaultRuntime: mocks.defaultRuntime,
 }));
 
@@ -156,7 +159,8 @@ describe("daemon-cli coverage", () => {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
-    resolveGatewayProbeAuthWithSecretInputs.mockClear();
+    resolveGatewayProbeAuthSafeWithSecretInputs.mockClear();
+    findExtraGatewayServices.mockClear();
     buildGatewayInstallPlan.mockClear();
   });
 
@@ -174,7 +178,7 @@ describe("daemon-cli coverage", () => {
     expect(probeGatewayStatus).toHaveBeenCalledWith(
       expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
     );
-    expect(findExtraGatewayServices).toHaveBeenCalled();
+    expect(findExtraGatewayServices).not.toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
   });
 

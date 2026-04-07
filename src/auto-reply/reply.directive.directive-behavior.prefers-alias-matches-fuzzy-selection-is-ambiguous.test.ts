@@ -16,6 +16,7 @@ import {
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { withFullRuntimeReplyConfig } from "./reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "./reply.js";
 
 function makeModelDefinition(id: string, name: string): ModelDefinitionConfig {
@@ -35,19 +36,19 @@ function makeModelSwitchConfig(home: string) {
     model: { primary: "openai/gpt-4.1-mini" },
     models: {
       "openai/gpt-4.1-mini": {},
-      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "anthropic/claude-opus-4-6": { alias: "Opus" },
     },
   });
 }
 
 function makeMoonshotConfig(home: string, storePath: string) {
-  return {
+  return withFullRuntimeReplyConfig({
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-opus-4-6" },
         workspace: path.join(home, "openclaw"),
         models: {
-          "anthropic/claude-opus-4-5": {},
+          "anthropic/claude-opus-4-6": {},
           "moonshot/kimi-k2-0905-preview": {},
         },
       },
@@ -64,7 +65,7 @@ function makeMoonshotConfig(home: string, storePath: string) {
       },
     },
     session: { store: storePath },
-  } as unknown as OpenClawConfig;
+  } as unknown as OpenClawConfig);
 }
 
 describe("directive behavior", () => {
@@ -189,10 +190,10 @@ describe("directive behavior", () => {
         await getReplyFromConfig(
           { Body: testCase.body, From: "+1222", To: "+1222", CommandAuthorized: true },
           {},
-          {
+          withFullRuntimeReplyConfig({
             ...testCase.config,
             session: { store: testCase.storePath },
-          } as unknown as OpenClawConfig,
+          } as unknown as OpenClawConfig),
         );
         assertModelSelection(testCase.storePath, testCase.expectedSelection);
       }
@@ -206,13 +207,13 @@ describe("directive behavior", () => {
       const res = await getReplyFromConfig(
         { Body: "/model ki", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        {
+        withFullRuntimeReplyConfig({
           agents: {
             defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
+              model: { primary: "anthropic/claude-opus-4-6" },
               workspace: path.join(home, "openclaw"),
               models: {
-                "anthropic/claude-opus-4-5": {},
+                "anthropic/claude-opus-4-6": {},
                 "moonshot/kimi-k2-0905-preview": { alias: "Kimi" },
                 "lmstudio/kimi-k2-0905-preview": {},
               },
@@ -236,7 +237,7 @@ describe("directive behavior", () => {
             },
           },
           session: { store: storePath },
-        },
+        } as OpenClawConfig),
       );
 
       const text = replyText(res);
@@ -295,7 +296,7 @@ describe("directive behavior", () => {
       );
 
       let events = drainSystemEvents(MAIN_SESSION_KEY);
-      expect(events).toContain("Model switched to Opus (anthropic/claude-opus-4-5).");
+      expect(events).toContain("Model switched to Opus (anthropic/claude-opus-4-6).");
 
       drainSystemEvents(MAIN_SESSION_KEY);
 

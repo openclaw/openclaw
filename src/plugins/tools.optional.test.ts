@@ -195,6 +195,8 @@ function expectConflictingCoreNameResolution(params: {
 describe("resolvePluginTools optional tools", () => {
   beforeEach(async () => {
     vi.resetModules();
+    ({ resolvePluginTools } = await import("./tools.js"));
+    ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
     loadOpenClawPluginsMock.mockClear();
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockImplementation((params) =>
@@ -205,11 +207,7 @@ describe("resolvePluginTools optional tools", () => {
       config,
       changes: [],
     }));
-    ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-    resetPluginRuntimeStateForTest();
-    ({ resolvePluginTools } = await import("./tools.js"));
-    ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-    resetPluginRuntimeStateForTest();
+    resetPluginRuntimeStateForTest?.();
   });
 
   afterEach(() => {

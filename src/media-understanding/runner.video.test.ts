@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
@@ -77,8 +75,7 @@ describe("runCapability video provider wiring", () => {
   });
 
   it("auto-selects moonshot for video when google is unavailable", async () => {
-    const isolatedAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-agent-"));
-    try {
+    await withTempDir({ prefix: "openclaw-video-agent-" }, async (isolatedAgentDir) => {
       await withEnvAsync(
         {
           GEMINI_API_KEY: undefined,
@@ -139,8 +136,6 @@ describe("runCapability video provider wiring", () => {
           });
         },
       );
-    } finally {
-      await fs.rm(isolatedAgentDir, { recursive: true, force: true });
-    }
+    });
   });
 });

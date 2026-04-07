@@ -1,5 +1,8 @@
 import type { loadConfig } from "../config/config.js";
-import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
+import {
+  resolveGatewayProbeAuthSafeWithSecretInputs,
+  resolveGatewayProbeTarget,
+} from "../gateway/probe-auth.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
 export async function resolveGatewayProbeAuthResolution(
@@ -11,9 +14,10 @@ export async function resolveGatewayProbeAuthResolution(
   };
   warning?: string;
 }> {
+  const target = resolveGatewayProbeTarget(cfg);
   return resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,
-    mode: cfg.gateway?.mode === "remote" ? "remote" : "local",
+    mode: target.mode,
     env: process.env,
   });
 }

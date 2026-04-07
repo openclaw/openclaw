@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isRecord, readNestedString } from "./attachments/shared.js";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
@@ -46,9 +47,6 @@ type PollStoreData = {
 const STORE_FILENAME = "msteams-polls.json";
 const MAX_POLLS = 1000;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function normalizeChoiceValue(value: unknown): string | null {
   if (typeof value === "string") {
@@ -87,11 +85,6 @@ function readNestedValue(value: unknown, keys: Array<string | number>): unknown 
     current = current[key as keyof typeof current];
   }
   return current;
-}
-
-function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
-  const found = readNestedValue(value, keys);
-  return typeof found === "string" && found.trim() ? found.trim() : undefined;
 }
 
 export function extractMSTeamsPollVote(
@@ -273,7 +266,7 @@ export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MS
   const empty: PollStoreData = { version: 1, polls: {} };
 
   const readStore = async (): Promise<PollStoreData> => {
-    const { value } = await readJsonFile<PollStoreData>(filePath, empty);
+    const { value } = await readJsonFile(filePath, empty);
     const pruned = pruneToLimit(pruneExpired(value.polls ?? {}));
     return { version: 1, polls: pruned };
   };

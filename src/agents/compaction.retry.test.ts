@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retryAsync } from "../infra/retry.js";
 
 // Mock the external generateSummary function
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof piCodingAgent>();
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof piCodingAgent>("@mariozechner/pi-coding-agent");
   return {
     ...actual,
     generateSummary: vi.fn(),
@@ -47,7 +47,7 @@ describe("compaction retry integration", () => {
       content: [{ type: "text", text: "Test response" }],
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {
         input: 0,
         output: 0,

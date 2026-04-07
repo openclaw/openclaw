@@ -49,6 +49,25 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
   return { provider, model };
 }
 
+function readContextString(context: Record<string, unknown>, key: string, fallback = ""): string {
+  const value = context[key];
+  return typeof value === "string" ? value : fallback;
+}
+
+function readContextNumber(context: Record<string, unknown>, key: string): number | undefined {
+  const value = context[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 function normalizePage(value: number | undefined): number {
   if (!Number.isFinite(value)) {
     return 1;
@@ -160,8 +179,8 @@ export function parseMattermostModelPickerContext(
     return null;
   }
 
-  const ownerUserId = String(context.ownerUserId ?? "").trim();
-  const action = String(context.action ?? "").trim();
+  const ownerUserId = readContextString(context, "ownerUserId").trim();
+  const action = readContextString(context, "action").trim();
   if (!ownerUserId) {
     return null;
   }
@@ -170,8 +189,8 @@ export function parseMattermostModelPickerContext(
     return { action, ownerUserId };
   }
 
-  const provider = normalizeProviderId(String(context.provider ?? ""));
-  const page = Number.parseInt(String(context.page ?? "1"), 10);
+  const provider = normalizeProviderId(readContextString(context, "provider"));
+  const page = readContextNumber(context, "page");
   if (!provider) {
     return null;
   }
@@ -186,7 +205,7 @@ export function parseMattermostModelPickerContext(
   }
 
   if (action === "select") {
-    const model = String(context.model ?? "").trim();
+    const model = readContextString(context, "model").trim();
     if (!model) {
       return null;
     }
@@ -231,6 +250,7 @@ export function resolveMattermostModelPickerCurrentModel(params: {
       sessionEntry,
       sessionStore,
       sessionKey: params.route.sessionKey,
+      defaultProvider: params.data.resolvedDefault.provider,
     });
     if (!override?.model) {
       return fallback;

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   createDedupeCache,
   formatInboundFromLabel as formatInboundFromLabelShared,
@@ -59,7 +60,7 @@ function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | u
 
 export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): string | undefined {
   const entry = resolveAgentEntry(cfg, agentId);
-  return entry?.identity?.name?.trim() || undefined;
+  return normalizeOptionalString(entry?.identity?.name);
 }
 
 export function resolveThreadSessionKeys(params: {

@@ -1,6 +1,13 @@
-import type { OpenClawConfig } from "./config.js";
+type PluginAllowlistConfigCarrier = {
+  plugins?: {
+    allow?: string[];
+  };
+};
 
-export function ensurePluginAllowlisted(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
+export function ensurePluginAllowlisted<T extends PluginAllowlistConfigCarrier>(
+  cfg: T,
+  pluginId: string,
+): T {
   const allow = cfg.plugins?.allow;
   if (!Array.isArray(allow) || allow.includes(pluginId)) {
     return cfg;
@@ -11,5 +18,5 @@ export function ensurePluginAllowlisted(cfg: OpenClawConfig, pluginId: string): 
       ...cfg.plugins,
       allow: [...allow, pluginId],
     },
-  };
+  } as T;
 }

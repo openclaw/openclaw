@@ -1,9 +1,15 @@
+import {
+  resolveProviderEndpoint,
+  resolveProviderHttpRequestConfig,
+  type ProviderRequestTransportOverrides,
+} from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   applyAgentDefaultModelPrimary,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
+import { parseGoogleOauthApiKey } from "./oauth-token-shared.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId };
 
 type GoogleApiCarrier = {
@@ -14,12 +20,14 @@ type GoogleProviderConfigLike = GoogleApiCarrier & {
   models?: ReadonlyArray<GoogleApiCarrier | null | undefined> | null;
 };
 
-const DEFAULT_GOOGLE_API_HOST = "generativelanguage.googleapis.com";
-
 export const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
 function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function isCanonicalGoogleApiOriginShorthand(value: string): boolean {
+  return /^https:\/\/generativelanguage\.googleapis\.com\/?$/i.test(value);
 }
 
 export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
@@ -29,14 +37,14 @@ export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
     url.hash = "";
     url.search = "";
     if (
-      url.hostname.toLowerCase() === DEFAULT_GOOGLE_API_HOST &&
+      resolveProviderEndpoint(url.toString()).endpointClass === "google-generative-ai" &&
       trimTrailingSlashes(url.pathname || "") === ""
     ) {
       url.pathname = "/v1beta";
     }
     return trimTrailingSlashes(url.toString());
   } catch {
-    if (/^https:\/\/generativelanguage\.googleapis\.com\/?$/i.test(raw)) {
+    if (isCanonicalGoogleApiOriginShorthand(raw)) {
       return DEFAULT_GOOGLE_API_BASE_URL;
     }
     return raw;
@@ -135,20 +143,14 @@ export function normalizeGoogleProviderConfig(
 }
 
 export function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
-  if (apiKey.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(apiKey) as { token?: string; projectId?: string };
-      if (typeof parsed.token === "string" && parsed.token) {
-        return {
-          headers: {
-            Authorization: `Bearer ${parsed.token}`,
-            "Content-Type": "application/json",
-          },
-        };
-      }
-    } catch {
-      // Fall back to API key mode.
-    }
+  const parsed = apiKey.startsWith("{") ? parseGoogleOauthApiKey(apiKey) : null;
+  if (parsed?.token) {
+    return {
+      headers: {
+        Authorization: `Bearer ${parsed.token}`,
+        "Content-Type": "application/json",
+      },
+    };
   }
 
   return {
@@ -157,6 +159,28 @@ export function parseGeminiAuth(apiKey: string): { headers: Record<string, strin
       "Content-Type": "application/json",
     },
   };
+}
+
+export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
+  capability: "image" | "audio" | "video";
+  transport: "http" | "media-understanding";
+}) {
+  return resolveProviderHttpRequestConfig({
+    baseUrl: normalizeGoogleApiBaseUrl(params.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL),
+    defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
+    allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
+    headers: params.headers,
+    request: params.request,
+    defaultHeaders: parseGeminiAuth(params.apiKey).headers,
+    provider: "google",
+    api: "google-generative-ai",
+    capability: params.capability,
+    transport: params.transport,
+  });
 }
 
 export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";

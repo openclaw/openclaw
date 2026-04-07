@@ -12,6 +12,7 @@ read_when:
 - Provider: `deepseek`
 - Auth: `DEEPSEEK_API_KEY`
 - API: OpenAI-compatible
+- Base URL: `https://api.deepseek.com`
 
 ## Quick start
 
@@ -40,14 +41,13 @@ If the Gateway runs as a daemon (launchd/systemd), make sure `DEEPSEEK_API_KEY`
 is available to that process (for example, in `~/.openclaw/.env` or via
 `env.shellEnv`).
 
-## Available models
+## Built-in catalog
 
-| Model ID            | Name                     | Type      | Context |
-| ------------------- | ------------------------ | --------- | ------- |
-| `deepseek-chat`     | DeepSeek Chat (V3.2)     | General   | 128K    |
-| `deepseek-reasoner` | DeepSeek Reasoner (V3.2) | Reasoning | 128K    |
+| Model ref                    | Name              | Input | Context | Max output | Notes                                             |
+| ---------------------------- | ----------------- | ----- | ------- | ---------- | ------------------------------------------------- |
+| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 131,072 | 8,192      | Default model; DeepSeek V3.2 non-thinking surface |
+| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 131,072 | 65,536     | Reasoning-enabled V3.2 surface                    |
 
-- **deepseek-chat** corresponds to DeepSeek-V3.2 in non-thinking mode.
-- **deepseek-reasoner** corresponds to DeepSeek-V3.2 in thinking mode with chain-of-thought reasoning.
+Both bundled models currently advertise streaming usage compatibility in source.
 
 Get your API key at [platform.deepseek.com](https://platform.deepseek.com/api_keys).
