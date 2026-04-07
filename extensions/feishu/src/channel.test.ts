@@ -752,7 +752,14 @@ describe("feishuPlugin actions", () => {
 
   it("lists directory-backed peers and groups", async () => {
     listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
-    listFeishuDirectoryPeersLiveMock.mockResolvedValueOnce([{ kind: "user", id: "ou_1" }]);
+    listFeishuDirectoryPeersLiveMock.mockResolvedValueOnce([
+      {
+        kind: "user",
+        id: "ou_1",
+        email: "alice@example.com",
+        enterprise_email: "alice@corp.example.com",
+      },
+    ]);
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "channel-list",
@@ -778,7 +785,13 @@ describe("feishuPlugin actions", () => {
     expect(result?.details).toMatchObject({
       ok: true,
       groups: [expect.objectContaining({ id: "oc_group_1" })],
-      peers: [expect.objectContaining({ id: "ou_1" })],
+      peers: [
+        expect.objectContaining({
+          id: "ou_1",
+          email: "alice@example.com",
+          enterprise_email: "alice@corp.example.com",
+        }),
+      ],
     });
   });
 
