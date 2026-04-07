@@ -350,7 +350,7 @@ function repairToolCallInputs(
 
     for (const block of msg.content) {
       if (isRawToolCallBlock(block)) {
-        // Drop blocks that are missing required fields — they are genuine artifacts.
+        // Drop genuinely incomplete streaming artifacts (missing required fields).
         if (
           !hasToolCallInput(block) ||
           !hasToolCallId(block) ||
@@ -362,31 +362,61 @@ function repairToolCallInputs(
           messageChanged = true;
           continue;
         }
-        // partialJson is a streaming-only assembly field. The OpenAI Responses
-        // transport can retain it on finalized blocks; strip it instead of
-        // dropping the otherwise-complete call.
-        if ("partialJson" in block) {
-          const stripped = { ...(block as object) } as Record<string, unknown>;
-          delete stripped.partialJson;
+      }
+      let workBlock = block;
+      if (isRawToolCallBlock(block) && hasPartialJson(block)) {
+        if (isInterruptedAssistantTurn(msg) || !isFinalizedOpenAIResponsesToolCall(block)) {
+          droppedToolCalls += 1;
+          droppedInMessage += 1;
           changed = true;
           messageChanged = true;
-          nextContent.push(stripped as typeof block);
           continue;
         }
+
+        // OpenAI Responses persists finalized function calls with both parsed
+        // arguments and the original partialJson bytes. Strip only the
+        // redundant partialJson field so replay keeps the finalized call.
+        const stripped = { ...block };
+        delete (stripped as RawToolCallBlock & { partialJson?: unknown }).partialJson;
+        workBlock = stripped;
+        changed = true;
+        messageChanged = true;
       }
-      if (isRawToolCallBlock(block)) {
-        if (RAW_TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? "")) {
-          const sanitized = sanitizeToolCallBlock(block);
-          if (sanitized !== block) {
-            changed = true;
-            messageChanged = true;
+      if (isRawToolCallBlock(workBlock)) {
+        if (RAW_TOOL_CALL_BLOCK_TYPES.has((workBlock as { type?: string }).type ?? "")) {
+          // Only sanitize (redact) sessions_spawn blocks; all others are passed through
+          // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
+          const blockName =
+            typeof (workBlock as { name?: unknown }).name === "string"
+              ? (workBlock as { name: string }).name.trim()
+              : undefined;
+          if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
+            const sanitized = sanitizeToolCallBlock(workBlock);
+            if (sanitized !== workBlock) {
+              changed = true;
+              messageChanged = true;
+            }
+            nextContent.push(sanitized as typeof block);
+          } else {
+            if (typeof (workBlock as { name?: unknown }).name === "string") {
+              const rawName = (workBlock as { name: string }).name;
+              const trimmedName = rawName.trim();
+              if (rawName !== trimmedName && trimmedName) {
+                const renamed = { ...(workBlock as object), name: trimmedName } as typeof block;
+                nextContent.push(renamed);
+                changed = true;
+                messageChanged = true;
+              } else {
+                nextContent.push(workBlock);
+              }
+            } else {
+              nextContent.push(workBlock);
+            }
           }
-          nextContent.push(sanitized as typeof block);
           continue;
         }
-      } else {
-        nextContent.push(block);
       }
+      nextContent.push(workBlock);
     }
 
     if (droppedInMessage > 0) {
