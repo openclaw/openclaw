@@ -12,7 +12,15 @@
  *   npx tsx src/cli.ts bot zalo                       # Start Zalo bot
  */
 
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { config as loadEnv } from "dotenv";
+
+// Load .env from extension root
+const __cliDir = dirname(fileURLToPath(import.meta.url));
+loadEnv({ path: resolve(__cliDir, "..", ".env") });
+
 import { runPipeline, loadConfig, type Stage } from "./pipeline.js";
 import { scrapeAll } from "./scraper/index.js";
 

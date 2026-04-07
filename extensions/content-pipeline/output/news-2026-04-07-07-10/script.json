@@ -1,0 +1,88 @@
+{
+  "videoTitle": "Tech Pulse: Go to C, AI Memory & AdSense Exit!",
+  "videoDescription": "Catch up on the latest tech news! We're talking Solod's Go-to-C magic, Anthropic's big AI compute push, a surprising AdSense exit, and a look at Hippo's new AI memory. Plus, a dive into the world of peptides!",
+  "tags": [
+    "TechNews",
+    "AI",
+    "Programming",
+    "Google",
+    "Anthropic",
+    "AdSense",
+    "Peptides",
+    "SoftwareDevelopment",
+    "HackerNews"
+  ],
+  "slides": [
+    {
+      "slideType": "intro",
+      "title": "Today in Tech",
+      "body": [
+        "Go code to C with Solod",
+        "Anthropic's big AI compute push",
+        "A long-time AdSense user calls it quits"
+      ],
+      "speakerNotes": "Hey tech enthusiasts, welcome back to your daily dose of innovation! Today, we're diving into some fascinating developments, from groundbreaking programming tools to major shifts in AI and online advertising. Let's get right into it!"
+    },
+    {
+      "slideType": "story",
+      "title": "Solod: Go to C Translator",
+      "body": [
+        "New project Solod emerges",
+        "Translates Go code to C",
+        "Expands Go's platform reach"
+      ],
+      "sourceUrl": "https://github.com/solod-dev/solod",
+      "speakerNotes": "First up, a cool new project called Solod is making waves by translating a subset of Go code directly into C! This means developers can now write in Go and deploy to C-compatible systems, opening up huge possibilities for embedded systems or low-level programming. It is a game changer for expanding Go's versatility and reach into new hardware environments. Imagine the possibilities for performance and portability!"
+    },
+    {
+      "slideType": "story",
+      "title": "AdSense Off After 20 Years",
+      "body": [
+        "Blogger quits Google AdSense",
+        "After two decades of use",
+        "Cites declining revenue and value"
+      ],
+      "sourceUrl": "https://blog.ericgoldman.org/archives/2025/06/after-20-years-i-turned-off-google-adsense-for-my-websites.htm",
+      "speakerNotes": "In a significant move, a long-time blogger has decided to turn off Google AdSense after two decades! Citing declining revenue and the diminishing value it provides, this decision highlights a potential shift in how independent publishers view traditional online advertising. It makes you wonder if we are seeing a broader trend away from established ad networks for content creators. What does this mean for the future of monetization?"
+    },
+    {
+      "slideType": "story",
+      "title": "Anthropic Partners for AI Power",
+      "body": [
+        "Anthropic boosts Google, Broadcom ties",
+        "Focus on next-gen AI compute",
+        "Aims for advanced AI development"
+      ],
+      "sourceUrl": "https://www.anthropic.com/news/google-broadcom-partnership-compute",
+      "speakerNotes": "AI powerhouse Anthropic is expanding its partnership with Google and Broadcom to supercharge its next-generation compute infrastructure. This collaboration is all about fueling the development of more powerful and sophisticated AI models. With compute power being a critical bottleneck for advanced AI, this strategic move ensures Anthropic has the muscle needed to push the boundaries of what's possible. Get ready for some serious AI breakthroughs!"
+    },
+    {
+      "slideType": "story",
+      "title": "Hippo AI's Biologic Memory",
+      "body": [
+        "Hippo: New AI memory system",
+        "Inspired by biological memory",
+        "Enhances agent learning and recall"
+      ],
+      "sourceUrl": "https://github.com/kitfunso/hippo-memory",
+      "speakerNotes": "Shifting gears to AI innovation, a new project called Hippo is making waves with its biologically inspired memory system for AI agents. This fascinating approach draws lessons from how living organisms remember and learn, aiming to give AI more efficient and robust recall capabilities. By mimicking nature's design, Hippo could lead to AI agents that learn faster and retain information more effectively. It is a fresh take on overcoming current AI memory limitations!"
+    },
+    {
+      "slideType": "story",
+      "title": "Diving into Peptides",
+      "body": [
+        "Blog post on peptide science",
+        "Explores entry points for research",
+        "Highlights complexity and potential"
+      ],
+      "sourceUrl": "https://www.science.org/content/blog-post/ah-peptides-where-begin",
+      "speakerNotes": "Finally, for those with a scientific curiosity, there is an insightful blog post titled 'Peptides: where to begin?' This article serves as a fantastic guide into the complex yet incredibly promising world of peptides. It explores various entry points for understanding and researching these vital biological molecules, highlighting their potential in drug discovery and health. It is a great starting point for anyone looking to dive into this fascinating area of biochemistry!"
+    },
+    {
+      "slideType": "outro",
+      "title": "That's a Wrap!",
+      "body": ["Like this video!", "Subscribe for more tech news", "What story excited you most?"],
+      "speakerNotes": "And that's your tech news roundup for today! Don't forget to like this video, subscribe for more daily updates, and let us know in the comments which story you found most exciting. See you next time!"
+    }
+  ]
+}

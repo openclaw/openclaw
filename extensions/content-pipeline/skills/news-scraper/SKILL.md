@@ -64,7 +64,7 @@ After scraping, post a digest to the `#scraped-articles` channel:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:SCRAPED_ARTICLES_ID",
+  "to": "channel:1490932828228026439",
   "message": "📰 **Tech News Digest — April 7, 2026**\n\n1. **Article Title** *(Hacker News, 245 pts)*\n   https://...\n\n2. **Another Article** *(dev.to)*\n   https://...\n\n[...top 10 articles]\n\n📊 Total: 50 articles from 5 sources"
 }
 ```

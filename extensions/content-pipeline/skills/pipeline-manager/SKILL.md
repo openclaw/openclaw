@@ -62,7 +62,7 @@ Post to `#team-status`:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:TEAM_STATUS_ID",
+  "to": "channel:1490891176272986308",
   "message": "🎯 **Pipeline started** — Daily News Video\n📰 Stage 1/4: hana is scraping tech news sources..."
 }
 ```
@@ -90,7 +90,7 @@ Post to `#team-status`:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:TEAM_STATUS_ID",
+  "to": "channel:1490891176272986308",
   "message": "🎯 Stage 2/4: minh is writing the video script with Gemma 4..."
 }
 ```
@@ -102,7 +102,7 @@ Once minh returns the script, spawn kai:
 ```json
 {
   "tool": "sessions_spawn",
-  "task": "Produce a news video. Run the full pipeline from slides onward: cd /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline && npx tsx src/cli.ts run news --skip-upload 2>&1\n\nThen post each slide image to Discord channel SLIDE_PREVIEW_ID. Report progress to TEAM_STATUS_ID. When done, report the video file paths.",
+  "task": "Produce a news video. Run the full pipeline from slides onward: cd /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline && npx tsx src/cli.ts run news --skip-upload 2>&1\n\nThen post each slide image to Discord channel 1490932841599729748. Report progress to 1490891176272986308. When done, report the video file paths.",
   "agentId": "kai",
   "label": "news-production",
   "runTimeoutSeconds": 600
@@ -116,7 +116,7 @@ Post to `#team-status`:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:TEAM_STATUS_ID",
+  "to": "channel:1490891176272986308",
   "message": "🎯 Stage 3/4: kai is rendering slides and producing the video..."
 }
 ```
@@ -130,7 +130,7 @@ When kai finishes, post the final summary:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:PUBLISHED_NEWS_ID",
+  "to": "channel:1490932855453515898",
   "message": "📹 **Daily News Video Ready!**\n\n🎬 Title: [VIDEO TITLE]\n⏱️ Duration: [DURATION]\n📊 Stories: [COUNT] articles covered\n\n[Upload links if available]"
 }
 ```

@@ -1,0 +1,16 @@
+1
+00:00:00,050 --> 00:00:02,137
+And that's your tech news roundup for today!
+
+2
+00:00:02,137 --> 00:00:08,000
+From programming breakthroughs to AI advancements and a look into biotech, it's been a packed update.
+
+3
+00:00:08,000 --> 00:00:12,887
+Don't forget to like, subscribe, and tell us which story caught your attention the most.
+
+4
+00:00:12,887 --> 00:00:13,975
+See you next time!
+

@@ -1,0 +1,16 @@
+1
+00:00:00,050 --> 00:00:03,450
+Imagine writing in Go but getting C-level performance!
+
+2
+00:00:03,450 --> 00:00:08,975
+That's the promise of Solod, a new subset of Go that translates directly to C code.
+
+3
+00:00:08,975 --> 00:00:17,650
+This project aims to bring the simplicity of Go to areas traditionally dominated by C, like embedded systems or operating system kernels.
+
+4
+00:00:17,650 --> 00:00:24,712
+It's a fascinating bridge between two powerful programming paradigms, offering developers the best of both worlds.
+

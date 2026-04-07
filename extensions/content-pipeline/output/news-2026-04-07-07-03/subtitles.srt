@@ -1,0 +1,102 @@
+1
+00:00:00,050 --> 00:00:02,312
+Hey tech enthusiasts, welcome back!
+
+2
+00:00:02,312 --> 00:00:11,200
+Today we're diving into some seriously cool developments, from a new way to get C performance from Go code to major shifts in online advertising.
+
+3
+00:00:11,200 --> 00:00:16,587
+Plus, we'll look at how AI is getting a memory upgrade and a powerful new partnership.
+
+
+4
+00:00:16,706 --> 00:00:20,106
+Imagine writing in Go but getting C-level performance!
+
+5
+00:00:20,106 --> 00:00:25,631
+That's the promise of Solod, a new subset of Go that translates directly to C code.
+
+6
+00:00:25,631 --> 00:00:34,306
+This project aims to bring the simplicity of Go to areas traditionally dominated by C, like embedded systems or operating system kernels.
+
+7
+00:00:34,306 --> 00:00:41,368
+It's a fascinating bridge between two powerful programming paradigms, offering developers the best of both worlds.
+
+
+8
+00:00:41,474 --> 00:00:43,086
+A 20-year run has ended!
+
+9
+00:00:43,086 --> 00:00:50,661
+A prominent blogger, Eric Goldman, has decided to pull the plug on Google AdSense for his websites, effective next year.
+
+10
+00:00:50,661 --> 00:00:58,474
+After two decades, he's moving on from the platform, citing evolving ad tech and the diminishing returns of traditional display ads.
+
+11
+00:00:58,474 --> 00:01:04,799
+It's a significant shift for a long-time user, highlighting changes in the digital advertising landscape.
+
+
+12
+00:01:04,898 --> 00:01:06,948
+Big news in the AI world!
+
+13
+00:01:06,948 --> 00:01:12,398
+Anthropic is supercharging its future with expanded partnerships with Google and Broadcom.
+
+14
+00:01:12,398 --> 00:01:19,860
+This collaboration focuses on next-gen compute, meaning more powerful infrastructure for Anthropic's advanced AI models.
+
+15
+00:01:19,860 --> 00:01:26,310
+It's a strategic move to secure the cutting-edge hardware needed to push the boundaries of artificial intelligence.
+
+16
+00:01:26,310 --> 00:01:30,310
+Get ready for even more sophisticated AI innovations!
+
+
+17
+00:01:30,410 --> 00:01:32,535
+What if AI could remember like a human?
+
+18
+00:01:32,535 --> 00:01:38,822
+That's the idea behind Hippo, a new biologically inspired memory system for AI agents.
+
+19
+00:01:38,822 --> 00:01:46,410
+Hippo aims to give AI a more efficient and context-aware way to store and retrieve information, much like our own brains.
+
+20
+00:01:46,410 --> 00:01:52,772
+It's an exciting step towards more sophisticated and intelligent AI systems that can learn and adapt better.
+
+
+21
+00:02:00,874 --> 00:02:02,961
+And that's your tech news roundup for today!
+
+22
+00:02:02,961 --> 00:02:08,824
+From programming breakthroughs to AI advancements and a look into biotech, it's been a packed update.
+
+23
+00:02:08,824 --> 00:02:13,711
+Don't forget to like, subscribe, and tell us which story caught your attention the most.
+
+24
+00:02:13,711 --> 00:02:14,799
+See you next time!
+
+

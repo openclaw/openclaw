@@ -1,0 +1,7 @@
+file '/Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline/output/news-2026-04-07-07-03/segment_01.mp4'
+file '/Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline/output/news-2026-04-07-07-03/segment_02.mp4'
+file '/Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline/output/news-2026-04-07-07-03/segment_03.mp4'
+file '/Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline/output/news-2026-04-07-07-03/segment_04.mp4'
+file '/Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline/output/news-2026-04-07-07-03/segment_05.mp4'
+file '/Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline/output/news-2026-04-07-07-03/segment_06.mp4'
+file '/Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline/output/news-2026-04-07-07-03/segment_07.mp4'

@@ -21,7 +21,11 @@ const TEMPLATE_MAP: Record<string, string> = {
 };
 
 function getTemplateData(slide: SlideContent, index: number, total: number) {
-  const bodyLines = slide.body
+  // Handle body as string or array (LLMs sometimes return arrays)
+  const bodyStr = Array.isArray(slide.body)
+    ? (slide.body as string[]).join("\n")
+    : String(slide.body ?? "");
+  const bodyLines = bodyStr
     .split("\n")
     .map((l) => l.replace(/^[-•*]\s*/, "").trim())
     .filter(Boolean);

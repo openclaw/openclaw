@@ -109,7 +109,7 @@ Post the generated script summary to `#scripts`:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:SCRIPTS_ID",
+  "to": "channel:1490932835257680042",
   "message": "✍️ **Script Ready:** \"[VIDEO TITLE]\"\n\n📝 Slides: [COUNT]\n🎙️ Estimated duration: [DURATION]\n🏷️ Tags: [TAGS]\n\n**Stories covered:**\n1. [Story 1]\n2. [Story 2]\n..."
 }
 ```

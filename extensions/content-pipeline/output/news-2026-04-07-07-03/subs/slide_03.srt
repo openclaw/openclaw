@@ -1,0 +1,16 @@
+1
+00:00:00,050 --> 00:00:01,662
+A 20-year run has ended!
+
+2
+00:00:01,662 --> 00:00:09,237
+A prominent blogger, Eric Goldman, has decided to pull the plug on Google AdSense for his websites, effective next year.
+
+3
+00:00:09,237 --> 00:00:17,050
+After two decades, he's moving on from the platform, citing evolving ad tech and the diminishing returns of traditional display ads.
+
+4
+00:00:17,050 --> 00:00:23,375
+It's a significant shift for a long-time user, highlighting changes in the digital advertising landscape.
+

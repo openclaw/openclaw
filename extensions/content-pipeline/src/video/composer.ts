@@ -79,10 +79,20 @@ export async function composeVideo(
   // Burn subtitles into landscape video
   const landscapePath = join(outputDir, "video_landscape.mp4");
   if (combinedSrt.trim()) {
-    await execAsync(
-      `ffmpeg -y -i "${rawPath}" -vf "subtitles='${subtitlePath}':force_style='FontSize=24,PrimaryColour=&Hffffff&,OutlineColour=&H40000000&,Outline=2'" ` +
-        `-c:a copy "${landscapePath}"`,
-    );
+    // Escape path for ffmpeg subtitle filter (replace : and \ and ')
+    const escapedSubPath = subtitlePath
+      .replace(/\\/g, "\\\\\\\\")
+      .replace(/:/g, "\\\\:")
+      .replace(/'/g, "\\\\'");
+    try {
+      await execAsync(
+        `ffmpeg -y -i "${rawPath}" -vf "subtitles='${escapedSubPath}'" -c:a copy "${landscapePath}"`,
+      );
+    } catch {
+      // Subtitle burn failed — copy raw video without subtitles
+      console.warn("  ⚠ Subtitle burn failed, using video without subtitles");
+      await execAsync(`cp "${rawPath}" "${landscapePath}"`);
+    }
   } else {
     await execAsync(`cp "${rawPath}" "${landscapePath}"`);
   }

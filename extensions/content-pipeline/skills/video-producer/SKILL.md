@@ -56,7 +56,7 @@ After rendering, post each slide to Discord for preview:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:SLIDE_PREVIEW_ID",
+  "to": "channel:1490932841599729748",
   "message": "🎨 Slide 1/7: Intro",
   "media": "file:///path/to/output/run-id/slides/slide_01.png"
 }
@@ -84,7 +84,7 @@ Report progress to `#video-progress`:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:VIDEO_PROGRESS_ID",
+  "to": "channel:1490932848184655883",
   "message": "🎙️ TTS: 7/7 audio segments generated (total: 3m 24s)"
 }
 ```
@@ -117,7 +117,7 @@ Report to `#video-progress`:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:VIDEO_PROGRESS_ID",
+  "to": "channel:1490932848184655883",
   "message": "🎬 **Video composed!**\n📐 Landscape: 1920x1080 (video_landscape.mp4)\n📱 Portrait: 1080x1920 (video_portrait.mp4)\n⏱️ Duration: 3m 24s\n📦 Size: 45MB"
 }
 ```
@@ -148,7 +148,7 @@ Post to `#published-news` or `#published-tutorials`:
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:PUBLISHED_NEWS_ID",
+  "to": "channel:1490932855453515898",
   "message": "📹 **New Video Published!**\n\n🎬 **[VIDEO TITLE]**\n⏱️ Duration: [DURATION]\n📊 [SLIDE COUNT] slides, [STORY COUNT] stories\n\n🔗 YouTube: [URL]\n🔗 TikTok: [URL]\n🔗 Facebook: [URL]\n\n🏷️ Tags: [TAGS]"
 }
 ```
@@ -160,7 +160,7 @@ If uploading the video file directly to Discord (for preview):
   "tool": "message",
   "action": "send",
   "channel": "discord",
-  "to": "channel:PUBLISHED_NEWS_ID",
+  "to": "channel:1490932855453515898",
   "message": "📹 Preview of today's video:",
   "media": "file:///path/to/output/run-id/video_landscape.mp4"
 }

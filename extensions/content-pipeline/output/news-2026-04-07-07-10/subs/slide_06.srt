@@ -1,0 +1,16 @@
+1
+00:00:00,050 --> 00:00:07,712
+Finally, for those with a scientific curiosity, there is an insightful blog post titled 'Peptides: where to begin?'
+
+2
+00:00:07,712 --> 00:00:14,262
+This article serves as a fantastic guide into the complex yet incredibly promising world of peptides.
+
+3
+00:00:14,262 --> 00:00:23,875
+It explores various entry points for understanding and researching these vital biological molecules, highlighting their potential in drug discovery and health.
+
+4
+00:00:23,875 --> 00:00:29,862
+It is a great starting point for anyone looking to dive into this fascinating area of biochemistry!
+
