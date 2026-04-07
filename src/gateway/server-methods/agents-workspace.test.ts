@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
 
   // agent-scope mock
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/test-workspace/main"),
+  listAgentIds: vi.fn(() => ["main"]),
 }));
 
 // Mock fs-safe functions
@@ -67,6 +68,7 @@ vi.mock("../../config/config.js", () => ({
 
 // Mock agent-scope
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentIds: mocks.listAgentIds,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
 }));
 
@@ -904,8 +906,7 @@ describe("agents.workspace error handling", () => {
   });
 
   it("handles invalid agent ID", async () => {
-    mocks.resolveAgentWorkspaceDir.mockReturnValue(null as unknown as string);
-
+    // "invalid-agent" is not in the listAgentIds mock (which returns ["main"])
     const { getLastCall } = await invokeWorkspaceHandler("agents.workspace.list", {
       agentId: "invalid-agent",
     });

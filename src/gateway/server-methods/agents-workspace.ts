@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import {
   mkdirPathWithinRoot,
@@ -32,13 +32,15 @@ function resolveWorkspaceOrError(
 ): { agentId: string; workspaceDir: string } | null {
   const cfg = loadConfig();
   const agentId = normalizeAgentId(agentIdRaw);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
 
-  if (!workspaceDir) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid agent ID"));
+  // Validate agent exists in configured agents list
+  const allowed = new Set(listAgentIds(cfg));
+  if (!allowed.has(agentId)) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
     return null;
   }
 
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   return { agentId, workspaceDir };
 }
 
