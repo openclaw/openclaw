@@ -75,9 +75,12 @@ self-check, and writes a Markdown report under `.artifacts/qa-e2e/`.
 Private debugger UI:
 
 ```bash
-pnpm qa:lab:build
-pnpm openclaw qa ui
+pnpm qa:lab:up
 ```
+
+That one command builds the QA site, starts the Docker-backed gateway + QA Lab
+stack, and prints the QA Lab URL. From that site you can pick scenarios, choose
+the model lane, launch individual runs, and watch results live.
 
 Full repo-backed QA suite:
 
@@ -96,10 +99,10 @@ Current scope is intentionally narrow:
 - threaded routing grammar
 - channel-owned message actions
 - Markdown reporting
+- Docker-backed QA site with run controls
 
 Follow-up work will add:
 
-- Dockerized OpenClaw orchestration
 - provider/model matrix execution
 - richer scenario discovery
 - OpenClaw-native orchestration later

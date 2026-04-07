@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 
 type OAuthSettingsFs = {
   existsSync: (path: Parameters<typeof existsSync>[0]) => ReturnType<typeof existsSync>;
@@ -26,10 +27,6 @@ type GeminiCliAuthSettings = {
   selectedAuthType?: unknown;
   enforcedAuthType?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;

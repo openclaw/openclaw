@@ -3,6 +3,7 @@ import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pa
 import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import {
+  isBundledPluginDependentUnitTestFile,
   unitTestAdditionalExcludePatterns,
   unitTestIncludePatterns,
 } from "./vitest.unit-paths.mjs";
@@ -34,6 +35,15 @@ export function createUnitVitestConfigWithOptions(
   const isolate = resolveVitestIsolation(env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
   const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, options.argv);
+  const protectedIncludeFiles = new Set(
+    defaultIncludePatterns.filter((pattern) => isBundledPluginDependentUnitTestFile(pattern)),
+  );
+  const baseExcludePatterns = unitTestAdditionalExcludePatterns.filter((pattern) => {
+    if (protectedIncludeFiles.size === 0) {
+      return true;
+    }
+    return ![...protectedIncludeFiles].some((file) => pattern === file || pattern.endsWith("/**"));
+  });
   return defineProject({
     ...sharedVitestConfig,
     test: {
@@ -48,7 +58,8 @@ export function createUnitVitestConfigWithOptions(
       exclude: [
         ...new Set([
           ...exclude,
-          ...(options.extraExcludePatterns ?? unitTestAdditionalExcludePatterns),
+          ...baseExcludePatterns,
+          ...(options.extraExcludePatterns ?? []),
           ...loadExtraExcludePatternsFromEnv(env),
         ]),
       ],

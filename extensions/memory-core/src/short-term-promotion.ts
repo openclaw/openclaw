@@ -3,12 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
   summarizeConceptTagScriptCoverage,
   type ConceptTagScriptCoverage,
 } from "./concept-vocabulary.js";
+import { asRecord } from "./dreaming-shared.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
@@ -29,6 +31,8 @@ const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.05;
 const PHASE_SIGNAL_REM_BOOST_MAX = 0.08;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
+const inProcessShortTermLocks = new Map<string, Promise<void>>();
+const ensuredShortTermDirs = new Map<string, Promise<void>>();
 
 export type PromotionWeights = {
   frequency: number;
@@ -319,7 +323,7 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   if (parsed.length <= 1) {
     return 0.2;
   }
-  const spanDays = Math.max(0, (parsed.at(-1)! - parsed[0]!) / DAY_MS);
+  const spanDays = Math.max(0, (parsed.at(-1)! - parsed[0]) / DAY_MS);
   const spacing = clampScore(Math.log1p(parsed.length - 1) / Math.log1p(4));
   const span = clampScore(spanDays / 7);
   return clampScore(0.55 * spacing + 0.45 * span);
@@ -436,7 +440,7 @@ function toFiniteNonNegativeInt(value: unknown, fallback: number): number {
 function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights {
   const merged = {
     ...DEFAULT_PROMOTION_WEIGHTS,
-    ...(weights ?? {}),
+    ...weights,
   };
   const frequency = Math.max(0, merged.frequency);
   const relevance = Math.max(0, merged.relevance);
@@ -517,6 +521,28 @@ function resolveLockPath(workspaceDir: string): string {
   return path.join(workspaceDir, SHORT_TERM_LOCK_RELATIVE_PATH);
 }
 
+function resolveShortTermArtifactsDir(workspaceDir: string): string {
+  return path.dirname(resolveLockPath(workspaceDir));
+}
+
+async function ensureShortTermArtifactsDir(workspaceDir: string): Promise<void> {
+  const artifactsDir = resolveShortTermArtifactsDir(workspaceDir);
+  const existing = ensuredShortTermDirs.get(artifactsDir);
+  if (existing) {
+    await existing;
+    return;
+  }
+  const ensuring = fs
+    .mkdir(artifactsDir, { recursive: true })
+    .then(() => undefined)
+    .catch((err) => {
+      ensuredShortTermDirs.delete(artifactsDir);
+      throw err;
+    });
+  ensuredShortTermDirs.set(artifactsDir, ensuring);
+  await ensuring;
+}
+
 function parseLockOwnerPid(raw: string): number | null {
   const match = raw.trim().match(/^(\d+):/);
   if (!match) {
@@ -560,45 +586,71 @@ async function sleep(ms: number): Promise<void> {
   });
 }
 
-async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
-  const lockPath = resolveLockPath(workspaceDir);
-  await fs.mkdir(path.dirname(lockPath), { recursive: true });
-  const startedAt = Date.now();
+async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
+  const previous = inProcessShortTermLocks.get(lockPath) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const queued = previous.catch(() => undefined).then(() => current);
+  inProcessShortTermLocks.set(lockPath, queued);
 
-  while (true) {
-    let lockHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
-    try {
-      lockHandle = await fs.open(lockPath, "wx");
-      await lockHandle.writeFile(`${process.pid}:${Date.now()}\n`, "utf-8").catch(() => undefined);
-      try {
-        return await task();
-      } finally {
-        await lockHandle.close().catch(() => undefined);
-        await fs.unlink(lockPath).catch(() => undefined);
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") {
-        throw err;
-      }
-
-      const ageMs = await fs
-        .stat(lockPath)
-        .then((stats) => Date.now() - stats.mtimeMs)
-        .catch(() => 0);
-      if (ageMs > SHORT_TERM_LOCK_STALE_MS) {
-        if (await canStealStaleLock(lockPath)) {
-          await fs.unlink(lockPath).catch(() => undefined);
-          continue;
-        }
-      }
-
-      if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
-        throw new Error(`Timed out waiting for short-term promotion lock at ${lockPath}`);
-      }
-
-      await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    releaseCurrent();
+    if (inProcessShortTermLocks.get(lockPath) === queued) {
+      inProcessShortTermLocks.delete(lockPath);
     }
   }
+}
+
+async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
+  const lockPath = resolveLockPath(workspaceDir);
+  return withInProcessShortTermLock(lockPath, async () => {
+    await ensureShortTermArtifactsDir(workspaceDir);
+    const startedAt = Date.now();
+
+    while (true) {
+      let lockHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+      try {
+        lockHandle = await fs.open(lockPath, "wx");
+        await lockHandle
+          .writeFile(`${process.pid}:${Date.now()}\n`, "utf-8")
+          .catch(() => undefined);
+        try {
+          return await task();
+        } finally {
+          await lockHandle.close().catch(() => undefined);
+          await fs.unlink(lockPath).catch(() => undefined);
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") {
+          throw err;
+        }
+
+        const ageMs = await fs
+          .stat(lockPath)
+          .then((stats) => Date.now() - stats.mtimeMs)
+          .catch(() => 0);
+        if (ageMs > SHORT_TERM_LOCK_STALE_MS) {
+          if (await canStealStaleLock(lockPath)) {
+            await fs.unlink(lockPath).catch(() => undefined);
+            continue;
+          }
+        }
+
+        if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
+          throw new Error(`Timed out waiting for short-term promotion lock at ${lockPath}`, {
+            cause: err,
+          });
+        }
+
+        await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
+      }
+    }
+  });
 }
 
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
@@ -692,7 +744,7 @@ async function writePhaseSignalStore(
   store: ShortTermPhaseSignalStore,
 ): Promise<void> {
   const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
-  await fs.mkdir(path.dirname(phaseSignalPath), { recursive: true });
+  await ensureShortTermArtifactsDir(workspaceDir);
   const tmpPath = `${phaseSignalPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
   await fs.rename(tmpPath, phaseSignalPath);
@@ -700,7 +752,7 @@ async function writePhaseSignalStore(
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   const storePath = resolveStorePath(workspaceDir);
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await ensureShortTermArtifactsDir(workspaceDir);
   const tmpPath = `${storePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
   await fs.rename(tmpPath, storePath);
@@ -796,6 +848,18 @@ export async function recordShortTermRecalls(params: {
 
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.recorded",
+      timestamp: nowIso,
+      query,
+      resultCount: relevant.length,
+      results: relevant.map((result) => ({
+        path: normalizeMemoryPath(result.path),
+        startLine: Math.max(1, Math.floor(result.startLine)),
+        endLine: Math.max(1, Math.floor(result.endLine)),
+        score: clampScore(result.score),
+      })),
+    });
   });
 }
 
@@ -1297,6 +1361,20 @@ export async function applyShortTermPromotions(
     }
     store.updatedAt = nowIso;
     await writeStore(workspaceDir, store);
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.promotion.applied",
+      timestamp: nowIso,
+      memoryPath,
+      applied: rehydratedSelected.length,
+      candidates: rehydratedSelected.map((candidate) => ({
+        key: candidate.key,
+        path: candidate.path,
+        startLine: candidate.startLine,
+        endLine: candidate.endLine,
+        score: candidate.score,
+        recallCount: candidate.recallCount,
+      })),
+    });
 
     return {
       memoryPath,
@@ -1472,13 +1550,6 @@ export async function auditShortTermPromotionArtifacts(params: {
     issues,
     ...(qmd ? { qmd } : {}),
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }
 
 export async function repairShortTermPromotionArtifacts(params: {

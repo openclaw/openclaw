@@ -233,10 +233,18 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-lancedb/**"
+"extensions: memory-wiki":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-wiki/**"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
+"extensions: webhooks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/webhooks/**"
 "extensions: device-pair":
   - changed-files:
       - any-glob-to-any-file:
@@ -249,6 +257,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: arcee":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/arcee/**"
 "extensions: byteplus":
   - changed-files:
       - any-glob-to-any-file:

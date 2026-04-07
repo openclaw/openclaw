@@ -458,6 +458,41 @@ describe("exec approvals", () => {
     expect(prepareCwd).toBeUndefined();
   });
 
+  it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {
+    const calls: string[] = [];
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "node-ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "auto",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+      elevated: { enabled: true, allowed: true, defaultLevel: "on" },
+    });
+
+    const result = await tool.execute("call-auto-node-elevated-default", {
+      command: "echo gateway-ok",
+      host: "node",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("node-ok");
+    expect(calls).toContain("node.invoke");
+  });
+
   it("honors ask=off for elevated gateway exec without prompting", async () => {
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
@@ -748,8 +783,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -791,8 +824,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-discord", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -854,8 +885,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-discord-delayed", {
       command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
       workdir: tempDir,
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -930,8 +959,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-webchat", {
       command: "node -e \"require('node:fs').writeFileSync('marker.txt','ok')\"",
       workdir: tempDir,
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -986,8 +1013,6 @@ describe("exec approvals", () => {
     const result = await tool.execute("call-gw-followup-deny", {
       command: "echo ok",
       workdir: process.cwd(),
-      gatewayUrl: undefined,
-      gatewayToken: undefined,
     });
 
     expect(result.details.status).toBe("approval-pending");

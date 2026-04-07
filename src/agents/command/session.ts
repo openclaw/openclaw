@@ -95,6 +95,37 @@ function collectSessionIdMatchesForRequest(opts: {
   return { matches, primaryStoreMatches, storeByKey };
 }
 
+/**
+ * Resolve an existing stored session key for a session id from a specific agent store.
+ * This scopes the lookup to the target store without implicitly converting `agentId`
+ * into that agent's main session key.
+ */
+export function resolveStoredSessionKeyForSessionId(opts: {
+  cfg: OpenClawConfig;
+  sessionId: string;
+  agentId?: string;
+}): SessionKeyResolution {
+  const sessionId = opts.sessionId.trim();
+  const storeAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
+  const storePath = resolveStorePath(opts.cfg.session?.store, {
+    agentId: storeAgentId,
+  });
+  const sessionStore = loadSessionStore(storePath);
+  if (!sessionId) {
+    return { sessionKey: undefined, sessionStore, storePath };
+  }
+
+  const selection = resolveSessionIdMatchSelection(
+    Object.entries(sessionStore).filter(([, entry]) => entry?.sessionId === sessionId),
+    sessionId,
+  );
+  return {
+    sessionKey: selection.kind === "selected" ? selection.sessionKey : undefined,
+    sessionStore,
+    storePath,
+  };
+}
+
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
   to?: string;
@@ -121,9 +152,10 @@ export function resolveSessionKeyForRequest(opts: {
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
 
-  // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
-  // When duplicates exist across agent stores, pick the same deterministic best match used by the
-  // shared gateway/session resolver helpers instead of whichever store happens to be scanned first.
+  // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was
+  // derived. When duplicates exist across agent stores, pick the same deterministic best match used
+  // by the shared gateway/session resolver helpers instead of whichever store happens to be scanned
+  // first.
   if (
     opts.sessionId &&
     !explicitSessionKey &&

@@ -82,6 +82,7 @@ async function shouldTreatDeliveredTextAsVisible(params: {
   channel: string | undefined;
   kind: ReplyDispatchKind;
   text: string | undefined;
+  routed: boolean;
 }): Promise<boolean> {
   if (!params.text?.trim()) {
     return false;
@@ -93,19 +94,20 @@ async function shouldTreatDeliveredTextAsVisible(params: {
   if (!channelId) {
     return false;
   }
-  // Only Telegram currently overrides block/tool visibility via channel runtime.
-  // Keep other channels on the fast path so ACP local delivery does not pay the
-  // broader channel-registry import cost on every streamed turn.
-  if (channelId !== "telegram") {
-    return false;
-  }
   const { getChannelPlugin } = await loadChannelPluginRuntime();
-  return (
-    getChannelPlugin(channelId)?.outbound?.shouldTreatRoutedTextAsVisible?.({
+  const outbound = getChannelPlugin(channelId)?.outbound;
+  const visibilityOverride =
+    outbound?.shouldTreatDeliveredTextAsVisible ?? outbound?.shouldTreatRoutedTextAsVisible;
+  if (visibilityOverride) {
+    return visibilityOverride({
       kind: params.kind,
       text: params.text,
-    }) === true
-  );
+    });
+  }
+  if (!params.routed) {
+    return channelId === "telegram";
+  }
+  return false;
 }
 
 async function maybeApplyAcpTts(params: {
@@ -320,6 +322,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         channel: routedChannel,
         kind,
         text: ttsPayload.text,
+        routed: true,
       });
       const { routeReply } = await loadRouteReplyRuntime();
       const result = await routeReply({
@@ -363,6 +366,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       channel: directChannel,
       kind,
       text: ttsPayload.text,
+      routed: false,
     });
     const delivered =
       kind === "tool"

@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { writeBuildStamp } from "./build-stamp.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
@@ -21,6 +22,9 @@ const DEFAULTS = {
 };
 
 const WATCH_GATEWAY_SKIP_ENV = {
+  OPENCLAW_DISABLE_BONJOUR: "1",
+  OPENCLAW_SKIP_ACPX_RUNTIME: "1",
+  OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1",
   OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
   OPENCLAW_SKIP_CANVAS_HOST: "1",
   OPENCLAW_SKIP_CHANNELS: "1",
@@ -454,6 +458,10 @@ async function main() {
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
     runCheckedCommand("pnpm", ["build"]);
+    // The watch harness must start from a completed-build baseline. Refresh
+    // the build stamp after the full build pipeline finishes so run-node does
+    // not spuriously rebuild inside the bounded watch window.
+    writeBuildStamp({ cwd: process.cwd() });
   }
 
   const preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));

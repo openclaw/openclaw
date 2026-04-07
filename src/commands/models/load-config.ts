@@ -1,3 +1,4 @@
+import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   getRuntimeConfig,
@@ -5,7 +6,6 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
   getModelsCommandSecretTargetIds,
-  resolveCommandSecretRefsViaGateway,
 } from "./load-config.runtime.js";
 
 export type LoadedModelsConfig = {
@@ -32,16 +32,12 @@ export async function loadModelsConfigWithSource(params: {
 }): Promise<LoadedModelsConfig> {
   const runtimeConfig = getRuntimeConfig();
   const sourceConfig = await loadSourceConfigSnapshot(runtimeConfig);
-  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+  const { resolvedConfig, diagnostics } = await resolveCommandConfigWithSecrets({
     config: runtimeConfig,
     commandName: params.commandName,
     targetIds: getModelsCommandSecretTargetIds(),
+    runtime: params.runtime,
   });
-  if (params.runtime) {
-    for (const entry of diagnostics) {
-      params.runtime.log(`[secrets] ${entry}`);
-    }
-  }
   setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
   return {
     sourceConfig,

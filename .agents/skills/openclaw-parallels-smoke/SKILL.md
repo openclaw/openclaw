@@ -17,6 +17,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Per-phase logs land under `/tmp/openclaw-parallels-*`.
 - Do not run local and gateway agent turns in parallel on the same fresh workspace or session.
 - If `main` is moving under active multi-agent work, prefer a detached worktree pinned to one commit for long Parallels suites. The smoke scripts now verify the packed tgz commit instead of live `git rev-parse HEAD`, but a pinned worktree still avoids noisy rebuild/version drift during reruns.
+- For `openclaw update --channel dev` lanes, remember the guest clones GitHub `main`, not your local worktree. If a local fix exists but the rerun still fails inside the cloned dev checkout, do not treat that as disproof of the fix until the branch has been pushed.
 - For `prlctl exec`, pass the VM name before `--current-user` (`prlctl exec "$VM" --current-user ...`), not the other way around.
 - If the workflow installs OpenClaw from a repo checkout instead of the site installer/npm release, finish by installing a real guest CLI shim and verifying it in a fresh guest shell. `pnpm openclaw ...` inside the repo is not enough for handoff parity.
 - On macOS guests, prefer a user-global install plus a stable PATH-visible shim:
@@ -79,7 +80,9 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Windows installer/tgz phases now retry once after guest-ready recheck; keep new Windows smoke steps idempotent so a transport-flake retry is safe.
 - If a Windows retry sees the VM become `suspended` or `stopped`, resume/start it before the next `prlctl exec`; otherwise the second attempt just repeats the same `rc=255`.
 - Windows global `npm install -g` phases can stay quiet for a minute or more even when healthy; inspect the phase log before calling it hung, and only treat it as a regression once the retry wrapper or timeout trips.
+- When those Windows global installs stay quiet, the useful progress often lives in the guest npm debug log, not the helper phase log. The smoke script now streams incremental `npm-cache/_logs/*-debug-0.log` deltas into the phase log during long baseline/package installs; read those lines before assuming the lane is stalled.
 - The Windows baseline-package helpers now auto-dump the latest guest `npm-cache/_logs/*-debug-0.log` tail on timeout or nonzero completion. Read that tail in the phase log before opening a second guest shell.
+- The same incremental npm-debug streaming also applies to `--upgrade-from-packed-main` / packaged-install baseline phases. A phase log that still says only `install.start`, `install.download-tgz`, `install.install-tgz` can still be healthy if the streamed npm-debug section shows registry fetches or bundled-plugin postinstall work.
 - Fresh Windows tgz install phases should also use the background PowerShell runner plus done-file/log-drain pattern; do not rely on one long-lived `prlctl exec ... powershell ... npm install -g` transport for package installs.
 - Windows release-to-dev helpers should log `where pnpm` before and after the update and require `where pnpm` to succeed post-update. That proves the updater installed or enabled `pnpm` itself instead of depending on a smoke-only bootstrap.
 - Fresh Windows ref-mode onboard should use the same background PowerShell runner plus done-file/log-drain pattern as the npm-update helper, including startup materialization checks, host-side timeouts on short poll `prlctl exec` calls, and retry-on-poll-failure behavior for transient transport flakes.

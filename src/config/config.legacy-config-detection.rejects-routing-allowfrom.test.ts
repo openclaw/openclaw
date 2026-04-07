@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-migrate.js";
+import type { OpenClawConfig } from "./config.js";
 import { validateConfigObject } from "./validation.js";
 
 function getChannelConfig(config: unknown, provider: string) {
   const channels = (config as { channels?: Record<string, Record<string, unknown>> } | undefined)
     ?.channels;
   return channels?.[provider];
+}
+
+function expectMigratedConfig(input: unknown, name: string) {
+  const migrated = applyLegacyDoctorMigrations(input);
+  expect(migrated.next, name).not.toBeNull();
+  return migrated.next as NonNullable<OpenClawConfig>;
 }
 
 describe("legacy config detection", () => {
@@ -171,6 +179,89 @@ describe("legacy config detection", () => {
   );
   it.each([
     {
+      name: "top-level off",
+      input: { channels: { telegram: { streamMode: "off" } } },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.telegram?.streaming?.mode).toBe("off");
+        expect(
+          (config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
+      },
+    },
+    {
+      name: "top-level block",
+      input: { channels: { telegram: { streamMode: "block" } } },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.telegram?.streaming?.mode).toBe("block");
+        expect(
+          (config.channels?.telegram as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
+      },
+    },
+    {
+      name: "per-account off",
+      input: {
+        channels: {
+          telegram: {
+            accounts: {
+              ops: {
+                streamMode: "off",
+              },
+            },
+          },
+        },
+      },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.telegram?.accounts?.ops?.streaming?.mode).toBe("off");
+        expect(
+          (config.channels?.telegram?.accounts?.ops as Record<string, unknown> | undefined)
+            ?.streamMode,
+        ).toBeUndefined();
+      },
+    },
+  ] as const)(
+    "normalizes telegram legacy streamMode alias during migration: $name",
+    ({ input, assert, name }) => {
+      assert(expectMigratedConfig(input, name));
+    },
+  );
+
+  it.each([
+    {
+      name: "boolean streaming=true",
+      input: { channels: { discord: { streaming: true } } },
+      expectedChanges: [
+        "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
+      ],
+      expectedStreaming: "partial",
+    },
+    {
+      name: "streamMode with streaming boolean",
+      input: { channels: { discord: { streaming: false, streamMode: "block" } } },
+      expectedChanges: [
+        "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
+      ],
+      expectedStreaming: "block",
+    },
+  ] as const)(
+    "normalizes discord streaming fields during legacy migration: $name",
+    ({ input, expectedChanges, expectedStreaming, name }) => {
+      const migrated = applyLegacyDoctorMigrations(input);
+      for (const expectedChange of expectedChanges) {
+        expect(migrated.changes, name).toContain(expectedChange);
+      }
+      const config = migrated.next as NonNullable<OpenClawConfig> | null;
+      expect(config, name).not.toBeNull();
+      expect(config?.channels?.discord?.streaming?.mode, name).toBe(expectedStreaming);
+      expect(
+        (config?.channels?.discord as Record<string, unknown> | undefined)?.streamMode,
+        name,
+      ).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
       name: "streaming=true",
       input: { channels: { discord: { streaming: true } } },
       expectedStreaming: "partial",
@@ -193,11 +284,72 @@ describe("legacy config detection", () => {
       if (!res.ok) {
         expect(res.issues[0]?.path, name).toBe("channels.discord");
         expect(res.issues[0]?.message, name).toContain(
-          "channels.discord.streamMode and boolean channels.discord.streaming are legacy",
+          "channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy",
         );
       }
     },
   );
+
+  it.each([
+    {
+      name: "discord account streaming boolean",
+      input: {
+        channels: {
+          discord: {
+            accounts: {
+              work: {
+                streaming: true,
+              },
+            },
+          },
+        },
+      },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.discord?.accounts?.work?.streaming?.mode).toBe("partial");
+        expect(
+          (config.channels?.discord?.accounts?.work as Record<string, unknown> | undefined)
+            ?.streamMode,
+        ).toBeUndefined();
+      },
+    },
+    {
+      name: "slack streamMode alias",
+      input: {
+        channels: {
+          slack: {
+            streamMode: "status_final",
+          },
+        },
+      },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.slack?.streaming?.mode).toBe("progress");
+        expect(
+          (config.channels?.slack as Record<string, unknown> | undefined)?.streamMode,
+        ).toBeUndefined();
+        expect(config.channels?.slack?.streaming?.nativeTransport).toBeUndefined();
+      },
+    },
+    {
+      name: "slack streaming boolean legacy",
+      input: {
+        channels: {
+          slack: {
+            streaming: false,
+          },
+        },
+      },
+      assert: (config: NonNullable<OpenClawConfig>) => {
+        expect(config.channels?.slack?.streaming?.mode).toBe("off");
+        expect(config.channels?.slack?.streaming?.nativeTransport).toBe(false);
+      },
+    },
+  ] as const)(
+    "normalizes account-level discord/slack streaming alias during migration: $name",
+    ({ input, assert, name }) => {
+      assert(expectMigratedConfig(input, name));
+    },
+  );
+
   it("accepts historyLimit overrides per provider and account", async () => {
     const res = validateConfigObject({
       messages: { groupChat: { historyLimit: 12 } },

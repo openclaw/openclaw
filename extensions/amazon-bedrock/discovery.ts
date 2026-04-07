@@ -177,12 +177,16 @@ function resolveBaseModelId(profile: InferenceProfileSummary): string | undefine
   const firstArn = profile.models?.[0]?.modelArn;
   if (firstArn) {
     const arnMatch = /foundation-model\/(.+)$/.exec(firstArn);
-    if (arnMatch) return arnMatch[1];
+    if (arnMatch) {
+      return arnMatch[1];
+    }
   }
   if (profile.type === "SYSTEM_DEFINED") {
     const id = profile.inferenceProfileId ?? "";
     const prefixMatch = /^(?:us|eu|ap|jp|global)\.(.+)$/i.exec(id);
-    if (prefixMatch) return prefixMatch[1];
+    if (prefixMatch) {
+      return prefixMatch[1];
+    }
   }
   return undefined;
 }
@@ -236,8 +240,12 @@ function resolveInferenceProfiles(
 ): ModelDefinitionConfig[] {
   const discovered: ModelDefinitionConfig[] = [];
   for (const profile of profiles) {
-    if (!profile.inferenceProfileId?.trim()) continue;
-    if (profile.status !== "ACTIVE") continue;
+    if (!profile.inferenceProfileId?.trim()) {
+      continue;
+    }
+    if (profile.status !== "ACTIVE") {
+      continue;
+    }
 
     // Apply provider filter: check if any of the underlying models match.
     if (providerFilter.length > 0) {
@@ -246,7 +254,9 @@ function resolveInferenceProfiles(
         const provider = m.modelArn?.split("/")?.[1]?.split(".")?.[0];
         return provider ? providerFilter.includes(provider.toLowerCase()) : false;
       });
-      if (!matchesFilter) continue;
+      if (!matchesFilter) {
+        continue;
+      }
     }
 
     // Look up the underlying foundation model to inherit its capabilities.
@@ -366,7 +376,9 @@ export async function discoverBedrockModels(params: {
     return discovered.toSorted((a, b) => {
       const aGlobal = a.id.startsWith("global.") ? 0 : 1;
       const bGlobal = b.id.startsWith("global.") ? 0 : 1;
-      if (aGlobal !== bGlobal) return aGlobal - bGlobal;
+      if (aGlobal !== bGlobal) {
+        return aGlobal - bGlobal;
+      }
       return a.name.localeCompare(b.name);
     });
   })();
@@ -409,8 +421,8 @@ export async function resolveImplicitBedrockProvider(params: {
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
   const discoveryConfig = {
-    ...(params.config?.models?.bedrockDiscovery ?? {}),
-    ...(params.pluginConfig?.discovery ?? {}),
+    ...params.config?.models?.bedrockDiscovery,
+    ...params.pluginConfig?.discovery,
   };
   const enabled = discoveryConfig?.enabled;
   const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;

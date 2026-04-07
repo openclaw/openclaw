@@ -341,6 +341,33 @@ export function createExecApprovalDecisionState(params: {
   };
 }
 
+export function enforceStrictInlineEvalApprovalBoundary(params: {
+  baseDecision: {
+    timedOut: boolean;
+  };
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+  requiresInlineEvalApproval: boolean;
+}): {
+  approvedByAsk: boolean;
+  deniedReason: string | null;
+} {
+  if (
+    !params.baseDecision.timedOut ||
+    !params.requiresInlineEvalApproval ||
+    !params.approvedByAsk
+  ) {
+    return {
+      approvedByAsk: params.approvedByAsk,
+      deniedReason: params.deniedReason,
+    };
+  }
+  return {
+    approvedByAsk: false,
+    deniedReason: params.deniedReason ?? "approval-timeout",
+  };
+}
+
 export function shouldResolveExecApprovalUnavailableInline(params: {
   trigger?: string;
   unavailableReason: ExecApprovalUnavailableReason | null;

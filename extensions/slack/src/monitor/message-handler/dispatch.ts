@@ -8,6 +8,10 @@ import {
   type StatusReactionAdapter,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import {
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingNativeTransport,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -70,10 +74,6 @@ const UNICODE_TO_SLACK: Record<string, string> = {
 function toSlackEmojiName(emoji: string): string {
   const trimmed = emoji.trim().replace(/^:+|:+$/g, "");
   return UNICODE_TO_SLACK[trimmed] ?? trimmed;
-}
-
-function hasMedia(payload: ReplyPayload): boolean {
-  return resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
 export function isSlackStreamingEnabled(params: {
@@ -319,7 +319,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const slackStreaming = resolveSlackStreamingConfig({
     streaming: account.config.streaming,
-    nativeStreaming: account.config.nativeStreaming,
+    nativeStreaming: resolveChannelStreamingNativeTransport(account.config),
   });
   const streamThreadHint = resolveSlackStreamingThreadHint({
     replyToMode: prepared.replyToMode,
@@ -432,7 +432,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       const slackBlocks = readSlackReplyBlocks(payload);
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
-      const finalText = reply.text;
       const trimmedFinalText = reply.trimmedText;
       const canFinalizeViaPreviewEdit =
         previewStreamingEnabled &&
@@ -575,8 +574,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         hasRepliedRef,
         disableBlockStreaming: useStreaming
           ? true
-          : typeof account.config.blockStreaming === "boolean"
-            ? !account.config.blockStreaming
+          : typeof resolveChannelStreamingBlockEnabled(account.config) === "boolean"
+            ? !resolveChannelStreamingBlockEnabled(account.config)
             : undefined,
         onModelSelected,
         onPartialReply: useStreaming

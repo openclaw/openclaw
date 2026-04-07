@@ -1,6 +1,5 @@
 import type {
-  BlockStreamingChunkConfig,
-  BlockStreamingCoalesceConfig,
+  ChannelPreviewStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -253,22 +252,8 @@ export type DiscordAccountConfig = {
   contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /**
-   * Live stream preview mode:
-   * - "off": disable preview updates
-   * - "partial": edit a single preview message
-   * - "block": stream in chunked preview updates
-   * - "progress": alias that maps to "partial" on Discord
-   */
-  streaming?: DiscordStreamMode;
-  /** Chunking config for Discord stream previews in `streaming: "block"`. */
-  draftChunk?: BlockStreamingChunkConfig;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
+  streaming?: ChannelPreviewStreamingConfig;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines

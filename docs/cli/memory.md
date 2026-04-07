@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/search/promote)"
+summary: "CLI reference for `openclaw memory` (status/index/search/promote/promote-explain/rem-harness)"
 read_when:
   - You want to index or search semantic memory
   - You’re debugging memory availability or indexing
@@ -29,6 +29,10 @@ openclaw memory search --query "deployment" --max-results 20
 openclaw memory promote --limit 10 --min-score 0.75
 openclaw memory promote --apply
 openclaw memory promote --json --min-recall-count 0 --min-unique-queries 0
+openclaw memory promote-explain "router vlan"
+openclaw memory promote-explain "router vlan" --json
+openclaw memory rem-harness
+openclaw memory rem-harness --json
 openclaw memory status --json
 openclaw memory status --deep --index
 openclaw memory status --deep --index --verbose
@@ -88,6 +92,31 @@ Full options:
 - `--min-unique-queries <n>`: minimum distinct query count required for a candidate.
 - `--apply`: append selected candidates into `MEMORY.md` and mark them promoted.
 - `--include-promoted`: include already promoted candidates in output.
+- `--json`: print JSON output.
+
+`memory promote-explain`:
+
+Explain a specific promotion candidate and its score breakdown.
+
+```bash
+openclaw memory promote-explain <selector> [--agent <id>] [--include-promoted] [--json]
+```
+
+- `<selector>`: candidate key, path fragment, or snippet fragment to look up.
+- `--agent <id>`: scope to a single agent (default: the default agent).
+- `--include-promoted`: include already promoted candidates.
+- `--json`: print JSON output.
+
+`memory rem-harness`:
+
+Preview REM reflections, candidate truths, and deep promotion output without writing anything.
+
+```bash
+openclaw memory rem-harness [--agent <id>] [--include-promoted] [--json]
+```
+
+- `--agent <id>`: scope to a single agent (default: the default agent).
+- `--include-promoted`: include already promoted deep candidates.
 - `--json`: print JSON output.
 
 ## Dreaming (experimental)

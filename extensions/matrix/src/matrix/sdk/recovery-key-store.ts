@@ -144,6 +144,7 @@ export class MatrixRecoveryKeyStore {
     } catch (err) {
       throw new Error(
         `Invalid Matrix recovery key: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
       );
     }
     const keyId =
@@ -247,7 +248,7 @@ export class MatrixRecoveryKeyStore {
 
     const hasDefaultSecretStorageKey = Boolean(status?.defaultKeyId);
     const hasKnownInvalidSecrets = Object.values(status?.secretStorageKeyValidityMap ?? {}).some(
-      (valid) => valid === false,
+      (valid) => !valid,
     );
     let generatedRecoveryKey = false;
     const storedRecovery = this.loadStoredRecoveryKey();

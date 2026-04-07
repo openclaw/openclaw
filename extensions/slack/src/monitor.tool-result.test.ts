@@ -713,7 +713,8 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+    const sentText = sendMock.mock.calls[0]?.[1];
+    expectPairingReplyText(typeof sentText === "string" ? sentText : "", {
       channel: "slack",
       idLine: "Your Slack user id: U1",
       code: "PAIRCODE",

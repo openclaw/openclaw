@@ -27,6 +27,7 @@ type MockOpenAiRequestSnapshot = {
   allInputText: string;
   toolOutput: string;
   model: string;
+  imageInputCount: number;
   plannedToolName?: string;
 };
 
@@ -69,17 +70,7 @@ function extractLastUserText(input: ResponsesInputItem[]) {
     if (item.role !== "user" || !Array.isArray(item.content)) {
       continue;
     }
-    const text = item.content
-      .filter(
-        (entry): entry is { type: "input_text"; text: string } =>
-          !!entry &&
-          typeof entry === "object" &&
-          (entry as { type?: unknown }).type === "input_text" &&
-          typeof (entry as { text?: unknown }).text === "string",
-      )
-      .map((entry) => entry.text)
-      .join("\n")
-      .trim();
+    const text = extractInputText(item.content);
     if (text) {
       return text;
     }
@@ -108,23 +99,27 @@ function extractToolOutput(input: ResponsesInputItem[]) {
   return "";
 }
 
+function extractInputText(content: unknown[]): string {
+  return content
+    .filter(
+      (entry): entry is { type: "input_text"; text: string } =>
+        !!entry &&
+        typeof entry === "object" &&
+        (entry as { type?: unknown }).type === "input_text" &&
+        typeof (entry as { text?: unknown }).text === "string",
+    )
+    .map((entry) => entry.text)
+    .join("\n")
+    .trim();
+}
+
 function extractAllUserTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {
     if (item.role !== "user" || !Array.isArray(item.content)) {
       continue;
     }
-    const text = item.content
-      .filter(
-        (entry): entry is { type: "input_text"; text: string } =>
-          !!entry &&
-          typeof entry === "object" &&
-          (entry as { type?: unknown }).type === "input_text" &&
-          typeof (entry as { text?: unknown }).text === "string",
-      )
-      .map((entry) => entry.text)
-      .join("\n")
-      .trim();
+    const text = extractInputText(item.content);
     if (text) {
       texts.push(text);
     }
@@ -141,22 +136,31 @@ function extractAllInputTexts(input: ResponsesInputItem[]) {
     if (!Array.isArray(item.content)) {
       continue;
     }
-    const text = item.content
-      .filter(
-        (entry): entry is { type: "input_text"; text: string } =>
-          !!entry &&
-          typeof entry === "object" &&
-          (entry as { type?: unknown }).type === "input_text" &&
-          typeof (entry as { text?: unknown }).text === "string",
-      )
-      .map((entry) => entry.text)
-      .join("\n")
-      .trim();
+    const text = extractInputText(item.content);
     if (text) {
       texts.push(text);
     }
   }
   return texts.join("\n");
+}
+
+function countImageInputs(input: ResponsesInputItem[]) {
+  let count = 0;
+  for (const item of input) {
+    if (!Array.isArray(item.content)) {
+      continue;
+    }
+    for (const entry of item.content) {
+      if (
+        entry &&
+        typeof entry === "object" &&
+        (entry as { type?: unknown }).type === "input_image"
+      ) {
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
@@ -279,6 +283,11 @@ function extractOrbitCode(text: string) {
   return /\b(?:ORBIT-9|orbit-9)\b/.exec(text)?.[0]?.toUpperCase() ?? null;
 }
 
+function extractExactReplyDirective(text: string) {
+  const match = /reply with exactly:\s*([^\n]+)/i.exec(text);
+  return match?.[1]?.trim() || null;
+}
+
 function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
   const prompt = extractLastUserText(input);
   const toolOutput = extractToolOutput(input);
@@ -295,6 +304,8 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
         : toolOutput;
   const orbitCode = extractOrbitCode(memorySnippet);
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
+  const exactReplyDirective = extractExactReplyDirective(allInputText);
+  const imageInputCount = countImageInputs(input);
 
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
@@ -304,6 +315,9 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   }
   if (/memory unavailable check/i.test(prompt)) {
     return "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess.";
+  }
+  if (/\bmarker\b/i.test(prompt) && exactReplyDirective) {
+    return exactReplyDirective;
   }
   if (/visible skill marker/i.test(prompt)) {
     return "VISIBLE-SKILL-OK";
@@ -322,6 +336,9 @@ function buildAssistantText(input: ResponsesInputItem[], body: Record<string, un
   }
   if (/image generation check/i.test(prompt) && mediaPath) {
     return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${mediaPath}`;
+  }
+  if (/image understanding check/i.test(prompt) && imageInputCount > 0) {
+    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
   if (toolOutput && /delegate|subagent/i.test(prompt)) {
     return `Protocol note: delegated result acknowledged. The bounded subagent task returned and is folded back into the main thread.`;
@@ -491,6 +508,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   const host = params?.host ?? "127.0.0.1";
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
+  const imageGenerationRequests: Array<Record<string, unknown>> = [];
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
@@ -515,7 +533,17 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       writeJson(res, 200, requests);
       return;
     }
+    if (req.method === "GET" && url.pathname === "/debug/image-generations") {
+      writeJson(res, 200, imageGenerationRequests);
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/v1/images/generations") {
+      const raw = await readBody(req);
+      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      imageGenerationRequests.push(body);
+      if (imageGenerationRequests.length > 20) {
+        imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
+      }
       writeJson(res, 200, {
         data: [
           {
@@ -538,6 +566,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
         allInputText: extractAllInputTexts(input),
         toolOutput: extractToolOutput(input),
         model: typeof body.model === "string" ? body.model : "",
+        imageInputCount: countImageInputs(input),
         plannedToolName: extractPlannedToolName(events),
       };
       requests.push(lastRequest);

@@ -11,37 +11,37 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string, routes *routeIndex) (bool, error) {
+func processFile(ctx context.Context, translator docsTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, string, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	frontMatter, body := splitFrontMatter(string(content))
 	frontData := map[string]any{}
 	if frontMatter != "" {
 		if err := yaml.Unmarshal([]byte(frontMatter), &frontData); err != nil {
-			return false, fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
+			return false, "", fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
 		}
 	}
 
 	if err := translateFrontMatter(ctx, translator, tm, frontData, relPath, srcLang, tgtLang); err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	body, err = translateHTMLBlocks(ctx, translator, body, srcLang, tgtLang)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	segments, err := extractSegments(body, relPath)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	namespace := cacheNamespace()
@@ -54,7 +54,7 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 		}
 		translated, err := translator.Translate(ctx, seg.Text, srcLang, tgtLang)
 		if err != nil {
-			return false, fmt.Errorf("translate failed (%s): %w", relPath, err)
+			return false, "", fmt.Errorf("translate failed (%s): %w", relPath, err)
 		}
 		seg.Translated = translated
 		entry := TMEntry{
@@ -74,19 +74,18 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 	}
 
 	translatedBody := applyTranslations(body, segments)
-	translatedBody = routes.localizeBodyLinks(translatedBody)
 	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	outputPath := filepath.Join(docsRoot, tgtLang, relPath)
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	output := updatedFront + translatedBody
-	return false, os.WriteFile(outputPath, []byte(output), 0o644)
+	return false, outputPath, os.WriteFile(outputPath, []byte(output), 0o644)
 }
 
 func splitFrontMatter(content string) (string, string) {
@@ -134,7 +133,7 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 	return fmt.Sprintf("---\n%s---\n\n", string(encoded)), nil
 }
 
-func translateFrontMatter(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, data map[string]any, relPath, srcLang, tgtLang string) error {
+func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *TranslationMemory, data map[string]any, relPath, srcLang, tgtLang string) error {
 	if len(data) == 0 {
 		return nil
 	}
@@ -171,7 +170,7 @@ func translateFrontMatter(ctx context.Context, translator *PiTranslator, tm *Tra
 	return nil
 }
 
-func translateSnippet(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) (string, error) {
+func translateSnippet(ctx context.Context, translator docsTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) (string, error) {
 	if strings.TrimSpace(textValue) == "" {
 		return textValue, nil
 	}

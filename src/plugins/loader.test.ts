@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearInternalHooks, getRegisteredEventKeys } from "../hooks/internal-hooks.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
@@ -8,7 +8,13 @@ import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
-import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
+import {
+  __testing,
+  clearPluginLoaderCache,
+  loadOpenClawPlugins,
+  PluginLoadReentryError,
+  resolveRuntimePluginRegistry,
+} from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
@@ -28,7 +34,10 @@ import {
 import {
   buildMemoryPromptSection,
   getMemoryRuntime,
+  listMemoryCorpusSupplements,
+  registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
+  registerMemoryPromptSupplement,
   registerMemoryPromptSection,
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
@@ -40,6 +49,7 @@ import {
   listImportedRuntimePluginIds,
   setActivePluginRegistry,
 } from "./runtime.js";
+import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
@@ -1181,6 +1191,125 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     },
     {
+      label: "fails loudly when a plugin reenters the same snapshot load during register",
+      run: () => {
+        useNoBundledPlugins();
+        const marker = "__openclaw_loader_reentry_error";
+        const reenterFnMarker = "__openclaw_loader_reentry_fn";
+        Reflect.deleteProperty(globalThis, marker);
+        Reflect.set(
+          globalThis,
+          reenterFnMarker,
+          (options: Parameters<typeof loadOpenClawPlugins>[0]) => loadOpenClawPlugins(options),
+        );
+        const pluginDir = makeTempDir();
+        const pluginFile = path.join(pluginDir, "reentrant-snapshot.cjs");
+        const nestedOptions = {
+          cache: false,
+          activate: false,
+          workspaceDir: pluginDir,
+          config: {
+            plugins: {
+              load: { paths: [pluginFile] },
+              allow: ["reentrant-snapshot"],
+            },
+          },
+        } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+        writePlugin({
+          id: "reentrant-snapshot",
+          dir: pluginDir,
+          filename: "reentrant-snapshot.cjs",
+          body: `module.exports = {
+  id: "reentrant-snapshot",
+  register() {
+    try {
+      globalThis.${reenterFnMarker}(${JSON.stringify(nestedOptions)});
+    } catch (error) {
+      globalThis.${marker} = {
+        name: error?.name,
+        message: String(error?.message ?? error),
+      };
+      throw error;
+    }
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins(nestedOptions);
+
+        try {
+          expect(Reflect.get(globalThis, marker)).toMatchObject({
+            name: PluginLoadReentryError.name,
+            message: expect.stringContaining("plugin load reentry detected"),
+          });
+          expect(registry.plugins.find((entry) => entry.id === "reentrant-snapshot")).toMatchObject(
+            {
+              status: "error",
+              error: expect.stringContaining("plugin load reentry detected"),
+              failurePhase: "register",
+            },
+          );
+        } finally {
+          Reflect.deleteProperty(globalThis, marker);
+          Reflect.deleteProperty(globalThis, reenterFnMarker);
+        }
+      },
+    },
+    {
+      label: "lets resolveRuntimePluginRegistry short-circuit during same snapshot load",
+      run: () => {
+        useNoBundledPlugins();
+        const marker = "__openclaw_runtime_registry_reentry_marker";
+        const resolverMarker = "__openclaw_runtime_registry_reentry_fn";
+        Reflect.deleteProperty(globalThis, marker);
+        Reflect.set(
+          globalThis,
+          resolverMarker,
+          (options: Parameters<typeof resolveRuntimePluginRegistry>[0]) =>
+            resolveRuntimePluginRegistry(options),
+        );
+        const pluginDir = makeTempDir();
+        const pluginFile = path.join(pluginDir, "runtime-registry-reentry.cjs");
+        const nestedOptions = {
+          cache: false,
+          activate: false,
+          workspaceDir: pluginDir,
+          config: {
+            plugins: {
+              load: { paths: [pluginFile] },
+              allow: ["runtime-registry-reentry"],
+            },
+          },
+        } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+        writePlugin({
+          id: "runtime-registry-reentry",
+          dir: pluginDir,
+          filename: "runtime-registry-reentry.cjs",
+          body: `module.exports = {
+  id: "runtime-registry-reentry",
+  register() {
+    const registry = globalThis.${resolverMarker}(${JSON.stringify(nestedOptions)});
+    globalThis.${marker} = registry === undefined ? "undefined" : "loaded";
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins(nestedOptions);
+
+        try {
+          expect(Reflect.get(globalThis, marker)).toBe("undefined");
+          expect(
+            registry.plugins.find((entry) => entry.id === "runtime-registry-reentry"),
+          ).toMatchObject({
+            status: "loaded",
+          });
+        } finally {
+          Reflect.deleteProperty(globalThis, marker);
+          Reflect.deleteProperty(globalThis, resolverMarker);
+        }
+      },
+    },
+    {
       label: "keeps scoped plugin loads in a separate cache entry",
       run: () => {
         useNoBundledPlugins();
@@ -1381,7 +1510,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
       id: "active",
       create: async () => ({ provider: null }),
     });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => null,
+    });
     registerMemoryPromptSection(() => ["active memory section"]);
+    registerMemoryPromptSupplement("memory-wiki", () => ["active wiki supplement"]);
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 1,
       forceFlushTranscriptBytes: 2,
@@ -1448,7 +1582,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(scoped.plugins.find((entry) => entry.id === "snapshot-memory")?.status).toBe("loaded");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "active memory section",
+      "active wiki supplement",
     ]);
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
     expect(getMemoryRuntime()).toBe(activeRuntime);
     expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
@@ -1468,6 +1604,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
             create: async () => ({ provider: null }),
           });
           api.registerMemoryPromptSection(() => ["stale failure section"]);
+          api.registerMemoryPromptSupplement(() => ["stale failure supplement"]);
+          api.registerMemoryCorpusSupplement({
+            search: async () => [],
+            get: async () => null,
+          });
           api.registerMemoryFlushPlan(() => ({
             softThresholdTokens: 10,
             forceFlushTranscriptBytes: 20,
@@ -1504,6 +1645,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(listMemoryCorpusSupplements()).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(listMemoryEmbeddingProviders()).toEqual([]);
@@ -1737,20 +1879,52 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     },
     {
-      name: "does not reuse cached registries across gateway subagent binding modes",
+      name: "does not reuse cached registries across different plugin SDK resolution preferences",
       setup: () => {
         useNoBundledPlugins();
         const plugin = writePlugin({
-          id: "cache-gateway-bindable",
-          filename: "cache-gateway-bindable.cjs",
-          body: `module.exports = { id: "cache-gateway-bindable", register() {} };`,
+          id: "cache-sdk-resolution",
+          filename: "cache-sdk-resolution.cjs",
+          body: `module.exports = { id: "cache-sdk-resolution", register() {} };`,
         });
 
         const options = {
           workspaceDir: plugin.dir,
           config: {
             plugins: {
-              allow: ["cache-gateway-bindable"],
+              allow: ["cache-sdk-resolution"],
+              load: {
+                paths: [plugin.file],
+              },
+            },
+          },
+        };
+
+        return {
+          loadFirst: () => loadOpenClawPlugins(options),
+          loadVariant: () =>
+            loadOpenClawPlugins({
+              ...options,
+              pluginSdkResolution: "workspace" as PluginSdkResolutionPreference,
+            }),
+        };
+      },
+    },
+    {
+      name: "does not reuse cached registries across gateway subagent binding modes",
+      setup: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "cache-gateway-shared",
+          filename: "cache-gateway-shared.cjs",
+          body: `module.exports = { id: "cache-gateway-shared", register() {} };`,
+        });
+
+        const options = {
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              allow: ["cache-gateway-shared"],
               load: {
                 paths: [plugin.file],
               },
@@ -2641,38 +2815,6 @@ module.exports = {
       expectedChannels: 1,
     },
     {
-      name: "can prefer setupEntry for configured channel loads during startup",
-      fixture: {
-        id: "setup-runtime-preferred-test",
-        label: "Setup Runtime Preferred Test",
-        packageName: "@openclaw/setup-runtime-preferred-test",
-        fullBlurb: "full entry should be deferred while startup is still cold",
-        setupBlurb: "setup runtime preferred",
-        configured: true,
-        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
-      },
-      load: ({ pluginDir }: { pluginDir: string }) =>
-        loadOpenClawPlugins({
-          cache: false,
-          preferSetupRuntimeForChannelPlugins: true,
-          config: {
-            channels: {
-              "setup-runtime-preferred-test": {
-                enabled: true,
-                token: "configured",
-              },
-            },
-            plugins: {
-              load: { paths: [pluginDir] },
-              allow: ["setup-runtime-preferred-test"],
-            },
-          },
-        }),
-      expectFullLoaded: false,
-      expectSetupLoaded: true,
-      expectedChannels: 1,
-    },
-    {
       name: "does not prefer setupEntry for configured channel loads without startup opt-in",
       fixture: {
         id: "setup-runtime-not-preferred-test",
@@ -2711,6 +2853,26 @@ module.exports = {
     expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
     expect(registry.channelSetups).toHaveLength(1);
     expect(registry.channels).toHaveLength(expectedChannels);
+  });
+
+  it("prefers setupEntry for configured channel loads during startup when opted in", () => {
+    expect(
+      __testing.shouldLoadChannelPluginInSetupRuntime({
+        manifestChannels: ["setup-runtime-preferred-test"],
+        setupSource: "./setup-entry.cjs",
+        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+        cfg: {
+          channels: {
+            "setup-runtime-preferred-test": {
+              enabled: true,
+              token: "configured",
+            },
+          },
+        },
+        env: {},
+        preferSetupRuntimeForChannelPlugins: true,
+      }),
+    ).toBe(true);
   });
 
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
@@ -3725,5 +3887,23 @@ export const runtimeValue = helperValue;`,
 
     const record = registry.plugins.find((entry) => entry.id === "source-runtime-shim");
     expect(record?.status).toBe("loaded");
+  });
+
+  it("converts Windows absolute import specifiers to file URLs only for module loading", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      expect(__testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
+        "file:///C:/Users/alice/plugin/index.mjs",
+      );
+      expect(__testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
+        "file://server/share/plugin/index.mjs",
+      );
+      expect(__testing.toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
+        "file:///C:/Users/alice/plugin/index.mjs",
+      );
+      expect(__testing.toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 });

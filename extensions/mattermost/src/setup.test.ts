@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
 
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
+vi.mock("../../../test/helpers/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelRuntimeMap: () => new Map(),
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));
@@ -163,7 +163,7 @@ describe("mattermost setup", () => {
     expect(applyAccountConfig).toBeTypeOf("function");
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: { channels: { mattermost: {} } },
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
@@ -184,7 +184,7 @@ describe("mattermost setup", () => {
     });
 
     expect(
-      applyAccountConfig!({
+      applyAccountConfig({
         cfg: {
           channels: {
             mattermost: {

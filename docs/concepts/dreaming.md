@@ -164,6 +164,21 @@ openclaw memory status --deep
 Manual `memory promote` uses deep-phase thresholds by default unless overridden
 with CLI flags.
 
+Explain why a specific candidate would or would not promote:
+
+```bash
+openclaw memory promote-explain "router vlan"
+openclaw memory promote-explain "router vlan" --json
+```
+
+Preview REM reflections, candidate truths, and deep promotion output without
+writing anything:
+
+```bash
+openclaw memory rem-harness
+openclaw memory rem-harness --json
+```
+
 ## Key defaults
 
 All settings live under `plugins.entries.memory-core.config.dreaming`.
