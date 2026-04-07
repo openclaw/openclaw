@@ -8,6 +8,9 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "openclaw"
+  - "@remotion/*"
+  - "remotion"
+  - "@aws-sdk/*"
   - "@mariozechner/*"
   - "@typescript/native-preview*"
   - "@oxlint/*"

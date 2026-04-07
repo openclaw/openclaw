@@ -1,5 +1,5 @@
 import { exec } from "node:child_process";
-import { writeFile, readFile } from "node:fs/promises";
+import { copyFile, unlink, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { AudioSegment, VideoResult, PipelineConfig } from "../types.js";
@@ -48,8 +48,8 @@ export async function composeVideo(
     segmentPaths.push(segmentPath);
   }
 
-  // Create concat list
-  const concatList = segmentPaths.map((p) => `file '${p}'`).join("\n");
+  // Create concat list (use forward slashes for ffmpeg compatibility on Windows)
+  const concatList = segmentPaths.map((p) => `file '${p.replace(/\\/g, "/")}'`).join("\n");
   const concatFile = join(outputDir, "concat.txt");
   await writeFile(concatFile, concatList);
 
@@ -79,10 +79,10 @@ export async function composeVideo(
   // Burn subtitles into landscape video
   const landscapePath = join(outputDir, "video_landscape.mp4");
   if (combinedSrt.trim()) {
-    // Escape path for ffmpeg subtitle filter (replace : and \ and ')
+    // Escape path for ffmpeg subtitle filter (handle both Windows and Unix paths)
     const escapedSubPath = subtitlePath
-      .replace(/\\/g, "\\\\\\\\")
-      .replace(/:/g, "\\\\:")
+      .replace(/\\/g, "/")       // Convert Windows backslashes to forward slashes
+      .replace(/:/g, "\\\\:")    // Escape colons (drive letter on Windows)
       .replace(/'/g, "\\\\'");
     try {
       await execAsync(
@@ -91,10 +91,10 @@ export async function composeVideo(
     } catch {
       // Subtitle burn failed — copy raw video without subtitles
       console.warn("  ⚠ Subtitle burn failed, using video without subtitles");
-      await execAsync(`cp "${rawPath}" "${landscapePath}"`);
+      await copyFile(rawPath, landscapePath);
     }
   } else {
-    await execAsync(`cp "${rawPath}" "${landscapePath}"`);
+    await copyFile(rawPath, landscapePath);
   }
 
   // Create portrait version (9:16) with blurred background
@@ -109,9 +109,10 @@ export async function composeVideo(
 
   // Cleanup temp segments
   for (const p of segmentPaths) {
-    await execAsync(`rm -f "${p}"`).catch(() => {});
+    await unlink(p).catch(() => {});
   }
-  await execAsync(`rm -f "${rawPath}" "${concatFile}"`).catch(() => {});
+  await unlink(rawPath).catch(() => {});
+  await unlink(concatFile).catch(() => {});
 
   console.log(`  ✓ Landscape: video_landscape.mp4 (${config.width}x${config.height})`);
   console.log(`  ✓ Portrait: video_portrait.mp4 (1080x1920)`);

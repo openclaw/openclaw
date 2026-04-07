@@ -7,7 +7,8 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
@@ -66,7 +67,7 @@ async function main() {
   const audioIdx = args.indexOf("--audio");
   const wordsIdx = args.indexOf("--words");
 
-  const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : "/tmp/test-remotion.mp4";
+  const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : join(tmpdir(), "test-remotion.mp4");
 
   let props: VideoProps;
 

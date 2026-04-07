@@ -34,8 +34,9 @@ sources:
 # Model format: "provider/model-name"
 # Failover: tries each model in order. On rate limit → next model.
 content:
-  model: "google/gemini-2.5-flash"
+  model: "ollama/gemma4"
   fallbackModels:
+    - "google/gemini-2.5-flash"
     - "groq/llama-3.3-70b-versatile"
     - "openrouter/meta-llama/llama-3.3-70b-instruct:free"
     - "cerebras/llama3.1-8b"

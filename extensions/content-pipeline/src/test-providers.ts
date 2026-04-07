@@ -21,6 +21,7 @@ const TEST_MESSAGE = {
 };
 
 const PROVIDERS = [
+  { name: "Ollama (local)", model: "ollama/gemma4", envKey: "OLLAMA_API_KEY", optional: true },
   { name: "Google AI Studio", model: "google/gemini-2.5-flash", envKey: "GOOGLE_AI_API_KEY" },
   { name: "Groq", model: "groq/llama-3.3-70b-versatile", envKey: "GROQ_API_KEY" },
   {
@@ -88,7 +89,7 @@ async function testKeyManager(): Promise<void> {
   const km = new KeyManager({});
   await km.initialize();
 
-  for (const provider of ["google", "groq", "openrouter", "cerebras"]) {
+  for (const provider of ["ollama", "google", "groq", "openrouter", "cerebras"]) {
     const count = km.countAvailable(provider);
     const key = km.getActiveKey(provider);
     const keyPreview = key ? `${key.slice(0, 8)}...${key.slice(-4)}` : "none";

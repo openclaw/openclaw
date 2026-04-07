@@ -7,7 +7,7 @@ description: >
 metadata:
   openclaw:
     emoji: "🎯"
-    os: ["darwin", "linux"]
+    os: ["darwin", "linux", "win32"]
     requires:
       bins: ["ffmpeg", "edge-tts"]
 ---
@@ -48,7 +48,7 @@ When the user says "start news", "make a news video", "daily digest", or similar
 ```json
 {
   "tool": "sessions_spawn",
-  "task": "Scrape today's top tech news. Run: npx tsx /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline/src/cli.ts preview 2>&1. Parse the output table into a ranked list of articles. Return the top 10 articles with title, source, score, and URL.",
+  "task": "Scrape today's top tech news. Run: npx tsx extensions/content-pipeline/src/cli.ts preview 2>&1. Parse the output table into a ranked list of articles. Return the top 10 articles with title, source, score, and URL.",
   "agentId": "hana",
   "label": "news-research",
   "runTimeoutSeconds": 120
@@ -76,7 +76,7 @@ Once hana returns articles, spawn minh with the article data:
 ```json
 {
   "tool": "sessions_spawn",
-  "task": "Write a news video script for these articles:\n[PASTE HANA'S ARTICLES HERE]\n\nRun the content generator: cd /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline && npx tsx src/cli.ts run news --stage content 2>&1\n\nReturn the generated script JSON from output/*/script.json",
+  "task": "Write a news video script for these articles:\n[PASTE HANA'S ARTICLES HERE]\n\nRun the content generator: cd extensions/content-pipeline && npx tsx src/cli.ts run news --stage content 2>&1\n\nReturn the generated script JSON from output/*/script.json",
   "agentId": "minh",
   "label": "news-script",
   "runTimeoutSeconds": 180
@@ -102,7 +102,7 @@ Once minh returns the script, spawn kai:
 ```json
 {
   "tool": "sessions_spawn",
-  "task": "Produce a news video. Run the full pipeline from slides onward: cd /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline && npx tsx src/cli.ts run news --skip-upload 2>&1\n\nThen post each slide image to Discord channel 1490932841599729748. Report progress to 1490891176272986308. When done, report the video file paths.",
+  "task": "Produce a news video. Run the full pipeline from slides onward: cd extensions/content-pipeline && npx tsx src/cli.ts run news --skip-upload 2>&1\n\nThen post each slide image to Discord channel 1490932841599729748. Report progress to 1490891176272986308. When done, report the video file paths.",
   "agentId": "kai",
   "label": "news-production",
   "runTimeoutSeconds": 600
@@ -154,7 +154,7 @@ When the user says "make a tutorial about X", "tutorial on X", or similar:
 ```json
 {
   "tool": "sessions_spawn",
-  "task": "Write a tutorial video script about: [TOPIC]\n\nRun: cd /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline && npx tsx src/cli.ts run tutorial \"[TOPIC]\" --stage content 2>&1\n\nReturn the generated script JSON.",
+  "task": "Write a tutorial video script about: [TOPIC]\n\nRun: cd extensions/content-pipeline && npx tsx src/cli.ts run tutorial \"[TOPIC]\" --stage content 2>&1\n\nReturn the generated script JSON.",
   "agentId": "minh",
   "label": "tutorial-script",
   "runTimeoutSeconds": 180

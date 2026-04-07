@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { requestApproval } from "./approval.js";
@@ -218,7 +218,7 @@ export async function runPipeline(opts: RunOptions, onEvent?: EventCallback) {
   emit("video", "completed", `Video: ${dur}`);
 
   // Upload to R2
-  const runId = outputDir.split("/").pop() ?? "unknown";
+  const runId = basename(outputDir);
   console.log("\n☁️ Uploading to R2 cloud storage...");
   await discord.status("☁️ Uploading to cloud storage...");
   const r2Urls = await uploadRunToR2(outputDir, runId);

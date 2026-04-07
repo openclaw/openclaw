@@ -7,7 +7,7 @@ description: >
 metadata:
   openclaw:
     emoji: "📰"
-    os: ["darwin", "linux"]
+    os: ["darwin", "linux", "win32"]
     requires:
       bins: ["node"]
 ---
@@ -21,7 +21,7 @@ You are hana. Your job is to scrape, rank, and summarize tech news articles.
 Run the pipeline CLI to scrape all configured sources:
 
 ```bash
-cd /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline
+cd extensions/content-pipeline
 npx tsx src/cli.ts preview 2>&1
 ```
 

@@ -7,7 +7,7 @@ description: >
 metadata:
   openclaw:
     emoji: "✍️"
-    os: ["darwin", "linux"]
+    os: ["darwin", "linux", "win32"]
     requires:
       bins: ["node"]
       env: ["GOOGLE_AI_API_KEY"]
@@ -24,7 +24,7 @@ When nhu.tuyet gives you a list of articles, generate a news video script.
 ### Option A: Use the pipeline CLI (recommended)
 
 ```bash
-cd /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline
+cd extensions/content-pipeline
 npx tsx src/cli.ts run news --stage content 2>&1
 ```
 
@@ -79,7 +79,7 @@ the Google AI API. The script must follow this JSON structure:
 When nhu.tuyet gives you a topic:
 
 ```bash
-cd /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline
+cd extensions/content-pipeline
 npx tsx src/cli.ts run tutorial "TOPIC_HERE" --stage content 2>&1
 ```
 

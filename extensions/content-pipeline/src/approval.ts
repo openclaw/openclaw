@@ -11,6 +11,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { loadConfig } from "./pipeline.js";
 
 const API = "https://discord.com/api/v10";
 const getToken = () => process.env.DISCORD_BOT_TOKEN ?? "";
@@ -136,7 +137,6 @@ export async function handleApproval(runId: string): Promise<Record<string, stri
   // YouTube
   try {
     const { uploadToYoutube } = await import("./upload/youtube.js");
-    const { loadConfig } = await import("./pipeline.js");
     const config = loadConfig();
     const videoResult = {
       landscapePath: join(req.outputDir, "video_landscape.mp4"),

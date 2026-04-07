@@ -10,7 +10,7 @@
 
 import { KeyManager, type KeyManagerConfig } from "./key-manager.js";
 
-export type Provider = "google" | "groq" | "openrouter" | "cerebras" | "anthropic";
+export type Provider = "google" | "groq" | "openrouter" | "cerebras" | "anthropic" | "ollama";
 
 export interface LlmConfig {
   provider: Provider;
@@ -26,6 +26,7 @@ const PROVIDER_URLS: Record<string, string> = {
   groq: "https://api.groq.com/openai/v1",
   openrouter: "https://openrouter.ai/api/v1",
   cerebras: "https://api.cerebras.ai/v1",
+  ollama: process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1",
 };
 
 const PROVIDER_ENV_KEYS: Record<string, string[]> = {
@@ -34,6 +35,7 @@ const PROVIDER_ENV_KEYS: Record<string, string[]> = {
   openrouter: ["OPENROUTER_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   anthropic: ["ANTHROPIC_API_KEY"],
+  ollama: ["OLLAMA_API_KEY"],
 };
 
 // Singleton KeyManager — initialized lazily
@@ -57,13 +59,26 @@ export function parseModelSpec(model: string): LlmConfig {
   const provider = model.slice(0, slash) as Provider;
   const modelName = model.slice(slash + 1);
 
-  if (["google", "groq", "openrouter", "cerebras", "anthropic"].includes(provider)) {
+  if (["google", "groq", "openrouter", "cerebras", "anthropic", "ollama"].includes(provider)) {
     return { provider, model: modelName };
   }
   return { provider: "google", model };
 }
 
 function getApiKey(provider: Provider): string | undefined {
+  // Ollama doesn't require an API key by default (local server)
+  if (provider === "ollama") {
+    if (_keyManager) {
+      const key = _keyManager.getActiveKey(provider);
+      if (key) return key;
+    }
+    const envKeys = PROVIDER_ENV_KEYS[provider] ?? [];
+    for (const key of envKeys) {
+      if (process.env[key]) return process.env[key];
+    }
+    return "ollama"; // dummy key — Ollama ignores auth by default
+  }
+
   // Try KeyManager first (has rotation + auto-generated keys)
   if (_keyManager) {
     const key = _keyManager.getActiveKey(provider);
@@ -97,6 +112,7 @@ export async function generateText(config: LlmConfig, message: LlmMessage): Prom
     case "groq":
     case "openrouter":
     case "cerebras":
+    case "ollama":
       return generateWithOpenAICompat(config.provider, config.model, message);
     default:
       throw new Error(`Unknown provider: ${config.provider}`);

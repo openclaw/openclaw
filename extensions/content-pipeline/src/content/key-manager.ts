@@ -47,6 +47,7 @@ export class KeyManager {
     this.loadEnvKeys("groq", ["GROQ_API_KEY"]);
     this.loadEnvKeys("openrouter", ["OPENROUTER_API_KEY"]);
     this.loadEnvKeys("cerebras", ["CEREBRAS_API_KEY"]);
+    this.loadEnvKeys("ollama", ["OLLAMA_API_KEY"]);
 
     // Auto-generate Google keys if service account is available
     if (this.config.google?.serviceAccountPath) {

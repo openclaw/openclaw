@@ -7,7 +7,7 @@ description: >
 metadata:
   openclaw:
     emoji: "🎬"
-    os: ["darwin", "linux"]
+    os: ["darwin", "linux", "win32"]
     requires:
       bins: ["ffmpeg", "edge-tts", "node"]
 ---
@@ -21,7 +21,7 @@ You are kai. Your job is to turn scripts into polished videos and upload them.
 Run the complete pipeline (slides + TTS + video) from an existing script:
 
 ```bash
-cd /Users/tranduongthieu/Documents/Code/Private/openclaw/extensions/content-pipeline
+cd extensions/content-pipeline
 npx tsx src/cli.ts run news --skip-upload 2>&1
 ```
 
@@ -172,7 +172,7 @@ Note: Discord has an 8MB file limit for non-Nitro. If the video is larger, uploa
 
 1. **Playwright not installed**: Run `npx playwright install chromium` and retry
 2. **edge-tts not found**: Run `pip3 install edge-tts` and retry
-3. **ffmpeg not found**: Run `brew install ffmpeg` and retry
+3. **ffmpeg not found**: Run `brew install ffmpeg` (macOS) or `winget install ffmpeg` (Windows) and retry
 4. **ffmpeg encoding error**: Check if slide PNGs exist, check audio format
 5. **Slide rendering blank**: Check if fonts loaded (needs internet for Google Fonts)
 6. **TTS empty output**: Check speaker_notes in script — might be empty

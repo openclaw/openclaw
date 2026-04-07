@@ -6,8 +6,10 @@
 import { exec } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { dirname } from "node:path";
+import { platform } from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { SlideContent, AudioSegment, PipelineConfig } from "../types.js";
@@ -37,7 +39,7 @@ async function generateWithKokoro(
   await writeFile(textFile, text);
 
   const { stdout } = await execAsync(
-    `python3 "${join(SCRIPTS_DIR, "kokoro-generate.py")}" --file "${textFile}" --voice "${voice}" --speed ${speed} --output "${outputPath}"`,
+    `${platform === "win32" ? "python" : "python3"} "${join(SCRIPTS_DIR, "kokoro-generate.py")}" --file "${textFile}" --voice "${voice}" --speed ${speed} --output "${outputPath}"`,
     { timeout: 60_000 },
   );
 
@@ -80,7 +82,7 @@ export async function generateTtsAudio(
 
   const useKokoro =
     ttsEngine === "kokoro" &&
-    existsSync(join(process.env.HOME ?? "~", ".openclaw", "models", "kokoro-v1.0.onnx"));
+    existsSync(join(homedir(), ".openclaw", "models", "kokoro-v1.0.onnx"));
 
   console.log(`🎙️ TTS engine: ${useKokoro ? "Kokoro (local)" : "edge-tts (cloud)"}`);
 
@@ -139,7 +141,7 @@ export async function concatenateAudio(
   outputPath: string,
 ): Promise<void> {
   const listFile = outputPath.replace(/\.wav$/, "-list.txt");
-  const lines = segments.map((s) => `file '${s.audioPath}'`).join("\n");
+  const lines = segments.map((s) => `file '${s.audioPath.replace(/\\/g, "/")}'`).join("\n");
   await writeFile(listFile, lines);
   await execAsync(`ffmpeg -y -f concat -safe 0 -i "${listFile}" -c copy "${outputPath}"`);
 }

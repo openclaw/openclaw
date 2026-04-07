@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { createReadStream } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { google } from "googleapis";
 import type { VideoResult, VideoContent, PipelineConfig } from "../types.js";
 
 const TOKEN_PATH = join(
-  process.env.HOME ?? "~",
+  homedir(),
   ".openclaw",
   "content-pipeline",
   "youtube-token.json",
