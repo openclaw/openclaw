@@ -6,7 +6,7 @@ import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
-import { readStringValue } from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
@@ -16,7 +16,7 @@ export function resolveDefaultAgentWorkspaceDir(
 ): string {
   const home = resolveRequiredHomeDir(env, homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
-  if (profile && profile.toLowerCase() !== "default") {
+  if (profile && normalizeOptionalLowercaseString(profile) !== "default") {
     return path.join(home, ".openclaw", `workspace-${profile}`);
   }
   return path.join(home, ".openclaw", "workspace");

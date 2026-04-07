@@ -2216,6 +2216,10 @@ export type OpenClawPluginApi = {
     id: string,
     factory: import("../context-engine/registry.js").ContextEngineFactory,
   ) => void;
+  /** Register a compaction provider (pluggable summarization backend). */
+  registerCompactionProvider: (
+    provider: import("./compaction-provider.js").CompactionProvider,
+  ) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (
     capability: import("./memory-state.js").MemoryPluginCapability,

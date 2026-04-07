@@ -153,6 +153,7 @@ describe("handleMessageUpdate", () => {
         onPartialReply,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         streamReasoning: false,
@@ -211,6 +212,7 @@ describe("handleMessageUpdate", () => {
         onPartialReply,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         streamReasoning: false,
@@ -263,6 +265,7 @@ describe("handleMessageUpdate", () => {
         onAgentEvent,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         streamReasoning: false,
@@ -361,6 +364,7 @@ describe("handleMessageUpdate", () => {
         session: { id: "session-1" },
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         streamReasoning: false,
@@ -413,6 +417,7 @@ describe("handleMessageEnd", () => {
         assistantTexts: [],
         assistantTextBaseline: 0,
         emittedAssistantUpdate: false,
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         includeReasoning: false,
@@ -470,6 +475,7 @@ describe("handleMessageEnd", () => {
         assistantTexts: [],
         assistantTextBaseline: 0,
         emittedAssistantUpdate: false,
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         reasoningStreamOpen: false,
         includeReasoning: false,
@@ -531,6 +537,7 @@ describe("handleMessageEnd", () => {
         onBlockReply,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         messagingToolSentTexts: [],
         messagingToolSentTextsNormalized: [],
@@ -592,6 +599,7 @@ describe("handleMessageEnd", () => {
         onBlockReply,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         messagingToolSentTexts: [],
         messagingToolSentTextsNormalized: [],
@@ -651,6 +659,7 @@ describe("handleMessageEnd", () => {
         onAgentEvent,
       },
       state: {
+        deterministicApprovalPromptPending: false,
         deterministicApprovalPromptSent: false,
         messagingToolSentTexts: [],
         messagingToolSentTextsNormalized: [],

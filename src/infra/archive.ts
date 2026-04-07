@@ -8,6 +8,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import JSZip from "jszip";
 import * as tar from "tar";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   resolveArchiveOutputPath,
   stripArchivePath,
@@ -76,7 +77,7 @@ const OPEN_WRITE_CREATE_FLAGS =
 const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
 
 export function resolveArchiveKind(filePath: string): ArchiveKind | null {
-  const lower = filePath.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(filePath);
   if (lower.endsWith(".zip")) {
     return "zip";
   }

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 /** Maximum file size accepted by the QQ Bot API. */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
@@ -92,7 +93,7 @@ export function formatFileSize(bytes: number): string {
 
 /** Infer a MIME type from the file extension. */
 export function getMimeType(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
   const mimeTypes: Record<string, string> = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",

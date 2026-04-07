@@ -34,6 +34,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/types.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
@@ -318,8 +319,8 @@ export async function initSessionState(params: {
     : triggerBodyNormalized;
   // Reset triggers are configured as lowercased commands (e.g. "/new"), but users may type
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
-  const trimmedBodyLower = trimmedBody.toLowerCase();
-  const strippedForResetLower = strippedForReset.toLowerCase();
+  const trimmedBodyLower = normalizeLowercaseStringOrEmpty(trimmedBody);
+  const strippedForResetLower = normalizeLowercaseStringOrEmpty(strippedForReset);
   let matchedResetTriggerLower: string | undefined;
 
   for (const trigger of resetTriggers) {
@@ -329,7 +330,7 @@ export async function initSessionState(params: {
     if (!resetAuthorized) {
       break;
     }
-    const triggerLower = trigger.toLowerCase();
+    const triggerLower = normalizeLowercaseStringOrEmpty(trigger);
     if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
       isNewSession = true;
       bodyStripped = "";

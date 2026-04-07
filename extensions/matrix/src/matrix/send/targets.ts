@@ -1,4 +1,7 @@
-import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/text-runtime";
 import { inspectMatrixDirectRooms, persistMatrixDirectRoomMapping } from "../direct-management.js";
 import { isStrictDirectRoom } from "../direct-room.js";
 import type { MatrixClient } from "../sdk.js";
@@ -83,7 +86,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
 
 export async function resolveMatrixRoomId(client: MatrixClient, raw: string): Promise<string> {
   const target = normalizeMatrixResolvableTarget(normalizeTarget(raw));
-  const lowered = target.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(target);
   if (lowered.startsWith("user:")) {
     return await resolveDirectRoomId(client, target.slice("user:".length));
   }

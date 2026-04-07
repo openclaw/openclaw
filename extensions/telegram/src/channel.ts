@@ -899,6 +899,7 @@ export const telegramPlugin = createChatChannelPlugin({
           accountId: account.accountId,
           config: ctx.cfg,
           runtime: ctx.runtime,
+          channelRuntime: ctx.channelRuntime,
           abortSignal: ctx.abortSignal,
           useWebhook: Boolean(account.config.webhookUrl),
           webhookUrl: account.config.webhookUrl,

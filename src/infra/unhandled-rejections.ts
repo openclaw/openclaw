@@ -103,13 +103,16 @@ function hasSqliteSignal(err: unknown): boolean {
     }
   }
 
-  const name = readErrorName(err);
-  if (name.toLowerCase().includes("sqlite")) {
+  const name = normalizeLowercaseStringOrEmpty(readErrorName(err));
+  if (name.includes("sqlite")) {
     return true;
   }
 
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  if (message.toLowerCase().includes("sqlite")) {
+  const message =
+    "message" in err && typeof err.message === "string"
+      ? normalizeLowercaseStringOrEmpty(err.message)
+      : "";
+  if (message.includes("sqlite")) {
     return true;
   }
 

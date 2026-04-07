@@ -240,12 +240,10 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
       profile: params.profile,
     }) ?? "";
   const allowedProfiles = proxyConfig.allowProfiles;
+  if (isPersistentBrowserProfileMutation(method, path)) {
+    throw new Error("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
+  }
   if (allowedProfiles.length > 0) {
-    if (isPersistentBrowserProfileMutation(method, path)) {
-      throw new Error(
-        "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
-      );
-    }
     if (path !== "/profiles") {
       const profileToCheck = requestedProfile || resolved.defaultProfile;
       if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: profileToCheck })) {

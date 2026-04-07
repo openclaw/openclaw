@@ -109,13 +109,18 @@ function resolveActiveChannel(params: {
     entry?.lastProvider ??
     entry?.provider ??
     ""
-  )
-    .trim()
-    .toLowerCase();
-  if (candidate === INTERNAL_MESSAGE_CHANNEL) {
+  ).trim();
+  const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
+  if (!normalizedCandidate) {
+    return inferProviderFromSessionKey({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
+  }
+  if (normalizedCandidate === INTERNAL_MESSAGE_CHANNEL) {
     return INTERNAL_MESSAGE_CHANNEL;
   }
-  const normalized = normalizeAnyChannelId(candidate);
+  const normalized = normalizeAnyChannelId(normalizedCandidate);
   if (normalized) {
     return normalized;
   }

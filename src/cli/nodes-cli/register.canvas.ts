@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { writeBase64ToFile } from "../nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../nodes-canvas.js";
@@ -41,9 +42,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("canvas snapshot", async () => {
-          const formatOpt = String(opts.format ?? "jpg")
-            .trim()
-            .toLowerCase();
+          const formatOpt = normalizeLowercaseStringOrEmpty(String(opts.format ?? "jpg").trim());
           const formatForParams =
             formatOpt === "jpg" ? "jpeg" : formatOpt === "jpeg" ? "jpeg" : "png";
           if (formatForParams !== "png" && formatForParams !== "jpeg") {

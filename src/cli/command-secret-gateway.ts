@@ -393,7 +393,7 @@ function collectInactiveSurfacePathsFromDiagnostics(diagnostics: string[]): Set<
 }
 
 function isUnsupportedSecretsResolveError(err: unknown): boolean {
-  const message = formatErrorMessage(err).toLowerCase();
+  const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(err));
   if (!message.includes("secrets.resolve")) {
     return false;
   }

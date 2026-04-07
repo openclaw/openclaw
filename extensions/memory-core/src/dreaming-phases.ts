@@ -128,7 +128,7 @@ function isGenericDailyHeading(heading: string): boolean {
   if (!normalized) {
     return true;
   }
-  const lower = normalized.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(normalized);
   if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
     return true;
   }
@@ -1103,8 +1103,7 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
 
 function tokenizeSnippet(snippet: string): Set<string> {
   return new Set(
-    snippet
-      .toLowerCase()
+    normalizeLowercaseStringOrEmpty(snippet)
       .split(/[^a-z0-9]+/i)
       .map((token) => token.trim())
       .filter(Boolean),

@@ -207,6 +207,7 @@ describe("node.invoke approval bypass", () => {
   const connectLinuxNode = async (
     onInvoke: (payload: unknown) => void,
     deviceIdentity?: DeviceIdentity,
+    commands: string[] = ["system.run"],
   ) => {
     let readyResolve: (() => void) | null = null;
     const ready = new Promise<void>((resolve) => {
@@ -226,7 +227,7 @@ describe("node.invoke approval bypass", () => {
       platform: "linux",
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
-      commands: ["system.run"],
+      commands,
       deviceIdentity: resolvedDeviceIdentity,
       onHelloOk: () => readyResolve?.(),
       onEvent: (evt) => {
@@ -316,6 +317,39 @@ describe("node.invoke approval bypass", () => {
         expect(res.error?.message ?? "", testCase.name).toContain(testCase.expectedError);
         await expectNoForwardedInvoke(() => sawInvoke);
       }
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("rejects browser.proxy persistent profile mutations before forwarding", async () => {
+    let sawInvoke = false;
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      undefined,
+      ["browser.proxy"],
+    );
+    const ws = await connectOperator(["operator.write"]);
+    try {
+      const nodeId = await getConnectedNodeId(ws);
+      const res = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "browser.proxy",
+        params: {
+          method: "POST",
+          path: "/profiles/create",
+          body: { name: "poc", cdpUrl: "http://127.0.0.1:9222" },
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain(
+        "node.invoke cannot mutate persistent browser profiles via browser.proxy",
+      );
+      await expectNoForwardedInvoke(() => sawInvoke);
     } finally {
       ws.close();
       node.stop();

@@ -33,7 +33,11 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../../shared/string-coerce.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -805,7 +809,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       canonicalParentSessionKey = parent.canonicalKey;
     }
-    const loweredRequestedKey = requestedKey?.toLowerCase();
+    const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
     const key = requestedKey
       ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
         ? loweredRequestedKey

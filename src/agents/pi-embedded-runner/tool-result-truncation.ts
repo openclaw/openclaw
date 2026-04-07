@@ -3,6 +3,7 @@ import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { log } from "./logger.js";
 import { formatContextLimitTruncationNotice } from "./tool-result-context-guard.js";
@@ -71,7 +72,7 @@ const MIDDLE_OMISSION_MARKER =
  */
 function hasImportantTail(text: string): boolean {
   // Check last ~2000 chars for error-like patterns
-  const tail = text.slice(-2000).toLowerCase();
+  const tail = normalizeLowercaseStringOrEmpty(text.slice(-2000));
   return (
     /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/.test(tail) ||
     // JSON closing — if the output is JSON, the tail has closing structure

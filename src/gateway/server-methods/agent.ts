@@ -28,7 +28,10 @@ import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { createRunningTaskRun } from "../../tasks/task-executor.js";
 import {
   normalizeDeliveryContext,
@@ -502,7 +505,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      const resetReason = resetCommandMatch[1]?.toLowerCase() === "new" ? "new" : "reset";
+      const resetReason =
+        normalizeOptionalLowercaseString(resetCommandMatch[1]) === "new" ? "new" : "reset";
       const resetResult = await runSessionResetFromAgent({
         key: requestedSessionKey,
         reason: resetReason,

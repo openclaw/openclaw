@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedBrowserConfig } from "./config.js";
 
 export type BrowserExecutable = {
@@ -121,7 +122,7 @@ function execText(
 }
 
 function inferKindFromIdentifier(identifier: string): BrowserExecutable["kind"] {
-  const id = identifier.toLowerCase();
+  const id = normalizeLowercaseStringOrEmpty(identifier);
   if (id.includes("brave")) {
     return "brave";
   }
@@ -146,7 +147,7 @@ function inferKindFromIdentifier(identifier: string): BrowserExecutable["kind"] 
 }
 
 function inferKindFromExecutableName(name: string): BrowserExecutable["kind"] {
-  const lower = name.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(name);
   if (lower.includes("brave")) {
     return "brave";
   }
@@ -285,7 +286,7 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
   if (!resolved) {
     return null;
   }
-  const exeName = path.posix.basename(resolved).toLowerCase();
+  const exeName = normalizeLowercaseStringOrEmpty(path.posix.basename(resolved));
   if (!CHROMIUM_EXE_NAMES.has(exeName)) {
     return null;
   }
@@ -307,7 +308,7 @@ function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   if (!exists(exePath)) {
     return null;
   }
-  const exeName = path.win32.basename(exePath).toLowerCase();
+  const exeName = normalizeLowercaseStringOrEmpty(path.win32.basename(exePath));
   if (!CHROMIUM_EXE_NAMES.has(exeName)) {
     return null;
   }
@@ -464,7 +465,7 @@ function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecu
 function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | null {
   for (const candidate of candidates) {
     if (exists(candidate)) {
-      const normalizedPath = candidate.toLowerCase();
+      const normalizedPath = normalizeLowercaseStringOrEmpty(candidate);
       return {
         kind:
           normalizedPath.includes("beta") ||

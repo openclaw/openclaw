@@ -6,6 +6,7 @@ import {
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { readStringParam } from "./common.js";
 
@@ -53,7 +54,7 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
 
   const origin = url.origin;
   // Key: protocol + host only, lowercased. (host includes IPv6 brackets + port when present)
-  const key = `${url.protocol}//${url.host.toLowerCase()}`;
+  const key = `${url.protocol}//${normalizeLowercaseStringOrEmpty(url.host)}`;
   return { origin, key };
 }
 

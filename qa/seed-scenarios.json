@@ -100,6 +100,23 @@
     "codeRefs": ["extensions/qa-lab/src/report.ts"]
   },
   {
+    "id": "approval-turn-tool-followthrough",
+    "title": "Approval turn tool followthrough",
+    "surface": "harness",
+    "objective": "Verify a short approval like \"ok do it\" triggers immediate tool use instead of fake-progress narration.",
+    "successCriteria": [
+      "Agent can keep the pre-action turn brief.",
+      "The short approval leads to a real tool call on the next turn.",
+      "Final answer uses tool-derived evidence instead of placeholder progress text."
+    ],
+    "docsRefs": ["docs/help/testing.md", "docs/channels/qa-channel.md"],
+    "codeRefs": [
+      "extensions/qa-lab/src/suite.ts",
+      "extensions/qa-lab/src/mock-openai-server.ts",
+      "src/agents/pi-embedded-runner/run/incomplete-turn.ts"
+    ]
+  },
+  {
     "id": "reaction-edit-delete",
     "title": "Reaction, edit, delete lifecycle",
     "surface": "message-actions",
@@ -146,6 +163,23 @@
     "codeRefs": ["src/agents/system-prompt.ts", "extensions/qa-lab/src/report.ts"]
   },
   {
+    "id": "subagent-fanout-synthesis",
+    "title": "Subagent fanout synthesis",
+    "surface": "subagents",
+    "objective": "Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.",
+    "successCriteria": [
+      "Parent flow launches at least two bounded subagent tasks.",
+      "Both delegated results are acknowledged in the main flow.",
+      "Final answer synthesizes both worker outputs in one reply."
+    ],
+    "docsRefs": ["docs/tools/subagents.md", "docs/help/testing.md"],
+    "codeRefs": [
+      "src/agents/subagent-spawn.ts",
+      "src/agents/system-prompt.ts",
+      "extensions/qa-lab/src/suite.ts"
+    ]
+  },
+  {
     "id": "thread-follow-up",
     "title": "Threaded follow-up",
     "surface": "thread",
@@ -183,6 +217,44 @@
     ],
     "docsRefs": ["docs/concepts/memory.md", "docs/tools/index.md"],
     "codeRefs": ["extensions/memory-core/src/tools.ts", "extensions/qa-lab/src/suite.ts"]
+  },
+  {
+    "id": "session-memory-ranking",
+    "title": "Session memory ranking",
+    "surface": "memory",
+    "objective": "Verify session-transcript memory can outrank stale durable notes and drive the final answer toward the newer fact.",
+    "successCriteria": [
+      "Session memory indexing is enabled for the scenario.",
+      "Search ranks the newer transcript-backed fact ahead of the stale durable note.",
+      "The agent uses memory tools and answers with the current fact, not the stale one."
+    ],
+    "docsRefs": ["docs/concepts/memory-search.md", "docs/reference/memory-config.md"],
+    "codeRefs": [
+      "extensions/memory-core/src/tools.ts",
+      "extensions/memory-core/src/memory/manager.ts",
+      "extensions/qa-lab/src/suite.ts"
+    ]
+  },
+  {
+    "id": "thread-memory-isolation",
+    "title": "Thread memory isolation",
+    "surface": "memory",
+    "objective": "Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.",
+    "successCriteria": [
+      "Agent uses memory tools inside the thread.",
+      "The hidden fact is answered correctly in the thread.",
+      "No root-channel outbound message leaks during the threaded memory reply."
+    ],
+    "docsRefs": [
+      "docs/concepts/memory-search.md",
+      "docs/channels/qa-channel.md",
+      "docs/channels/group-messages.md"
+    ],
+    "codeRefs": [
+      "extensions/memory-core/src/tools.ts",
+      "extensions/qa-channel/src/protocol.ts",
+      "extensions/qa-lab/src/suite.ts"
+    ]
   },
   {
     "id": "model-switch-tool-continuity",
@@ -270,6 +342,23 @@
     ]
   },
   {
+    "id": "image-generation-roundtrip",
+    "title": "Image generation roundtrip",
+    "surface": "image-generation",
+    "objective": "Verify a generated image is saved as media, reattached on the next turn, and described correctly through the vision path.",
+    "successCriteria": [
+      "image_generate produces a saved MEDIA artifact.",
+      "The generated artifact is reattached on a follow-up turn.",
+      "The follow-up vision answer describes the generated scene rather than a generic attachment placeholder."
+    ],
+    "docsRefs": ["docs/tools/image-generation.md", "docs/help/testing.md"],
+    "codeRefs": [
+      "src/agents/tools/image-generate-tool.ts",
+      "src/gateway/chat-attachments.ts",
+      "extensions/qa-lab/src/mock-openai-server.ts"
+    ]
+  },
+  {
     "id": "config-patch-hot-apply",
     "title": "Config patch skill disable",
     "surface": "config",
@@ -294,6 +383,28 @@
     ],
     "docsRefs": ["docs/gateway/configuration.md", "docs/gateway/protocol.md"],
     "codeRefs": ["src/gateway/server-methods/config.ts", "src/gateway/server-restart-sentinel.ts"]
+  },
+  {
+    "id": "config-restart-capability-flip",
+    "title": "Config restart capability flip",
+    "surface": "config",
+    "objective": "Verify a restart-triggering config change flips capability inventory and the same session successfully uses the newly restored tool after wake-up.",
+    "successCriteria": [
+      "Capability is absent before the restart-triggering patch.",
+      "Restart sentinel wakes the same session back up after config patch.",
+      "The restored capability appears in tools.effective and works in the follow-up turn."
+    ],
+    "docsRefs": [
+      "docs/gateway/configuration.md",
+      "docs/gateway/protocol.md",
+      "docs/tools/image-generation.md"
+    ],
+    "codeRefs": [
+      "src/gateway/server-methods/config.ts",
+      "src/gateway/server-restart-sentinel.ts",
+      "src/gateway/server-methods/tools-effective.ts",
+      "extensions/qa-lab/src/suite.ts"
+    ]
   },
   {
     "id": "runtime-inventory-drift-check",

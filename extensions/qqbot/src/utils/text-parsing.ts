@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { RefAttachmentSummary } from "../ref-index-store.js";
 
 /** Replace QQ face tags with readable text labels. */
@@ -62,7 +63,7 @@ export function buildAttachmentSummaries(
     return undefined;
   }
   return attachments.map((att, idx) => {
-    const ct = att.content_type?.toLowerCase() ?? "";
+    const ct = normalizeLowercaseStringOrEmpty(att.content_type);
     let type: RefAttachmentSummary["type"] = "unknown";
     if (ct.startsWith("image/")) {
       type = "image";

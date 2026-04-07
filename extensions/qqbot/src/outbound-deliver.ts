@@ -6,6 +6,7 @@
  * 2. `sendPlainReply` handles plain replies, including markdown images and mixed text/media.
  */
 
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   sendC2CMessage,
   sendDmMessage,
@@ -151,7 +152,7 @@ export async function parseAndSendMediaTags(
 
   const tagCounts = mediaTagMatches.reduce(
     (acc, m) => {
-      const t = m[1].toLowerCase();
+      const t = normalizeLowercaseStringOrEmpty(m[1]);
       acc[t] = (acc[t] ?? 0) + 1;
       return acc;
     },
@@ -184,7 +185,7 @@ export async function parseAndSendMediaTags(
       sendQueue.push({ type: "text", content: filterInternalMarkers(textBefore) });
     }
 
-    const tagName = match[1].toLowerCase();
+    const tagName = normalizeLowercaseStringOrEmpty(match[1]);
     let mediaPath = decodeMediaPath(match[2]?.trim() ?? "", log, prefix);
 
     if (mediaPath) {

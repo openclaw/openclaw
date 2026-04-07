@@ -629,12 +629,12 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private isCollectionAlreadyExistsError(message: string): boolean {
-    const lower = message.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(message);
     return lower.includes("already exists") || lower.includes("exists");
   }
 
   private isCollectionMissingError(message: string): boolean {
-    const lower = message.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(message);
     return (
       lower.includes("not found") || lower.includes("does not exist") || lower.includes("missing")
     );
@@ -642,7 +642,10 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private isMissingCollectionSearchError(err: unknown): boolean {
     const message = formatErrorMessage(err);
-    return this.isCollectionMissingError(message) && message.toLowerCase().includes("collection");
+    return (
+      this.isCollectionMissingError(message) &&
+      normalizeLowercaseStringOrEmpty(message).includes("collection")
+    );
   }
 
   private async tryRepairMissingCollectionSearch(err: unknown): Promise<boolean> {
@@ -792,14 +795,16 @@ export class QmdMemoryManager implements MemorySearchManager {
         ? path.resolve(value)
         : path.resolve(this.workspaceDir, value);
       const normalized = path.normalize(resolved);
-      return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+      return process.platform === "win32"
+        ? normalizeLowercaseStringOrEmpty(normalized)
+        : normalized;
     };
     return normalize(left) === normalize(right);
   }
 
   private shouldRepairNullByteCollectionError(err: unknown): boolean {
     const message = formatErrorMessage(err);
-    const lower = message.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(message);
     return (
       (lower.includes("enotdir") ||
         lower.includes("not a directory") ||
@@ -811,7 +816,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private shouldRepairDuplicateDocumentConstraint(err: unknown): boolean {
     const message = formatErrorMessage(err);
-    const lower = message.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(message);
     return (
       lower.includes("unique constraint failed") &&
       lower.includes("documents.collection") &&
@@ -1365,7 +1370,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       return true;
     }
     const message = formatErrorMessage(err);
-    const normalized = message.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(message);
     return normalized.includes("timed out");
   }
 
@@ -1952,7 +1957,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private sanitizeCollectionNameSegment(input: string): string {
-    const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+    const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
     const trimmed = lower.replace(/^-+|-+$/g, "");
     return trimmed || "agent";
   }
@@ -2087,7 +2092,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     collection?: string;
     collectionRelativePath?: string;
   } | null {
-    if (!fileRef.toLowerCase().startsWith("qmd://")) {
+    if (!normalizeLowercaseStringOrEmpty(fileRef).startsWith("qmd://")) {
       return null;
     }
     try {
@@ -2203,16 +2208,19 @@ export class QmdMemoryManager implements MemorySearchManager {
     const normalizePart = (value: string): string =>
       value
         .normalize("NFKD")
-        .toLowerCase()
+        .toLocaleLowerCase()
         .replace(/[^\p{Letter}\p{Number}]+/gu, "-")
         .replace(/-{2,}/g, "-")
         .replace(/^-+|-+$/g, "");
     const normalizedName = normalizePart(parsed.name);
     const normalizedExt = parsed.ext
       .normalize("NFKD")
-      .toLowerCase()
+      .toLocaleLowerCase()
       .replace(/[^\p{Letter}\p{Number}.]+/gu, "");
-    const fallbackName = parsed.name.normalize("NFKD").toLowerCase().replace(/\s+/g, "-").trim();
+    const fallbackName = normalizeLowercaseStringOrEmpty(parsed.name.normalize("NFKD")).replace(
+      /\s+/g,
+      "-",
+    );
     return `${normalizedName || fallbackName || "file"}${normalizedExt}`;
   }
 
@@ -2523,13 +2531,13 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private isSqliteBusyError(err: unknown): boolean {
     const message = formatErrorMessage(err);
-    const normalized = message.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(message);
     return normalized.includes("sqlite_busy") || normalized.includes("database is locked");
   }
 
   private isUnsupportedQmdOptionError(err: unknown): boolean {
     const message = formatErrorMessage(err);
-    const normalized = message.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(message);
     return (
       normalized.includes("unknown flag") ||
       normalized.includes("unknown option") ||

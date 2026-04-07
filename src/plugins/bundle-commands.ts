@@ -100,7 +100,7 @@ function listMarkdownFilesRecursive(rootDir: string): string[] {
         pending.push(fullPath);
         continue;
       }
-      if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+      if (entry.isFile() && normalizeOptionalLowercaseString(entry.name)?.endsWith(".md")) {
         files.push(fullPath);
       }
     }

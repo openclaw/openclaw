@@ -5,7 +5,10 @@ import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { SlackAttachment, SlackFile } from "../types.js";
 
 function isSlackHostname(hostname: string): boolean {
@@ -135,7 +138,9 @@ function resolveSlackMediaMimetype(
 }
 
 function looksLikeHtmlBuffer(buffer: Buffer): boolean {
-  const head = buffer.subarray(0, 512).toString("utf-8").replace(/^\s+/, "").toLowerCase();
+  const head = normalizeLowercaseStringOrEmpty(
+    buffer.subarray(0, 512).toString("utf-8").replace(/^\s+/, ""),
+  );
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
 
@@ -235,8 +240,8 @@ export async function resolveSlackMedia(params: {
 
         // Guard against auth/login HTML pages returned instead of binary media.
         // Allow user-provided HTML files through.
-        const fileMime = file.mimetype?.toLowerCase();
-        const fileName = file.name?.toLowerCase() ?? "";
+        const fileMime = normalizeOptionalLowercaseString(file.mimetype);
+        const fileName = normalizeLowercaseStringOrEmpty(file.name);
         const isExpectedHtml =
           fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
         if (!isExpectedHtml) {

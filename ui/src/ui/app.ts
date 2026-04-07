@@ -72,6 +72,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -118,7 +119,7 @@ function resolveOnboardingMode(): boolean {
   if (!raw) {
     return false;
   }
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 

@@ -1,5 +1,6 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger, retryAsync } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("venice-models");
 
@@ -504,7 +505,7 @@ function isRetryableVeniceDiscoveryError(err: unknown): boolean {
   if (err instanceof Error && err.name === "AbortError") {
     return true;
   }
-  if (err instanceof TypeError && err.message.toLowerCase() === "fetch failed") {
+  if (err instanceof TypeError && normalizeLowercaseStringOrEmpty(err.message) === "fetch failed") {
     return true;
   }
   return hasRetryableNetworkCode(err);
@@ -609,11 +610,12 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
         models.push(definition);
       } else {
         const apiSpec = apiModel.model_spec;
+        const lowerModelId = normalizeLowercaseStringOrEmpty(apiModel.id);
         const isReasoning =
           apiSpec?.capabilities?.supportsReasoning ||
-          apiModel.id.toLowerCase().includes("thinking") ||
-          apiModel.id.toLowerCase().includes("reason") ||
-          apiModel.id.toLowerCase().includes("r1");
+          lowerModelId.includes("thinking") ||
+          lowerModelId.includes("reason") ||
+          lowerModelId.includes("r1");
 
         const hasVision = apiSpec?.capabilities?.supportsVision === true;
 

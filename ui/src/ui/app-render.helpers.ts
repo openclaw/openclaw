@@ -16,6 +16,7 @@ import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import {
   listThinkingLevelLabels,
@@ -607,7 +608,7 @@ function buildThinkingOptions(
     if (!trimmed) {
       return;
     }
-    const key = trimmed.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(trimmed);
     if (seen.has(key)) {
       return;
     }
@@ -624,7 +625,7 @@ function buildThinkingOptions(
   };
 
   for (const label of listThinkingLevelLabels(provider)) {
-    const normalized = normalizeThinkLevel(label) ?? label.trim().toLowerCase();
+    const normalized = normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label);
     addOption(normalized);
   }
   if (currentOverride) {
@@ -807,7 +808,7 @@ function capitalize(s: string): string {
  * fallback display name.  Exported for testing.
  */
 export function parseSessionKey(key: string): SessionKeyInfo {
-  const normalized = key.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(key);
 
   // ── Main session ─────────────────────────────────
   if (key === "main" || key === "agent:main:main") {
@@ -878,7 +879,7 @@ export function resolveSessionDisplayName(
 }
 
 export function isCronSessionKey(key: string): boolean {
-  const normalized = key.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(key);
   if (!normalized) {
     return false;
   }
@@ -946,7 +947,7 @@ export function resolveSessionOptionGroups(
     const parsed = parseAgentSessionKey(key);
     const group = parsed
       ? ensureGroup(
-          `agent:${parsed.agentId.toLowerCase()}`,
+          `agent:${normalizeLowercaseStringOrEmpty(parsed.agentId)}`,
           resolveAgentGroupLabel(state, parsed.agentId),
         )
       : ensureGroup("other", "Other Sessions");
@@ -1060,9 +1061,9 @@ function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResul
 }
 
 function resolveAgentGroupLabel(state: AppViewState, agentIdRaw: string): string {
-  const normalized = agentIdRaw.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(agentIdRaw);
   const agent = (state.agentsList?.agents ?? []).find(
-    (entry) => entry.id.trim().toLowerCase() === normalized,
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalized,
   );
   const name = agent?.identity?.name?.trim() || agent?.name?.trim() || "";
   return name && name !== agentIdRaw ? `${name} (${agentIdRaw})` : agentIdRaw;

@@ -369,7 +369,7 @@ export abstract class MemoryManagerSyncOps {
         }
         if (
           stat.isFile() &&
-          (entry.toLowerCase().endsWith(".md") ||
+          (normalizeLowercaseStringOrEmpty(entry).endsWith(".md") ||
             classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
         ) {
           watchPaths.add(entry);

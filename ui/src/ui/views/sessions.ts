@@ -4,6 +4,7 @@ import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
   GatewaySessionRow,
   SessionCompactionCheckpoint,
@@ -82,7 +83,7 @@ function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
     return "";
   }
-  const normalized = provider.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
@@ -144,15 +145,15 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
 }
 
 function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
-  const q = query.trim().toLowerCase();
+  const q = normalizeLowercaseStringOrEmpty(query);
   if (!q) {
     return rows;
   }
   return rows.filter((row) => {
-    const key = (row.key ?? "").toLowerCase();
-    const label = (row.label ?? "").toLowerCase();
-    const kind = (row.kind ?? "").toLowerCase();
-    const displayName = (row.displayName ?? "").toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(row.key);
+    const label = normalizeLowercaseStringOrEmpty(row.label);
+    const kind = normalizeLowercaseStringOrEmpty(row.kind);
+    const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
     return key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q);
   });
 }

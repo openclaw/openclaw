@@ -1,5 +1,6 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 const log = createSubsystemLogger("chutes-models");
 
@@ -564,12 +565,13 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
       }
       seen.add(id);
 
+      const lowerId = normalizeLowercaseStringOrEmpty(id);
       const isReasoning =
         entry.supported_features?.includes("reasoning") ||
-        id.toLowerCase().includes("r1") ||
-        id.toLowerCase().includes("thinking") ||
-        id.toLowerCase().includes("reason") ||
-        id.toLowerCase().includes("tee");
+        lowerId.includes("r1") ||
+        lowerId.includes("thinking") ||
+        lowerId.includes("reason") ||
+        lowerId.includes("tee");
 
       const input: Array<"text" | "image"> = (entry.input_modalities || ["text"]).filter(
         (i): i is "text" | "image" => i === "text" || i === "image",

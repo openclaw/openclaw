@@ -37,6 +37,7 @@ export function makeAttemptResult(
     timedOut: false,
     timedOutDuringCompaction: false,
     promptError: null,
+    promptErrorSource: null,
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
     toolMetas,
