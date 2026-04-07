@@ -118,7 +118,9 @@ function expectCompatChainApplied(params: {
     | "realtimeTranscriptionProviders"
     | "realtimeVoiceProviders"
     | "mediaUnderstandingProviders"
-    | "imageGenerationProviders";
+    | "imageGenerationProviders"
+    | "videoGenerationProviders"
+    | "musicGenerationProviders";
   contractKey: string;
   cfg: OpenClawConfig;
   allowlistCompat: OpenClawConfig;
@@ -223,6 +225,8 @@ describe("resolvePluginCapabilityProviders", () => {
     ["realtimeVoiceProviders", "realtimeVoiceProviders"],
     ["mediaUnderstandingProviders", "mediaUnderstandingProviders"],
     ["imageGenerationProviders", "imageGenerationProviders"],
+    ["videoGenerationProviders", "videoGenerationProviders"],
+    ["musicGenerationProviders", "musicGenerationProviders"],
   ] as const)("applies bundled compat before fallback loading for %s", (key, contractKey) => {
     const { cfg, allowlistCompat, enablementCompat } = createCompatChainConfig();
     expectCompatChainApplied({
@@ -231,42 +235,6 @@ describe("resolvePluginCapabilityProviders", () => {
       cfg,
       allowlistCompat,
       enablementCompat,
-    });
-  });
-
-  it("applies allowlist compat before enablement when fallback bundle loading runs", () => {
-    const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
-    const allowlistCompat = {
-      plugins: {
-        allow: ["custom-plugin", "openai"],
-      },
-    } as OpenClawConfig;
-    const enablementCompat = {
-      plugins: {
-        allow: ["custom-plugin", "openai"],
-        entries: { openai: { enabled: true } },
-      },
-    };
-
-    setBundledCapabilityFixture("speechProviders");
-    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
-
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({ key: "speechProviders", cfg }),
-    );
-
-    expect(mocks.withBundledPluginEnablementCompat).toHaveBeenCalledWith({
-      config: allowlistCompat,
-      pluginIds: ["openai"],
-    });
-    expect(mocks.withBundledPluginVitestCompat).toHaveBeenCalledWith({
-      config: enablementCompat,
-      pluginIds: ["openai"],
-      env: process.env,
-    });
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      config: enablementCompat,
     });
   });
 
