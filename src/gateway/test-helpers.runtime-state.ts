@@ -22,6 +22,7 @@ export type AgentCommandFn = (...args: unknown[]) => Promise<void>;
 export type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
 export type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
+export type CompactEmbeddedPiSessionFn = (...args: unknown[]) => Promise<unknown>;
 
 const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
 
@@ -49,6 +50,7 @@ export type GatewayTestHoistedState = {
     abortCalls: string[];
     waitCalls: string[];
     waitResults: Map<string, boolean>;
+    compactEmbeddedPiSession: Mock<CompactEmbeddedPiSessionFn>;
   };
   testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
   getReplyFromConfig: Mock<GetReplyFromConfigFn>;
@@ -99,6 +101,16 @@ const gatewayTestHoisted = vi.hoisted(() => {
       abortCalls: [],
       waitCalls: [],
       waitResults: new Map<string, boolean>(),
+      compactEmbeddedPiSession: vi.fn().mockResolvedValue({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "summary",
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 120,
+          tokensAfter: 80,
+        },
+      }),
     },
     testTailscaleWhois: { value: null },
     getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),

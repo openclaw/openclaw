@@ -1,8 +1,7 @@
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeXaiModelId } from "../model-id.js";
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+export { isRecord };
 
 export function coerceXaiToolConfig<TConfig extends Record<string, unknown>>(
   config: Record<string, unknown> | undefined,

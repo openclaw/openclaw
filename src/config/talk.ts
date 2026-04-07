@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { isPlainObject, isRecord } from "../utils.js";
+import { isRecord } from "../utils.js";
 import type {
   ResolvedTalkConfig,
   TalkConfig,

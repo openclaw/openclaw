@@ -1,3 +1,3 @@
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+
+export { isRecord };

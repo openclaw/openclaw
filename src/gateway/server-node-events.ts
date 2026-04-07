@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
@@ -408,7 +409,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
                   await deleteMediaBuffer(ref.id);
                 } catch (cleanupErr) {
                   ctx.logGateway.warn(
-                    `Failed to cleanup orphaned media ${ref.id}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`,
+                    `Failed to cleanup orphaned media ${ref.id}: ${formatErrorMessage(cleanupErr)}`,
                   );
                 }
               }
@@ -416,9 +417,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
             return;
           }
         } catch (err) {
-          ctx.logGateway.warn(
-            `agent.request attachment parse failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          ctx.logGateway.warn(`agent.request attachment parse failed: ${formatErrorMessage(err)}`);
           return;
         }
       }

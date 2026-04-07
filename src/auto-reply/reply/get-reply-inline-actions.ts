@@ -6,6 +6,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -255,7 +256,7 @@ export async function handleInlineActions(params: {
         typing.cleanup();
         return { kind: "reply", reply: { text } };
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = formatErrorMessage(err);
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ ${message}` } };
       }

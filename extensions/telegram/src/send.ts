@@ -1080,7 +1080,7 @@ export async function reactMessageTelegram(
   try {
     await requestWithDiag(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatErrorMessage(err);
     if (/REACTION_INVALID/i.test(msg)) {
       return { ok: false as const, warning: `Reaction unavailable: ${trimmedEmoji}` };
     }
