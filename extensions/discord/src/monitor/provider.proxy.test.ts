@@ -113,9 +113,11 @@ vi.mock("ws", () => ({
 
 describe("createDiscordGatewayPlugin", () => {
   let createDiscordGatewayPlugin: typeof import("./gateway-plugin.js").createDiscordGatewayPlugin;
+  let waitForDiscordGatewayPluginRegistration: typeof import("./gateway-plugin.js").waitForDiscordGatewayPluginRegistration;
 
   beforeAll(async () => {
-    ({ createDiscordGatewayPlugin } = await import("./gateway-plugin.js"));
+    ({ createDiscordGatewayPlugin, waitForDiscordGatewayPluginRegistration } =
+      await import("./gateway-plugin.js"));
   });
 
   function createRuntime() {
@@ -154,6 +156,22 @@ describe("createDiscordGatewayPlugin", () => {
 
   async function registerGatewayClient(plugin: unknown) {
     await (
+      plugin as {
+        registerClient: (client: {
+          options: { token: string };
+          registerListener: typeof baseRegisterClientSpy;
+          unregisterListener: ReturnType<typeof vi.fn>;
+        }) => Promise<void>;
+      }
+    ).registerClient({
+      options: { token: "token-123" },
+      registerListener: baseRegisterClientSpy,
+      unregisterListener: vi.fn(),
+    });
+  }
+
+  function startIgnoredGatewayRegistration(plugin: unknown) {
+    void (
       plugin as {
         registerClient: (client: {
           options: { token: string };
@@ -274,6 +292,39 @@ describe("createDiscordGatewayPlugin", () => {
       status: 401,
       text: async () => "401: Unauthorized",
     } as Response);
+  });
+
+  it("keeps Carbon-ignored fatal metadata failures handled for supervised startup", async () => {
+    const runtime = createRuntime();
+    const unhandledReasons: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledReasons.push(reason);
+    };
+    globalFetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => "401: Unauthorized",
+    } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      startIgnoredGatewayRegistration(plugin);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(unhandledReasons).toHaveLength(0);
+      const registration = waitForDiscordGatewayPluginRegistration(plugin);
+      if (!registration) {
+        throw new Error("expected Discord gateway registration promise");
+      }
+      await expect(registration).rejects.toThrow("Failed to get gateway information from Discord");
+      expect(baseRegisterClientSpy).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
   });
 
   it("uses proxy agent for gateway WebSocket when configured", async () => {
