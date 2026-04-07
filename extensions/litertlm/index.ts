@@ -17,8 +17,8 @@ export default definePluginEntry({
         order: "late",
         run: async () => null,
       },
-      createStreamFn: ({ model }) => {
-        return createLiteRtLmShimStreamFn({ model });
+      createStreamFn: ({ config, model }) => {
+        return createLiteRtLmShimStreamFn({ model, config });
       },
       resolveSyntheticAuth: () => {
         return {

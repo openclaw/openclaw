@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { LiteRtLmModelPreference } from "./provider-models.js";
 
 export type LiteRtLmRuntimeConfig = {
@@ -81,6 +82,7 @@ export type LiteRtLmConfigResolutionInput = {
   model: LiteRtLmModelPreference | { modelId: string };
   env?: NodeJS.ProcessEnv;
   providerConfig?: LiteRtLmProviderConfig;
+  config?: OpenClawConfig;
 };
 
 export function getDefaultLiteRtLmBundledShimPath() {
@@ -90,11 +92,28 @@ export function getDefaultLiteRtLmBundledShimPath() {
   );
 }
 
+export function getLiteRtLmProviderConfig(config?: OpenClawConfig): LiteRtLmProviderConfig {
+  const raw = config?.models?.providers?.["litertlm-local"] as Record<string, unknown> | undefined;
+  if (!raw) {
+    return {};
+  }
+  return {
+    pythonPath: typeof raw.pythonPath === "string" ? raw.pythonPath : undefined,
+    shimPath: typeof raw.shimPath === "string" ? raw.shimPath : undefined,
+    modelFile: typeof raw.modelFile === "string" ? raw.modelFile : undefined,
+    timeoutMs: typeof raw.timeoutMs === "number" ? raw.timeoutMs : undefined,
+    backend: typeof raw.backend === "string" ? raw.backend : undefined,
+  };
+}
+
 export function resolveLiteRtLmRuntimeConfig(
   input: LiteRtLmConfigResolutionInput,
 ): LiteRtLmRuntimeConfig {
   const env = input.env ?? process.env;
-  const providerConfig = input.providerConfig ?? {};
+  const providerConfig = {
+    ...getLiteRtLmProviderConfig(input.config),
+    ...(input.providerConfig ?? {}),
+  };
 
   const pythonPath =
     providerConfig.pythonPath?.trim() || env.OPENCLAW_LITERTLM_PYTHON?.trim() || "python3";
