@@ -383,7 +383,7 @@ def test_config_model_router_keys():
 
 def test_deep_research_returns_quality_metrics():
     """Verify the pipeline returns quality_metrics in the result dict."""
-    from src.deep_research import DeepResearchPipeline
+    from src.research._core import DeepResearchPipeline
 
     mcp = MagicMock()
     mcp.call_tool = AsyncMock(return_value="mock result")

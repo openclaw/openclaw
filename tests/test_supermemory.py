@@ -6,7 +6,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.supermemory import SuperMemory, MemoryRecord
+from src.memory_system.legacy import SuperMemory, MemoryRecord
 
 
 # ---------------------------------------------------------------------------

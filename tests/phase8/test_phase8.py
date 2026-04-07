@@ -16,7 +16,7 @@ class TestHITLApproval(unittest.TestCase):
     """Test the Human-in-the-Loop approval gate in llm_gateway."""
 
     def setUp(self):
-        from src import llm_gateway
+        from src.llm import gateway as llm_gateway
         from src import hitl_approval
         self.gw = llm_gateway
         self.hitl = hitl_approval
@@ -180,7 +180,7 @@ class TestVisionModelRouting(unittest.TestCase):
     """Test the vision model selection logic in llm_gateway."""
 
     def test_vision_models_list(self):
-        from src.llm_gateway import _VISION_MODELS
+        from src.llm.gateway import _VISION_MODELS
         self.assertIsInstance(_VISION_MODELS, list)
         self.assertTrue(len(_VISION_MODELS) >= 1)
         self.assertTrue(all(isinstance(m, str) for m in _VISION_MODELS))
@@ -188,7 +188,7 @@ class TestVisionModelRouting(unittest.TestCase):
     def test_route_llm_signature_accepts_image(self):
         """Verify route_llm accepts image_url and image_base64 kwargs."""
         import inspect
-        from src.llm_gateway import route_llm
+        from src.llm.gateway import route_llm
         sig = inspect.signature(route_llm)
         self.assertIn("image_url", sig.parameters)
         self.assertIn("image_base64", sig.parameters)
@@ -272,7 +272,7 @@ class TestPhase8Integration(unittest.TestCase):
     """Smoke tests for Phase 8 module imports and config."""
 
     def test_import_hitl_gateway(self):
-        from src.llm_gateway import (
+        from src.llm.gateway import (
             assess_risk,
             set_approval_callback,
             resolve_approval,

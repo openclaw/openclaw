@@ -34,7 +34,7 @@ class TestLLMGatewayStress(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         import json
-        from src.llm_gateway import configure
+        from src.llm.gateway import configure
         with open("config/openclaw_config.json", encoding="utf-8") as f:
             cfg = json.load(f)
         # Disable HITL for stress tests (no approval gates blocking)
@@ -43,7 +43,7 @@ class TestLLMGatewayStress(unittest.TestCase):
 
     def test_50_concurrent_route_llm_no_crash(self):
         """Fire 50 simultaneous route_llm calls — must not raise SystemExit or unhandled exception."""
-        from src.llm_gateway import route_llm
+        from src.llm.gateway import route_llm
 
         async def _stress():
             tasks = []
@@ -132,7 +132,7 @@ class TestLLMGatewayStress(unittest.TestCase):
 
     def test_openrouter_connection_failure_graceful(self):
         """Simulated OpenRouter failure must not crash — must return empty string or fallback."""
-        from src.llm_gateway import route_llm
+        from src.llm.gateway import route_llm
 
         async def _test():
             # With invalid config, OpenRouter will fail — should gracefully fallback
@@ -150,7 +150,7 @@ class TestLLMGatewayStress(unittest.TestCase):
 
     def test_vision_routing_with_image(self):
         """Vision route must select a vision-capable model when image_base64 is present."""
-        from src.llm_gateway import route_llm, _VISION_MODELS
+        from src.llm.gateway import route_llm, _VISION_MODELS
 
         async def _test():
             # This will fail at the API level (no real key) but should not crash
@@ -361,7 +361,7 @@ class TestHITLPressure(unittest.TestCase):
     """Generate 5 risky tasks simultaneously — verify queue isolation."""
 
     def setUp(self):
-        from src import llm_gateway
+        from src.llm import gateway as llm_gateway
         from src import hitl_approval
         self.gw = llm_gateway
         self.hitl = hitl_approval
@@ -428,7 +428,7 @@ class TestHITLPressure(unittest.TestCase):
 
     def test_hitl_timeout_behavior(self):
         """Approval that exceeds timeout must return timeout message."""
-        from src.llm_gateway import route_llm
+        from src.llm.gateway import route_llm
 
         self.hitl._approval_config.clear()
         self.hitl._approval_config.update({"enabled": True, "budget_threshold": 0.01, "timeout_sec": 1})
@@ -449,7 +449,7 @@ class TestHITLPressure(unittest.TestCase):
 
     def test_hitl_approved_continues_execution(self):
         """An approved request must continue to the LLM call (not block)."""
-        from src.llm_gateway import route_llm
+        from src.llm.gateway import route_llm
 
         self.hitl._approval_config.clear()
         self.hitl._approval_config.update({"enabled": True, "budget_threshold": 0.01, "timeout_sec": 5})
@@ -489,28 +489,20 @@ class TestModuleImportCoverage(unittest.TestCase):
     }
 
     CORE_MODULES = [
-        "src.llm_gateway",
-        "src.pipeline_executor",
+        "src.llm.gateway",
+        "src.pipeline._core",
         "src.pipeline_schemas",
         "src.pipeline_utils",
         "src.safety_guardrails",
         "src.scheduler",
         "src.openrouter_client",
         "src.intent_classifier",
-        "src.code_validator",
-        "src.memory_enhanced",
-        "src.memory_gc",
-        "src.supermemory",
-        "src.rag_engine",
-        "src.task_queue",
-        "src.deep_research",
-        "src.research_enhanced",
-        "src.security_auditor",
-        "src.auto_rollback",
-        "src.agent_personas",
-        "src.archivist_telegram",
-        "src.gateway_commands",
-        "src.tailscale_monitor",
+        "src.validators.code_validator",
+        "src.memory_system.legacy",
+        "src.core.task_queue",
+        "src.research._core",
+        "src.core.auto_rollback",
+        "src.core.agent_personas",
         # AI subsystem
         "src.ai.agents",
         "src.ai.inference",
@@ -534,8 +526,6 @@ class TestModuleImportCoverage(unittest.TestCase):
         # MCP
         "src.mcp_client",
         "src.memory_mcp",
-        "src.websearch_mcp",
-        "src.shell_mcp",
         "src.parsers_mcp",
         # Tools & sandbox
         "src.tools.dynamic_sandbox",

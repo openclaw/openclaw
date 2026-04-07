@@ -80,7 +80,7 @@ async def test_boot():
     # ── Step 3: PipelineExecutor init ──
     print("\n── Step 3: PipelineExecutor Init ──")
     try:
-        from src.pipeline_executor import PipelineExecutor
+        from src.pipeline._core import PipelineExecutor
         pipeline = PipelineExecutor(config)
         record_ok("pipeline_executor", "PipelineExecutor created")
 

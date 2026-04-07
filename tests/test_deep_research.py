@@ -11,7 +11,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest.mock import AsyncMock, patch, MagicMock
-from src.deep_research import (
+from src.research._core import (
     DeepResearchPipeline,
     _DEPTH_PROFILES,
     _CONFIDENCE_THRESHOLD,
