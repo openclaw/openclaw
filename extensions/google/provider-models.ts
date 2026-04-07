@@ -150,7 +150,13 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       googleTemplateIds: GEMMA_TEMPLATE_IDS,
       cliTemplateIds: GEMMA_TEMPLATE_IDS,
     };
-    patch = { reasoning: true };
+    // Only Gemma 4 supports the Google thinking-level payload shape that pi-ai
+    // emits for reasoning-capable models. Older Gemma families would receive
+    // incompatible thinking payloads (handled in sanitizeGoogleThinkingPayload),
+    // so keep the reasoning override scoped to Gemma 4.
+    if (lower.startsWith("gemma-4")) {
+      patch = { reasoning: true };
+    }
   } else {
     return undefined;
   }
