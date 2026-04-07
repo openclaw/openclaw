@@ -89,9 +89,15 @@ describe("google video generation provider", () => {
     expect(GoogleGenAIMock).toHaveBeenCalledWith(
       expect.objectContaining({
         apiKey: "google-key",
+        httpOptions: expect.objectContaining({
+          apiVersion: "v1alpha",
+        }),
+      }),
+    );
+    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         httpOptions: expect.not.objectContaining({
           baseUrl: expect.anything(),
-          apiVersion: expect.anything(),
         }),
       }),
     );
@@ -115,6 +121,44 @@ describe("google video generation provider", () => {
         inputVideos: [{ buffer: Buffer.from("vid"), mimeType: "video/mp4" }],
       }),
     ).rejects.toThrow("Google video generation does not support image and video inputs together.");
+  });
+
+  it("omits apiVersion for GA models", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: Buffer.from("mp4-bytes").toString("base64"),
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "google",
+      model: "veo-2.0-generate-001",
+      prompt: "A sunset over mountains",
+      cfg: {},
+    });
+
+    expect(GoogleGenAIMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "google-key",
+        httpOptions: expect.not.objectContaining({
+          apiVersion: expect.anything(),
+        }),
+      }),
+    );
   });
 
   it("rounds unsupported durations to the nearest Veo value", async () => {

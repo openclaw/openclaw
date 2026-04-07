@@ -20,6 +20,14 @@ const GOOGLE_VIDEO_MIN_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[
 const GOOGLE_VIDEO_MAX_DURATION_SECONDS =
   GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS.length - 1];
 
+/**
+ * Preview Veo models are only available at the v1alpha API version.
+ * GA models (ending in -001 etc.) work with the default v1beta.
+ */
+function resolveApiVersion(model: string): string | undefined {
+  return model.endsWith("-preview") ? "v1alpha" : undefined;
+}
+
 function resolveConfiguredGoogleVideoBaseUrl(req: VideoGenerationRequest): string | undefined {
   const configured = req.cfg?.models?.providers?.google?.baseUrl?.trim();
   return configured ? normalizeGoogleApiBaseUrl(configured) : undefined;
@@ -222,15 +230,18 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
 
       const configuredBaseUrl = resolveConfiguredGoogleVideoBaseUrl(req);
       const durationSeconds = resolveDurationSeconds(req.durationSeconds);
+      const resolvedModel = req.model?.trim() || DEFAULT_GOOGLE_VIDEO_MODEL;
+      const apiVersion = resolveApiVersion(resolvedModel);
       const client = new GoogleGenAI({
         apiKey: auth.apiKey,
         httpOptions: {
           ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+          ...(apiVersion ? { apiVersion } : {}),
           timeout: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         },
       });
       let operation = await client.models.generateVideos({
-        model: req.model?.trim() || DEFAULT_GOOGLE_VIDEO_MODEL,
+        model: resolvedModel,
         prompt: req.prompt,
         image: resolveInputImage(req),
         video: resolveInputVideo(req),
@@ -283,7 +294,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       );
       return {
         videos,
-        model: req.model?.trim() || DEFAULT_GOOGLE_VIDEO_MODEL,
+        model: resolvedModel,
         metadata: operation.name
           ? {
               operationName: operation.name,
