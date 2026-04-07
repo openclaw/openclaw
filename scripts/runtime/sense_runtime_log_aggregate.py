@@ -327,10 +327,20 @@ def derive_digest_bucket_ui_hint_tokens(
 
 
 def derive_digest_bucket_ui_layouts(
+    digest_bucket_ui_hint: object,
     digest_bucket_ui_hint_compact: object,
     digest_bucket_ui_hint_line2: object,
     digest_bucket_ui_hint_tokens: object,
 ) -> dict[str, object]:
+    hint = (
+        dict(digest_bucket_ui_hint)
+        if isinstance(digest_bucket_ui_hint, dict)
+        else {
+            'badge': {'palette': 'muted', 'short': 'UNK', 'order': 0},
+            'percent': '0.0%',
+            'leader': False,
+        }
+    )
     compact = (
         digest_bucket_ui_hint_compact
         if isinstance(digest_bucket_ui_hint_compact, str)
@@ -347,6 +357,7 @@ def derive_digest_bucket_ui_layouts(
         else ['UNK', '0.0%', 'Follower']
     )
     return {
+        'hint': hint,
         'compact': compact,
         'line2': line2,
         'tokens': tokens,
@@ -781,6 +792,7 @@ def main() -> int:
                 item.get('digest_bucket_leader'),
             )
             item['digest_bucket_ui_layouts'] = derive_digest_bucket_ui_layouts(
+                item.get('digest_bucket_ui_hint'),
                 item.get('digest_bucket_ui_hint_compact'),
                 item.get('digest_bucket_ui_hint_line2'),
                 item.get('digest_bucket_ui_hint_tokens'),
