@@ -17,6 +17,15 @@ import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import {
+  assertCronJobMatches,
+  assertCronJobVisibleViaCli,
+  assertLiveImageProbeReply,
+  buildLiveCronProbeMessage,
+  createLiveCronProbeSpec,
+  runOpenClawCliJson,
+} from "./live-agent-probes.js";
+import { renderCatFacePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
@@ -25,6 +34,7 @@ const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 
 const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
+type LiveAcpAgent = "claude" | "codex" | "gemini";
 
 function createSlackCurrentConversationBindingRegistry() {
   return createTestRegistry([
@@ -42,8 +52,11 @@ function createSlackCurrentConversationBindingRegistry() {
   ]);
 }
 
-function normalizeAcpAgent(raw: string | undefined): "claude" | "codex" {
+function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
   const normalized = raw?.trim().toLowerCase();
+  if (normalized === "gemini") {
+    return "gemini";
+  }
   if (normalized === "codex") {
     return "codex";
   }
@@ -65,9 +78,19 @@ function extractAssistantTexts(messages: unknown[]): string[] {
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
-function extractLastAssistantText(messages: unknown[]): string | null {
-  const texts = extractAssistantTexts(messages);
-  return texts.at(-1) ?? null;
+function createAcpRecallPrompt(liveAgent: LiveAcpAgent): string {
+  if (liveAgent !== "claude") {
+    return "Please include the exact token from your immediately previous assistant reply.";
+  }
+  return "Reply with exactly the token from your immediately previous assistant reply and nothing else.";
+}
+
+function createAcpMarkerPrompt(liveAgent: LiveAcpAgent, memoryNonce: string): string {
+  const token = `ACP-BIND-MEMORY-${memoryNonce}`;
+  if (liveAgent !== "claude") {
+    return `Please include the exact token ${token} in your reply.`;
+  }
+  return `Reply with exactly this token and nothing else: ${token}`;
 }
 
 function extractSpawnedAcpSessionKey(texts: string[]): string | null {
@@ -231,7 +254,7 @@ function formatAssistantTextPreview(texts: string[], maxChars = 600): string {
 async function bindConversationAndWait(params: {
   client: GatewayClient;
   sessionKey: string;
-  liveAgent: "claude" | "codex";
+  liveAgent: LiveAcpAgent;
   originatingChannel: string;
   originatingTo: string;
   originatingAccountId: string;
@@ -316,6 +339,11 @@ async function sendChatAndWait(params: {
   originatingChannel: string;
   originatingTo: string;
   originatingAccountId: string;
+  attachments?: Array<{
+    mimeType: string;
+    fileName: string;
+    content: string;
+  }>;
 }) {
   const started = await params.client.request<{ runId?: string; status?: string }>("chat.send", {
     sessionKey: params.sessionKey,
@@ -324,11 +352,84 @@ async function sendChatAndWait(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
+    attachments: params.attachments,
   });
   if (started?.status !== "started" || typeof started.runId !== "string") {
     throw new Error(`chat.send did not start correctly: ${JSON.stringify(started)}`);
   }
   await waitForAgentRunOk(params.client, started.runId);
+}
+
+async function waitForAssistantText(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  contains: string;
+  minAssistantCount?: number;
+  timeoutMs?: number;
+}): Promise<{ messages: unknown[]; lastAssistantText: string }> {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const history = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+      sessionKey: params.sessionKey,
+      limit: 16,
+    });
+    const messages = history.messages ?? [];
+    const assistantTexts = extractAssistantTexts(messages);
+    const lastAssistantText = assistantTexts.at(-1) ?? null;
+    if (
+      assistantTexts.length >= (params.minAssistantCount ?? 1) &&
+      lastAssistantText?.includes(params.contains)
+    ) {
+      return { messages, lastAssistantText };
+    }
+    await sleep(500);
+  }
+
+  const finalHistory = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+    sessionKey: params.sessionKey,
+    limit: 16,
+  });
+  throw new Error(
+    `timed out waiting for assistant text containing ${params.contains}: ${formatAssistantTextPreview(
+      extractAssistantTexts(finalHistory.messages ?? []),
+    )}`,
+  );
+}
+
+async function waitForAssistantTurn(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  minAssistantCount: number;
+  timeoutMs?: number;
+}): Promise<{ messages: unknown[]; lastAssistantText: string }> {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const history = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+      sessionKey: params.sessionKey,
+      limit: 16,
+    });
+    const messages = history.messages ?? [];
+    const assistantTexts = extractAssistantTexts(messages);
+    const lastAssistantText = assistantTexts.at(-1) ?? null;
+    if (assistantTexts.length >= params.minAssistantCount && lastAssistantText) {
+      return { messages, lastAssistantText };
+    }
+    await sleep(500);
+  }
+
+  const finalHistory = await params.client.request<{ messages?: unknown[] }>("chat.history", {
+    sessionKey: params.sessionKey,
+    limit: 16,
+  });
+  throw new Error(
+    `timed out waiting for assistant turn ${String(params.minAssistantCount)}: ${formatAssistantTextPreview(
+      extractAssistantTexts(finalHistory.messages ?? []),
+    )}`,
+  );
 }
 
 describeLive("gateway live (ACP bind)", () => {
@@ -364,7 +465,7 @@ describeLive("gateway live (ACP bind)", () => {
       process.env.OPENCLAW_STATE_DIR = tempStateDir;
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
+      process.env.OPENCLAW_SKIP_CRON = "0";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -422,6 +523,11 @@ describeLive("gateway live (ACP bind)", () => {
             },
           },
         },
+        cron: {
+          ...cfg.cron,
+          enabled: true,
+          store: path.join(tempRoot, "cron.json"),
+        },
       };
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
       process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
@@ -469,30 +575,149 @@ describeLive("gateway live (ACP bind)", () => {
         });
         logLiveStep("follow-up turn completed");
 
+        const firstBoundHistory = await waitForAssistantText({
+          client,
+          sessionKey: spawnedSessionKey,
+          contains: `ACP-BIND-${followupNonce}`,
+        });
+        const firstAssistantCount = extractAssistantTexts(firstBoundHistory.messages).length;
+
         await sendChatAndWait({
           client,
           sessionKey: originalSessionKey,
           idempotencyKey: `idem-memory-${randomUUID()}`,
-          message:
-            "Reply with exactly two uppercase tokens separated by a single space: " +
-            "first, the token from your immediately previous assistant reply; " +
-            `second, ACP-BIND-MEMORY-${memoryNonce}. No extra text.`,
+          message: createAcpRecallPrompt(liveAgent),
           originatingChannel: "slack",
           originatingTo: conversationId,
           originatingAccountId: accountId,
         });
-        logLiveStep("memory follow-up turn completed");
+        logLiveStep("memory recall turn completed");
 
-        const boundHistory = await client.request<{ messages?: unknown[] }>("chat.history", {
+        const recallHistory = await waitForAssistantText({
+          client,
           sessionKey: spawnedSessionKey,
-          limit: 16,
+          contains: `ACP-BIND-${followupNonce}`,
+          minAssistantCount: firstAssistantCount + 1,
         });
-        const assistantTexts = extractAssistantTexts(boundHistory.messages ?? []);
-        const lastAssistantText = extractLastAssistantText(boundHistory.messages ?? []);
+        const recallAssistantText = recallHistory.lastAssistantText;
+        expect(recallAssistantText).toContain(`ACP-BIND-${followupNonce}`);
+        logLiveStep("bound session transcript retained the previous token");
+        const recallAssistantCount = extractAssistantTexts(recallHistory.messages).length;
+
+        await sendChatAndWait({
+          client,
+          sessionKey: originalSessionKey,
+          idempotencyKey: `idem-marker-${randomUUID()}`,
+          message: createAcpMarkerPrompt(liveAgent, memoryNonce),
+          originatingChannel: "slack",
+          originatingTo: conversationId,
+          originatingAccountId: accountId,
+        });
+        logLiveStep("memory marker turn completed");
+
+        const boundHistory = await waitForAssistantText({
+          client,
+          sessionKey: spawnedSessionKey,
+          contains: `ACP-BIND-MEMORY-${memoryNonce}`,
+          minAssistantCount: recallAssistantCount + 1,
+        });
+        const assistantTexts = extractAssistantTexts(boundHistory.messages);
+        const lastAssistantText = boundHistory.lastAssistantText;
         expect(assistantTexts.join("\n\n")).toContain(`ACP-BIND-${followupNonce}`);
-        expect(lastAssistantText).toContain(`ACP-BIND-${followupNonce}`);
         expect(lastAssistantText).toContain(`ACP-BIND-MEMORY-${memoryNonce}`);
-        logLiveStep("bound session transcript contains follow-up token");
+        logLiveStep("bound session transcript contains the final marker token");
+
+        const markerAssistantCount = assistantTexts.length;
+        await sendChatAndWait({
+          client,
+          sessionKey: originalSessionKey,
+          idempotencyKey: `idem-image-${randomUUID()}`,
+          message:
+            "Best match for the attached image: lobster, mouse, cat, horse. " +
+            "Reply with one lowercase word only.",
+          originatingChannel: "slack",
+          originatingTo: conversationId,
+          originatingAccountId: accountId,
+          attachments: [
+            {
+              mimeType: "image/png",
+              fileName: `probe-${randomUUID()}.png`,
+              content: renderCatFacePngBase64(),
+            },
+          ],
+        });
+        logLiveStep("image turn completed");
+
+        const imageHistory = await waitForAssistantTurn({
+          client,
+          sessionKey: spawnedSessionKey,
+          minAssistantCount: markerAssistantCount + 1,
+          timeoutMs: 60_000,
+        });
+        assertLiveImageProbeReply(imageHistory.lastAssistantText);
+        logLiveStep("bound session classified the probe image");
+
+        const imageAssistantCount = extractAssistantTexts(imageHistory.messages).length;
+        const cronProbe = createLiveCronProbeSpec();
+        let cronJobId: string | undefined;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await sendChatAndWait({
+            client,
+            sessionKey: originalSessionKey,
+            idempotencyKey: `idem-cron-${attempt}-${randomUUID()}`,
+            message: buildLiveCronProbeMessage({
+              agent: liveAgent,
+              argsJson: cronProbe.argsJson,
+              attempt,
+              exactReply: cronProbe.name,
+            }),
+            originatingChannel: "slack",
+            originatingTo: conversationId,
+            originatingAccountId: accountId,
+          });
+          logLiveStep(`cron mcp turn completed (attempt ${String(attempt + 1)})`);
+
+          const cronHistory = await waitForAssistantTurn({
+            client,
+            sessionKey: spawnedSessionKey,
+            minAssistantCount: imageAssistantCount + attempt + 1,
+            timeoutMs: 90_000,
+          });
+          const createdJob = await assertCronJobVisibleViaCli({
+            port,
+            token,
+            env: process.env,
+            expectedName: cronProbe.name,
+            expectedMessage: cronProbe.message,
+          });
+          if (createdJob) {
+            assertCronJobMatches({
+              job: createdJob,
+              expectedName: cronProbe.name,
+              expectedMessage: cronProbe.message,
+              expectedSessionKey: spawnedSessionKey,
+              expectedAgentId: liveAgent,
+            });
+            cronJobId = createdJob.id;
+            expect(cronHistory.lastAssistantText.trim().length).toBeGreaterThan(0);
+            break;
+          }
+          if (attempt === 1) {
+            throw new Error(
+              `acp cron cli verify could not find job ${cronProbe.name}: reply=${JSON.stringify(
+                cronHistory.lastAssistantText,
+              )}`,
+            );
+          }
+        }
+        if (!cronJobId) {
+          throw new Error(`acp cron cli verify did not create job ${cronProbe.name}`);
+        }
+        await runOpenClawCliJson(
+          ["cron", "rm", cronJobId, "--json", "--url", `ws://127.0.0.1:${port}`, "--token", token],
+          process.env,
+        );
+        logLiveStep("bound session created cron via MCP and CLI verification passed");
       } finally {
         releasePinnedPluginChannelRegistry(channelRegistry);
         clearRuntimeConfigSnapshot();

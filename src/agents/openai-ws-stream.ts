@@ -1,3 +1,12 @@
+import { randomUUID } from "node:crypto";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
+  StopReason,
+} from "@mariozechner/pi-ai";
+import * as piAi from "@mariozechner/pi-ai";
 /**
  * OpenAI WebSocket StreamFn Integration
  *
@@ -20,21 +29,16 @@
  *
  * @see src/agents/openai-ws-connection.ts for the connection manager
  */
-
-import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  AssistantMessageEventStream,
-  StopReason,
-} from "@mariozechner/pi-ai";
-import * as piAi from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveProviderTransportTurnStateWithPlugin,
   resolveProviderWebSocketSessionPolicyWithPlugin,
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel, ProviderTransportTurnState } from "../plugins/types.js";
+import {
+  encodeAssistantTextSignature,
+  normalizeAssistantPhase,
+} from "../shared/chat-message-content.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-tool-schema.js";
 import {
   getOpenAIWebSocketErrorDetails,
@@ -101,21 +105,6 @@ type OpenAIWsStreamDeps = {
 };
 
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
-
-function normalizeAssistantPhase(value: unknown): OpenAIResponsesAssistantPhase | undefined {
-  return value === "commentary" || value === "final_answer" ? value : undefined;
-}
-
-function encodeAssistantTextSignature(params: {
-  id: string;
-  phase?: OpenAIResponsesAssistantPhase;
-}): string {
-  return JSON.stringify({
-    v: 1,
-    id: params.id,
-    ...(params.phase ? { phase: params.phase } : {}),
-  });
-}
 
 const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
   createManager: (options) => new OpenAIWebSocketManager(options),
@@ -561,7 +550,7 @@ function normalizeWsRunError(err: unknown): OpenAIWebSocketRuntimeError {
   if (err instanceof OpenAIWebSocketRuntimeError) {
     return err;
   }
-  return new OpenAIWebSocketRuntimeError(err instanceof Error ? err.message : String(err), {
+  return new OpenAIWebSocketRuntimeError(formatErrorMessage(err), {
     kind: "server",
     retryable: false,
   });
@@ -1053,13 +1042,15 @@ export function createOpenAIWebSocketStreamFn(
                       ? normalizeAssistantPhase((event.item as { phase?: unknown }).phase)
                       : undefined;
                   outputItemPhaseById.set(event.item.id, itemPhase);
-                  for (const key of outputTextByPart.keys()) {
-                    if (key.startsWith(`${event.item.id}:`)) {
-                      const [, contentIndexText] = key.split(":");
-                      emitBufferedTextDelta({
-                        itemId: event.item.id,
-                        contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
-                      });
+                  if (itemPhase !== undefined) {
+                    for (const key of outputTextByPart.keys()) {
+                      if (key.startsWith(`${event.item.id}:`)) {
+                        const [, contentIndexText] = key.split(":");
+                        emitBufferedTextDelta({
+                          itemId: event.item.id,
+                          contentIndex: Number.parseInt(contentIndexText ?? "0", 10) || 0,
+                        });
+                      }
                     }
                   }
                 }
@@ -1070,7 +1061,7 @@ export function createOpenAIWebSocketStreamFn(
                 const key = getOutputTextKey(event.item_id, event.content_index);
                 const nextText = `${outputTextByPart.get(key) ?? ""}${event.delta}`;
                 outputTextByPart.set(key, nextText);
-                if (outputItemPhaseById.has(event.item_id)) {
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
                   emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,
@@ -1084,7 +1075,7 @@ export function createOpenAIWebSocketStreamFn(
                 if (event.text && event.text !== outputTextByPart.get(key)) {
                   outputTextByPart.set(key, event.text);
                 }
-                if (outputItemPhaseById.has(event.item_id)) {
+                if (outputItemPhaseById.get(event.item_id) !== undefined) {
                   emitBufferedTextDelta({
                     itemId: event.item_id,
                     contentIndex: event.content_index,
@@ -1186,7 +1177,7 @@ export function createOpenAIWebSocketStreamFn(
 
     queueMicrotask(() =>
       run().catch((err) => {
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorMessage = formatErrorMessage(err);
         log.warn(`[ws-stream] session=${sessionId} run error: ${errorMessage}`);
         eventStream.push({
           type: "error",

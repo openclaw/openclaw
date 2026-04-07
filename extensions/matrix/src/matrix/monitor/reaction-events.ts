@@ -169,6 +169,7 @@ export async function handleInboundMatrixReaction(params: {
     roomId: params.roomId,
     senderId: params.senderId,
     isDirectMessage: params.isDirectMessage,
+    dmSessionScope: accountConfig.dm?.sessionScope ?? "per-user",
     threadId: thread.threadId,
     eventTs: params.event.origin_server_ts,
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,

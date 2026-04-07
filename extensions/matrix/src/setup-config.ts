@@ -5,6 +5,7 @@ import {
   normalizeSecretInputString,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isSupportedMatrixAvatarSource } from "./matrix/profile.js";
@@ -57,6 +58,18 @@ function resolveSetupAvatarUrl(input: ChannelSetupInput): string | undefined {
   return trimmed || undefined;
 }
 
+function resolveExistingMatrixAccountKey(
+  accounts: Record<string, Record<string, unknown>>,
+  targetAccountId: string,
+): string {
+  const normalizedTargetAccountId = normalizeAccountId(targetAccountId);
+  return (
+    Object.keys(accounts).find(
+      (accountId) => normalizeAccountId(accountId) === normalizedTargetAccountId,
+    ) ?? targetAccountId
+  );
+}
+
 export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): CoreConfig {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   const baseConfig = channels?.[channel];
@@ -95,8 +108,9 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
   }
 
   const targetAccountId = resolveSingleAccountPromotionTarget({ channel: base });
+  const resolvedTargetAccountId = resolveExistingMatrixAccountKey(accounts, targetAccountId);
 
-  const nextAccount: Record<string, unknown> = { ...(accounts[targetAccountId] ?? {}) };
+  const nextAccount: Record<string, unknown> = { ...accounts[resolvedTargetAccountId] };
   for (const key of keysToMove) {
     nextAccount[key] = cloneIfObject(base[key]);
   }
@@ -113,7 +127,7 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
         ...nextChannel,
         accounts: {
           ...accounts,
-          [targetAccountId]: nextAccount,
+          [resolvedTargetAccountId]: nextAccount,
         },
       },
     },
@@ -197,7 +211,7 @@ export function applyMatrixSetupAccountConfig(params: {
         : typeof params.input.allowPrivateNetwork === "boolean"
           ? params.input.allowPrivateNetwork
           : undefined,
-    proxy: params.input.proxy?.trim() || undefined,
+    proxy: normalizeOptionalString(params.input.proxy),
     userId: password && !userId ? null : userId,
     accessToken: accessToken || (password ? null : undefined),
     password: password || (accessToken ? null : undefined),

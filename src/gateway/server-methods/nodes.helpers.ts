@@ -1,4 +1,5 @@
 import type { ErrorObject } from "ajv";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ErrorCodes, errorShape, formatValidationErrors } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";
@@ -38,10 +39,7 @@ export function uniqueSortedStrings(values: unknown[]) {
 }
 
 export function safeParseJson(value: string | null | undefined): unknown {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }

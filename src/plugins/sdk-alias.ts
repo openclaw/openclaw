@@ -250,6 +250,7 @@ export function resolvePluginSdkAliasFile(params: {
 
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
+const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 
 export function listPluginSdkExportedSubpaths(
   params: {
@@ -318,7 +319,9 @@ export function resolvePluginSdkScopedAliasMap(
     for (const kind of orderedKinds) {
       const candidate = candidateMap[kind];
       if (fs.existsSync(candidate)) {
-        aliasMap[`openclaw/plugin-sdk/${subpath}`] = candidate;
+        for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
+          aliasMap[`${packageName}/${subpath}`] = candidate;
+        }
         break;
       }
     }
@@ -376,7 +379,12 @@ export function buildPluginLoaderAliasMap(
       ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
       : {}),
     ...(pluginSdkAlias
-      ? { "openclaw/plugin-sdk": normalizeJitiAliasTargetPath(pluginSdkAlias) }
+      ? Object.fromEntries(
+          PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [
+            packageName,
+            normalizeJitiAliasTargetPath(pluginSdkAlias),
+          ]),
+        )
       : {}),
     ...Object.fromEntries(
       Object.entries(
@@ -433,12 +441,13 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
   };
 }
 
-export function shouldPreferNativeJiti(modulePath: string): boolean {
+function isNativeJitiDisabledByRuntime(): boolean {
   const versions = process.versions as { bun?: string };
-  if (typeof versions.bun === "string") {
-    return false;
-  }
-  if (process.platform === "win32") {
+  return typeof versions.bun === "string" || process.platform === "win32";
+}
+
+export function shouldPreferNativeJiti(modulePath: string): boolean {
+  if (isNativeJitiDisabledByRuntime()) {
     return false;
   }
   switch (path.extname(modulePath).toLowerCase()) {
@@ -450,4 +459,19 @@ export function shouldPreferNativeJiti(modulePath: string): boolean {
     default:
       return false;
   }
+}
+
+export function resolvePluginLoaderJitiTryNative(
+  modulePath: string,
+  options?: {
+    preferBuiltDist?: boolean;
+  },
+): boolean {
+  if (isNativeJitiDisabledByRuntime()) {
+    return false;
+  }
+  return (
+    shouldPreferNativeJiti(modulePath) ||
+    (options?.preferBuiltDist === true && modulePath.includes(`${path.sep}dist${path.sep}`))
+  );
 }

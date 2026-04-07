@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCompatibilityNotice,
   createCustomHook,
@@ -11,6 +11,7 @@ import {
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
+const loadPluginMetadataRegistrySnapshotMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
@@ -38,6 +39,11 @@ vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
 }));
 
+vi.mock("./runtime/metadata-registry-loader.js", () => ({
+  loadPluginMetadataRegistrySnapshot: (...args: unknown[]) =>
+    loadPluginMetadataRegistrySnapshotMock(...args),
+}));
+
 vi.mock("./providers.js", () => ({
   resolveBundledProviderCompatPluginIds: (...args: unknown[]) =>
     resolveBundledProviderCompatPluginIdsMock(...args),
@@ -56,6 +62,7 @@ vi.mock("../plugin-sdk/facade-runtime.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getActivePluginChannelRegistry: () => null,
   listImportedRuntimePluginIds: (...args: unknown[]) => listImportedRuntimePluginIdsMock(...args),
 }));
 
@@ -69,12 +76,12 @@ vi.mock("../agents/workspace.js", () => ({
 }));
 
 function setPluginLoadResult(overrides: Partial<ReturnType<typeof createPluginLoadResult>>) {
-  loadOpenClawPluginsMock.mockReturnValue(
-    createPluginLoadResult({
-      plugins: [],
-      ...overrides,
-    }),
-  );
+  const result = createPluginLoadResult({
+    plugins: [],
+    ...overrides,
+  });
+  loadOpenClawPluginsMock.mockReturnValue(result);
+  loadPluginMetadataRegistrySnapshotMock.mockReturnValue(result);
 }
 
 function setSinglePluginLoadResult(
@@ -122,19 +129,30 @@ function expectPluginLoaderCall(params: {
   );
 }
 
-function expectAutoEnabledStatusLoad(params: {
-  rawConfig: unknown;
-  autoEnabledConfig: unknown;
-  autoEnabledReasons?: Record<string, string[]>;
+function expectMetadataSnapshotLoaderCall(params: {
+  config?: unknown;
+  activationSourceConfig?: unknown;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  loadModules?: boolean;
 }) {
+  expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ...(params.config !== undefined ? { config: params.config } : {}),
+      ...(params.activationSourceConfig !== undefined
+        ? { activationSourceConfig: params.activationSourceConfig }
+        : {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.env ? { env: params.env } : {}),
+      ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
+    }),
+  );
+}
+
+function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
   expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
     config: params.rawConfig,
     env: process.env,
-  });
-  expectPluginLoaderCall({
-    config: params.autoEnabledConfig,
-    activationSourceConfig: params.rawConfig,
-    autoEnabledReasons: params.autoEnabledReasons ?? {},
   });
 }
 
@@ -159,6 +177,7 @@ function expectBundledCompatChainApplied(params: {
   pluginIds: string[];
   compatConfig: unknown;
   enabledConfig: unknown;
+  loadModules: boolean;
 }) {
   expect(withBundledPluginAllowlistCompatMock).toHaveBeenCalledWith({
     config: params.config,
@@ -168,7 +187,11 @@ function expectBundledCompatChainApplied(params: {
     config: params.compatConfig,
     pluginIds: params.pluginIds,
   });
-  expectPluginLoaderCall({ config: params.enabledConfig });
+  if (params.loadModules) {
+    expectPluginLoaderCall({ config: params.enabledConfig, loadModules: true });
+    return;
+  }
+  expectMetadataSnapshotLoaderCall({ config: params.enabledConfig, loadModules: false });
 }
 
 function createAutoEnabledStatusConfig(
@@ -242,7 +265,8 @@ function expectBundleInspectState(
 }
 
 describe("plugin status reports", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({
       buildAllPluginInspectReports,
       buildPluginCompatibilityNotices,
@@ -253,11 +277,9 @@ describe("plugin status reports", () => {
       formatPluginCompatibilityNotice,
       summarizePluginCompatibility,
     } = await import("./status.js"));
-  });
-
-  beforeEach(() => {
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
+    loadPluginMetadataRegistrySnapshotMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();
@@ -291,7 +313,7 @@ describe("plugin status reports", () => {
       env,
     });
 
-    expectPluginLoaderCall({
+    expectMetadataSnapshotLoaderCall({
       config: {},
       workspaceDir: "/workspace",
       env,
@@ -299,16 +321,15 @@ describe("plugin status reports", () => {
     });
   });
 
-  it("uses a non-activating snapshot load for snapshot reports", () => {
+  it("uses a metadata snapshot load for snapshot reports", () => {
     buildPluginSnapshotReport({ config: {}, workspaceDir: "/workspace" });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+    expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        activate: false,
-        cache: false,
         loadModules: false,
       }),
     );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("loads plugin status from the auto-enabled config snapshot", () => {
@@ -330,12 +351,12 @@ describe("plugin status reports", () => {
 
     expectAutoEnabledStatusLoad({
       rawConfig,
-      autoEnabledConfig,
-      autoEnabledReasons: {
-        demo: ["demo configured"],
-      },
     });
-    expectPluginLoaderCall({ loadModules: false });
+    expectMetadataSnapshotLoaderCall({
+      config: autoEnabledConfig,
+      activationSourceConfig: rawConfig,
+      loadModules: false,
+    });
   });
 
   it("uses the auto-enabled config snapshot for inspect policy summaries", () => {
@@ -415,12 +436,15 @@ describe("plugin status reports", () => {
 
     expectAutoEnabledStatusLoad({
       rawConfig,
-      autoEnabledConfig,
+    });
+    expectPluginLoaderCall({
+      config: autoEnabledConfig,
+      activationSourceConfig: rawConfig,
       autoEnabledReasons: {
         demo: ["demo configured"],
       },
+      loadModules: true,
     });
-    expectPluginLoaderCall({ loadModules: true });
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
@@ -437,6 +461,7 @@ describe("plugin status reports", () => {
       pluginIds,
       compatConfig,
       enabledConfig,
+      loadModules: false,
     });
   });
 
@@ -474,10 +499,14 @@ describe("plugin status reports", () => {
 
     expectAutoEnabledStatusLoad({
       rawConfig,
-      autoEnabledConfig,
+    });
+    expectPluginLoaderCall({
+      config: autoEnabledConfig,
+      activationSourceConfig: rawConfig,
       autoEnabledReasons: {
         demo: ["demo configured"],
       },
+      loadModules: true,
     });
   });
 
@@ -644,24 +673,25 @@ describe("plugin status reports", () => {
     expectCapabilityKinds(inspect[1], ["text-inference", "web-search"]);
   });
 
-  it("treats a CLI-command-only plugin as a non-capability", () => {
+  it("treats a CLI-command-only plugin as a plain capability", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
-        id: "openai",
-        name: "OpenAI",
-        cliCommands: ["openai"],
+        id: "anthropic",
+        name: "Anthropic",
+        cliBackendIds: ["claude-cli"],
       }),
     );
 
-    const inspect = expectInspectReport("openai");
+    const inspect = expectInspectReport("anthropic");
 
     expectInspectShape(inspect, {
-      shape: "non-capability",
-      capabilityMode: "none",
-      capabilityKinds: [],
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["cli-backend"],
     });
-    expect(inspect.capabilities).toEqual([]);
+    expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
   });
+
   it("builds compatibility warnings for legacy compatibility paths", () => {
     setPluginLoadResult({
       plugins: [

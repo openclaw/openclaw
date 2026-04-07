@@ -1,8 +1,21 @@
-import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import {
+  resolveMemorySlotDecisionShared,
+  resolveEnableStateShared,
+  resolveEnableStateResult,
+} from "./config-activation-shared.js";
+import {
+  hasExplicitPluginConfig as hasExplicitPluginConfigShared,
+  isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
+  normalizePluginsConfigWithResolver,
+  type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
+} from "./config-normalization-shared.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import { defaultSlotIdForKey, hasKind } from "./slots.js";
-import type { PluginKind, PluginOrigin } from "./types.js";
+import type { PluginOrigin } from "./types.js";
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
 
@@ -46,30 +59,7 @@ export type PluginActivationConfigSource = {
   rootConfig?: OpenClawConfig;
 };
 
-export type NormalizedPluginsConfig = {
-  enabled: boolean;
-  allow: string[];
-  deny: string[];
-  loadPaths: string[];
-  slots: {
-    memory?: string | null;
-  };
-  entries: Record<
-    string,
-    {
-      enabled?: boolean;
-      hooks?: {
-        allowPromptInjection?: boolean;
-      };
-      subagent?: {
-        allowModelOverride?: boolean;
-        allowedModels?: string[];
-        hasAllowedModelsConfig?: boolean;
-      };
-      config?: unknown;
-    }
-  >;
-};
+export type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
 
 let bundledPluginAliasLookupCache: ReadonlyMap<string, string> | undefined;
 
@@ -83,12 +73,21 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
     if (plugin.origin !== "bundled") {
       continue;
     }
-    lookup.set(plugin.id.toLowerCase(), plugin.id);
+    const pluginId = normalizeOptionalLowercaseString(plugin.id);
+    if (pluginId) {
+      lookup.set(pluginId, plugin.id);
+    }
     for (const providerId of plugin.providers) {
-      lookup.set(providerId.toLowerCase(), plugin.id);
+      const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
+      if (normalizedProviderId) {
+        lookup.set(normalizedProviderId, plugin.id);
+      }
     }
     for (const legacyPluginId of plugin.legacyPluginIds ?? []) {
-      lookup.set(legacyPluginId.toLowerCase(), plugin.id);
+      const normalizedLegacyPluginId = normalizeOptionalLowercaseString(legacyPluginId);
+      if (normalizedLegacyPluginId) {
+        lookup.set(normalizedLegacyPluginId, plugin.id);
+      }
     }
   }
   bundledPluginAliasLookupCache = lookup;
@@ -96,32 +95,10 @@ function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
 }
 
 export function normalizePluginId(id: string): string {
-  const trimmed = id.trim();
-  return getBundledPluginAliasLookup().get(trimmed.toLowerCase()) ?? trimmed;
+  const trimmed = normalizeOptionalString(id) ?? "";
+  const normalized = normalizeOptionalLowercaseString(trimmed) ?? "";
+  return getBundledPluginAliasLookup().get(normalized) ?? trimmed;
 }
-
-const normalizeList = (value: unknown): string[] => {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => (typeof entry === "string" ? normalizePluginId(entry) : ""))
-    .filter(Boolean);
-};
-
-const normalizeSlotValue = (value: unknown): string | null | undefined => {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.toLowerCase() === "none") {
-    return null;
-  }
-  return trimmed;
-};
 
 const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> = {
   "enabled-in-config": "enabled in config",
@@ -159,92 +136,10 @@ function toPluginActivationState(decision: PluginActivationDecision): PluginActi
   };
 }
 
-const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entries"] => {
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-    return {};
-  }
-  const normalized: NormalizedPluginsConfig["entries"] = {};
-  for (const [key, value] of Object.entries(entries)) {
-    const normalizedKey = normalizePluginId(key);
-    if (!normalizedKey) {
-      continue;
-    }
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      normalized[normalizedKey] = {};
-      continue;
-    }
-    const entry = value as Record<string, unknown>;
-    const hooksRaw = entry.hooks;
-    const hooks =
-      hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
-        ? {
-            allowPromptInjection: (hooksRaw as { allowPromptInjection?: unknown })
-              .allowPromptInjection,
-          }
-        : undefined;
-    const normalizedHooks =
-      hooks && typeof hooks.allowPromptInjection === "boolean"
-        ? {
-            allowPromptInjection: hooks.allowPromptInjection,
-          }
-        : undefined;
-    const subagentRaw = entry.subagent;
-    const subagent =
-      subagentRaw && typeof subagentRaw === "object" && !Array.isArray(subagentRaw)
-        ? {
-            allowModelOverride: (subagentRaw as { allowModelOverride?: unknown })
-              .allowModelOverride,
-            hasAllowedModelsConfig: Array.isArray(
-              (subagentRaw as { allowedModels?: unknown }).allowedModels,
-            ),
-            allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
-              ? ((subagentRaw as { allowedModels?: unknown }).allowedModels as unknown[])
-                  .map((model) => (typeof model === "string" ? model.trim() : ""))
-                  .filter(Boolean)
-              : undefined,
-          }
-        : undefined;
-    const normalizedSubagent =
-      subagent &&
-      (typeof subagent.allowModelOverride === "boolean" ||
-        subagent.hasAllowedModelsConfig ||
-        (Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0))
-        ? {
-            ...(typeof subagent.allowModelOverride === "boolean"
-              ? { allowModelOverride: subagent.allowModelOverride }
-              : {}),
-            ...(subagent.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
-            ...(Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0
-              ? { allowedModels: subagent.allowedModels }
-              : {}),
-          }
-        : undefined;
-    normalized[normalizedKey] = {
-      ...normalized[normalizedKey],
-      enabled:
-        typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
-      hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
-      subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
-      config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
-    };
-  }
-  return normalized;
-};
-
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  const memorySlot = normalizeSlotValue(config?.slots?.memory);
-  return {
-    enabled: config?.enabled !== false,
-    allow: normalizeList(config?.allow),
-    deny: normalizeList(config?.deny),
-    loadPaths: normalizeList(config?.load?.paths),
-    slots: {
-      memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
-    },
-    entries: normalizePluginEntries(config?.entries),
-  };
+  return normalizePluginsConfigWithResolver(config, normalizePluginId);
 };
 
 export function createPluginActivationSource(params: {
@@ -263,30 +158,8 @@ const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
 const hasExplicitMemoryEntry = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.entries && Object.prototype.hasOwnProperty.call(plugins.entries, "memory-core"));
 
-export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) => {
-  if (!plugins) {
-    return false;
-  }
-  if (typeof plugins.enabled === "boolean") {
-    return true;
-  }
-  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
-    return true;
-  }
-  if (plugins.load?.paths && Array.isArray(plugins.load.paths) && plugins.load.paths.length > 0) {
-    return true;
-  }
-  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
-    return true;
-  }
-  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
-    return true;
-  }
-  return false;
-};
+export const hasExplicitPluginConfig = (plugins?: OpenClawConfig["plugins"]) =>
+  hasExplicitPluginConfigShared(plugins);
 
 export function applyTestPluginDefaults(
   cfg: OpenClawConfig,
@@ -522,32 +395,17 @@ export function resolveEnableState(
   config: NormalizedPluginsConfig,
   enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } {
-  const state = resolvePluginActivationState({
-    id,
-    origin,
-    config,
-    enabledByDefault,
-  });
-  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+  return resolveEnableStateShared(
+    { id, origin, config, enabledByDefault },
+    resolvePluginActivationState,
+  );
 }
 
 export function isBundledChannelEnabledByChannelConfig(
   cfg: OpenClawConfig | undefined,
   pluginId: string,
 ): boolean {
-  if (!cfg) {
-    return false;
-  }
-  const channelId = normalizeChatChannelId(pluginId);
-  if (!channelId) {
-    return false;
-  }
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = channels?.[channelId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return false;
-  }
-  return (entry as Record<string, unknown>).enabled === true;
+  return isBundledChannelEnabledByChannelConfigShared(cfg, pluginId);
 }
 
 export function resolveEffectiveEnableState(params: {
@@ -558,8 +416,7 @@ export function resolveEffectiveEnableState(params: {
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
 }): { enabled: boolean; reason?: string } {
-  const state = resolveEffectivePluginActivationState(params);
-  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+  return resolveEnableStateResult(params, resolveEffectivePluginActivationState);
 }
 
 export function resolveEffectivePluginActivationState(params: {
@@ -580,27 +437,5 @@ export function resolveMemorySlotDecision(params: {
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (!hasKind(params.kind as PluginKind | PluginKind[] | undefined, "memory")) {
-    return { enabled: true };
-  }
-  // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the
-  // memory slot must stay enabled so its other slot role can still load.
-  const isMultiKind = Array.isArray(params.kind) && params.kind.length > 1;
-  if (params.slot === null) {
-    return isMultiKind ? { enabled: true } : { enabled: false, reason: "memory slot disabled" };
-  }
-  if (typeof params.slot === "string") {
-    if (params.slot === params.id) {
-      return { enabled: true, selected: true };
-    }
-    return isMultiKind
-      ? { enabled: true }
-      : { enabled: false, reason: `memory slot set to "${params.slot}"` };
-  }
-  if (params.selectedId && params.selectedId !== params.id) {
-    return isMultiKind
-      ? { enabled: true }
-      : { enabled: false, reason: `memory slot already filled by "${params.selectedId}"` };
-  }
-  return { enabled: true, selected: true };
+  return resolveMemorySlotDecisionShared(params);
 }

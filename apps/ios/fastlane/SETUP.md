@@ -29,6 +29,8 @@ ASC_KEYCHAIN_SERVICE=openclaw-asc-key
 ASC_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 ```
 
+Important: `apps/ios/fastlane/.env` is only for Fastlane/App Store Connect auth and optional beta-archive settings. It does **not** configure gateway-side direct APNs push delivery for local iOS builds.
+
 Optional app targeting variables (helpful if Fastlane cannot auto-resolve app by bundle):
 
 ```bash
@@ -52,6 +54,8 @@ IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID
 ```
 
 Tip: run `scripts/ios-team-id.sh` from repo root to print a Team ID for `.env`. The helper prefers the canonical OpenClaw team (`Y5PE65HELJ`) when present locally; otherwise it prefers the first non-personal team from your Xcode account (then personal team if needed). Fastlane uses this helper automatically if `IOS_DEVELOPMENT_TEAM` is missing.
+
+For local/manual iOS builds that stay on direct APNs, configure the gateway host separately with `OPENCLAW_APNS_TEAM_ID`, `OPENCLAW_APNS_KEY_ID`, and either `OPENCLAW_APNS_PRIVATE_KEY_P8` or `OPENCLAW_APNS_PRIVATE_KEY_PATH`. Those gateway runtime env vars are separate from Fastlane's `.env`.
 
 Validate auth:
 

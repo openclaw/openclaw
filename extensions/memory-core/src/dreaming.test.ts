@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   __testing,
   reconcileShortTermDreamingCronJob,
@@ -10,8 +9,10 @@ import {
   runShortTermDreamingPromotionIfTriggered,
 } from "./dreaming.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
+import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const constants = __testing.constants;
+const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 type CronParam = NonNullable<Parameters<typeof reconcileShortTermDreamingCronJob>[0]["cron"]>;
 type CronJobLike = Awaited<ReturnType<CronParam["list"]>>[number];
@@ -74,7 +75,7 @@ function createCronHarness(
       if (index < 0) {
         return {};
       }
-      const current = jobs[index]!;
+      const current = jobs[index];
       jobs[index] = {
         ...current,
         ...(patch.name ? { name: patch.name } : {}),
@@ -120,7 +121,7 @@ describe("short-term dreaming config", () => {
       cfg,
     });
     expect(resolved).toEqual({
-      enabled: true,
+      enabled: false,
       cron: constants.DEFAULT_DREAMING_CRON_EXPR,
       timezone: "America/Los_Angeles",
       limit: constants.DEFAULT_DREAMING_LIMIT,
@@ -141,11 +142,12 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          enabled: true,
           timezone: "UTC",
           verboseLogging: true,
+          frequency: "5 1 * * *",
           phases: {
             deep: {
-              cron: "15 2 * * *",
               limit: 7,
               minScore: 0.4,
               minRecallCount: 2,
@@ -159,7 +161,7 @@ describe("short-term dreaming config", () => {
     });
     expect(resolved).toEqual({
       enabled: true,
-      cron: "15 2 * * *",
+      cron: "5 1 * * *",
       timezone: "UTC",
       limit: 7,
       minScore: 0.4,
@@ -175,13 +177,14 @@ describe("short-term dreaming config", () => {
     });
   });
 
-  it("accepts cron alias and numeric string thresholds", () => {
+  it("accepts top-level frequency and numeric string thresholds", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          enabled: true,
+          frequency: "5 1 * * *",
           phases: {
             deep: {
-              cron: "5 1 * * *",
               limit: "4",
               minScore: "0.6",
               minRecallCount: "2",
@@ -214,6 +217,7 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          enabled: true,
           phases: {
             deep: {
               limit: " ",
@@ -248,6 +252,7 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          enabled: true,
           phases: {
             deep: {
               limit: 0,
@@ -283,6 +288,7 @@ describe("short-term dreaming config", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
         dreaming: {
+          enabled: true,
           phases: {
             deep: {
               minScore: -0.2,
@@ -487,6 +493,103 @@ describe("short-term dreaming cron reconciliation", () => {
     expect(harness.jobs.map((entry) => entry.id)).toEqual(["job-other"]);
   });
 
+  it("migrates legacy light/rem dreaming cron jobs during reconciliation", async () => {
+    const deepManagedJob: CronJobLike = {
+      id: "job-deep",
+      name: constants.MANAGED_DREAMING_CRON_NAME,
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      createdAtMs: 10,
+    };
+    const legacyLightJob: CronJobLike = {
+      id: "job-light",
+      name: "Memory Light Dreaming",
+      description: "[managed-by=memory-core.dreaming.light] legacy",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 */6 * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "__openclaw_memory_core_light_sleep__" },
+      createdAtMs: 8,
+    };
+    const legacyRemJob: CronJobLike = {
+      id: "job-rem",
+      name: "Memory REM Dreaming",
+      description: "[managed-by=memory-core.dreaming.rem] legacy",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 5 * * 0" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "__openclaw_memory_core_rem_sleep__" },
+      createdAtMs: 9,
+    };
+    const harness = createCronHarness([legacyLightJob, legacyRemJob, deepManagedJob]);
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result.status).toBe("updated");
+    expect(result.removed).toBe(2);
+    expect(harness.removeCalls).toEqual(["job-light", "job-rem"]);
+    expect(logger.info).toHaveBeenCalledWith(
+      "memory-core: migrated 2 legacy phase dreaming cron job(s) to the unified dreaming controller.",
+    );
+  });
+
+  it("migrates legacy phase jobs even when unified dreaming is disabled", async () => {
+    const legacyLightJob: CronJobLike = {
+      id: "job-light",
+      name: "Memory Light Dreaming",
+      description: "[managed-by=memory-core.dreaming.light] legacy",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 */6 * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "__openclaw_memory_core_light_sleep__" },
+      createdAtMs: 8,
+    };
+    const harness = createCronHarness([legacyLightJob]);
+    const logger = createLogger();
+
+    const result = await reconcileShortTermDreamingCronJob({
+      cron: harness.cron,
+      config: {
+        enabled: false,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: constants.DEFAULT_DREAMING_LIMIT,
+        minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
+        minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
+        minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ status: "disabled", removed: 1 });
+    expect(harness.removeCalls).toEqual(["job-light"]);
+    expect(logger.info).toHaveBeenCalledWith(
+      "memory-core: completed legacy phase dreaming cron migration while unified dreaming is disabled (1 job(s) removed).",
+    );
+  });
+
   it("does not overcount removed jobs when cron remove result is unknown", async () => {
     const managedJob: CronJobLike = {
       id: "job-managed",
@@ -559,17 +662,9 @@ describe("short-term dreaming cron reconciliation", () => {
 });
 
 describe("short-term dreaming trigger", () => {
-  const tempDirs: string[] = [];
-
-  afterEach(async () => {
-    await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
-    tempDirs.length = 0;
-  });
-
   it("applies promotions when the managed dreaming heartbeat event fires", async () => {
     const logger = createLogger();
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-"));
-    tempDirs.push(workspaceDir);
+    const workspaceDir = await createTempWorkspace("memory-dreaming-");
     await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
 
     await recordShortTermRecalls({
@@ -609,10 +704,61 @@ describe("short-term dreaming trigger", () => {
     expect(memoryText).toContain("Move backups to S3 Glacier.");
   });
 
+  it("applies promotions when the managed dreaming token is embedded in a reminder body", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-composite-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
+
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "backup policy",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: [
+        "System: rotate logs",
+        "System: __openclaw_memory_core_short_term_promotion_dream__",
+        "",
+        "A scheduled reminder has been triggered. The reminder content is:",
+        "",
+        "rotate logs",
+        "__openclaw_memory_core_short_term_promotion_dream__",
+        "",
+        "Handle this reminder internally. Do not relay it to the user unless explicitly requested.",
+      ].join("\n"),
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    expect(memoryText).toContain("Move backups to S3 Glacier.");
+  });
+
   it("keeps one-off recalls out of long-term memory under default thresholds", async () => {
     const logger = createLogger();
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-strict-"));
-    tempDirs.push(workspaceDir);
+    const workspaceDir = await createTempWorkspace("memory-dreaming-strict-");
     await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
       "Move backups to S3 Glacier.",
       "Retain quarterly snapshots.",
@@ -685,8 +831,7 @@ describe("short-term dreaming trigger", () => {
 
   it("skips dreaming promotion cleanly when limit is zero", async () => {
     const logger = createLogger();
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-limit-zero-"));
-    tempDirs.push(workspaceDir);
+    const workspaceDir = await createTempWorkspace("memory-dreaming-limit-zero-");
 
     const result = await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
@@ -719,8 +864,7 @@ describe("short-term dreaming trigger", () => {
 
   it("repairs recall artifacts before dreaming promotion runs", async () => {
     const logger = createLogger();
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-repair-"));
-    tempDirs.push(workspaceDir);
+    const workspaceDir = await createTempWorkspace("memory-dreaming-repair-");
     await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
       "Move backups to S3 Glacier and sync router failover notes.",
       "Keep router recovery docs current.",
@@ -800,8 +944,7 @@ describe("short-term dreaming trigger", () => {
 
   it("emits detailed run logs when verboseLogging is enabled", async () => {
     const logger = createLogger();
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-verbose-"));
-    tempDirs.push(workspaceDir);
+    const workspaceDir = await createTempWorkspace("memory-dreaming-verbose-");
     await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["Move backups to S3 Glacier."]);
 
     await recordShortTermRecalls({
@@ -850,8 +993,7 @@ describe("short-term dreaming trigger", () => {
 
   it("fans out one dreaming run across configured agent workspaces", async () => {
     const logger = createLogger();
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-dreaming-multi-"));
-    tempDirs.push(workspaceRoot);
+    const workspaceRoot = await createTempWorkspace("memory-dreaming-multi-");
     const alphaWorkspace = path.join(workspaceRoot, "alpha");
     const betaWorkspace = path.join(workspaceRoot, "beta");
 

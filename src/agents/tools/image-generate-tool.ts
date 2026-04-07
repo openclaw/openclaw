@@ -7,6 +7,7 @@ import {
   listRuntimeImageGenerationProviders,
 } from "../../image-generation/runtime.js";
 import type {
+  ImageGenerationIgnoredOverride,
   ImageGenerationProvider,
   ImageGenerationResolution,
   ImageGenerationSourceImage,
@@ -15,6 +16,7 @@ import { getImageMetadata } from "../../media/image-ops.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
@@ -212,7 +214,7 @@ function resolveAction(args: Record<string, unknown>): "generate" | "list" {
   if (!raw) {
     return "generate";
   }
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "generate" || normalized === "list") {
     return normalized;
   }
@@ -303,6 +305,10 @@ function resolveSelectedImageGenerationProvider(params: {
   );
 }
 
+function formatIgnoredImageGenerationOverride(override: ImageGenerationIgnoredOverride): string {
+  return `${override.key}=${override.value}`;
+}
+
 function validateImageGenerationCapabilities(params: {
   provider: ImageGenerationProvider | undefined;
   count: number;
@@ -318,7 +324,6 @@ function validateImageGenerationCapabilities(params: {
   }
   const isEdit = params.inputImageCount > 0;
   const modeCaps = isEdit ? provider.capabilities.edit : provider.capabilities.generate;
-  const geometry = provider.capabilities.geometry;
   const maxCount = modeCaps.maxCount ?? MAX_COUNT;
   if (params.count > maxCount) {
     throw new ToolInputError(
@@ -334,52 +339,6 @@ function validateImageGenerationCapabilities(params: {
     if (params.inputImageCount > maxInputImages) {
       throw new ToolInputError(
         `${provider.id} edit supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
-      );
-    }
-  }
-
-  if (params.size) {
-    if (!modeCaps.supportsSize) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} does not support size overrides.`,
-      );
-    }
-    if ((geometry?.sizes?.length ?? 0) > 0 && !geometry?.sizes?.includes(params.size)) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} size must be one of ${geometry?.sizes?.join(", ")}.`,
-      );
-    }
-  }
-
-  if (params.aspectRatio) {
-    if (!modeCaps.supportsAspectRatio) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} does not support aspectRatio overrides.`,
-      );
-    }
-    if (
-      (geometry?.aspectRatios?.length ?? 0) > 0 &&
-      !geometry?.aspectRatios?.includes(params.aspectRatio)
-    ) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} aspectRatio must be one of ${geometry?.aspectRatios?.join(", ")}.`,
-      );
-    }
-  }
-
-  if (params.resolution) {
-    if (params.explicitResolution !== false && !modeCaps.supportsResolution) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} does not support resolution overrides.`,
-      );
-    }
-    if (
-      modeCaps.supportsResolution &&
-      (geometry?.resolutions?.length ?? 0) > 0 &&
-      !geometry?.resolutions?.includes(params.resolution)
-    ) {
-      throw new ToolInputError(
-        `${provider.id} ${isEdit ? "edit" : "generate"} resolution must be one of ${geometry?.resolutions?.join("/")}.`,
       );
     }
   }
@@ -652,6 +611,35 @@ export function createImageGenerateTool(options?: {
         count,
         inputImages,
       });
+      const ignoredOverrides = result.ignoredOverrides ?? [];
+      const warning =
+        ignoredOverrides.length > 0
+          ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map(formatIgnoredImageGenerationOverride).join(", ")}.`
+          : undefined;
+      const normalizedSize =
+        result.normalization?.size?.applied ??
+        (typeof result.metadata?.normalizedSize === "string" &&
+        result.metadata.normalizedSize.trim()
+          ? result.metadata.normalizedSize
+          : undefined);
+      const normalizedAspectRatio =
+        result.normalization?.aspectRatio?.applied ??
+        (typeof result.metadata?.normalizedAspectRatio === "string" &&
+        result.metadata.normalizedAspectRatio.trim()
+          ? result.metadata.normalizedAspectRatio
+          : undefined);
+      const normalizedResolution =
+        result.normalization?.resolution?.applied ??
+        (typeof result.metadata?.normalizedResolution === "string" &&
+        result.metadata.normalizedResolution.trim()
+          ? result.metadata.normalizedResolution
+          : undefined);
+      const sizeTranslatedToAspectRatio =
+        result.normalization?.aspectRatio?.derivedFrom === "size" ||
+        (!normalizedSize &&
+          typeof result.metadata?.requestedSize === "string" &&
+          result.metadata.requestedSize === size &&
+          Boolean(normalizedAspectRatio));
 
       const savedImages = await Promise.all(
         result.images.map((image) =>
@@ -670,6 +658,7 @@ export function createImageGenerateTool(options?: {
         .filter((entry): entry is string => Boolean(entry));
       const lines = [
         `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+        ...(warning ? [`Warning: ${warning}`] : []),
         // Show the actual saved paths so the model does not invent a bogus
         // local path when it references the generated image in a follow-up reply.
         ...savedImages.map((image) => `MEDIA:${image.path}`),
@@ -700,12 +689,21 @@ export function createImageGenerateTool(options?: {
                   })),
                 }
               : {}),
-          ...(resolution ? { resolution } : {}),
-          ...(size ? { size } : {}),
-          ...(aspectRatio ? { aspectRatio } : {}),
+          ...(normalizedResolution || resolution
+            ? { resolution: normalizedResolution ?? resolution }
+            : {}),
+          ...(normalizedSize || (size && !sizeTranslatedToAspectRatio)
+            ? { size: normalizedSize ?? size }
+            : {}),
+          ...(normalizedAspectRatio || aspectRatio
+            ? { aspectRatio: normalizedAspectRatio ?? aspectRatio }
+            : {}),
           ...(filename ? { filename } : {}),
           attempts: result.attempts,
+          ...(result.normalization ? { normalization: result.normalization } : {}),
           metadata: result.metadata,
+          ...(warning ? { warning } : {}),
+          ...(ignoredOverrides.length > 0 ? { ignoredOverrides } : {}),
           ...(revisedPrompts.length > 0 ? { revisedPrompts } : {}),
         },
       };

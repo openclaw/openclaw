@@ -28,6 +28,7 @@ Config key:
 Allowed values:
 
 - `"friendly"`: default; enable the OpenAI-specific overlay.
+- `"on"`: alias for `"friendly"`.
 - `"off"`: disable the overlay and use the base OpenClaw prompt only.
 
 Scope:
@@ -77,10 +78,19 @@ You can also set it directly with the config CLI:
 openclaw config set plugins.entries.openai.config.personality off
 ```
 
+OpenClaw normalizes this setting case-insensitively at runtime, so values like
+`"Off"` still disable the friendly overlay.
+
 ## Option A: OpenAI API key (OpenAI Platform)
 
 **Best for:** direct API access and usage-based billing.
 Get your API key from the OpenAI dashboard.
+
+Route summary:
+
+- `openai/gpt-5.4` = direct OpenAI Platform API route
+- Requires `OPENAI_API_KEY` (or equivalent OpenAI provider config)
+- In OpenClaw, ChatGPT/Codex sign-in is routed through `openai-codex/*`, not `openai/*`
 
 ### CLI setup
 
@@ -108,10 +118,75 @@ OpenClaw does **not** expose `openai/gpt-5.3-codex-spark` on the direct OpenAI
 API path. `pi-ai` still ships a built-in row for that model, but live OpenAI API
 requests currently reject it. Spark is treated as Codex-only in OpenClaw.
 
+## Image generation
+
+The bundled `openai` plugin also registers image generation through the shared
+`image_generate` tool.
+
+- Default image model: `openai/gpt-image-1`
+- Generate: up to 4 images per request
+- Edit mode: enabled, up to 5 reference images
+- Supports `size`
+- Current OpenAI-specific caveat: OpenClaw does not forward `aspectRatio` or
+  `resolution` overrides to the OpenAI Images API today
+
+To use OpenAI as the default image provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "openai/gpt-image-1",
+      },
+    },
+  },
+}
+```
+
+See [Image Generation](/tools/image-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
+## Video generation
+
+The bundled `openai` plugin also registers video generation through the shared
+`video_generate` tool.
+
+- Default video model: `openai/sora-2`
+- Modes: text-to-video, image-to-video, and single-video reference/edit flows
+- Current limits: 1 image or 1 video reference input
+- Current OpenAI-specific caveat: OpenClaw currently only forwards `size`
+  overrides for native OpenAI video generation. Unsupported optional overrides
+  such as `aspectRatio`, `resolution`, `audio`, and `watermark` are ignored
+  and reported back as a tool warning.
+
+To use OpenAI as the default video provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      videoGenerationModel: {
+        primary: "openai/sora-2",
+      },
+    },
+  },
+}
+```
+
+See [Video Generation](/tools/video-generation) for the shared tool
+parameters, provider selection, and failover behavior.
+
 ## Option B: OpenAI Code (Codex) subscription
 
 **Best for:** using ChatGPT/Codex subscription access instead of an API key.
 Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or API key sign-in.
+
+Route summary:
+
+- `openai-codex/gpt-5.4` = ChatGPT/Codex OAuth route
+- Uses ChatGPT/Codex sign-in, not a direct OpenAI Platform API key
+- Provider-side limits for `openai-codex/*` can differ from the ChatGPT web/app experience
 
 ### CLI setup (Codex OAuth)
 
@@ -133,6 +208,10 @@ openclaw models auth login --provider openai-codex
 
 OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
+
+This route is intentionally separate from `openai/gpt-5.4`. If you want the
+direct OpenAI Platform API path, use `openai/*` with an API key. If you want
+ChatGPT/Codex sign-in, use `openai-codex/*`.
 
 If onboarding reuses an existing Codex CLI login, those credentials stay
 managed by Codex CLI. On expiry, OpenClaw re-reads the external Codex source
@@ -341,6 +420,12 @@ When fast mode is enabled, OpenClaw maps it to OpenAI priority processing:
 - `openai-codex/*` Responses calls to `chatgpt.com/backend-api` also send `service_tier = "priority"`
 - existing payload `service_tier` values are preserved
 - fast mode does not rewrite `reasoning` or `text.verbosity`
+
+For GPT 5.4 specifically, the most common setup is:
+
+- send `/fast on` in a session using `openai/gpt-5.4` or `openai-codex/gpt-5.4`
+- or set `agents.defaults.models["openai/gpt-5.4"].params.fastMode = true`
+- if you also use Codex OAuth, set `agents.defaults.models["openai-codex/gpt-5.4"].params.fastMode = true` too
 
 Example:
 

@@ -1,23 +1,29 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../plugins/provider-runtime.js", () => ({
-  resolveProviderCacheTtlEligibility: (params: {
-    context: { provider: string; modelId: string; modelApi?: string };
-  }) => {
-    if (params.context.provider === "anthropic") {
-      return true;
-    }
-    if (params.context.provider === "moonshot" || params.context.provider === "zai") {
-      return true;
-    }
-    if (params.context.provider === "openrouter") {
-      return ["anthropic/", "moonshot/", "moonshotai/", "zai/"].some((prefix) =>
-        params.context.modelId.startsWith(prefix),
-      );
-    }
-    return undefined;
-  },
-}));
+vi.mock("../../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
+    "../../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderCacheTtlEligibility: (params: {
+      context: { provider: string; modelId: string; modelApi?: string };
+    }) => {
+      if (params.context.provider === "anthropic") {
+        return true;
+      }
+      if (params.context.provider === "moonshot" || params.context.provider === "zai") {
+        return true;
+      }
+      if (params.context.provider === "openrouter") {
+        return ["anthropic/", "moonshot/", "moonshotai/", "zai/"].some((prefix) =>
+          params.context.modelId.startsWith(prefix),
+        );
+      }
+      return undefined;
+    },
+  };
+});
 
 import { isCacheTtlEligibleProvider } from "./cache-ttl.js";
 

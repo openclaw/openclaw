@@ -356,6 +356,32 @@ describe("discoverOpenClawPlugins", () => {
     });
   });
 
+  it("does not treat repo-level live or test files as plugin entrypoints", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    mkdirSafe(bundledDir);
+
+    writeStandalonePlugin(
+      path.join(bundledDir, "video-generation-providers.live.test.ts"),
+      "export default {}",
+    );
+    writeStandalonePlugin(
+      path.join(bundledDir, "music-generation-providers.live.test.ts"),
+      "export default {}",
+    );
+    writeStandalonePlugin(path.join(bundledDir, "real-plugin.ts"), "export default {}");
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: {
+        ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      },
+    });
+
+    expectCandidateOrder(candidates, ["real-plugin"]);
+    expect(diagnostics).toEqual([]);
+  });
+
   it("loads package extension packs", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");

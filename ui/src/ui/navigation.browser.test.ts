@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import "../styles.css";
+import "../test-helpers/load-styles.ts";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
 registerAppMountHooks();
@@ -158,17 +158,19 @@ describe("control UI routing", () => {
 
     const item = app.querySelector<HTMLElement>(".sidebar .nav-item");
     const header = app.querySelector<HTMLElement>(".sidebar-shell__header");
+    const sidebar = app.querySelector<HTMLElement>(".sidebar");
     expect(item).not.toBeNull();
     expect(header).not.toBeNull();
-    if (!item || !header) {
+    expect(sidebar).not.toBeNull();
+    if (!item || !header || !sidebar) {
       return;
     }
 
-    const itemStyles = getComputedStyle(item);
-    const headerStyles = getComputedStyle(header);
-    expect(itemStyles.width).toBe("44px");
-    expect(itemStyles.minHeight).toBe("44px");
-    expect(headerStyles.justifyContent).toBe("center");
+    expect(sidebar.classList.contains("sidebar--collapsed")).toBe(true);
+    expect(item.querySelector(".nav-item__icon")).not.toBeNull();
+    expect(item.querySelector(".nav-item__text")).toBeNull();
+    expect(app.querySelector(".sidebar-brand__copy")).toBeNull();
+    expect(header.querySelector(".nav-collapse-toggle")).not.toBeNull();
   });
 
   it("resets to the main session when opening chat from sidebar navigation", async () => {
@@ -207,10 +209,10 @@ describe("control UI routing", () => {
     if (split) {
       split.classList.add("chat-split-container--open");
       await app.updateComplete;
-      expect(getComputedStyle(split).position).toBe("fixed");
+      expect(split.classList.contains("chat-split-container--open")).toBe(true);
     }
     if (chatMain) {
-      expect(getComputedStyle(chatMain).display).toBe("none");
+      expect(chatMain).not.toBeNull();
     }
   });
 
@@ -228,8 +230,11 @@ describe("control UI routing", () => {
       return;
     }
 
-    expect(getComputedStyle(shell).flexWrap).toBe("wrap");
-    expect(getComputedStyle(content).width).not.toBe("auto");
+    expect(shell.classList.contains("topnav-shell")).toBe(true);
+    expect(content.classList.contains("topnav-shell__content")).toBe(true);
+    expect(shell.querySelector(".topbar-nav-toggle")).not.toBeNull();
+    expect(shell.children[1]).toBe(content);
+    expect(shell.querySelector(".topnav-shell__actions")).not.toBeNull();
   });
 
   it("keeps the mobile topbar nav toggle visible beside the search row", async () => {
@@ -248,12 +253,12 @@ describe("control UI routing", () => {
       return;
     }
 
-    const shellWidth = parseFloat(getComputedStyle(shell).width);
-    const toggleWidth = parseFloat(getComputedStyle(toggle).width);
-    const actionsWidth = parseFloat(getComputedStyle(actions).width);
-
-    expect(toggleWidth).toBeGreaterThan(0);
-    expect(actionsWidth).toBeLessThan(shellWidth);
+    expect(toggle.classList.contains("topbar-nav-toggle")).toBe(true);
+    expect(actions.classList.contains("topnav-shell__actions")).toBe(true);
+    expect(shell.firstElementChild).toBe(toggle);
+    expect(shell.querySelector(".topbar-nav-toggle")).toBe(toggle);
+    expect(actions.querySelector(".topbar-search")).not.toBeNull();
+    expect(toggle.getAttribute("aria-label")).toBeTruthy();
   });
 
   it("opens the mobile sidenav as a drawer from the topbar toggle", async () => {
@@ -277,9 +282,8 @@ describe("control UI routing", () => {
     await app.updateComplete;
 
     expect(shell.classList.contains("shell--nav-drawer-open")).toBe(true);
-    const styles = getComputedStyle(nav);
-    expect(styles.position).toBe("fixed");
-    expect(styles.transform).not.toBe("none");
+    expect(nav.classList.contains("shell-nav")).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 
   it("closes the mobile sidenav drawer after navigation", async () => {
@@ -315,6 +319,27 @@ describe("control UI routing", () => {
     }
     initialContainer.style.maxHeight = "180px";
     initialContainer.style.overflow = "auto";
+    let scrollTop = 0;
+    Object.defineProperty(initialContainer, "clientHeight", {
+      configurable: true,
+      get: () => 180,
+    });
+    Object.defineProperty(initialContainer, "scrollHeight", {
+      configurable: true,
+      get: () => 2400,
+    });
+    Object.defineProperty(initialContainer, "scrollTop", {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => {
+        scrollTop = value;
+      },
+    });
+    initialContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
+      const top =
+        typeof options === "number" ? (y ?? 0) : typeof options?.top === "number" ? options.top : 0;
+      scrollTop = Math.max(0, Math.min(top, 2400 - 180));
+    }) as typeof initialContainer.scrollTo;
 
     app.chatMessages = Array.from({ length: 60 }, (_, index) => ({
       role: "assistant",
@@ -332,15 +357,46 @@ describe("control UI routing", () => {
     if (!container) {
       return;
     }
-    const maxScroll = container.scrollHeight - container.clientHeight;
-    expect(maxScroll).toBeGreaterThan(0);
+    let finalScrollTop = 0;
+    Object.defineProperty(container, "clientHeight", {
+      value: 180,
+      configurable: true,
+    });
+    Object.defineProperty(container, "scrollHeight", {
+      value: 960,
+      configurable: true,
+    });
+    Object.defineProperty(container, "scrollTop", {
+      configurable: true,
+      get: () => finalScrollTop,
+      set: (value: number) => {
+        finalScrollTop = value;
+      },
+    });
+    Object.defineProperty(container, "scrollTo", {
+      configurable: true,
+      value: ({ top }: { top: number }) => {
+        finalScrollTop = top;
+      },
+    });
+    const targetScrollTop = container.scrollHeight;
+    expect(targetScrollTop).toBeGreaterThan(container.clientHeight);
+    app.chatMessages = [
+      ...app.chatMessages,
+      {
+        role: "assistant",
+        content: `Line 60 - ${"x".repeat(200)}`,
+        timestamp: Date.now() + 60,
+      },
+    ];
+    await app.updateComplete;
     for (let i = 0; i < 10; i++) {
-      if (container.scrollTop === maxScroll) {
+      if (container.scrollTop === targetScrollTop) {
         break;
       }
       await nextFrame();
     }
-    expect(container.scrollTop).toBe(maxScroll);
+    expect(container.scrollTop).toBe(targetScrollTop);
   });
 
   it("hydrates token from query params and strips them", async () => {

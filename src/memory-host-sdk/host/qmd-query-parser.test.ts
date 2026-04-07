@@ -40,6 +40,18 @@ complete`,
     ]);
   });
 
+  it("maps single-line qmd line metadata onto both line bounds", () => {
+    const results = parseQmdQueryJson('[{"docid":"abc","score":0.5,"line":9}]', "");
+    expect(results).toEqual([
+      {
+        docid: "abc",
+        score: 0.5,
+        startLine: 9,
+        endLine: 9,
+      },
+    ]);
+  });
+
   it("treats plain-text no-results from stderr as an empty result set", () => {
     const results = parseQmdQueryJson("", "No results found\n");
     expect(results).toEqual([]);

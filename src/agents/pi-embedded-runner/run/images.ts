@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
@@ -379,7 +380,7 @@ export async function loadImageFromRef(
       return { type: "image", data, mimeType };
     } catch (err) {
       log.debug(
-        `Native image: failed to load media-uri ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
+        `Native image: failed to load media-uri ${ref.resolved}: ${formatErrorMessage(err)}`,
       );
       return null;
     }
@@ -402,7 +403,7 @@ export async function loadImageFromRef(
         targetPath = resolved.resolved;
       } catch (err) {
         log.debug(
-          `Native image: sandbox validation failed for ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
+          `Native image: sandbox validation failed for ${ref.resolved}: ${formatErrorMessage(err)}`,
         );
         return null;
       }
@@ -440,9 +441,7 @@ export async function loadImageFromRef(
     return { type: "image", data, mimeType };
   } catch (err) {
     // Log the actual error for debugging (size limits, network failures, etc.)
-    log.debug(
-      `Native image: failed to load ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    log.debug(`Native image: failed to load ${ref.resolved}: ${formatErrorMessage(err)}`);
     return null;
   }
 }

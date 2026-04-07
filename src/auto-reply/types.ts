@@ -24,6 +24,11 @@ export type TypingPolicy =
   | "internal_webchat"
   | "heartbeat";
 
+export type ReplyThreadingPolicy = {
+  /** Override implicit reply-to-current behavior for the current turn. */
+  implicitCurrentMessage?: "default" | "allow" | "deny";
+};
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;

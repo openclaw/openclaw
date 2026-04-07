@@ -1,7 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerMemoryCli } from "./src/cli.js";
 import { registerDreamingCommand } from "./src/dreaming-command.js";
-import { registerMemoryDreamingPhases } from "./src/dreaming-phases.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import {
   buildMemoryFlushPlan,
@@ -11,6 +10,7 @@ import {
 } from "./src/flush-plan.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
 import { buildPromptSection } from "./src/prompt-section.js";
+import { listMemoryCorePublicArtifacts } from "./src/public-artifacts.js";
 import { memoryRuntime } from "./src/runtime-provider.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./src/tools.js";
 export {
@@ -29,11 +29,15 @@ export default definePluginEntry({
   register(api) {
     registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
-    registerMemoryDreamingPhases(api);
     registerDreamingCommand(api);
-    api.registerMemoryPromptSection(buildPromptSection);
-    api.registerMemoryFlushPlan(buildMemoryFlushPlan);
-    api.registerMemoryRuntime(memoryRuntime);
+    api.registerMemoryCapability({
+      promptBuilder: buildPromptSection,
+      flushPlanResolver: buildMemoryFlushPlan,
+      runtime: memoryRuntime,
+      publicArtifacts: {
+        listArtifacts: listMemoryCorePublicArtifacts,
+      },
+    });
 
     api.registerTool(
       (ctx) =>

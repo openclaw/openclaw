@@ -20,22 +20,52 @@ export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise
   });
 }
 
-export function installModelsConfigTestHooks(opts?: { restoreFetch?: boolean }) {
+export function installModelsConfigTestHooks(opts?: {
+  restoreFetch?: boolean;
+  resetPluginLoaderState?: boolean;
+  resetProviderRuntimeHookCache?: boolean;
+}) {
   let previousHome: string | undefined;
+  let previousOpenClawAgentDir: string | undefined;
+  let previousPiCodingAgentDir: string | undefined;
   const originalFetch = globalThis.fetch;
+  const shouldResetPluginLoaderState = opts?.resetPluginLoaderState !== false;
+  const shouldResetProviderRuntimeHookCache = opts?.resetProviderRuntimeHookCache !== false;
 
   beforeEach(() => {
     previousHome = process.env.HOME;
-    resetPluginLoaderTestStateForTest();
+    previousOpenClawAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    previousPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+    delete process.env.OPENCLAW_AGENT_DIR;
+    delete process.env.PI_CODING_AGENT_DIR;
+    if (shouldResetPluginLoaderState) {
+      resetPluginLoaderTestStateForTest();
+    }
     resetModelsJsonReadyCacheForTest();
-    resetProviderRuntimeHookCacheForTest();
+    if (shouldResetProviderRuntimeHookCache) {
+      resetProviderRuntimeHookCacheForTest();
+    }
   });
 
   afterEach(() => {
     process.env.HOME = previousHome;
-    resetPluginLoaderTestStateForTest();
+    if (previousOpenClawAgentDir === undefined) {
+      delete process.env.OPENCLAW_AGENT_DIR;
+    } else {
+      process.env.OPENCLAW_AGENT_DIR = previousOpenClawAgentDir;
+    }
+    if (previousPiCodingAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousPiCodingAgentDir;
+    }
+    if (shouldResetPluginLoaderState) {
+      resetPluginLoaderTestStateForTest();
+    }
     resetModelsJsonReadyCacheForTest();
-    resetProviderRuntimeHookCacheForTest();
+    if (shouldResetProviderRuntimeHookCache) {
+      resetProviderRuntimeHookCacheForTest();
+    }
     if (opts?.restoreFetch && originalFetch) {
       globalThis.fetch = originalFetch;
     }

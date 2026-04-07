@@ -255,6 +255,7 @@ async function projectPlanState(params: {
     changedFiles,
     enabled: options.scrubEnv,
   });
+  const checkFullRuntime = params.write ? changedFiles.size > 0 : params.allowExecInDryRun;
 
   const validation = await validateProjectedSecretsState({
     env: params.env,
@@ -263,6 +264,7 @@ async function projectPlanState(params: {
     authStoreByPath,
     write: params.write,
     allowExecInDryRun: params.allowExecInDryRun,
+    checkFullRuntime,
   });
 
   return {
@@ -655,6 +657,7 @@ async function validateProjectedSecretsState(params: {
   authStoreByPath: Map<string, Record<string, unknown>>;
   write: boolean;
   allowExecInDryRun: boolean;
+  checkFullRuntime: boolean;
 }): Promise<{ refsChecked: number; skippedExecRefs: number; resolvabilityComplete: boolean }> {
   const cache = {};
   let refsChecked = 0;
@@ -691,10 +694,14 @@ async function validateProjectedSecretsState(params: {
   for (const [authStorePath, store] of params.authStoreByPath.entries()) {
     authStoreLookup.set(resolveUserPath(authStorePath), store);
   }
-  if (params.write || params.allowExecInDryRun) {
+  if (params.checkFullRuntime) {
     await prepareSecretsRuntimeSnapshot({
       config: params.nextConfig,
       env: params.env,
+      // Dry-run preflight only needs auth-store materialization when this plan
+      // actually touches auth-profile state. Write mode keeps the stricter
+      // whole-runtime check.
+      includeAuthStoreRefs: params.write || params.authStoreByPath.size > 0,
       loadAuthStore: (agentDir?: string) => {
         const storePath = resolveUserPath(resolveAuthStorePath(agentDir));
         const override = authStoreLookup.get(storePath);

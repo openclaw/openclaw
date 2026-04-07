@@ -273,7 +273,7 @@ export function buildPollResultsSummary(params: {
     }
   >();
 
-  const orderedRelationEvents = [...params.relationEvents].sort((left, right) => {
+  const orderedRelationEvents = [...params.relationEvents].toSorted((left, right) => {
     const leftTs =
       typeof left.origin_server_ts === "number" && Number.isFinite(left.origin_server_ts)
         ? left.origin_server_ts

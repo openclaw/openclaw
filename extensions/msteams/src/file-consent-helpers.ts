@@ -9,6 +9,7 @@
  * and messenger.ts (reply path) to avoid duplication.
  */
 
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { buildFileConsentCard } from "./file-consent.js";
 import { storePendingUpload } from "./pending-uploads.js";
 
@@ -66,7 +67,7 @@ export function requiresFileConsent(params: {
   bufferSize: number;
   thresholdBytes: number;
 }): boolean {
-  const isPersonal = params.conversationType?.toLowerCase() === "personal";
+  const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
   const isImage = params.contentType?.startsWith("image/") ?? false;
   const isLargeFile = params.bufferSize >= params.thresholdBytes;
   return isPersonal && (isLargeFile || !isImage);

@@ -7,11 +7,21 @@ export const pluginRegistrationContractCases = {
     pluginId: "anthropic",
     providerIds: ["anthropic"],
     mediaUnderstandingProviderIds: ["anthropic"],
+    cliBackendIds: ["claude-cli"],
     requireDescribeImages: true,
   },
   brave: {
     pluginId: "brave",
     webSearchProviderIds: ["brave"],
+  },
+  comfy: {
+    pluginId: "comfy",
+    providerIds: ["comfy"],
+    imageGenerationProviderIds: ["comfy"],
+    musicGenerationProviderIds: ["comfy"],
+    videoGenerationProviderIds: ["comfy"],
+    requireGenerateImage: true,
+    requireGenerateVideo: true,
   },
   deepgram: {
     pluginId: "deepgram",

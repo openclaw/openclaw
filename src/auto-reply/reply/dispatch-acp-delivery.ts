@@ -2,6 +2,11 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -51,61 +56,36 @@ type ToolMessageHandle = {
   messageId: string;
 };
 
-function normalizeDeliveryChannel(value: string | undefined): string | undefined {
-  const normalized = value?.trim().toLowerCase();
-  return normalized || undefined;
-}
-
-function resolveDeliveryAccountId(params: {
-  cfg: OpenClawConfig;
-  channel: string | undefined;
-  accountId: string | undefined;
-}): string | undefined {
-  const explicit = params.accountId?.trim();
-  if (explicit) {
-    return explicit;
-  }
-  const channelId = normalizeDeliveryChannel(params.channel);
-  if (!channelId) {
-    return undefined;
-  }
-  const channelCfg = (
-    params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-  )?.[channelId];
-  const configuredDefault = channelCfg?.defaultAccount;
-  return typeof configuredDefault === "string" && configuredDefault.trim()
-    ? configuredDefault.trim()
-    : undefined;
-}
-
 async function shouldTreatDeliveredTextAsVisible(params: {
   channel: string | undefined;
   kind: ReplyDispatchKind;
   text: string | undefined;
+  routed: boolean;
 }): Promise<boolean> {
-  if (!params.text?.trim()) {
+  if (!normalizeOptionalString(params.text)) {
     return false;
   }
   if (params.kind === "final") {
     return true;
   }
-  const channelId = normalizeDeliveryChannel(params.channel);
+  const channelId = normalizeOptionalLowercaseString(params.channel);
   if (!channelId) {
     return false;
   }
-  // Only Telegram currently overrides block/tool visibility via channel runtime.
-  // Keep other channels on the fast path so ACP local delivery does not pay the
-  // broader channel-registry import cost on every streamed turn.
-  if (channelId !== "telegram") {
-    return false;
-  }
   const { getChannelPlugin } = await loadChannelPluginRuntime();
-  return (
-    getChannelPlugin(channelId)?.outbound?.shouldTreatRoutedTextAsVisible?.({
+  const outbound = getChannelPlugin(channelId)?.outbound;
+  const visibilityOverride =
+    outbound?.shouldTreatDeliveredTextAsVisible ?? outbound?.shouldTreatRoutedTextAsVisible;
+  if (visibilityOverride) {
+    return visibilityOverride({
       kind: params.kind,
       text: params.text,
-    }) === true
-  );
+    });
+  }
+  if (!params.routed) {
+    return channelId === "telegram";
+  }
+  return false;
 }
 
 async function maybeApplyAcpTts(params: {
@@ -203,13 +183,16 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
-  const directChannel = normalizeDeliveryChannel(params.ctx.Provider ?? params.ctx.Surface);
-  const routedChannel = normalizeDeliveryChannel(params.originatingChannel);
-  const resolvedAccountId = resolveDeliveryAccountId({
-    cfg: params.cfg,
-    channel: routedChannel ?? directChannel,
-    accountId: params.ctx.AccountId,
-  });
+  const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
+  const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
+  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const resolvedAccountId =
+    explicitAccountId ??
+    normalizeOptionalString(
+      (
+        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
+      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
+    );
 
   const settleDirectVisibleText = async () => {
     if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
@@ -232,7 +215,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
-    await params.onReplyStart?.();
+    void Promise.resolve(params.onReplyStart?.()).catch((error) => {
+      logVerbose(
+        `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   };
 
   const tryEditToolMessage = async (
@@ -246,7 +233,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (!handle?.messageId) {
       return false;
     }
-    const message = payload.text?.trim();
+    const message = normalizeOptionalString(payload.text);
     if (!message) {
       return false;
     }
@@ -270,7 +257,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return true;
     } catch (error) {
       logVerbose(
-        `dispatch-acp: tool message edit failed for ${toolCallId}: ${error instanceof Error ? error.message : String(error)}`,
+        `dispatch-acp: tool message edit failed for ${toolCallId}: ${formatErrorMessage(error)}`,
       );
       return false;
     }
@@ -281,7 +268,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
-    if (kind === "block" && payload.text?.trim()) {
+    if (kind === "block" && normalizeOptionalString(payload.text)) {
       if (state.accumulatedBlockText.length > 0) {
         state.accumulatedBlockText += "\n";
       }
@@ -308,7 +295,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     });
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
-      const toolCallId = meta?.toolCallId?.trim();
+      const toolCallId = normalizeOptionalString(meta?.toolCallId);
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
         const edited = await tryEditToolMessage(ttsPayload, toolCallId);
         if (edited) {
@@ -320,6 +307,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         channel: routedChannel,
         kind,
         text: ttsPayload.text,
+        routed: true,
       });
       const { routeReply } = await loadRouteReplyRuntime();
       const result = await routeReply({
@@ -363,6 +351,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       channel: directChannel,
       kind,
       text: ttsPayload.text,
+      routed: false,
     });
     const delivered =
       kind === "tool"

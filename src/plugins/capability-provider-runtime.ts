@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
@@ -14,7 +15,8 @@ type CapabilityProviderRegistryKey =
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "imageGenerationProviders"
-  | "videoGenerationProviders";
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 type CapabilityContractKey =
   | "memoryEmbeddingProviders"
@@ -23,7 +25,8 @@ type CapabilityContractKey =
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "imageGenerationProviders"
-  | "videoGenerationProviders";
+  | "videoGenerationProviders"
+  | "musicGenerationProviders";
 
 type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number] extends { provider: infer T } ? T : never;
@@ -36,6 +39,7 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
   mediaUnderstandingProviders: "mediaUnderstandingProviders",
   imageGenerationProviders: "imageGenerationProviders",
   videoGenerationProviders: "videoGenerationProviders",
+  musicGenerationProviders: "musicGenerationProviders",
 };
 
 function resolveBundledCapabilityCompatPluginIds(params: {
@@ -59,8 +63,12 @@ function resolveCapabilityProviderConfig(params: {
   cfg?: OpenClawConfig;
 }) {
   const pluginIds = resolveBundledCapabilityCompatPluginIds(params);
-  const enablementCompat = withBundledPluginEnablementCompat({
+  const allowlistCompat = withBundledPluginAllowlistCompat({
     config: params.cfg,
+    pluginIds,
+  });
+  const enablementCompat = withBundledPluginEnablementCompat({
+    config: allowlistCompat,
     pluginIds,
   });
   return withBundledPluginVitestCompat({

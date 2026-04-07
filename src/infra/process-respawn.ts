@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
@@ -11,10 +13,7 @@ export type GatewayRespawnResult = {
 };
 
 function isTruthy(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
@@ -63,7 +62,7 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     child.unref();
     return { mode: "spawned", pid: child.pid ?? undefined };
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = formatErrorMessage(err);
     return { mode: "failed", detail };
   }
 }

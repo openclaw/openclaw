@@ -1,24 +1,14 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   renderBundledRootHelpText,
   writeCliStartupMetadata,
 } from "../../scripts/write-cli-startup-metadata.ts";
-
-function createTempDir(prefix: string): string {
-  return mkdtempSync(path.join(os.tmpdir(), prefix));
-}
+import { createScriptTestHarness } from "./test-helpers.js";
 
 describe("write-cli-startup-metadata", () => {
-  const tempDirs: string[] = [];
-
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  const { createTempDir } = createScriptTestHarness();
 
   it("captures bundled root help text from the CLI program", async () => {
     const rootHelpText = await renderBundledRootHelpText();
@@ -29,7 +19,6 @@ describe("write-cli-startup-metadata", () => {
 
   it("writes startup metadata with populated root help text", async () => {
     const tempRoot = createTempDir("openclaw-startup-metadata-");
-    tempDirs.push(tempRoot);
     const distDir = path.join(tempRoot, "dist");
     const extensionsDir = path.join(tempRoot, "extensions");
     const outputPath = path.join(distDir, "cli-startup-metadata.json");

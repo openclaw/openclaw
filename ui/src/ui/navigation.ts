@@ -66,7 +66,14 @@ const TAB_PATHS: Record<Tab, string> = {
   dreams: "/dreaming",
 };
 
-const PATH_TO_TAB = new Map(Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]));
+const PATH_ALIASES: Record<string, Tab> = {
+  "/dreams": "dreams",
+};
+
+const PATH_TO_TAB = new Map<string, Tab>([
+  ...Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab] as const),
+  ...Object.entries(PATH_ALIASES),
+]);
 
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) {

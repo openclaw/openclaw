@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { listMatrixAccountIds, resolveMatrixAccount } from "./matrix/accounts.js";
 import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 
@@ -82,7 +83,9 @@ function matchesMatrixRequestAccount(params: {
   accountId?: string | null;
   request: ApprovalRequest;
 }): boolean {
-  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const turnSourceChannel = normalizeLowercaseStringOrEmpty(
+    params.request.request.turnSourceChannel,
+  );
   const boundAccountId = resolveApprovalRequestChannelAccountId({
     cfg: params.cfg,
     request: params.request,

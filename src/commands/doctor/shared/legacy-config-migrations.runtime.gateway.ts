@@ -11,6 +11,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
@@ -21,10 +22,7 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
 };
 
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return false;
   }
@@ -105,7 +103,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         return;
       }
 
-      const normalized = bindRaw.trim().toLowerCase();
+      const normalized = normalizeOptionalLowercaseString(bindRaw);
+      if (!normalized) {
+        return;
+      }
       let mapped: "lan" | "loopback" | undefined;
       if (
         normalized === "0.0.0.0" ||

@@ -281,6 +281,53 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
   });
 
+  it("emits provider inventory output for compact video_generate list results", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "video_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: [
+              "openai: default=sora-2 | models=sora-2",
+              "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
+            ].join("\n"),
+          },
+        ],
+        details: {
+          providers: [
+            { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
+            {
+              id: "google",
+              defaultModel: "veo-3.1-fast-generate-preview",
+              models: ["veo-3.1-fast-generate-preview"],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "video_generate",
+      undefined,
+      [
+        "openai: default=sora-2 | models=sora-2",
+        "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
+      ].join("\n"),
+      expect.any(Object),
+    );
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
   it("does NOT emit media for error results", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });

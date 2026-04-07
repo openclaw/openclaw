@@ -1,15 +1,17 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { stageBundledPluginRuntimeDeps } from "../../scripts/stage-bundled-plugin-runtime-deps.mjs";
+import { createScriptTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createScriptTestHarness();
 
 describe("stageBundledPluginRuntimeDeps", () => {
   function createBundledPluginFixture(params: {
     packageJson: Record<string, unknown>;
     pluginId?: string;
   }) {
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runtime-deps-"));
+    const repoRoot = createTempDir("openclaw-runtime-deps-");
     const pluginId = params.pluginId ?? "fixture-plugin";
     const pluginDir = path.join(repoRoot, "dist", "extensions", pluginId);
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -27,9 +29,21 @@ describe("stageBundledPluginRuntimeDeps", () => {
         name: "@openclaw/fixture-plugin",
         version: "1.0.0",
         dependencies: { "left-pad": "1.3.0" },
-        peerDependencies: { openclaw: "^1.0.0" },
-        peerDependenciesMeta: { openclaw: { optional: true } },
-        devDependencies: { openclaw: "^1.0.0" },
+        peerDependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+          openclaw: "^1.0.0",
+          react: "^19.0.0",
+        },
+        peerDependenciesMeta: {
+          "@openclaw/plugin-sdk": { optional: true },
+          openclaw: { optional: true },
+          react: { optional: true },
+        },
+        devDependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+          openclaw: "^1.0.0",
+          typescript: "^5.9.0",
+        },
         openclaw: { bundle: { stageRuntimeDependencies: true } },
       },
     });

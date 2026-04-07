@@ -1,6 +1,8 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { registerMatrixCliMetadata } from "./src/cli-metadata.js";
 
+export { registerMatrixCliMetadata } from "./src/cli-metadata.js";
+
 export default definePluginEntry({
   id: "matrix",
   name: "Matrix",

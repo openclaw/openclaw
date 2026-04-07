@@ -98,10 +98,6 @@ export function resolveExtensionTestPlan(params = {}) {
   const relativeExtensionDir = normalizeRelative(path.relative(repoRoot, extensionDir));
 
   const roots = [relativeExtensionDir];
-  const pairedCoreRoot = path.join(repoRoot, "src", extensionId);
-  if (fs.existsSync(pairedCoreRoot)) {
-    roots.push(normalizeRelative(path.relative(repoRoot, pairedCoreRoot)));
-  }
 
   const usesChannelConfig = roots.some((root) => channelTestRoots.includes(root));
   const usesAcpxConfig = roots.some((root) => isAcpxExtensionRoot(root));

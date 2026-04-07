@@ -6,8 +6,11 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
+import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
+import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { log } from "../logger.js";
@@ -90,10 +93,23 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
 }
 
 export function shouldInjectHeartbeatPrompt(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  defaultAgentId?: string;
   isDefaultAgent: boolean;
   trigger?: EmbeddedRunAttemptParams["trigger"];
 }): boolean {
-  return params.isDefaultAgent && shouldInjectHeartbeatPromptForTrigger(params.trigger);
+  return (
+    params.isDefaultAgent &&
+    shouldInjectHeartbeatPromptForTrigger(params.trigger) &&
+    Boolean(
+      resolveHeartbeatPromptForSystemPrompt({
+        config: params.config,
+        agentId: params.agentId,
+        defaultAgentId: params.defaultAgentId,
+      }),
+    )
+  );
 }
 
 export function shouldWarnOnOrphanedUserRepair(
@@ -117,6 +133,24 @@ export function prependSystemPromptAddition(params: {
   systemPromptAddition?: string;
 }): string {
   return prependSystemPromptAdditionAfterCacheBoundary(params);
+}
+
+export function resolveAttemptPrependSystemContext(params: {
+  sessionKey?: string;
+  trigger?: EmbeddedRunAttemptParams["trigger"];
+  hookPrependSystemContext?: string;
+}): string | undefined {
+  const activeMediaTaskPromptContexts =
+    params.trigger === "user" || params.trigger === "manual"
+      ? [
+          buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
+          buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
+        ]
+      : [];
+  return joinPresentTextSegments([
+    ...activeMediaTaskPromptContexts,
+    params.hookPrependSystemContext,
+  ]);
 }
 
 /** Build runtime context passed into context-engine afterTurn hooks. */

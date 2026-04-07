@@ -388,7 +388,12 @@ export const QueueDropSchema = z.union([
   z.literal("new"),
   z.literal("summarize"),
 ]);
-export const ReplyToModeSchema = z.union([z.literal("off"), z.literal("first"), z.literal("all")]);
+export const ReplyToModeSchema = z.union([
+  z.literal("off"),
+  z.literal("first"),
+  z.literal("all"),
+  z.literal("batched"),
+]);
 export const TypingModeSchema = z.union([
   z.literal("never"),
   z.literal("instant"),
@@ -534,6 +539,7 @@ export const CliBackendSchema = z
       .optional(),
     imageArg: z.string().optional(),
     imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
+    imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
     serialize: z.boolean().optional(),
     reliability: z
       .object({
