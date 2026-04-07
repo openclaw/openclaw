@@ -267,7 +267,7 @@ function buildNativeMcpInspectEntries(
     }
     entries.set(normalized, {
       name: normalized,
-      hasStdioTransport: true,
+      hasStdioTransport: false,
     });
   }
 

@@ -791,7 +791,7 @@ describe("plugin status reports", () => {
     });
   });
 
-  it("treats manifest-declared native MCP servers as a capability in metadata-only inspect", () => {
+  it("treats manifest-declared native MCP servers as unsupported in metadata-only inspect", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
         id: "native-mcp",
@@ -807,7 +807,38 @@ describe("plugin status reports", () => {
       capabilityMode: "plain",
       capabilityKinds: ["mcp-server"],
     });
-    expect(inspect.mcpServers).toEqual([{ name: "helloWorld", hasStdioTransport: true }]);
+    expect(inspect.mcpServers).toEqual([{ name: "helloWorld", hasStdioTransport: false }]);
+  });
+
+  it("keeps manifest-declared native MCP servers unsupported when runtime registration fails", () => {
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "native-mcp",
+        name: "Native MCP",
+        mcpServerNames: ["helloWorld"],
+      }),
+      {
+        diagnostics: [
+          {
+            level: "error",
+            pluginId: "native-mcp",
+            source: "/tmp/native-mcp/index.ts",
+            message: 'MCP server "helloWorld" must use managed stdio transport, not URL transport',
+          },
+        ],
+      },
+    );
+
+    const inspect = expectInspectReport("native-mcp");
+
+    expect(inspect.mcpServers).toEqual([{ name: "helloWorld", hasStdioTransport: false }]);
+    expect(inspect.diagnostics).toEqual([
+      expect.objectContaining({
+        level: "error",
+        pluginId: "native-mcp",
+        message: 'MCP server "helloWorld" must use managed stdio transport, not URL transport',
+      }),
+    ]);
   });
 
   it("trims and skips empty runtime MCP server names in inspect output", () => {
