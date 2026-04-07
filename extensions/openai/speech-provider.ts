@@ -171,7 +171,9 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }
-      const responseFormat = req.target === "voice-note" ? "opus" : "mp3";
+      // Groq's Orpheus TTS only supports WAV format
+      const isGroqEndpoint = config.baseUrl?.includes("groq.com");
+      const responseFormat = isGroqEndpoint ? "wav" : req.target === "voice-note" ? "opus" : "mp3";
       const audioBuffer = await openaiTTS({
         text: req.text,
         apiKey,
@@ -186,7 +188,8 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
       return {
         audioBuffer,
         outputFormat: responseFormat,
-        fileExtension: responseFormat === "opus" ? ".opus" : ".mp3",
+        fileExtension:
+          responseFormat === "opus" ? ".opus" : responseFormat === "wav" ? ".wav" : ".mp3",
         voiceCompatible: req.target === "voice-note",
       };
     },
