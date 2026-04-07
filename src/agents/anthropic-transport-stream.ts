@@ -20,7 +20,7 @@ import {
  * See: https://github.com/openclaw/openclaw/issues/14321
  * See: https://github.com/openclaw/openclaw/issues/32179
  */
-function safeParseStreamingJson(json: string): unknown {
+function safeParseStreamingJson(json: string | undefined): unknown {
   try {
     return parseStreamingJson(json);
   } catch (e) {
