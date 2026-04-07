@@ -135,6 +135,11 @@ export function createCronPromptExecutor(params: {
           senderIsOwner: false,
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
+          // When delivery target is resolved, pass it as the default channel target
+          // so the message tool can infer the target without requiring the AI to
+          // explicitly specify it. Without this, cron sessions have no inbound
+          // message context and message(action:'send') fails with "requires a target".
+          currentChannelId: params.resolvedDelivery.ok ? params.resolvedDelivery.to : undefined,
           sessionFile,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
