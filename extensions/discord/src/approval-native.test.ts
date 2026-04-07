@@ -6,7 +6,6 @@ import { clearSessionStoreCacheForTest } from "../../../src/config/sessions.js";
 import {
   createDiscordNativeApprovalAdapter,
   getDiscordApprovalCapability,
-  extractDiscordThreadId,
   shouldHandleDiscordApprovalRequest,
 } from "./approval-native.js";
 
@@ -244,13 +243,6 @@ describe("createDiscordNativeApprovalAdapter", () => {
     });
 
     expect(target).toEqual({ to: "987654321", threadId: undefined });
-  });
-
-  it("extracts a Discord thread id from thread-bound session keys", () => {
-    expect(extractDiscordThreadId("agent:main:discord:channel:111222333:thread:444555")).toBe(
-      "444555",
-    );
-    expect(extractDiscordThreadId("agent:main:discord:channel:111222333")).toBeNull();
   });
 
   it("preserves explicit turn-source thread ids on origin targets", async () => {

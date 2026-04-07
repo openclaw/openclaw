@@ -6,6 +6,7 @@ import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-s
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -26,32 +27,14 @@ import { parseSlackTarget } from "./targets.js";
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type SlackOriginTarget = { to: string; threadId?: string };
 
-type SlackSessionTarget = {
-  kind: "direct" | "channel" | "group";
-  id: string;
-  threadId?: string;
-};
-
-function extractSlackSessionTarget(sessionKey?: string | null): SlackSessionTarget | null {
-  if (!sessionKey) {
-    return null;
-  }
-  const match = sessionKey.match(/slack:(direct|channel|group):([^:]+)(?::thread:(.+))?$/i);
-  if (!match?.[1] || !match[2]) {
-    return null;
-  }
-  const threadId = match[3]?.trim() || undefined;
-  return {
-    kind: match[1].toLowerCase() as "direct" | "channel" | "group",
-    id: match[2].trim().toUpperCase(),
-    threadId,
-  };
-}
-
 function extractSlackSessionKind(
   sessionKey?: string | null,
 ): "direct" | "channel" | "group" | null {
-  return extractSlackSessionTarget(sessionKey)?.kind ?? null;
+  if (!sessionKey) {
+    return null;
+  }
+  const match = sessionKey.match(/slack:(direct|channel|group):/i);
+  return match?.[1] ? (match[1].toLowerCase() as "direct" | "channel" | "group") : null;
 }
 
 function normalizeComparableTarget(value: string): string {
@@ -108,12 +91,15 @@ function resolveSessionSlackOriginTarget(sessionTarget: {
 }
 
 function resolveSlackFallbackOriginTarget(request: ApprovalRequest): SlackOriginTarget | null {
-  const sessionTarget = extractSlackSessionTarget(request.request.sessionKey ?? undefined);
+  const sessionTarget = resolveApprovalRequestSessionConversation({
+    request,
+    channel: "slack",
+  });
   if (!sessionTarget) {
     return null;
   }
-  const parsed = parseSlackTarget(sessionTarget.id, {
-    defaultKind: sessionTarget.kind === "direct" ? "user" : "channel",
+  const parsed = parseSlackTarget(sessionTarget.id.toUpperCase(), {
+    defaultKind: "channel",
   });
   if (!parsed) {
     return null;

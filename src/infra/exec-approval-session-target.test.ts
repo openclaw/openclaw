@@ -10,6 +10,7 @@ import {
   resolveApprovalRequestChannelAccountId,
 } from "./approval-request-account-binding.js";
 import {
+  resolveApprovalRequestSessionConversation,
   resolveApprovalRequestOriginTarget,
   resolveExecApprovalSessionTarget,
 } from "./exec-approval-session-target.js";
@@ -211,6 +212,41 @@ describe("exec approval session target", () => {
         threadId: "777888999111222333",
       });
     });
+  });
+
+  it("parses channel-scoped session conversation fallbacks for approval requests", () => {
+    const request = buildPluginRequest({
+      sessionKey: "agent:main:matrix:channel:!Ops:Example.org:thread:$root",
+    });
+
+    expect(
+      resolveApprovalRequestSessionConversation({
+        request,
+        channel: "matrix",
+      }),
+    ).toEqual({
+      channel: "matrix",
+      kind: "channel",
+      id: "!Ops:Example.org",
+      rawId: "!Ops:Example.org:thread:$root",
+      threadId: "$root",
+      baseSessionKey: "agent:main:matrix:channel:!Ops:Example.org",
+      baseConversationId: "!Ops:Example.org",
+      parentConversationCandidates: ["!Ops:Example.org"],
+    });
+  });
+
+  it("ignores session conversation fallbacks for other channels", () => {
+    const request = buildPluginRequest({
+      sessionKey: "agent:main:matrix:channel:!ops:example.org",
+    });
+
+    expect(
+      resolveApprovalRequestSessionConversation({
+        request,
+        channel: "slack",
+      }),
+    ).toBeNull();
   });
 
   it("prefers explicit turn-source account bindings when session store is missing", () => {

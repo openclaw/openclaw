@@ -1,3 +1,4 @@
+import { resolveSessionConversationRef } from "../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
@@ -20,6 +21,17 @@ export type ExecApprovalSessionTarget = {
   to: string;
   accountId?: string;
   threadId?: string | number;
+};
+
+export type ApprovalRequestSessionConversation = {
+  channel: string;
+  kind: "group" | "channel";
+  id: string;
+  rawId: string;
+  threadId?: string;
+  baseSessionKey: string;
+  baseConversationId: string;
+  parentConversationCandidates: string[];
 };
 
 type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
@@ -70,6 +82,34 @@ function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRe
 
 function normalizeOptionalChannel(value?: string | null): string | undefined {
   return normalizeMessageChannel(value);
+}
+
+export function resolveApprovalRequestSessionConversation(params: {
+  request: ApprovalRequestLike;
+  channel?: string | null;
+}): ApprovalRequestSessionConversation | null {
+  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
+  if (!sessionKey) {
+    return null;
+  }
+  const resolved = resolveSessionConversationRef(sessionKey);
+  if (!resolved) {
+    return null;
+  }
+  const expectedChannel = normalizeOptionalChannel(params.channel);
+  if (expectedChannel && normalizeOptionalChannel(resolved.channel) !== expectedChannel) {
+    return null;
+  }
+  return {
+    channel: resolved.channel,
+    kind: resolved.kind,
+    id: resolved.id,
+    rawId: resolved.rawId,
+    threadId: resolved.threadId,
+    baseSessionKey: resolved.baseSessionKey,
+    baseConversationId: resolved.baseConversationId,
+    parentConversationCandidates: resolved.parentConversationCandidates,
+  };
 }
 
 export function resolveExecApprovalSessionTarget(params: {

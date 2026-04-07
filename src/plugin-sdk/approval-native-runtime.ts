@@ -3,9 +3,11 @@ export {
   createChannelNativeOriginTargetResolver,
 } from "./approval-native-helpers.js";
 export {
+  resolveApprovalRequestSessionConversation,
   resolveApprovalRequestOriginTarget,
   resolveApprovalRequestSessionTarget,
   resolveExecApprovalSessionTarget,
+  type ApprovalRequestSessionConversation,
   type ExecApprovalSessionTarget,
 } from "../infra/exec-approval-session-target.js";
 export { buildChannelApprovalNativeTargetKey } from "../infra/approval-native-target-key.js";

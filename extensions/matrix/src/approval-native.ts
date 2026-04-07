@@ -4,7 +4,10 @@ import {
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelNativeOriginTargetResolver } from "openclaw/plugin-sdk/approval-native-runtime";
+import {
+  createChannelNativeOriginTargetResolver,
+  resolveApprovalRequestSessionConversation,
+} from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -152,6 +155,23 @@ const resolveMatrixOriginTarget = createChannelNativeOriginTargetResolver({
   resolveTurnSourceTarget: resolveTurnSourceMatrixOriginTarget,
   resolveSessionTarget: resolveSessionMatrixOriginTarget,
   targetsMatch: matrixTargetsMatch,
+  resolveFallbackTarget: (request) => {
+    const sessionConversation = resolveApprovalRequestSessionConversation({
+      request,
+      channel: "matrix",
+    });
+    if (!sessionConversation) {
+      return null;
+    }
+    const target = resolveMatrixNativeTarget(sessionConversation.id);
+    if (!target) {
+      return null;
+    }
+    return {
+      to: target,
+      threadId: normalizeOptionalStringifiedId(sessionConversation.threadId),
+    };
+  },
 });
 
 function resolveMatrixApproverDmTargets(params: {

@@ -1,4 +1,5 @@
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { DiscordExecApprovalConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -20,6 +21,8 @@ import {
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 
+// Legacy export kept for monitor test/support surfaces; native routing now uses
+// the shared session-conversation fallback helper instead.
 export function extractDiscordChannelId(sessionKey?: string | null): string | null {
   if (!sessionKey) {
     return null;
@@ -123,13 +126,17 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
         configOverride,
       }),
     resolveTurnSourceTarget: (request) => {
+      const sessionConversation = resolveApprovalRequestSessionConversation({
+        request,
+        channel: "discord",
+      });
       const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
       const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
       const rawTurnSourceTo = request.request.turnSourceTo?.trim() || "";
       const turnSourceTo = normalizeDiscordOriginChannelId(rawTurnSourceTo);
       const threadId =
         normalizeDiscordThreadId(request.request.turnSourceThreadId) ??
-        extractDiscordThreadId(request.request.sessionKey?.trim() || null) ??
+        normalizeDiscordThreadId(sessionConversation?.threadId) ??
         undefined;
       const hasExplicitOriginTarget = /^(?:channel|group):/i.test(rawTurnSourceTo);
       if (turnSourceChannel !== "discord" || !turnSourceTo || sessionKind === "dm") {
@@ -140,6 +147,10 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
         : null;
     },
     resolveSessionTarget: (sessionTarget, request) => {
+      const sessionConversation = resolveApprovalRequestSessionConversation({
+        request,
+        channel: "discord",
+      });
       const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
       if (sessionKind === "dm") {
         return null;
@@ -150,23 +161,26 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
             to: targetTo,
             threadId:
               normalizeDiscordThreadId(sessionTarget.threadId) ??
-              extractDiscordThreadId(request.request.sessionKey?.trim() || null) ??
+              normalizeDiscordThreadId(sessionConversation?.threadId) ??
               undefined,
           }
         : null;
     },
     targetsMatch: (a, b) => a.to === b.to && a.threadId === b.threadId,
     resolveFallbackTarget: (request) => {
+      const sessionConversation = resolveApprovalRequestSessionConversation({
+        request,
+        channel: "discord",
+      });
       const sessionKind = extractDiscordSessionKind(request.request.sessionKey?.trim() || null);
       if (sessionKind === "dm") {
         return null;
       }
-      const legacyChannelId = extractDiscordChannelId(request.request.sessionKey?.trim() || null);
-      return legacyChannelId
+      const fallbackChannelId = normalizeDiscordOriginChannelId(sessionConversation?.id);
+      return fallbackChannelId
         ? {
-            to: legacyChannelId,
-            threadId:
-              extractDiscordThreadId(request.request.sessionKey?.trim() || null) ?? undefined,
+            to: fallbackChannelId,
+            threadId: normalizeDiscordThreadId(sessionConversation?.threadId) ?? undefined,
           }
         : null;
     },
