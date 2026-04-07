@@ -650,7 +650,25 @@ async function deliverOutboundPayloadsCore(
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, handler);
-  const hookRunner = getGlobalHookRunner();
+  // Resolve plugin hook runner for message_sending / message_sent hooks.
+  // getGlobalHookRunner() may return null during cold-start race conditions
+  // where delivery fires before plugins are fully loaded. Retry once after
+  // yielding to the event loop to allow pending plugin initialization to
+  // complete.
+  // See: https://github.com/openclaw/openclaw/issues/32621
+  let hookRunner = getGlobalHookRunner();
+  if (!hookRunner) {
+    // Yield to allow any pending plugin initialization to settle
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    hookRunner = getGlobalHookRunner();
+    if (!hookRunner) {
+      log.warn(
+        "deliverOutboundPayloadsCore: global hook runner is null after retry — " +
+          "plugin message_sending/message_sent hooks will be skipped",
+        { channel, to },
+      );
+    }
+  }
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
