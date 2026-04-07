@@ -19,7 +19,7 @@ function isPluginEnabledByConfig(
   plugin: PluginRegistry["plugins"][number],
   cfg?: OpenClawConfig,
 ): boolean {
-  if (!cfg?.plugins) {
+  if (!cfg) {
     return true;
   }
 

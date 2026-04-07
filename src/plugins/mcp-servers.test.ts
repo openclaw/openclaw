@@ -215,6 +215,37 @@ describe("loadEnabledPluginMcpServerConfig", () => {
     });
   });
 
+  it("drops workspace plugin MCP servers when the plugins block is removed", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "plugin-a",
+        rootDir: "/tmp/plugin-a",
+        origin: "workspace",
+        activationSource: "explicit",
+      }),
+    );
+    registry.mcpServers.push({
+      pluginId: "plugin-a",
+      name: "helloWorld",
+      server: { command: "node", args: ["hello.mjs"] },
+      source: "/tmp/plugin-a/index.cjs",
+      rootDir: "/tmp/plugin-a",
+    });
+    setActivePluginRegistry(registry, "mcp-server-test", "default", "/tmp/workspace-a");
+
+    expect(
+      loadEnabledPluginMcpServerConfig({
+        workspaceDir: "/tmp/workspace-a",
+        cfg: {},
+      }),
+    ).toEqual({
+      config: {
+        mcpServers: {},
+      },
+    });
+  });
+
   it("keeps bundled default-enabled MCP servers when runtime config has no allowlist", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(
