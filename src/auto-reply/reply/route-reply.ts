@@ -227,6 +227,13 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
  *
  * Some channels (webchat) require special handling and cannot be routed through
  * this generic interface.
+ *
+ * Channels installed as npm plugins may not appear in the static bundled catalog
+ * (`normalizeChatChannelId`) and may not yet be registered in the runtime plugin
+ * registry (`normalizeChannelId`) when this check runs.  Fall back to
+ * `normalizeMessageChannel` which accepts any non-empty, non-webchat string so
+ * that plugin-only channels (e.g. feishu installed via @openclaw/feishu) are
+ * still considered routable.
  */
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
@@ -234,5 +241,12 @@ export function isRoutableChannel(
   if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
     return false;
   }
-  return normalizeChatChannelId(channel) !== null || normalizeChannelId(channel) !== null;
+  if (normalizeChatChannelId(channel) !== null || normalizeChannelId(channel) !== null) {
+    return true;
+  }
+  // Fallback: accept any channel id that normalises to a non-webchat value.
+  // This covers plugin channels that are npm-installed (not bundled) and whose
+  // registry entry may not be available at the time this guard runs.
+  const normalized = normalizeMessageChannel(channel);
+  return normalized != null && normalized !== INTERNAL_MESSAGE_CHANNEL;
 }

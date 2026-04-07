@@ -26,7 +26,7 @@ vi.mock("../../infra/outbound/deliver-runtime.js", async () => {
   };
 });
 
-const { routeReply } = await import("./route-reply.js");
+const { routeReply, isRoutableChannel } = await import("./route-reply.js");
 
 function compileSlackInteractiveRepliesForTest(
   payload: Parameters<NonNullable<ChannelMessagingAdapter["transformReplyPayload"]>>[0]["payload"],
@@ -532,5 +532,56 @@ describe("routeReply", () => {
     expectLastDelivery({
       mirror: undefined,
     });
+  });
+});
+
+describe("isRoutableChannel", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  it("returns false for undefined", () => {
+    expect(isRoutableChannel(undefined)).toBe(false);
+  });
+
+  it("returns false for webchat (internal channel)", () => {
+    expect(isRoutableChannel("webchat")).toBe(false);
+  });
+
+  it("returns true for a channel registered in the runtime plugin registry", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: createChannelPlugin("slack"),
+          source: "test",
+        },
+      ]),
+    );
+    expect(isRoutableChannel("slack")).toBe(true);
+  });
+
+  it("returns true for feishu even when not present in runtime registry (npm-installed plugin regression)", () => {
+    // Regression test for https://github.com/openclaw/openclaw/issues/62304.
+    //
+    // Before the fix, isRoutableChannel relied solely on normalizeChatChannelId
+    // (bundled catalog) and normalizeChannelId (runtime registry).  When feishu
+    // is installed as an npm package (@openclaw/feishu) rather than being
+    // bundled, and the plugin registry has not yet been populated at the time
+    // this guard runs, both lookups return null, causing
+    // isRoutableChannel("feishu") === false.  That made the ACP/webchat path
+    // skip cross-channel routing and deliver the reply to webchat instead.
+    //
+    // The fix adds a final fallback via normalizeMessageChannel which accepts
+    // any non-empty, non-webchat string as routable.
+    setActivePluginRegistry(createTestRegistry()); // empty – feishu not registered
+    expect(isRoutableChannel("feishu")).toBe(true);
+  });
+
+  it("returns true for other npm-installed plugin channels not in bundled catalog", () => {
+    setActivePluginRegistry(createTestRegistry()); // empty registry
+    // LINE and Zalo are typical examples of npm-only plugin channels.
+    expect(isRoutableChannel("line")).toBe(true);
+    expect(isRoutableChannel("zalo")).toBe(true);
   });
 });
