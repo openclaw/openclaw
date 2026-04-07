@@ -1,6 +1,6 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry, type ProviderAuthMethodNonInteractiveContext, type ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { applyDatabricksConfig, DATABRICKS_DEFAULT_MODEL_REF } from "./api.js";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/plugins/provider-api-key-auth";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 
 const PROVIDER_ID = "databricks";
 
@@ -27,8 +27,9 @@ export default definePluginEntry({
     });
 
     const originalRun = defaultAuth.run;
-    defaultAuth.run = async (ctx) => {
-      let baseUrl = typeof ctx.opts?.databricksBaseUrl === "string" ? ctx.opts.databricksBaseUrl : undefined;
+    defaultAuth.run = async (ctx: ProviderAuthMethodNonInteractiveContext) => {
+      const opts = ctx.opts as Record<string, unknown> | undefined;
+      let baseUrl = typeof opts?.databricksBaseUrl === "string" ? opts.databricksBaseUrl : undefined;
       if (!baseUrl) {
         baseUrl = await ctx.prompter.prompt({
           message: "Enter Databricks Workspace Base URL (e.g. https://dbc-xxxx.cloud.databricks.com)",
@@ -66,7 +67,9 @@ export default definePluginEntry({
         order: "simple",
         run: async (ctx) => {
            const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
-           if (!auth.apiKey) return null;
+           if (!auth.apiKey) {
+             return null;
+           }
 
            const providerConfig = ctx.config.models?.providers?.[PROVIDER_ID];
            const baseUrl = typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
@@ -80,19 +83,24 @@ export default definePluginEntry({
                        Authorization: `Bearer ${auth.apiKey}`
                    }
                });
-               if (!res.ok) return null;
-               const data = await res.json();
-               if (!data || !Array.isArray(data.endpoints)) return null;
+               if (!res.ok) {
+                 return null;
+               }
+               
+               const data = await res.json() as { endpoints?: Array<{ name: string; endpoint_type: string; task: string }> };
+               if (!data || !Array.isArray(data.endpoints)) {
+                 return null;
+               }
                
                const models = data.endpoints
-                 .filter((ep: any) => ep.endpoint_type === "EXTERNAL_MODEL" || ep.task === "llm/v1/chat")
-                 .map((ep: any) => ({
+                 .filter((ep) => ep.endpoint_type === "EXTERNAL_MODEL" || ep.task === "llm/v1/chat")
+                 .map((ep) => ({
                     id: ep.name,
                     name: ep.name,
                     api: "openai-completions",
                     reasoning: false,
                     input: ["text"],
-                 }));
+                 } as const));
                  
                return {
                  provider: {
@@ -101,30 +109,42 @@ export default definePluginEntry({
                    models,
                  }
                };
-           } catch(e) {
+           } catch {
                return null;
            }
         }
       },
-      wrapStreamFn: (ctx) => {
+      wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
          const streamFn = ctx.streamFn;
-         if (!streamFn) return undefined;
-         return async (req, extra) => {
+         if (!streamFn) {
+           return undefined;
+         }
+         return async (req: { url?: string; method?: string; headers?: Record<string, string>; body?: string | Buffer | null }, extra: unknown) => {
             const providerConfig = ctx.config?.models?.providers?.[PROVIDER_ID] as undefined | { baseUrl?: string };
             const baseUrl = typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl : undefined;
             if (baseUrl) {
                 const urlObj = new URL(`/serving-endpoints/${ctx.modelId}/invocations`, baseUrl);
                 req.url = urlObj.toString();
             }
-            if (req.body) {
+            if (typeof req.body === "string") {
                 try {
-                   const bodyObj = JSON.parse(req.body as string);
-                   if ("store" in bodyObj) delete bodyObj.store;
-                   if ("background" in bodyObj) delete bodyObj.background;
-                   if ("service_tier" in bodyObj) delete bodyObj.service_tier;
+                   const bodyObj = JSON.parse(req.body) as Record<string, unknown>;
+                   if ("store" in bodyObj) {
+                     delete bodyObj.store;
+                   }
+                   if ("background" in bodyObj) {
+                     delete bodyObj.background;
+                   }
+                   if ("service_tier" in bodyObj) {
+                     delete bodyObj.service_tier;
+                   }
                    req.body = JSON.stringify(bodyObj);
-                } catch(e) {}
+                } catch {
+                   // Ignore parsing errors for non-JSON payloads
+                }
             }
+            // TypeScript compilation needs streamFn to match expected types, use any casting carefully
+            // @ts-expect-error StreamFn expects a strictly typed Pick<Request, ...> parameter
             return streamFn(req, extra);
          };
       }
