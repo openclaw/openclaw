@@ -2,25 +2,31 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import {
+  findModelInCatalog,
+  modelSupportsVision,
+  type ModelCatalogEntry,
+} from "../../agents/model-catalog.js";
 import {
   buildConfiguredModelCatalog,
   buildAllowedModelSet,
+  buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
   resolveModelRefFromString,
-  resolvePersistedOverrideModelRef,
+  resolvePersistedModelRef,
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { defaultRuntime } from "../../runtime.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ThinkLevel } from "./directives.js";
+import { collectImageModelKeys, isImageModel } from "./image-model-helpers.js";
 
 export type ModelDirectiveSelection = {
   provider: string;
@@ -43,23 +49,6 @@ type ModelSelectionState = {
   needsModelCatalog: boolean;
 };
 
-export function createFastTestModelSelectionState(params: {
-  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
-  provider: string;
-  model: string;
-}): ModelSelectionState {
-  return {
-    provider: params.provider,
-    model: params.model,
-    allowedModelKeys: new Set<string>(),
-    allowedModelCatalog: [],
-    resetModelOverride: false,
-    resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
-    resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
-  };
-}
-
 function shouldLogModelSelectionTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
@@ -80,6 +69,9 @@ function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
   return sessionStoreRuntimePromise;
 }
+
+// Image model helpers are now in a shared module to avoid code duplication
+// with chat.ts. See src/auto-reply/reply/image-model-helpers.ts.
 
 const FUZZY_VARIANT_TOKENS = [
   "lightning",
@@ -149,7 +141,7 @@ function resolveParentSessionKeyCandidate(params: {
   sessionKey?: string;
   parentSessionKey?: string;
 }): string | null {
-  const explicit = normalizeOptionalString(params.parentSessionKey);
+  const explicit = params.parentSessionKey?.trim();
   if (explicit && explicit !== params.sessionKey) {
     return explicit;
   }
@@ -167,7 +159,7 @@ export function resolveStoredModelOverride(params: {
   parentSessionKey?: string;
   defaultProvider: string;
 }): StoredModelOverride | null {
-  const direct = resolvePersistedOverrideModelRef({
+  const direct = resolvePersistedModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: params.sessionEntry?.providerOverride,
     overrideModel: params.sessionEntry?.modelOverride,
@@ -183,7 +175,7 @@ export function resolveStoredModelOverride(params: {
     return null;
   }
   const parentEntry = params.sessionStore[parentKey];
-  const parentOverride = resolvePersistedOverrideModelRef({
+  const parentOverride = resolvePersistedModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: parentEntry?.providerOverride,
     overrideModel: parentEntry?.modelOverride,
@@ -318,6 +310,9 @@ export async function createModelSelectionState(params: {
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
+  /** True when images triggered a model switch to imageModel.
+   *  In that case, skip session-stored overrides so the image model wins. */
+  hasAppliedImageModelOverride?: boolean;
 }): Promise<ModelSelectionState> {
   const timingEnabled = shouldLogModelSelectionTiming();
   const startMs = timingEnabled ? Date.now() : 0;
@@ -326,7 +321,7 @@ export async function createModelSelectionState(params: {
       return;
     }
     const suffix = extra ? ` ${extra}` : "";
-    console.log(
+    defaultRuntime.log?.(
       `[model-selection] session=${params.sessionKey ?? "(no-session)"} stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`,
     );
   };
@@ -354,7 +349,7 @@ export async function createModelSelectionState(params: {
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
-  const directStoredOverride = resolvePersistedOverrideModelRef({
+  const directStoredOverride = resolvePersistedModelRef({
     defaultProvider,
     overrideProvider: sessionEntry?.providerOverride,
     overrideModel: sessionEntry?.modelOverride,
@@ -427,9 +422,67 @@ export async function createModelSelectionState(params: {
     defaultProvider,
   });
   // Skip stored session model override only when an explicit heartbeat.model
-  // was resolved. Heartbeat runs without heartbeat.model should still inherit
+  // was resolved. For image-triggered model switches, we check if the stored
+  // override model supports images (is in the imageModel list). If not, we
+  // skip the stored override to allow automatic image model switching.
+  // Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
-  const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+  const skipForHeartbeat = params.hasResolvedHeartbeatModelOverride === true;
+
+  // When images triggered a model switch, check if stored override is an image model
+  let skipForImageSwitch = false;
+  if (params.hasAppliedImageModelOverride && storedOverride?.model) {
+    // Build alias index for resolving model aliases
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+    const { keys: imageModelKeys, imageModelDefaultProvider } = collectImageModelKeys({
+      imageModelConfig: cfg.agents?.defaults?.imageModel,
+      aliasIndex,
+      defaultProvider,
+    });
+    // Normalize the stored override to handle provider-qualified model strings
+    const normalizedStored = normalizeModelRef(
+      storedOverride.provider || defaultProvider,
+      storedOverride.model,
+    );
+    const storedProvider = normalizedStored.provider;
+    const storedModel = normalizedStored.model;
+
+    // Check if stored override is in the configured imageModel list
+    if (!isImageModel(storedProvider, storedModel, imageModelKeys)) {
+      // Not in configured list - check catalog for vision capability
+      const catalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
+      const catalogEntry = findModelInCatalog(catalog, storedProvider, storedModel);
+      if (modelSupportsVision(catalogEntry)) {
+        // Stored model supports vision (via catalog) - add to keys and don't skip
+        imageModelKeys.add(modelKey(storedProvider, storedModel));
+      } else {
+        // Stored override is not an image model, skip it for image requests
+        skipForImageSwitch = true;
+      }
+    } else if (imageModelDefaultProvider && storedProvider !== imageModelDefaultProvider) {
+      // Providerless imageModel entries match by pure name across providers (case 4 in
+      // isImageModel), but this can incorrectly keep a stored override from a different
+      // provider whose model may not support vision. Force catalog check to verify.
+      // Only run this cross-provider check when imageModelDefaultProvider was actually
+      // derived (non-empty). If imageModelDefaultProvider is empty, the configured
+      // imageModel is providerless (e.g., imageModel: "gpt-4o" without explicit-provider
+      // fallbacks), and a stored override matching by name should be considered valid
+      // without forcing a catalog check that could fail due to missing/stale metadata.
+      const explicitKey = modelKey(storedProvider, storedModel);
+      const isExplicitProviderQualified = imageModelKeys.has(explicitKey);
+      if (!isExplicitProviderQualified) {
+        const catalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
+        const catalogEntry = findModelInCatalog(catalog, storedProvider, storedModel);
+        if (!modelSupportsVision(catalogEntry)) {
+          skipForImageSwitch = true;
+        }
+      }
+    }
+  }
+
+  const skipStoredOverride = skipForHeartbeat || skipForImageSwitch;
+  // Track if we're using a stored override (for auth profile logic below)
+  let usingStoredOverride = false;
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeModelRef(
       storedOverride.provider || defaultProvider,
@@ -439,10 +492,29 @@ export async function createModelSelectionState(params: {
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
+      usingStoredOverride = true;
+      // Log when stored override is kept instead of imageModel override
+      if (params.hasAppliedImageModelOverride) {
+        defaultRuntime.log?.(
+          `[image-model-switch] Kept user's vision-capable stored model ${key} instead of imageModel override`,
+        );
+      }
     }
   }
 
-  if (sessionEntry && sessionStore && sessionKey && sessionEntry.authProfileOverride) {
+  // Skip auth profile override clear when image model is temporarily switched
+  // AND we're not using a user-selected stored override.
+  // The provider change is transient and should not clear saved credentials.
+  // When using stored override, the user explicitly chose a model, so auth profile
+  // checks should proceed normally.
+  const skipAuthProfileClear = params.hasAppliedImageModelOverride && !usingStoredOverride;
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    sessionEntry.authProfileOverride &&
+    !skipAuthProfileClear
+  ) {
     const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,

@@ -426,7 +426,7 @@ async function prepareCronRunContext(params: {
     logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
   }
 
-  const authProfileId = await resolveSessionAuthProfileOverride({
+  const resolvedAuthProfile = await resolveSessionAuthProfileOverride({
     cfg: cfgWithAgentDefaults,
     provider,
     agentDir,
@@ -439,10 +439,8 @@ async function prepareCronRunContext(params: {
   const liveSelection: CronLiveSelection = {
     provider,
     model,
-    authProfileId,
-    authProfileIdSource: authProfileId
-      ? cronSession.sessionEntry.authProfileOverrideSource
-      : undefined,
+    authProfileId: resolvedAuthProfile.authProfileId,
+    authProfileIdSource: resolvedAuthProfile.authProfileIdSource,
   };
 
   return {

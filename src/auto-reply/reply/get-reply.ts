@@ -1,40 +1,39 @@
-import fs from "node:fs/promises";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  buildAllowedModelSet,
+  buildModelAliasIndex,
+  modelKey,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
-import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
-import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
-import {
-  initFastReplySessionState,
-  buildFastReplyCommandContext,
-  shouldHandleFastReplyTextCommands,
-  shouldUseReplyFastDirectiveExecution,
-  resolveGetReplyConfig,
-  shouldUseReplyFastTestBootstrap,
-  shouldUseReplyFastTestRuntime,
-} from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { resolveChannelModelSupportsVision } from "./image-model-helpers.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
-import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
 import { createTypingController } from "./typing.js";
+
+function shouldLogCoreIngressTiming(): boolean {
+  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+}
 
 type ResetCommandAction = "new" | "reset";
 
@@ -145,20 +144,23 @@ export async function getReplyFromConfig(
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const ingressTimingEnabled = shouldLogCoreIngressTiming();
+  const ingressStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const logIngressStage = (stage: string, extra?: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    const sessionKey = ctx.SessionKey?.trim() || "(no-session)";
+    const suffix = extra ? ` ${extra}` : "";
+    defaultRuntime.log?.(
+      `[ingress] session=${sessionKey} stage=${stage} elapsedMs=${Date.now() - ingressStartMs}${suffix}`,
+    );
+  };
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
-  const cfg = resolveGetReplyConfig({
-    loadConfig,
-    isFastTestEnv,
-    configOverride,
-  });
-  const useFastTestBootstrap = shouldUseReplyFastTestBootstrap({
-    isFastTestEnv,
-    configOverride,
-  });
-  const useFastTestRuntime = shouldUseReplyFastTestRuntime({
-    cfg,
-    isFastTestEnv,
-  });
+  const cfg =
+    configOverride == null
+      ? loadConfig()
+      : (applyMergePatch(loadConfig(), configOverride) as OpenClawConfig);
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
@@ -181,7 +183,81 @@ export async function getReplyFromConfig(
   let provider = defaultProvider;
   let model = defaultModel;
   let hasResolvedHeartbeatModelOverride = false;
-  if (opts?.isHeartbeat) {
+  // Handle modelOverride from Gateway (e.g., image model when images detected)
+  let hasAppliedImageModelOverride = false;
+  // Track if a fallback was used when primary override was blocked by allowlist
+  let fallbackAppliedForImageModel = false;
+  if (opts?.modelOverride?.trim()) {
+    const modelRef = resolveModelRefFromString({
+      raw: opts.modelOverride.trim(),
+      defaultProvider,
+      aliasIndex,
+    });
+    if (modelRef) {
+      // Check if the model is allowed by the agent's allowlist
+      // Use buildAllowedModelSet to include models + fallbacks + default model
+      const { allowAny, allowedKeys } = buildAllowedModelSet({
+        cfg,
+        catalog: [], // Empty catalog; we only need allowedKeys
+        defaultProvider,
+        defaultModel,
+        agentId,
+      });
+      if (!allowAny) {
+        const modelKeyStr = modelKey(modelRef.ref.provider, modelRef.ref.model);
+        if (!allowedKeys.has(modelKeyStr)) {
+          // Model not in allowlist, try fallbacks before skipping
+          fallbackAppliedForImageModel = false;
+          if (opts?.modelOverrideFallbacks?.length) {
+            // Determine provider context for resolving providerless fallbacks.
+            // When modelOverride has explicit provider (e.g., "openai/gpt-4o"),
+            // providerless fallbacks should resolve against that provider, not defaultProvider.
+            // This matches the allowlist check logic in chat.ts.
+            const overrideProvider = modelRef.ref.provider;
+            const providerContext = overrideProvider ?? defaultProvider;
+            // Rebuild alias index with the correct provider context
+            const fallbackAliasIndex =
+              overrideProvider && overrideProvider !== defaultProvider
+                ? buildModelAliasIndex({ cfg, defaultProvider: providerContext })
+                : aliasIndex;
+            for (const fallbackRaw of opts.modelOverrideFallbacks) {
+              const fallbackRef = resolveModelRefFromString({
+                raw: fallbackRaw.trim(),
+                defaultProvider: providerContext,
+                aliasIndex: fallbackAliasIndex,
+              });
+              if (fallbackRef) {
+                const fallbackKeyStr = modelKey(fallbackRef.ref.provider, fallbackRef.ref.model);
+                if (allowedKeys.has(fallbackKeyStr)) {
+                  provider = fallbackRef.ref.provider;
+                  model = fallbackRef.ref.model;
+                  hasAppliedImageModelOverride = true;
+                  fallbackAppliedForImageModel = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (!fallbackAppliedForImageModel) {
+            // No allowlisted fallback, skip the override and let default model be used
+            // This prevents Dashboard images from bypassing agent model restrictions
+            defaultRuntime.log?.(
+              `[image-model-switch] Model override ${opts.modelOverride} not in agent allowlist and no fallback available, using default model ${defaultProvider}/${defaultModel}`,
+            );
+          }
+        } else {
+          provider = modelRef.ref.provider;
+          model = modelRef.ref.model;
+          hasAppliedImageModelOverride = true;
+        }
+      } else {
+        // No allowlist, allow any model
+        provider = modelRef.ref.provider;
+        model = modelRef.ref.model;
+        hasAppliedImageModelOverride = true;
+      }
+    }
+  } else if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
@@ -201,13 +277,12 @@ export async function getReplyFromConfig(
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const workspace = useFastTestBootstrap
-    ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-    : await ensureAgentWorkspace({
-        dir: workspaceDirRaw,
-        ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-      });
+  const workspace = await ensureAgentWorkspace({
+    dir: workspaceDirRaw,
+    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+  });
   const workspaceDir = workspace.dir;
+  logIngressStage("workspace-ready");
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -225,38 +300,41 @@ export async function getReplyFromConfig(
 
   const finalized = finalizeInboundContext(ctx);
 
+  const commandAuthorized = finalized.CommandAuthorized;
+  resolveCommandAuthorization({
+    ctx: finalized,
+    cfg,
+    commandAuthorized,
+  });
+
+  // Apply media/link enrichment BEFORE initSessionState so that
+  // sessionCtx captures the enriched content (e.g. audio transcripts,
+  // link summaries). Otherwise resolveReplyDirectives and runPreparedReply
+  // use stale pre-enrichment Body* fields from sessionCtx.
   if (!isFastTestEnv) {
-    await applyMediaUnderstandingIfNeeded({
+    const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
       agentDir,
       activeModel: { provider, model },
     });
-    await applyLinkUnderstandingIfNeeded({
+    logIngressStage(
+      "media-understanding",
+      `applied=${appliedMediaUnderstanding ? "1" : "0"} model=${provider}/${model}`,
+    );
+    const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
     });
+    logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
   }
-  emitPreAgentMessageHooks({
+
+  const sessionState = await initSessionState({
     ctx: finalized,
     cfg,
-    isFastTestEnv,
+    commandAuthorized,
   });
-
-  const commandAuthorized = finalized.CommandAuthorized;
-  const sessionState = useFastTestBootstrap
-    ? initFastReplySessionState({
-        ctx: finalized,
-        cfg,
-        agentId,
-        commandAuthorized,
-        workspaceDir,
-      })
-    : await initSessionState({
-        ctx: finalized,
-        cfg,
-        commandAuthorized,
-      });
+  logIngressStage("session-init");
   let {
     sessionCtx,
     sessionEntry,
@@ -314,7 +392,28 @@ export async function getReplyFromConfig(
   const hasSessionModelOverride = Boolean(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+
+  // Check if channel model is already a vision model (skip image model switch if so).
+  const { channelModelIsVisionModel } = await resolveChannelModelSupportsVision({
+    channelModelOverride: channelModelOverride ?? undefined,
+    imageModelConfig: cfg.agents?.defaults?.imageModel,
+    defaultProvider,
+    cfg,
+    hasAppliedImageModelOverride,
+    loadModelCatalog: async () => {
+      const { loadModelCatalog: loadCatalog } = await import("../../agents/model-catalog.js");
+      return loadCatalog({ config: cfg });
+    },
+  });
+
+  // Skip channel model override when image model was already selected for attachments,
+  // UNLESS the channel model is already a vision model (no need to switch)
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasSessionModelOverride &&
+    !(hasAppliedImageModelOverride && !channelModelIsVisionModel) &&
+    channelModelOverride
+  ) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
       defaultProvider,
@@ -326,79 +425,11 @@ export async function getReplyFromConfig(
     }
   }
 
-  if (
-    shouldUseReplyFastDirectiveExecution({
-      isFastTestBootstrap: useFastTestRuntime,
-      isGroup,
-      isHeartbeat: opts?.isHeartbeat === true,
-      resetTriggered,
-      triggerBodyNormalized,
-    })
-  ) {
-    const fastCommand = buildFastReplyCommandContext({
-      ctx,
-      cfg,
-      agentId,
-      sessionKey,
-      isGroup,
-      triggerBodyNormalized,
-      commandAuthorized,
-    });
-    return runPreparedReply({
-      ctx,
-      sessionCtx,
-      cfg,
-      agentId,
-      agentDir,
-      agentCfg,
-      sessionCfg,
-      commandAuthorized,
-      command: fastCommand,
-      commandSource: finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-      allowTextCommands: shouldHandleFastReplyTextCommands({
-        cfg,
-        commandSource: finalized.CommandSource,
-      }),
-      directives: clearInlineDirectives(
-        finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-      ),
-      defaultActivation: "always",
-      resolvedThinkLevel: undefined,
-      resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
-      resolvedReasoningLevel: "off",
-      resolvedElevatedLevel: "off",
-      execOverrides: undefined,
-      elevatedEnabled: false,
-      elevatedAllowed: false,
-      blockStreamingEnabled: false,
-      blockReplyChunking: undefined,
-      resolvedBlockStreamingBreak: "text_end",
-      modelState: createFastTestModelSelectionState({
-        agentCfg,
-        provider,
-        model,
-      }),
-      provider,
-      model,
-      perMessageQueueMode: undefined,
-      perMessageQueueOptions: undefined,
-      typing,
-      opts: resolvedOpts,
-      defaultProvider,
-      defaultModel,
-      timeoutMs,
-      isNewSession,
-      resetTriggered,
-      systemSent,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      sessionId,
-      storePath,
-      workspaceDir,
-      abortedLastRun,
-    });
-  }
+  emitPreAgentMessageHooks({
+    ctx: finalized,
+    cfg,
+    isFastTestEnv,
+  });
 
   const directiveResult = await resolveReplyDirectives({
     ctx: finalized,
@@ -423,11 +454,14 @@ export async function getReplyFromConfig(
     provider,
     model,
     hasResolvedHeartbeatModelOverride,
+    hasAppliedImageModelOverride,
     typing,
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,
   });
+  logIngressStage("directives-resolved");
   if (directiveResult.kind === "reply") {
+    logIngressStage("early-reply");
     return directiveResult.reply;
   }
 
@@ -461,6 +495,70 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
+
+  // Re-check if the final model matches the image model override.
+  // If directives/stored override picked a different model, reset the flags
+  // to avoid passing wrong auth profile and fallbacks.
+  let finalHasAppliedImageModelOverride = hasAppliedImageModelOverride;
+  // Only pass fallbacks if image model override was actually applied
+  let finalModelOverrideFallbacks = hasAppliedImageModelOverride
+    ? opts?.modelOverrideFallbacks
+    : undefined;
+  if (hasAppliedImageModelOverride && opts?.modelOverride) {
+    const finalModelKey = modelKey(provider, model);
+    const overrideRef = resolveModelRefFromString({
+      raw: opts.modelOverride.trim(),
+      defaultProvider,
+      aliasIndex,
+    });
+    if (overrideRef) {
+      const overrideKey = modelKey(overrideRef.ref.provider, overrideRef.ref.model);
+      // Check if final model is in the fallback chain.
+      // IMPORTANT: Use the override's provider context (not defaultProvider) to resolve
+      // providerless fallbacks, matching the logic used when fallbacks were originally
+      // resolved in the allowlist check above (lines 200-241).
+      const overrideProvider = overrideRef.ref.provider;
+      const fallbackProviderContext = overrideProvider ?? defaultProvider;
+      const fallbackAliasIndex =
+        overrideProvider && overrideProvider !== defaultProvider
+          ? buildModelAliasIndex({ cfg, defaultProvider: fallbackProviderContext })
+          : aliasIndex;
+      const isInFallbacks = (opts?.modelOverrideFallbacks ?? []).some((fb) => {
+        const fbRef = resolveModelRefFromString({
+          raw: fb.trim(),
+          defaultProvider: fallbackProviderContext,
+          aliasIndex: fallbackAliasIndex,
+        });
+        return fbRef && modelKey(fbRef.ref.provider, fbRef.ref.model) === finalModelKey;
+      });
+      if (finalModelKey !== overrideKey && !isInFallbacks) {
+        // Final model differs from image model override and is not in fallback chain,
+        // reset the flags. This handles cases where a later directive (e.g., /model)
+        // changed the model away from the image override chain entirely.
+        finalHasAppliedImageModelOverride = false;
+        finalModelOverrideFallbacks = undefined;
+      }
+    }
+  }
+
+  // Log final model selection when image model override was considered
+  if (hasAppliedImageModelOverride && opts?.modelOverride) {
+    const finalModelKey = modelKey(provider, model);
+    // Use the same resolution as above for consistency
+    const overrideRef = resolveModelRefFromString({
+      raw: opts.modelOverride.trim(),
+      defaultProvider,
+      aliasIndex,
+    });
+    const overrideKey = overrideRef
+      ? modelKey(overrideRef.ref.provider, overrideRef.ref.model)
+      : opts.modelOverride.trim();
+    if (finalModelKey !== overrideKey) {
+      defaultRuntime.log?.(
+        `[image-model-switch] Final model ${finalModelKey} differs from Gateway override ${overrideKey}, stored override or directive took precedence`,
+      );
+    }
+  }
 
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
@@ -533,34 +631,32 @@ export async function getReplyFromConfig(
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
-  if (!useFastTestBootstrap) {
-    const { getGlobalHookRunner } = await loadHookRunnerGlobal();
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("before_agent_reply")) {
-      const { resolveOriginMessageProvider } = await loadOriginRouting();
-      const hookMessageProvider = resolveOriginMessageProvider({
-        originatingChannel: sessionCtx.OriginatingChannel,
-        provider: sessionCtx.Provider,
-      });
-      const hookResult = await hookRunner.runBeforeAgentReply(
-        { cleanedBody },
-        {
-          agentId,
-          sessionKey: agentSessionKey,
-          sessionId,
-          workspaceDir,
-          messageProvider: hookMessageProvider,
-          trigger: opts?.isHeartbeat ? "heartbeat" : "user",
-          channelId: hookMessageProvider,
-        },
-      );
-      if (hookResult?.handled) {
-        return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
-      }
+  const { getGlobalHookRunner } = await loadHookRunnerGlobal();
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_agent_reply")) {
+    const { resolveOriginMessageProvider } = await loadOriginRouting();
+    const hookMessageProvider = resolveOriginMessageProvider({
+      originatingChannel: sessionCtx.OriginatingChannel,
+      provider: sessionCtx.Provider,
+    });
+    const hookResult = await hookRunner.runBeforeAgentReply(
+      { cleanedBody },
+      {
+        agentId,
+        sessionKey: agentSessionKey,
+        sessionId,
+        workspaceDir,
+        messageProvider: hookMessageProvider,
+        trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+        channelId: hookMessageProvider,
+      },
+    );
+    if (hookResult?.handled) {
+      return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
     }
   }
 
-  if (!useFastTestBootstrap && sessionKey && hasInboundMedia(ctx)) {
+  if (sessionKey && hasInboundMedia(ctx)) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
     await stageSandboxMedia({
       ctx,
@@ -570,6 +666,13 @@ export async function getReplyFromConfig(
       workspaceDir,
     });
   }
+  logIngressStage("sandbox-media");
+
+  // Create final opts with potentially cleared modelOverrideFallbacks
+  const finalOpts =
+    finalModelOverrideFallbacks !== opts?.modelOverrideFallbacks
+      ? { ...resolvedOpts, modelOverrideFallbacks: finalModelOverrideFallbacks }
+      : resolvedOpts;
 
   return runPreparedReply({
     ctx,
@@ -601,7 +704,7 @@ export async function getReplyFromConfig(
     perMessageQueueMode,
     perMessageQueueOptions,
     typing,
-    opts: resolvedOpts,
+    opts: finalOpts,
     defaultProvider,
     defaultModel,
     timeoutMs,
@@ -615,5 +718,6 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
+    hasAppliedImageModelOverride: finalHasAppliedImageModelOverride,
   });
 }

@@ -146,6 +146,10 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Model override from Gateway (e.g., imageModel when images detected). */
+  modelOverride?: string;
+  /** Fallback models for the override (tried in order if primary blocked by allowlist). */
+  modelOverrideFallbacks?: string[];
 };
 
 export type ReplyPayload = {
