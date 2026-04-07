@@ -584,10 +584,7 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("timeout");
   }
   if (status === 410) {
-    // HTTP 410 is only a true session-expiry signal when the payload says the
-    // remote session/conversation is gone. Generic 410/no-body responses from
-    // OpenAI-compatible proxies are better treated as retryable transport-path
-    // failures so we do not clear session state or poison auth-profile health.
+    // Generic 410/no-body responses behave like transport failures, not session expiry.
     if (
       messageReason === "session_expired" ||
       messageReason === "billing" ||
@@ -599,8 +596,9 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("timeout");
   }
   if (status === 404) {
-    // Bare "404 status code (no body)" style errors must still classify as failover so
-    // embedded runs throw FailoverError and outer model fallback can continue (#62119).
+    if (messageClassification?.kind === "context_overflow") {
+      return messageClassification;
+    }
     if (
       messageReason === "session_expired" ||
       messageReason === "billing" ||

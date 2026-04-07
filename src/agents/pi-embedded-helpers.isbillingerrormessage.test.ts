@@ -663,6 +663,14 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("HTTP 404: insufficient credits")).toBe("billing");
   });
 
+  it("does not map HTTP 404 plus context-overflow text to model_not_found", () => {
+    expect(
+      classifyFailoverReason(
+        "HTTP 404: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
+  });
+
   it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
     expect(
       classifyFailoverReason("HTTP 400: ThrottlingException: Too many concurrent requests"),
