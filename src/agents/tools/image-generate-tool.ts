@@ -286,6 +286,14 @@ function normalizeReferenceImages(args: Record<string, unknown>): string[] {
   return normalized;
 }
 
+function pickConfiguredMediaMaxBytes(cfg?: OpenClawConfig): number | undefined {
+  const configured = cfg?.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return undefined;
+}
+
 function resolveSelectedImageGenerationProvider(params: {
   config?: OpenClawConfig;
   imageGenerationModelConfig: ToolModelConfig;
@@ -575,10 +583,7 @@ export function createImageGenerateTool(options?: {
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
-        maxBytes:
-          typeof effectiveCfg?.agents?.defaults?.mediaMaxMb === "number"
-            ? Math.floor(effectiveCfg.agents.defaults.mediaMaxMb * 1024 * 1024)
-            : undefined,
+        maxBytes: pickConfiguredMediaMaxBytes(effectiveCfg),
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
