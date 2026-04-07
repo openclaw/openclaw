@@ -8,6 +8,7 @@ import {
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { appendUniqueSuffix } from "../shared/text/join-segments.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import {
   isSuppressedControlReplyLeadFragment,
@@ -86,24 +87,6 @@ function normalizeHeartbeatChatFinalText(params: {
   return { suppress: false, text: stripped.text };
 }
 
-function appendUniqueSuffix(base: string, suffix: string): string {
-  if (!suffix) {
-    return base;
-  }
-  if (!base) {
-    return suffix;
-  }
-  if (base.endsWith(suffix)) {
-    return base;
-  }
-  const maxOverlap = Math.min(base.length, suffix.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
-      return base + suffix.slice(overlap);
-    }
-  }
-  return base + suffix;
-}
 
 function resolveMergedAssistantText(params: {
   previousText: string;
